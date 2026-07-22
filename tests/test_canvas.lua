@@ -77,6 +77,30 @@ return {
     end)
     H.eq(first_text_after, first_text_before)
   end,
+  ["canvas: replace_section poking into viewport bottom preserves top"] = function()
+    local st = canvas.open(two_sections(), {})
+    -- section2 (b.txt) starts a few rows below the current viewport top --
+    -- the viewport top itself sits inside section1, untouched by the
+    -- coming edit; section2 only pokes into the BOTTOM of the viewport.
+    local s2 = select(1, canvas.section_rows(st, 2)) -- 0-based row
+    local top0 = s2 - 5 -- 0-based: 5 rows before section2 starts
+    local topline = top0 + 1 -- winrestview's topline field is 1-based
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = topline, lnum = topline })
+    end)
+    local before = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    local first_text_before = vim.api.nvim_win_call(st.win, function()
+      return vim.fn.getline(vim.fn.line("w0"))
+    end)
+    local bigger = model.build_section("b.txt", "9\n", "9\nplus\nmore\nlines\nhere\ntoo\n", "M")
+    canvas.replace_section(st, 2, bigger)
+    local after = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    local first_text_after = vim.api.nvim_win_call(st.win, function()
+      return vim.fn.getline(vim.fn.line("w0"))
+    end)
+    H.eq(after.topline, before.topline)
+    H.eq(first_text_after, first_text_before)
+  end,
   ["canvas: delete section"] = function()
     local st = canvas.open(two_sections(), {})
     canvas.replace_section(st, 1, nil)

@@ -33,7 +33,17 @@ local function set_modifiable(buf, val)
 end
 
 local function apply_win_opts(win)
-  local opts = { wrap = false, cursorline = true, signcolumn = "no", foldenable = false }
+  local opts = {
+    wrap = false,
+    cursorline = true,
+    signcolumn = "no",
+    foldenable = false,
+    -- The user's global 'scrolloff'/'sidescrolloff' would otherwise perturb
+    -- a restored topline (e.g. when view.lnum lands exactly at the window's
+    -- top row, a nonzero scrolloff pushes the actual topline up further).
+    scrolloff = 0,
+    sidescrolloff = 0,
+  }
   for name, val in pairs(opts) do
     vim.api.nvim_set_option_value(name, val, { win = win, scope = "local" })
   end
@@ -232,17 +242,23 @@ function M.replace_section(state, i, new_section)
 
   -- Intersecting + replace (not delete): capture a semantic anchor from the
   -- OLD entries at the viewport's current top-of-section offset, before the
-  -- buffer changes underneath it.
+  -- buffer changes underneath it. When the viewport top sits ABOVE the
+  -- replaced section (top0 < start_row -- the section only pokes into the
+  -- BOTTOM of the viewport), the content at and above the viewport top is
+  -- entirely untouched by this splice: there is nothing to anchor, and
+  -- anchoring off the section's first entry would wrongly imply the
+  -- viewport top itself sits at start_row, scrolling the user down by
+  -- (start_row - top0) rows. `preserve_view` short-circuits to "leave the
+  -- captured view exactly as it was" instead (see below).
   local anchor
+  local preserve_view = false
   if branch == "intersect" and new_section ~= nil then
-    local old_entries = state.sections[i].entries
-    local top_offset
     if top0 < start_row then
-      top_offset = 1
+      preserve_view = true
     else
-      top_offset = top0 - start_row + 1
+      local top_offset = top0 - start_row + 1
+      anchor = viewport.capture_from_entries(state.sections[i].entries, top_offset)
     end
-    anchor = viewport.capture_from_entries(old_entries, top_offset)
   end
 
   -- --- splice (buffer-mutating section; modifiable toggled around it) ---
@@ -278,7 +294,14 @@ function M.replace_section(state, i, new_section)
     view.lnum = math.max(1, view.lnum + delta)
     vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
   elseif branch == "intersect" then
-    if new_section ~= nil then
+    if new_section ~= nil and preserve_view then
+      -- Viewport top was above the replaced section: nothing above
+      -- start_row moved, so the captured view is still correct as-is.
+      -- Only clamp lnum, in case the cursor itself was inside the replaced
+      -- range and the buffer is now shorter than the cursor's old row.
+      view.lnum = math.min(view.lnum, vim.api.nvim_buf_line_count(state.buf))
+      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+    elseif new_section ~= nil then
       local resolved = viewport.resolve(anchor, new_section.entries) or 1
       -- resolved is a 1-based index into new_section.entries; the 0-based
       -- row of that entry in the buffer is start_row + (resolved - 1); the
