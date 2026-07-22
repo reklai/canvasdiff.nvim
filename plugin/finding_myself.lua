@@ -7,13 +7,15 @@ local SUBCOMMANDS = { "open", "close", "toggle", "refresh" }
 
 vim.api.nvim_create_user_command("FindingMyself", function(opts)
   local sub = opts.fargs[1] or "toggle"
-  local fm = require("finding_myself")
-  local fn = fm[sub]
-  if type(fn) ~= "function" then
-    vim.notify("finding_myself: unknown subcommand '" .. sub .. "'", vim.log.levels.ERROR)
+  if not vim.tbl_contains(SUBCOMMANDS, sub) then
+    vim.notify(
+      "finding_myself: unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")",
+      vim.log.levels.ERROR
+    )
     return
   end
-  fn()
+  local fm = require("finding_myself")
+  fm[sub]()
 end, {
   nargs = "?",
   desc = "Open/close/toggle/refresh the finding_myself diff canvas",

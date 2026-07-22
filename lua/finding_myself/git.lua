@@ -76,7 +76,10 @@ function M.changed_files(root)
       end
       i = i + 1
     else
-      -- Unhandled record kind (e.g. "u" unmerged, "!" ignored): skip.
+      -- Unhandled record kind (e.g. "!" ignored): skip. "u" (unmerged /
+      -- conflicted) records are intentionally out of MVP scope -- no
+      -- conflict-resolution UI exists yet, so they're silently dropped
+      -- rather than surfaced as a plain M/A/D diff.
       i = i + 1
     end
   end

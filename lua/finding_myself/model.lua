@@ -2,7 +2,7 @@ local differ = require("finding_myself.differ")
 
 local M = {}
 
-local CONTEXT = 3
+local DEFAULT_CONTEXT = 3
 
 local function split_lines(text)
   text = text or ""
@@ -27,13 +27,13 @@ local function old_range(hunk)
   return old_start + 1, old_start
 end
 
-local function ctx_window(hunk)
+local function ctx_window(hunk, context)
   local lo, hi = old_range(hunk)
-  return math.max(1, lo - CONTEXT), hi + CONTEXT
+  return math.max(1, lo - context), hi + context
 end
 
 -- Group hunks whose context windows touch or overlap into one displayed hunk.
-local function group_hunks(hunks)
+local function group_hunks(hunks, context)
   local sorted = {}
   for i, h in ipairs(hunks) do sorted[i] = h end
   table.sort(sorted, function(a, b) return a[1] < b[1] end)
@@ -41,7 +41,7 @@ local function group_hunks(hunks)
   local groups = {}
   local cur, cur_lo, cur_hi
   for _, h in ipairs(sorted) do
-    local lo, hi = ctx_window(h)
+    local lo, hi = ctx_window(h, context)
     if cur == nil then
       cur, cur_lo, cur_hi = { h }, lo, hi
     elseif lo <= cur_hi + 1 then
@@ -62,7 +62,8 @@ local function hunk_header(a, b, c, d)
   return ("@@ -%d,%d +%d,%d @@"):format(a, b, c, d)
 end
 
-function M.build_section(path, old_text, new_text, status)
+function M.build_section(path, old_text, new_text, status, context)
+  context = context or DEFAULT_CONTEXT
   local old_lines = split_lines(old_text)
   local new_lines = split_lines(new_text)
   local raw_hunks = differ.hunks(old_text or "", new_text or "")
@@ -75,7 +76,7 @@ function M.build_section(path, old_text, new_text, status)
     { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
   }
   local adds, dels = 0, 0
-  local groups = group_hunks(raw_hunks)
+  local groups = group_hunks(raw_hunks, context)
   local offset = 0 -- new_lnum - old_lnum, valid for unchanged lines up to this point
 
   for gi, group in ipairs(groups) do
@@ -152,10 +153,10 @@ function M.build_section(path, old_text, new_text, status)
   }
 end
 
-function M.build(files)
+function M.build(files, context)
   local sections = {}
   for _, f in ipairs(files) do
-    local s = M.build_section(f.path, f.old_text, f.new_text, f.status)
+    local s = M.build_section(f.path, f.old_text, f.new_text, f.status, context)
     if s then
       sections[#sections + 1] = s
     end

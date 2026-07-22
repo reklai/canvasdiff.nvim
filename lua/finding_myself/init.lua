@@ -103,7 +103,7 @@ function M.open()
   local win = vim.api.nvim_get_current_win()
   local prev_buf = vim.api.nvim_win_get_buf(win)
 
-  local sections = model.build(collect_files(root))
+  local sections = model.build(collect_files(root), config.options.context)
 
   local st = canvas.open(sections, {})
   st.root = root
@@ -171,7 +171,7 @@ function M.refresh()
   if not state then
     return
   end
-  local sections = model.build(collect_files(state.root))
+  local sections = model.build(collect_files(state.root), config.options.context)
   canvas.render_all(state, sections)
   state.sections = sections
   if #sections == 0 then

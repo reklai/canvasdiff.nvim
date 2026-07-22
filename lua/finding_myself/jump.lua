@@ -2,6 +2,7 @@ local canvas = require("finding_myself.canvas")
 local viewport = require("finding_myself.viewport")
 local model = require("finding_myself.model")
 local git = require("finding_myself.git")
+local config = require("finding_myself.config")
 
 local M = {}
 
@@ -128,7 +129,7 @@ function M.back()
   local abs_path = vim.fs.joinpath(state.root, ex.path)
   local content = read_current_content(ex.buf, abs_path)
   local old = git.show_head(state.root, ex.path)
-  local new_section = model.build_section(ex.path, old or "", content, ex.status)
+  local new_section = model.build_section(ex.path, old or "", content, ex.status, config.options.context)
 
   local idx
   for k, sec in ipairs(state.sections) do

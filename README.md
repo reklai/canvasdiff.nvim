@@ -23,7 +23,7 @@ Run `:FindingMyself` in any window inside a git repository. It replaces the
 current window's buffer with a single scrollable "canvas": every changed
 file's diff, one after another, in alphabetical path order, each with a
 `▎ path (+adds −dels)` header and unified-diff-style hunks (3 lines of
-context).
+context by default -- configurable via `context`, see Configuration below).
 
 - Move the cursor onto any line and press `<CR>` to jump into that file as a
   real `:edit` buffer, landing on the corresponding line (LSP/treesitter/
