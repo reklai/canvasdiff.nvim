@@ -1,5 +1,8 @@
 -- Run: nvim --headless --clean -l tests/run.lua [name-pattern]
-local root = vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)))
+-- Resolve to an absolute path up front: tests may change the process cwd
+-- (e.g. via nvim_set_current_dir), and everything below -- runtimepath,
+-- package.path, and the test-file glob -- must keep working after that.
+local root = vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
 vim.opt.runtimepath:prepend(root)
 package.path = root .. "/tests/?.lua;" .. package.path
 
