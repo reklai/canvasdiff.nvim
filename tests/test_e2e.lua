@@ -42,4 +42,40 @@ return {
     local ok = pcall(fm.open)
     assert(ok, "open outside a repo must not throw (notify instead)")
   end,
+  ["e2e: close() does not clobber a window that navigated away from the canvas"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n" },
+      worktree = { ["a.txt"] = "A\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    local other = vim.fs.joinpath(root, "other.txt")
+    local f = assert(io.open(other, "w")); f:write("other content\n"); f:close()
+
+    local fm = require("finding_myself")
+    fm.open()
+    assert(
+      require("finding_myself.canvas").is_canvas_buf(vim.api.nvim_get_current_buf()),
+      "canvas should be showing after open()"
+    )
+
+    -- Navigate the same window away from the canvas without calling close().
+    vim.cmd.edit(other)
+    local edited_buf = vim.api.nvim_get_current_buf()
+    H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(edited_buf)), "other.txt")
+
+    fm.close()
+    H.eq(vim.api.nvim_get_current_buf(), edited_buf, "close() must not swap away the window's current buffer")
+    H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "other.txt")
+  end,
+  ["e2e: close() before any open() is a safe no-op"] = function()
+    -- Force a fresh module instance so its module-level `state` is nil,
+    -- regardless of what earlier test cases in this process did.
+    package.loaded["finding_myself"] = nil
+    local fm = require("finding_myself")
+
+    local buf_before = vim.api.nvim_get_current_buf()
+    local ok = pcall(fm.close)
+    assert(ok, "close() with no prior open() must not throw")
+    H.eq(vim.api.nvim_get_current_buf(), buf_before, "close() must not touch the current buffer when nothing was ever opened")
+  end,
 }

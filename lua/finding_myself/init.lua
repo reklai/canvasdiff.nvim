@@ -119,16 +119,35 @@ end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
 --- canvas buffer itself is left alone -- canvas.lua keeps it cached/hidden.
+---
+--- Only ever acts on the CURRENT window, and only when that window is
+--- actually showing the canvas buffer right now -- never on `state.win`
+--- blindly. This matters because `state` is a single module-level
+--- singleton: the window it was captured in at `open()` time can since
+--- have navigated to a different buffer (e.g. `:edit`'d away), or a later
+--- `open()`/`toggle()` invoked from a *different* window can have
+--- overwritten `state.win`/`state.prev_buf` entirely. In either case
+--- blindly restoring `state.prev_buf` into `state.win` would clobber
+--- whatever the user is actually looking at in some other window.
+---
+--- If the current window isn't showing the canvas at all, close() is a
+--- no-op. If it is showing the canvas but isn't the window `state`
+--- remembers a `prev_buf` for (the multi-window case above), it falls
+--- back to `enew` there instead of guessing at some other window's
+--- previous buffer. Any *other* window still showing the canvas buffer
+--- besides the current one is left untouched -- multi-window canvas
+--- display is a documented MVP limitation, not handled here.
 function M.close()
   if not state then
     return
   end
-  local win = state.win
-  if not (win and vim.api.nvim_win_is_valid(win)) then
+
+  local win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_get_buf(win) ~= state.buf then
     return
   end
 
-  local prev_buf = state.prev_buf
+  local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
     vim.api.nvim_win_set_buf(win, prev_buf)
   else
