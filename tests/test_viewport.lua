@@ -28,6 +28,26 @@ return {
   ["viewport: empty entries"] = function()
     H.eq(V.resolve({ new_lnum = 1, content = "x" }, {}), nil)
   end,
+  ["viewport: rung2 prefers concrete distance over nil-distance content match"] = function()
+    -- content "shared" matches both a del entry (unknown new_lnum) and a ctx
+    -- entry 2 away from the anchor; the concrete-distance match must win.
+    local es = {
+      { new_lnum = nil, content = "shared", kind = "del" },
+      { new_lnum = 12, content = "shared", kind = "ctx" },
+    }
+    H.eq(V.resolve({ new_lnum = 10, content = "shared" }, es), 2)
+  end,
+  ["viewport: rung4 falls back to nearest hunk_hdr when hunk vanished"] = function()
+    local es = {
+      { new_lnum = nil, content = "@@ hunk1 @@", kind = "hunk_hdr" },
+      { new_lnum = 10, content = "line 10", kind = "ctx" },
+      { new_lnum = nil, content = "@@ hunk2 @@", kind = "hunk_hdr" },
+      { new_lnum = 50, content = "line 50", kind = "ctx" },
+    }
+    -- anchor's content matches nothing and its new_lnum (48) matches no
+    -- entry; the second hunk_hdr is nearest (its following entry is 50).
+    H.eq(V.resolve({ new_lnum = 48, content = "vanished line" }, es), 3)
+  end,
   ["viewport: capture prefers ctx below top"] = function()
     local es = {
       { new_lnum = nil, content = "+new", kind = "add" },

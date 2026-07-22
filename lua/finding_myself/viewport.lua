@@ -14,25 +14,29 @@ function V.resolve(anchor, entries)
     end
   end
 
-  -- 2. content match within +/-20 of anchor.new_lnum (nil on either side skips
-  --    the distance check); nearest by |new_lnum - anchor.new_lnum| wins ties.
+  -- 2. content match within +/-20 of anchor.new_lnum; nearest by
+  --    |new_lnum - anchor.new_lnum| wins ties (first hit breaks exact ties).
+  --    A concrete-distance match ALWAYS beats a nil-distance one (nil
+  --    new_lnum on either side means the position is unknown, not "close");
+  --    nil-distance content matches are only eligible when no concrete
+  --    in-range match exists.
   do
     local best_idx, best_dist
+    local nil_idx
     for i, e in ipairs(entries) do
       if e.content == anchor.content then
-        local within, dist
         if e.new_lnum == nil or anchor.new_lnum == nil then
-          within, dist = true, 0
+          if nil_idx == nil then nil_idx = i end
         else
-          dist = math.abs(e.new_lnum - anchor.new_lnum)
-          within = dist <= 20
-        end
-        if within and (best_idx == nil or dist < best_dist) then
-          best_idx, best_dist = i, dist
+          local dist = math.abs(e.new_lnum - anchor.new_lnum)
+          if dist <= 20 and (best_idx == nil or dist < best_dist) then
+            best_idx, best_dist = i, dist
+          end
         end
       end
     end
     if best_idx then return best_idx end
+    if nil_idx then return nil_idx end
   end
 
   -- 3. same new_lnum regardless of content; prefer kind "ctx" over "add".
