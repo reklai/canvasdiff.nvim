@@ -93,7 +93,7 @@ local function open_with_bar()
   return st
 end
 
-local function bar_win(st)
+local function bar_win()
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local cfg = vim.api.nvim_win_get_config(w)
     if cfg.relative == "win" and cfg.width == 1 then
@@ -117,7 +117,7 @@ end
 T["scroll_win opens a 1-col non-focusable float on the canvas"] = function()
   local st = open_with_bar()
   assert(scrollbar.is_open())
-  local w = bar_win(st)
+  local w = bar_win()
   assert(w, "float exists")
   local cfg = vim.api.nvim_win_get_config(w)
   H.eq(cfg.relative, "win")
@@ -131,7 +131,7 @@ end
 
 T["scroll_win thumb tracks the viewport"] = function()
   local st = open_with_bar()
-  local w = bar_win(st)
+  local w = bar_win()
   local bbuf = vim.api.nvim_win_get_buf(w)
   vim.api.nvim_win_call(st.win, function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
@@ -164,6 +164,22 @@ T["scroll_win hides during an excursion and re-shows after"] = function()
   scrollbar.close()
 end
 
+T["scroll_win hides on :edit excursion without manual update"] = function()
+  local st = open_with_bar()
+  local tmp = vim.fn.tempname()
+  local f = assert(io.open(tmp, "w")); f:write("hello\n"); f:close()
+  vim.api.nvim_win_call(st.win, function()
+    vim.cmd.edit({ tmp, mods = { keepalt = true } })
+  end)
+  vim.wait(300, function() return not scrollbar.is_open() end, 10)
+  H.eq(scrollbar.is_open(), false, "float hidden after :edit with no manual update call")
+  -- and the BufWinEnter re-show still works
+  vim.api.nvim_win_set_buf(st.win, st.buf)
+  vim.wait(300, function() return scrollbar.is_open() end, 10)
+  H.eq(scrollbar.is_open(), true)
+  scrollbar.close()
+end
+
 T["scroll_win canvas WinClosed tears the bar down"] = function()
   local st = open_with_bar()
   vim.cmd("vsplit") -- ensure the canvas window isn't the last one
@@ -180,7 +196,7 @@ end
 
 T["scroll_win file boundary rows are drawn"] = function()
   local st = open_with_bar()
-  local w = bar_win(st)
+  local w = bar_win()
   local bbuf = vim.api.nvim_win_get_buf(w)
   local lines = vim.api.nvim_buf_get_lines(bbuf, 0, -1, false)
   local dashes = 0

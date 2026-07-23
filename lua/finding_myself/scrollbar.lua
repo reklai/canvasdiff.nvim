@@ -205,6 +205,26 @@ local function install_autocmds(state)
       end
     end,
   })
+  vim.api.nvim_create_autocmd("BufWinLeave", {
+    group = aug,
+    buffer = state.buf,
+    callback = function()
+      -- The canvas buffer just left a window (jump excursion's :edit, or
+      -- any buffer switch); if it no longer shows in state.win, hide the
+      -- float instead of letting it sit over the real file. At this point
+      -- in the event the window still transiently reports the OLD buffer
+      -- (the canvas), so canvas_showing would wrongly read "still
+      -- showing" if checked synchronously; defer to let the switch land.
+      local b = bar
+      if b then
+        vim.schedule(function()
+          if bar == b then
+            S.update(b.state)
+          end
+        end)
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("WinClosed", {
     group = aug,
     pattern = tostring(state.win),
