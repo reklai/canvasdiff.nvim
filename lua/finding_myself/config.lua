@@ -23,6 +23,9 @@ M.defaults = {
     enabled = true,
     debounce_ms = 200,
   },
+  scrollbar = {
+    enabled = true,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)

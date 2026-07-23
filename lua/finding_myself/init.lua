@@ -7,6 +7,7 @@ local hl = require("finding_myself.hl")
 local collect = require("finding_myself.collect")
 local watch = require("finding_myself.watch")
 local sidebar = require("finding_myself.sidebar")
+local scrollbar = require("finding_myself.scrollbar")
 
 local M = {}
 
@@ -35,6 +36,9 @@ local function set_canvas_keymaps(st)
   local cfg = config.options
   local map_opts = { buffer = st.buf, silent = true, noremap = true }
   vim.keymap.set("n", cfg.keymaps.jump, function()
+    jump.enter(st, { back_key = cfg.keymaps.back })
+  end, map_opts)
+  vim.keymap.set("n", "<2-LeftMouse>", function()
     jump.enter(st, { back_key = cfg.keymaps.back })
   end, map_opts)
   vim.keymap.set("n", cfg.keymaps.close, function()
@@ -102,6 +106,10 @@ function M.open()
   if config.options.sidebar.enabled then
     sidebar.open(st, config.options.sidebar)
   end
+
+  if config.options.scrollbar.enabled then
+    scrollbar.open(st, config.options.scrollbar)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -137,6 +145,7 @@ function M.close()
   watch.stop()
   hl.detach(state)
   sidebar.close()
+  scrollbar.close()
 
   local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
@@ -185,6 +194,7 @@ function M.refresh()
   end
   hl.apply_now(state)
   sidebar.refresh(state)
+  scrollbar.update(state)
 end
 
 return M

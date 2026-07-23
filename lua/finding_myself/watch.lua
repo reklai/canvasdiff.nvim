@@ -4,6 +4,7 @@ local collect = require("finding_myself.collect")
 local config = require("finding_myself.config")
 local hl = require("finding_myself.hl")
 local sidebar = require("finding_myself.sidebar")
+local scrollbar = require("finding_myself.scrollbar")
 
 local W = {}
 
@@ -162,6 +163,7 @@ function W.reconcile(state)
       end
       hl.apply_now(state)
       sidebar.refresh(state)
+      scrollbar.update(state)
     end
     return
   end
@@ -184,6 +186,7 @@ function W.reconcile(state)
         canvas.render_all(state, desired)
         hl.apply_now(state)
         sidebar.refresh(state)
+        scrollbar.update(state)
         return
       end
       canvas.replace_section(state, i, nil) -- delete shrinks the list; keep i
@@ -195,6 +198,7 @@ function W.reconcile(state)
 
   hl.apply_now(state)
   sidebar.refresh(state)
+  scrollbar.update(state)
 end
 
 return W

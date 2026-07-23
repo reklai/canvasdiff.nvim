@@ -5,6 +5,7 @@ local git = require("finding_myself.git")
 local config = require("finding_myself.config")
 local hl = require("finding_myself.hl")
 local sidebar = require("finding_myself.sidebar")
+local scrollbar = require("finding_myself.scrollbar")
 
 local M = {}
 
@@ -180,6 +181,7 @@ function M.back()
   vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
   hl.apply_now(state)
   sidebar.refresh(state)
+  scrollbar.update(state)
 end
 
 return M

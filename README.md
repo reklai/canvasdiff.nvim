@@ -50,6 +50,15 @@ to the entry under the cursor / toggles that directory's fold, and `q`
 closes just the sidebar (the canvas stays open). Set `sidebar.enabled =
 false` to turn it off.
 
+A 1-column scrollbar minimap floats over the canvas's right edge, showing
+file boundaries (─), add/del density per stretch of lines (│, colored), and
+a highlighted thumb tracking your current viewport across the whole canvas.
+Double-click a line in the canvas (`<2-LeftMouse>`) to jump into that file,
+same as `<CR>`. It's purely visual and non-focusable -- your mouse wheel and
+any scrollbar plugin (satellite.nvim, nvim-scrollbar, ...) still work
+normally on the canvas window underneath it. Set `scrollbar.enabled = false`
+to turn it off (e.g. if you'd rather rely on one of those plugins alone).
+
 `:FindingMyself` with no argument toggles the canvas (open if not showing,
 close if showing). It also accepts an explicit subcommand, with completion:
 
@@ -89,6 +98,9 @@ require("finding_myself").setup({
     enabled = true,     -- auto-open the file-tree sidebar alongside the canvas
     width = 32,         -- sidebar window width, in columns
   },
+  scrollbar = {
+    enabled = true,     -- overlay the minimap scrollbar on the canvas
+  },
 })
 ```
 
@@ -102,6 +114,7 @@ Any subset of these can be overridden; unspecified keys keep their default.
 | `refresh` | `R` | Re-collect changed files and re-render the canvas |
 | `cycle_next` | `<C-n>` | Scroll to the next file's diff, wrapping |
 | `cycle_prev` | `<C-p>` | Scroll to the previous file's diff, wrapping |
+| (mouse) | `<2-LeftMouse>` | Double-click a line to jump into that file, same as `jump` |
 
 | Keymap (sidebar buffer only) | Default | Action |
 | --- | --- | --- |
@@ -149,13 +162,14 @@ What's here today:
 - A persistent file-tree sidebar (directory folding, scroll-synced active
   entry, `<CR>`-to-scroll) plus `<C-n>`/`<C-p>` section cycling, both live
   updated as the canvas reconciles.
+- A scrollbar minimap (file boundaries, add/del density, viewport thumb)
+  overlaid on the canvas, plus double-click-to-jump.
 
 ## Roadmap
 
 Rough order, each phase independently useful:
 
-1. **Scrollbar** — a visual indicator of where you are across all sections.
-2. **Virtualization** — render only the visible window's worth of diff for
+1. **Virtualization** — render only the visible window's worth of diff for
    large repos/diffs, instead of the whole canvas up front.
-3. **Session persistence** — remember canvas state (open files, scroll
+2. **Session persistence** — remember canvas state (open files, scroll
    position) across Neovim restarts.

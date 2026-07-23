@@ -345,9 +345,13 @@ T["sidebar_integration toggle from inside the sidebar redirects instead of throw
   fm.open()
 
   local canvas_mod = require("finding_myself.canvas")
+  -- Identify the sidebar window specifically (not just "any non-canvas
+  -- window"): the scrollbar float is also a non-canvas window in this
+  -- tabpage now, and picking it here would set focus on a non-focusable
+  -- float instead of the sidebar, defeating the point of the test.
   local side_win
   for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if not canvas_mod.is_canvas_buf(vim.api.nvim_win_get_buf(w)) then
+    if sidebar.is_sidebar_win(w) then
       side_win = w
     end
   end
