@@ -170,6 +170,10 @@ function S.select(state)
     side.folded[e.path] = not side.folded[e.path] or nil
     S.refresh(state)
   else
+    if not (state.win and vim.api.nvim_win_is_valid(state.win)
+        and vim.api.nvim_win_get_buf(state.win) == state.buf) then
+      return -- canvas window closed out from under the sidebar
+    end
     local start0 = (canvas.section_rows(state, e.section_i))
     vim.api.nvim_win_call(state.win, function()
       vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
@@ -193,7 +197,11 @@ end
 --- canvas window. The canvas window itself must never get winfixbuf.
 function S.open(state, opts)
   opts = opts or {}
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    return -- nothing to attach to; nil-safe no-op
+  end
   if S.is_open() then
+    side.state = state
     S.refresh(state)
     return
   end
@@ -219,22 +227,28 @@ function S.open(state, opts)
     vim.api.nvim_set_option_value(name, val, { win = win, scope = "local" })
   end
 
-  side = { buf = buf, win = win, entries = {}, folded = {}, active_mark = nil }
+  side = { buf = buf, win = win, entries = {}, folded = {}, active_mark = nil, state = state }
 
   local map_opts = { buffer = buf, silent = true, noremap = true }
-  vim.keymap.set("n", "<CR>", function() S.select(state) end, map_opts)
-  vim.keymap.set("n", "<Tab>", function() S.select(state) end, map_opts)
-  vim.keymap.set("n", "za", function() S.select(state) end, map_opts)
+  local function select_current()
+    local st = side and side.state
+    if st then
+      S.select(st)
+    end
+  end
+  vim.keymap.set("n", "<CR>", select_current, map_opts)
+  vim.keymap.set("n", "<Tab>", select_current, map_opts)
+  vim.keymap.set("n", "za", select_current, map_opts)
   vim.keymap.set("n", "q", function() S.close() end, map_opts)
 
   local aug = vim.api.nvim_create_augroup("finding_myself.sidebar", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = aug,
     callback = function(ev)
+      local st = side and side.state
       local w = tonumber(ev.match)
-      if side and w == state.win
-          and vim.api.nvim_win_get_buf(state.win) == state.buf then
-        S.sync(state)
+      if st and w == st.win and vim.api.nvim_win_get_buf(st.win) == st.buf then
+        S.sync(st)
       end
     end,
   })

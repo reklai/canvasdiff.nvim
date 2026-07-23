@@ -208,4 +208,56 @@ T["sidebar_win manual :close of the sidebar window clears the singleton"] = func
   sidebar.sync(st)
 end
 
+T["sidebar_win reopen rebinds callbacks to the new state"] = function()
+  local st1 = open_with_sidebar()
+  local win_a = st1.win
+  local top_a_before = vim.api.nvim_win_call(win_a, function() return vim.fn.line("w0") end)
+
+  -- A second canvas.open() that reuses the SAME window would make st1 and
+  -- st2 indistinguishable by win/buf, and (worse) Neovim reuses extmark ids
+  -- after a clear_namespace, so st1's now-stale anchor_ids would coincidentally
+  -- alias onto st2's freshly created anchors -- a false-positive pass that
+  -- proves nothing. Force st2 into a genuinely different window so the
+  -- rebind is the only thing that can make this test pass.
+  vim.api.nvim_set_current_win(win_a)
+  vim.cmd("vsplit")
+  local win_b = vim.api.nvim_get_current_win()
+  local secs = { big_section("x/new.txt", "x"), big_section("y/other.txt", "y") }
+  local canvas_mod = require("finding_myself.canvas")
+  local st2 = canvas_mod.open(secs, {})
+  H.eq(st2.win, win_b, "sanity: st2 opened in the new window, not win_a")
+
+  sidebar.open(st2, { width = 30 }) -- idempotent branch: refresh + rebind
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  vim.api.nvim_win_set_cursor(side_win, { 4, 0 }) -- y/other.txt row
+  vim.api.nvim_set_current_win(side_win)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+
+  local top_b = vim.api.nvim_win_call(win_b, function() return vim.fn.line("w0") end)
+  H.eq(top_b, (canvas_mod.section_rows(st2, 2)) + 1, "keymap scrolled the NEW state's window")
+  local top_a_after = vim.api.nvim_win_call(win_a, function() return vim.fn.line("w0") end)
+  H.eq(top_a_after, top_a_before, "old canvas window must be untouched by the rebound keymap")
+
+  sidebar.close()
+end
+
+T["sidebar_win select survives a dead canvas window"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  -- Keep a third, plain window alive so that (a) closing st.win below never
+  -- makes the sidebar the tabpage's last window, and (b) sidebar.close()'s
+  -- own window-close never hits "last window" either -- leaving a clean,
+  -- non-winfixbuf window behind for whatever test runs next.
+  vim.api.nvim_set_current_win(st.win)
+  vim.cmd("split")
+  -- kill the canvas window out from under the sidebar (not via close())
+  vim.api.nvim_win_close(st.win, true)
+  vim.api.nvim_win_set_cursor(side_win, { 2, 0 }) -- a file row
+  local ok, err = pcall(sidebar.select, st)
+  H.eq(ok, true, "select must not throw on a dead canvas window: " .. tostring(err))
+  sidebar.close()
+end
+
 return T
