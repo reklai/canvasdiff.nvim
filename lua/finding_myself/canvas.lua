@@ -344,4 +344,57 @@ function M.replace_section(state, i, new_section)
   -- showing the canvas.
 end
 
+--- Inserts `section` BEFORE current section index i (i = #sections + 1
+--- appends at EOF), correcting the view in the same synchronous tick so the
+--- niri invariant holds. Precondition: the canvas is non-empty
+--- (#state.sections >= 1) -- the 0 -> N transition goes through render_all.
+function M.insert_section(state, i, section)
+  local row = get_row(state, state.anchor_ids[i])
+  local new_lines = render.section_lines(section)
+
+  local win_ok = win_showing_canvas(state)
+  local branch, view
+  if win_ok then
+    local info = win_view_info(state.win)
+    local top0, bot0 = info.top - 1, info.bot - 1
+    view = info.view
+    if row > bot0 then
+      branch = "below"
+    elseif row <= top0 then
+      branch = "above"
+    else
+      branch = "intersect"
+    end
+  else
+    branch = "none"
+  end
+
+  set_modifiable(state.buf, true)
+  vim.api.nvim_buf_set_lines(state.buf, row, row, false, new_lines)
+  -- The left-gravity boundary anchor sitting exactly at `row` stays put
+  -- through the insert and would wrongly become the inserted section's
+  -- start; recreate it at its shifted position first, then give the new
+  -- section its own anchor at `row` (see the module-level gravity note).
+  replace_boundary_extmark(state, i, row + #new_lines)
+  table.insert(state.anchor_ids, i,
+    vim.api.nvim_buf_set_extmark(state.buf, ANCHOR_NS, row, 0, ANCHOR_OPTS))
+  table.insert(state.sections, i, section)
+  table.insert(state.hl_ids, i, apply_section_hl(state.buf, row, section))
+  set_modifiable(state.buf, false)
+
+  -- View correction, same synchronous tick.
+  if branch == "above" then
+    -- Insertion at or above the viewport top: shift so what the user reads
+    -- stays pinned; the new content scrolls in above, out of view.
+    view.topline = view.topline + #new_lines
+    view.lnum = view.lnum + #new_lines
+    vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+  elseif branch == "intersect" then
+    -- Insertion point is inside the viewport: nothing at or above the
+    -- viewport top moved, so the captured view is still correct as-is.
+    vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+  end
+  -- "below"/"none": the edit cannot move rows the user is looking at.
+end
+
 return M

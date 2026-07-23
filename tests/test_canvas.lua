@@ -108,4 +108,83 @@ return {
     H.eq(st.sections[1].path, "b.txt")
     H.eq(canvas.locate(st, 0), 1)
   end,
+  ["canvas_insert keeps order, anchors, and rows consistent"] = function()
+    local a = model.build_section("a.lua", "x\n", "x\ny\n", "M")
+    local c = model.build_section("c.lua", "x\n", "x\nz\n", "M")
+    local b = model.build_section("b.lua", "x\n", "x\nw\n", "M")
+    local st = canvas.open({ a, c }, {})
+
+    canvas.insert_section(st, 2, b)
+
+    H.eq(#st.sections, 3)
+    H.eq({ st.sections[1].path, st.sections[2].path, st.sections[3].path },
+      { "a.lua", "b.lua", "c.lua" })
+    -- rows are contiguous and non-overlapping, resolved live from anchors
+    local prev_end = 0
+    for i = 1, 3 do
+      local srow, erow = canvas.section_rows(st, i)
+      H.eq(srow, prev_end, "section " .. i .. " starts where previous ended")
+      assert(erow > srow, "non-empty section")
+      prev_end = erow
+    end
+    -- the inserted section's rendered lines are actually at its rows
+    local srow = (canvas.section_rows(st, 2))
+    local first = vim.api.nvim_buf_get_lines(st.buf, srow, srow + 1, false)[1]
+    assert(first:find("b.lua", 1, true), "b.lua header at inserted rows, got: " .. first)
+    -- EOF sentinel intact: locate on the last row maps into section 3
+    local last_row0 = vim.api.nvim_buf_line_count(st.buf) - 1
+    local li = (canvas.locate(st, last_row0))
+    H.eq(li, 3)
+  end,
+  ["canvas_insert appends at EOF with i = n + 1"] = function()
+    local a = model.build_section("a.lua", "x\n", "x\ny\n", "M")
+    local d = model.build_section("d.lua", "x\n", "x\nq\n", "M")
+    local st = canvas.open({ a }, {})
+    canvas.insert_section(st, 2, d)
+    H.eq(#st.sections, 2)
+    H.eq(st.sections[2].path, "d.lua")
+    local srow, erow = canvas.section_rows(st, 2)
+    H.eq(erow, vim.api.nvim_buf_line_count(st.buf), "section 2 ends at EOF")
+    assert(srow < erow)
+  end,
+  ["canvas_insert above viewport keeps visible text pinned"] = function()
+    -- two big sections; scroll into the second, insert before it
+    local big = {}
+    for i = 1, 120 do big[i] = ("line %d"):format(i) end
+    local old = table.concat(big, "\n") .. "\n"
+    local new = old:gsub("line 60", "line 60 changed")
+    local a = model.build_section("a.txt", old, new, "M")
+    local z = model.build_section("z.txt", old, new, "M")
+    local m = model.build_section("m.txt", old, new, "M")
+    local st = canvas.open({ a, z }, {})
+
+    -- scroll so the viewport sits inside section 2 (z.txt)
+    local z_start = (canvas.section_rows(st, 2))
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = z_start + 2, lnum = z_start + 2 })
+    end)
+    local before_top = vim.api.nvim_win_call(st.win, function()
+      return vim.fn.getline(vim.fn.line("w0"))
+    end)
+
+    canvas.insert_section(st, 2, m) -- lands entirely above the viewport
+
+    local after_top = vim.api.nvim_win_call(st.win, function()
+      return vim.fn.getline(vim.fn.line("w0"))
+    end)
+    H.eq(after_top, before_top, "topmost visible line must not change")
+  end,
+  ["canvas_insert below viewport leaves the view untouched"] = function()
+    local a = model.build_section("a.lua", "x\n", "x\ny\n", "M")
+    local d = model.build_section("d.lua", "x\n", "x\nq\n", "M")
+    local st = canvas.open({ a }, {})
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = 1, lnum = 1 })
+    end)
+    local before = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    canvas.insert_section(st, 2, d)
+    local after = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    H.eq(after.topline, before.topline)
+    H.eq(after.lnum, before.lnum)
+  end,
 }
