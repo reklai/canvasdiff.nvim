@@ -94,4 +94,29 @@ T["hl_ts_marks clip multiline captures per displayed row"] = function()
   assert(full_row_string_mark(5, "world"), "world row covered")
 end
 
+T["hl_cache evicts LRU at capacity and invalidate drops one entry"] = function()
+  -- fill well past capacity with distinct paths
+  for k = 1, 25 do
+    local s = model.build_section(("cache%d.lua"):format(k), OLD, NEW, "M")
+    hl.section_ts_marks(s)
+  end
+  H.eq(hl._cache_size(), 20, "cache bounded at CACHE_CAP")
+  hl.invalidate("cache25.lua")
+  H.eq(hl._cache_size(), 19, "invalidate drops a cached path")
+  hl.invalidate("cache25.lua")
+  H.eq(hl._cache_size(), 19, "double invalidate is a no-op")
+  hl.invalidate("no-such-path.lua")
+  H.eq(hl._cache_size(), 19, "invalidating an unknown path is a no-op")
+end
+
+T["hl_cache evicted path still produces correct marks on re-request"] = function()
+  local s1 = model.build_section("evictme.lua", OLD, NEW, "M")
+  local before = hl.section_ts_marks(s1)
+  for k = 1, 21 do
+    hl.section_ts_marks(model.build_section(("refill%d.lua"):format(k), OLD, NEW, "M"))
+  end
+  local after = hl.section_ts_marks(s1)
+  H.eq(after, before, "reparse after eviction yields identical marks")
+end
+
 return T

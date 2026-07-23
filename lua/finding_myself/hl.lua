@@ -42,6 +42,11 @@ function M.invalidate(path)
   end
 end
 
+--- Test-only: current number of cached paths.
+function M._cache_size()
+  return cache_n
+end
+
 --- Treesitter language for a repo-relative path, or nil when the filetype is
 --- unknown, no parser is installed, or the language has no highlights query.
 function M.lang_for(path)
