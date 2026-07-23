@@ -275,4 +275,34 @@ T["hl_engine stale state apply is a no-op after reattach"] = function()
   H.eq(#after, tracked, "live state tracks every mark in the namespace")
 end
 
+T["hl_engine BufWinEnter reapplies marks after a hidden splice"] = function()
+  local old = big_lua(30, 21)
+  local sec = model.build_section("hidden.lua", old, changed_every(old, 5), "M")
+  local st = canvas.open({ sec }, {})
+  reset_view(st)
+  hl.attach(st, { margin = 200 })
+  assert(st.ts.ids_by_path["hidden.lua"] and #st.ts.ids_by_path["hidden.lua"] > 0,
+    "sanity: attach applied marks")
+
+  -- hide the canvas: show a scratch buffer in its window
+  local scratch = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(st.win, scratch)
+
+  -- splice while hidden: the on_section_replaced hook still deletes the old
+  -- marks, but the trailing apply_now no-ops (window no longer shows the
+  -- canvas), so nothing re-applies them.
+  local sec2 = model.build_section("hidden.lua", old, changed_every(old, 7), "M")
+  canvas.replace_section(st, 1, sec2)
+  H.eq(st.ts.ids_by_path["hidden.lua"], nil, "hook cleared marks on the hidden splice")
+
+  -- re-show the canvas buffer in the window: nvim_win_set_buf fires
+  -- BufWinEnter, which must re-apply without an explicit apply_now call.
+  vim.api.nvim_win_set_buf(st.win, st.buf)
+
+  assert(st.ts.ids_by_path["hidden.lua"] and #st.ts.ids_by_path["hidden.lua"] > 0,
+    "BufWinEnter re-applied marks with nobody calling apply_now manually")
+  H.eq(st.win, vim.api.nvim_get_current_win(),
+    "BufWinEnter updated state.win to the window now showing the canvas")
+end
+
 return T

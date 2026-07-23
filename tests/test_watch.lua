@@ -86,6 +86,11 @@ T["watch_reconcile inserts a new file alphabetically"] = function()
     H.eq(srow, prev_end)
     prev_end = erow
   end
+  -- inserted section's rendered content is actually spliced into the buffer
+  local srow, erow = canvas.section_rows(st, 2)
+  local lines = table.concat(vim.api.nvim_buf_get_lines(st.buf, srow, erow, false), "\n")
+  assert(lines:find("c.txt", 1, true), "inserted section header present")
+  assert(lines:find("brand new", 1, true), "inserted section content present")
 end
 
 T["watch_reconcile deletes a reverted file's section"] = function()
@@ -95,6 +100,10 @@ T["watch_reconcile deletes a reverted file's section"] = function()
   watch.reconcile(st)
   H.eq(#st.sections, 1)
   H.eq(st.sections[1].path, "d.txt")
+  -- the deleted section's header line is really gone from the buffer, not
+  -- just dropped from state.sections
+  local all = table.concat(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), "\n")
+  H.eq(all:find("b.txt", 1, true), nil, "no leftover b.txt header line in the buffer")
 end
 
 T["watch_reconcile handles N to 0 and 0 to N via render_all"] = function()
@@ -194,6 +203,76 @@ T["watch_trigger fs_event catches external writes at repo root"] = function()
   end, 10)
   H.eq(ok, true, "fs_event triggered a reconcile")
   watch.stop()
+end
+
+T["watch_reconcile composite ops above viewport keep visible text pinned"] = function()
+  -- delete + replace above the viewport in ONE reconcile pass; the
+  -- viewport (pinned inside the LAST section) must not move at all.
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = bigtext(60, "a"), ["d.txt"] = bigtext(60, "d"), ["z.txt"] = bigtext(60, "z") },
+    worktree = {
+      ["a.txt"] = (bigtext(60, "a"):gsub("a line 30", "a line 30 X")),
+      ["d.txt"] = (bigtext(60, "d"):gsub("d line 30", "d line 30 X")),
+      ["z.txt"] = (bigtext(60, "z"):gsub("z line 30", "z line 30 X")),
+    },
+  })
+  local st = open_state(root)
+  H.eq(#st.sections, 3)
+  local z_start = (canvas.section_rows(st, 3))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = z_start + 3, lnum = z_start + 3 })
+  end)
+  local before_top = vim.api.nvim_win_call(st.win, function()
+    return vim.fn.getline(vim.fn.line("w0"))
+  end)
+
+  write_file(root, "a.txt", bigtext(60, "a")) -- revert -> delete section
+  write_file(root, "d.txt", (bigtext(60, "d"):gsub("d line 10", "d line 10 GROWN"):gsub("d line 50", "d line 50 GROWN"))) -- replace section
+  watch.reconcile(st)
+
+  H.eq(#st.sections, 2)
+  local after_top = vim.api.nvim_win_call(st.win, function()
+    return vim.fn.getline(vim.fn.line("w0"))
+  end)
+  H.eq(after_top, before_top, "visible text pinned through composite reconcile")
+end
+
+T["watch_reconcile while hidden then jump.back stays coherent"] = function()
+  -- reconcile against a HIDDEN canvas (window showing another buffer), then
+  -- re-show: content must be the reconciled version, rows contiguous.
+  local root = fixture()
+  local st = open_state(root)
+  -- hide the canvas: show a scratch buffer in its window
+  local scratch = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(st.win, scratch)
+
+  write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 15", "b line 15 HIDDEN")))
+  watch.reconcile(st)
+
+  vim.api.nvim_win_set_buf(st.win, st.buf)
+  H.eq(#st.sections, 2)
+  local srow, erow = canvas.section_rows(st, 1)
+  local text = table.concat(vim.api.nvim_buf_get_lines(st.buf, srow, erow, false), "\n")
+  assert(text:find("b line 15 HIDDEN", 1, true), "hidden reconcile spliced the canvas")
+  local prev_end = 0
+  for i = 1, 2 do
+    local s, e = canvas.section_rows(st, i)
+    H.eq(s, prev_end)
+    prev_end = e
+  end
+end
+
+T["watch_start stops itself when the canvas buffer is wiped"] = function()
+  local root = fixture()
+  local st = open_state(root)
+  watch.start(st, { debounce_ms = 20 })
+  assert(pcall(vim.api.nvim_get_autocmds, { group = "finding_myself.watch" }),
+    "augroup exists while watching")
+
+  vim.api.nvim_buf_delete(st.buf, { force = true })
+
+  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "finding_myself.watch" })
+  H.eq(group_gone, true, "BufWipeout stopped the watch (augroup torn down)")
 end
 
 T["watch_trigger stop() really stops"] = function()

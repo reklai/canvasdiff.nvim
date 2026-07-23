@@ -222,12 +222,18 @@ function M.apply_now(state)
 
   for i, sec in ipairs(state.sections) do
     local srow, erow = canvas.section_rows(state, i)
-    local in_window = srow <= hi and erow > lo
-    local has = ts.ids_by_path[sec.path] ~= nil
-    if in_window and not has then
-      apply_section(state, i)
-    elseif has and (erow <= evict_lo or srow > evict_hi) then
-      del_path_marks(state, sec.path)
+    -- srow/erow are nil when this state's anchors don't resolve against its
+    -- own buffer right now (e.g. a BufWinEnter fired for a buffer some
+    -- other, unrelated state table has since re-rendered without going
+    -- through this state's bookkeeping). Nothing safe to do; skip it.
+    if srow and erow then
+      local in_window = srow <= hi and erow > lo
+      local has = ts.ids_by_path[sec.path] ~= nil
+      if in_window and not has then
+        apply_section(state, i)
+      elseif has and (erow <= evict_lo or srow > evict_hi) then
+        del_path_marks(state, sec.path)
+      end
     end
   end
 end
@@ -283,6 +289,16 @@ function M.attach(state, opts)
           and vim.api.nvim_win_get_buf(win) == state.buf then
         debounce(state, state.ts.debounce_ms)
       end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = aug,
+    buffer = state.buf,
+    callback = function()
+      -- A window just started showing the canvas; sections spliced while it
+      -- was hidden had their marks invalidated with nobody to re-apply.
+      state.win = vim.api.nvim_get_current_win()
+      M.apply_now(state)
     end,
   })
 

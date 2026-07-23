@@ -103,7 +103,10 @@ detection watches the repo root and `.git` non-recursively plus the parent
 directories of files currently shown on the canvas; a change to a file in
 some other, not-yet-watched subdirectory is picked up the next time you
 save or refocus Neovim (or with a manual `R`) rather than instantly. Set
-`watch.enabled = false` to go back to manual-refresh-only behavior.
+`watch.enabled = false` to go back to manual-refresh-only behavior. The
+watcher keeps running while the canvas is merely hidden (so it's already
+fresh when you return to it) and only stops when the canvas is closed with
+`q` or its buffer is wiped.
 
 ## MVP scope
 

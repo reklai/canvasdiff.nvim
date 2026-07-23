@@ -392,6 +392,8 @@ function M.insert_section(state, i, section)
   elseif branch == "intersect" then
     -- Insertion point is inside the viewport: nothing at or above the
     -- viewport top moved, so the captured view is still correct as-is.
+    -- (the absolute cursor line may now sit on inserted content -- the
+    -- invariant protects the viewport top, not cursor identity).
     vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
   end
   -- "below"/"none": the edit cannot move rows the user is looking at.

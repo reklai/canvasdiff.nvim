@@ -116,6 +116,13 @@ function W.start(state, opts)
     group = aug,
     callback = mark_dirty,
   })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = aug,
+    buffer = state.buf,
+    callback = function()
+      W.stop()
+    end,
+  })
 
   refresh_fs_watches(state)
 end
