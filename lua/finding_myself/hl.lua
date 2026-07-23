@@ -169,6 +169,8 @@ local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "FmWordDel", { link = "DiffText", default = true })
 end
 
+local live_state
+
 local function del_path_marks(state, path)
   local ids = state.ts.ids_by_path[path]
   if not ids then
@@ -205,7 +207,7 @@ end
 --- when highlighting isn't attached or the canvas isn't showing.
 function M.apply_now(state)
   local ts = state.ts
-  if not ts then
+  if not ts or state ~= live_state then
     return
   end
   if not (state.win and vim.api.nvim_win_is_valid(state.win)
@@ -245,6 +247,9 @@ end
 --- Attach lazy treesitter+word highlighting to a live canvas state: install
 --- invalidation hooks, a debounced WinScrolled trigger, and apply once now.
 function M.attach(state, opts)
+  if timer then
+    timer:stop()
+  end
   opts = opts or {}
   ensure_hl_groups()
   state.ts = {
@@ -252,6 +257,7 @@ function M.attach(state, opts)
     margin = opts.margin or 100,
     debounce_ms = opts.debounce_ms or 30,
   }
+  live_state = state
 
   -- A cached canvas buffer can carry a previous session's marks (render_all
   -- ran before this attach installed the clearing hook, collapsing them onto

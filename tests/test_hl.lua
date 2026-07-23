@@ -247,4 +247,32 @@ T["hl_engine reattach after reopen leaves no stale marks"] = function()
   assert(total > 0, "sanity: attach applied marks")
 end
 
+T["hl_engine stale state apply is a no-op after reattach"] = function()
+  local st1 = canvas.open(big_sections(), {})
+  hl.attach(st1, { margin = 5 })
+  local st2 = canvas.open(big_sections(), {})
+  hl.attach(st2, { margin = 5 })
+
+  -- Move the viewport far from the sections both states applied at attach
+  -- time (f1), so a stale apply would evict f1 (deleting ids that alias the
+  -- live state's marks) and apply f3 (marks tracked only by the dead state).
+  vim.api.nvim_win_call(st2.win, function()
+    vim.cmd("normal! G")
+  end)
+
+  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local before = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
+
+  hl.apply_now(st1) -- simulated stale debounce callback
+
+  local after = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
+  H.eq(after, before, "stale-state apply changed the namespace")
+
+  local tracked = 0
+  for _, ids in pairs(st2.ts.ids_by_path) do
+    tracked = tracked + #ids
+  end
+  H.eq(#after, tracked, "live state tracks every mark in the namespace")
+end
+
 return T
