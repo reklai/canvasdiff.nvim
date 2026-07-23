@@ -1,5 +1,7 @@
 local H = require("helpers")
 local sidebar = require("finding_myself.sidebar")
+local canvas = require("finding_myself.canvas")
+local model = require("finding_myself.model")
 
 local T = {}
 
@@ -63,6 +65,147 @@ T["sidebar_render formats dirs, files, indent, and counts"] = function()
     "  ▸ mod/",
     "root.md  +0 −5",
   })
+end
+
+local function bigtext(n, tag)
+  local t = {}
+  for i = 1, n do t[i] = ("%s line %d"):format(tag, i) end
+  return table.concat(t, "\n") .. "\n"
+end
+
+-- ~55 rows per section (6 separated hunks): sections must be taller than
+-- the ~22-row headless window or topline restores would clamp and the
+-- scroll-targeting assertions below would silently test the wrong section.
+local function big_section(path, tag)
+  local old = bigtext(60, tag)
+  local lines = vim.split(old, "\n", { plain = true })
+  for i = 10, 60, 10 do
+    lines[i] = lines[i] .. " changed"
+  end
+  local new = table.concat(lines, "\n")
+  return model.build_section(path, old, new, "M")
+end
+
+local function open_with_sidebar()
+  local secs = {
+    big_section("a/one.txt", "a"),
+    big_section("b/two.txt", "b"),
+    big_section("c/three.txt", "c"),
+  }
+  local st = canvas.open(secs, {})
+  sidebar.close() -- reset singleton across tests
+  sidebar.open(st, { width = 30 })
+  return st
+end
+
+T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = function()
+  local st = open_with_sidebar()
+  assert(sidebar.is_open())
+  local side_win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if w ~= st.win and vim.api.nvim_win_get_buf(w) ~= st.buf then
+      side_win = w
+    end
+  end
+  assert(side_win, "sidebar window exists")
+  H.eq(vim.api.nvim_get_current_win(), st.win, "focus stays in canvas")
+  H.eq(vim.api.nvim_win_get_width(side_win), 30)
+  H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = side_win }), true)
+  H.eq(vim.api.nvim_get_option_value("winfixwidth", { win = side_win }), true)
+  H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = st.win }), false,
+    "canvas window must never get winfixbuf")
+  sidebar.close()
+  H.eq(sidebar.is_open(), false)
+end
+
+local SIDE_NS = vim.api.nvim_create_namespace("finding_myself.sidebar")
+
+local function active_row(side_buf)
+  local marks = vim.api.nvim_buf_get_extmarks(side_buf, SIDE_NS, 0, -1, { details = true })
+  for _, m in ipairs(marks) do
+    if m[4] and m[4].line_hl_group == "FmSidebarActive" then
+      return m[2]
+    end
+  end
+  return nil
+end
+
+local function sidebar_buf()
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("finding%-myself://sidebar") then
+      return b
+    end
+  end
+end
+
+T["sidebar_win sync tracks the section under the canvas topline"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  -- canvas.open() reuses the same window+buffer pair across tests (as
+  -- test_canvas.lua's suite already relies on), and Neovim restores that
+  -- window's last view for a buffer it previously displayed -- so an
+  -- earlier test's scroll would otherwise leak in here. Pin the view
+  -- explicitly, as every other test in this suite that cares about a
+  -- specific topline already does.
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.sync(st)
+  -- entries: a/(0) one.txt(1) b/(2) two.txt(3) c/(4) three.txt(5) -> rows 0..5
+  H.eq(active_row(sbuf), 1, "first file active at top")
+
+  local b_start = (canvas.section_rows(st, 2))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = b_start + 2, lnum = b_start + 2 })
+  end)
+  sidebar.sync(st)
+  H.eq(active_row(sbuf), 3, "second file active after scroll")
+  sidebar.close()
+end
+
+T["sidebar_win select on a file scrolls the canvas, never refocuses"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  vim.api.nvim_win_set_cursor(side_win, { 6, 0 }) -- c/three.txt row (1-based 6)
+  local focused_before = vim.api.nvim_get_current_win()
+  sidebar.select(st)
+  local c_start = (canvas.section_rows(st, 3))
+  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, c_start + 1, "canvas scrolled to the selected section")
+  H.eq(vim.api.nvim_win_get_buf(st.win), st.buf, "canvas window buffer untouched")
+  H.eq(vim.api.nvim_get_current_win(), focused_before, "focus unchanged")
+  sidebar.close()
+end
+
+T["sidebar_win select on a dir folds it and active falls back to the dir"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  vim.api.nvim_win_set_cursor(side_win, { 1, 0 }) -- a/ dir row
+  sidebar.select(st)
+  local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
+  H.eq(lines[1], "▸ a/", "dir folded")
+  H.eq(#lines, 5, "a/one.txt hidden")
+  -- canvas still at top (section 1 = a/one.txt, now folded away): active
+  -- falls back to the deepest visible ancestor dir
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.sync(st)
+  H.eq(active_row(sbuf), 0, "folded ancestor dir is the active entry")
+  sidebar.close()
+end
+
+T["sidebar_win manual :close of the sidebar window clears the singleton"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  vim.api.nvim_win_close(side_win, true)
+  H.eq(sidebar.is_open(), false, "WinClosed cleaned up")
+  -- and everything stays nil-safe afterwards
+  sidebar.refresh(st)
+  sidebar.sync(st)
 end
 
 return T
