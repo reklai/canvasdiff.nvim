@@ -27,6 +27,13 @@ M.defaults = {
   scrollbar = {
     enabled = true,
   },
+  virt = {
+    enabled = true,
+    max_files = 200,
+    max_lines = 100000,
+    margin = 100,
+    max_expanded = 20,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)

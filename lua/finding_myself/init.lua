@@ -8,6 +8,7 @@ local collect = require("finding_myself.collect")
 local watch = require("finding_myself.watch")
 local sidebar = require("finding_myself.sidebar")
 local scrollbar = require("finding_myself.scrollbar")
+local virt = require("finding_myself.virt")
 
 local M = {}
 
@@ -149,6 +150,10 @@ function M.open()
   if config.options.scrollbar.enabled then
     scrollbar.open(st, config.options.scrollbar)
   end
+
+  if config.options.virt.enabled then
+    virt.attach(st, config.options.virt)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -185,6 +190,7 @@ function M.close()
   hl.detach(state)
   sidebar.close()
   scrollbar.close()
+  virt.detach()
 
   local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
@@ -234,6 +240,7 @@ function M.refresh()
   hl.apply_now(state)
   sidebar.refresh(state)
   scrollbar.update(state)
+  virt.apply(state, config.options.virt)
 end
 
 return M
