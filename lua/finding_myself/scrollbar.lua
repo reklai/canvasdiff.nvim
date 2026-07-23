@@ -1,17 +1,25 @@
 local S = {}
 
 --- One kind per canvas line, sections in render order. hunk_hdr counts as
---- "ctx" (structural, uncolored); file_hdr becomes "hdr" (boundary rows).
-function S.line_kinds(sections)
+--- "ctx" (structural, uncolored); file_hdr becomes "hdr" (boundary rows). A
+--- collapsed section (`collapsed[section.path]` truthy) renders as its
+--- single placeholder row -- exactly one "hdr" entry. `collapsed` is
+--- optional so pre-Tier-2 callers keep working unchanged.
+function S.line_kinds(sections, collapsed)
+  collapsed = collapsed or {}
   local kinds = {}
   for _, section in ipairs(sections) do
-    for _, e in ipairs(section.entries) do
-      if e.kind == "file_hdr" then
-        kinds[#kinds + 1] = "hdr"
-      elseif e.kind == "add" or e.kind == "del" then
-        kinds[#kinds + 1] = e.kind
-      else
-        kinds[#kinds + 1] = "ctx"
+    if collapsed[section.path] then
+      kinds[#kinds + 1] = "hdr"
+    else
+      for _, e in ipairs(section.entries) do
+        if e.kind == "file_hdr" then
+          kinds[#kinds + 1] = "hdr"
+        elseif e.kind == "add" or e.kind == "del" then
+          kinds[#kinds + 1] = e.kind
+        else
+          kinds[#kinds + 1] = "ctx"
+        end
       end
     end
   end
@@ -148,7 +156,7 @@ function S.update(state)
     return { top0 = vim.fn.line("w0") - 1, bot0 = vim.fn.line("w$") - 1 }
   end)
   local height = vim.api.nvim_win_get_height(state.win)
-  local cells = S.column(S.line_kinds(state.sections), height, info.top0, info.bot0)
+  local cells = S.column(S.line_kinds(state.sections, state.collapsed), height, info.top0, info.bot0)
 
   local lines = {}
   for r = 1, #cells do

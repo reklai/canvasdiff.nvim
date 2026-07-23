@@ -227,7 +227,13 @@ function M.apply_now(state)
     -- other, unrelated state table has since re-rendered without going
     -- through this state's bookkeeping). Nothing safe to do; skip it.
     if srow and erow then
-      local in_window = srow <= hi and erow > lo
+      -- A collapsed section is just its placeholder line -- there is no
+      -- content to highlight, so treat it like "not in window" and never
+      -- (re-)apply. Eviction of marks applied before it was collapsed
+      -- happens synchronously via the on_section_replaced hook at collapse
+      -- time (canvas.set_collapsed), not here.
+      local collapsed = state.collapsed and state.collapsed[sec.path]
+      local in_window = not collapsed and srow <= hi and erow > lo
       local has = ts.ids_by_path[sec.path] ~= nil
       if in_window and not has then
         apply_section(state, i)

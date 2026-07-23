@@ -32,14 +32,53 @@ local function show_empty_message(st)
   vim.api.nvim_set_option_value("modifiable", false, { buf = st.buf })
 end
 
+--- Refresh the other live UI pieces after a direct canvas.set_collapsed
+--- splice (mirrors what jump.back/M.refresh already do after their own
+--- canvas splices): reapply lazy highlighting and sync sidebar/scrollbar.
+local function sync_after_collapse(st)
+  hl.apply_now(st)
+  sidebar.refresh(st)
+  scrollbar.update(st)
+end
+
+--- Expand section i if it's currently collapsed. Used by the jump keymap
+--- to intercept a jump into a collapsed section.
+local function expand_section(st, i)
+  canvas.set_collapsed(st, i, false)
+  sync_after_collapse(st)
+end
+
+--- Toggle collapse of the section under the cursor.
+local function toggle_collapse_under_cursor(st)
+  local cursor = vim.api.nvim_win_get_cursor(st.win)
+  local i = canvas.locate(st, cursor[1] - 1)
+  if not i then
+    return
+  end
+  canvas.set_collapsed(st, i, not st.collapsed[st.sections[i].path])
+  sync_after_collapse(st)
+end
+
 local function set_canvas_keymaps(st)
   local cfg = config.options
   local map_opts = { buffer = st.buf, silent = true, noremap = true }
   vim.keymap.set("n", cfg.keymaps.jump, function()
+    local cursor = vim.api.nvim_win_get_cursor(st.win)
+    local i = canvas.locate(st, cursor[1] - 1)
+    if i and st.collapsed[st.sections[i].path] then
+      expand_section(st, i)
+      return
+    end
     jump.enter(st, { back_key = cfg.keymaps.back })
   end, map_opts)
   vim.keymap.set("n", "<2-LeftMouse>", function()
     jump.enter(st, { back_key = cfg.keymaps.back })
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.collapse, function()
+    toggle_collapse_under_cursor(st)
+  end, map_opts)
+  vim.keymap.set("n", "za", function()
+    toggle_collapse_under_cursor(st)
   end, map_opts)
   vim.keymap.set("n", cfg.keymaps.close, function()
     M.close()

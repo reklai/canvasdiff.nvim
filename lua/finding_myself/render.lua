@@ -27,6 +27,11 @@ function R.section_lines(section)
   return lines
 end
 
+--- Single-line summary shown in place of a collapsed section's body.
+function R.placeholder(section)
+  return "▸ " .. section.path .. ("  (%d hunks, +%d −%d)"):format(section.nhunks, section.adds, section.dels)
+end
+
 function R.section_hl(section)
   local marks = {}
   for i, e in ipairs(section.entries) do

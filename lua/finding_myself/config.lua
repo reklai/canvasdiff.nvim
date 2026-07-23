@@ -8,6 +8,7 @@ M.defaults = {
     refresh = "R",
     cycle_next = "<C-n>",
     cycle_prev = "<C-p>",
+    collapse = "<Tab>",
   },
   context = 3,
   sidebar = {

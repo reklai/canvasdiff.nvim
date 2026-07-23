@@ -80,8 +80,18 @@ end
 --- Full-line highlight extmarks for one section, starting at buffer row
 --- `start_row` (0-based). Returns the created extmark ids so the caller can
 --- track them and delete them precisely later (see replace_section notes on
---- why row-range clearing is not safe here).
-local function apply_section_hl(buf, start_row, section)
+--- why row-range clearing is not safe here). `collapsed` renders the section
+--- as its single placeholder row instead, with one file-header-styled mark.
+local function apply_section_hl(buf, start_row, section, collapsed)
+  if collapsed then
+    return { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
+      end_row = start_row + 1,
+      end_col = 0,
+      hl_group = "FmFileHeader",
+      hl_eol = true,
+      priority = 100,
+    }) }
+  end
   local marks = render.section_hl(section)
   local ids = {}
   for _, m in ipairs(marks) do
@@ -95,6 +105,15 @@ local function apply_section_hl(buf, start_row, section)
     })
   end
   return ids
+end
+
+--- The lines a section renders as right now: its single placeholder line
+--- when `state.collapsed[sec.path]` is truthy, else its full body.
+local function section_lines_for(state, sec)
+  if state.collapsed and state.collapsed[sec.path] then
+    return { render.placeholder(sec) }
+  end
+  return render.section_lines(sec)
 end
 
 local function get_row(state, id)
@@ -138,7 +157,7 @@ function M.render_all(state, sections)
   local starts = {}
   for idx, sec in ipairs(sections) do
     starts[idx] = #all_lines
-    for _, l in ipairs(render.section_lines(sec)) do
+    for _, l in ipairs(section_lines_for(state, sec)) do
       all_lines[#all_lines + 1] = l
     end
   end
@@ -150,7 +169,7 @@ function M.render_all(state, sections)
   local anchor_ids, hl_ids = {}, {}
   for idx, sec in ipairs(sections) do
     anchor_ids[idx] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, starts[idx], 0, ANCHOR_OPTS)
-    hl_ids[idx] = apply_section_hl(buf, starts[idx], sec)
+    hl_ids[idx] = apply_section_hl(buf, starts[idx], sec, state.collapsed and state.collapsed[sec.path])
   end
   local eof_row = #sections > 0 and #all_lines or 0
   anchor_ids[#sections + 1] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, eof_row, 0, ANCHOR_OPTS)
@@ -172,6 +191,10 @@ function M.open(sections, opts)
   apply_win_opts(win)
 
   local state = { buf = buf, win = win, sections = {}, anchor_ids = {}, hl_ids = {} }
+  -- Never reset on a later render_all -- only initialized here, once, so a
+  -- refresh() on an already-open state (which calls render_all directly)
+  -- keeps whatever the user has collapsed.
+  state.collapsed = state.collapsed or {}
   M.render_all(state, sections)
   return state
 end
@@ -226,8 +249,9 @@ end
 --- reading). `new_section == nil` deletes the section.
 function M.replace_section(state, i, new_section)
   local replaced_path = state.sections[i] and state.sections[i].path
+  local was_collapsed = replaced_path and state.collapsed and state.collapsed[replaced_path]
   local start_row, end_row_exclusive = M.section_rows(state, i)
-  local new_lines = new_section and render.section_lines(new_section) or {}
+  local new_lines = new_section and section_lines_for(state, new_section) or {}
 
   local win_ok = win_showing_canvas(state)
   local branch, top0, bot0, view
@@ -257,8 +281,21 @@ function M.replace_section(state, i, new_section)
   -- captured view exactly as it was" instead (see below).
   local anchor
   local preserve_view = false
+  -- A collapsed section's entries don't map to buffer rows (only its one
+  -- placeholder line does), so capture_from_entries can't run against it.
+  -- Mirror the plain preserve_view split on whether the viewport top sits
+  -- above the section instead: above it, nothing moved, so preserve as-is;
+  -- otherwise there is nothing sensible to resolve down to but the
+  -- section's own new start row.
+  local collapsed_topline = false
   if branch == "intersect" and new_section ~= nil then
-    if top0 < start_row then
+    if was_collapsed then
+      if top0 < start_row then
+        preserve_view = true
+      else
+        collapsed_topline = true
+      end
+    elseif top0 < start_row then
       preserve_view = true
     else
       local top_offset = top0 - start_row + 1
@@ -281,13 +318,19 @@ function M.replace_section(state, i, new_section)
   end
 
   if new_section ~= nil then
-    state.hl_ids[i] = apply_section_hl(state.buf, start_row, new_section)
+    state.hl_ids[i] = apply_section_hl(state.buf, start_row, new_section,
+      state.collapsed and state.collapsed[new_section.path])
     state.sections[i] = new_section
   else
     pcall(vim.api.nvim_buf_del_extmark, state.buf, ANCHOR_NS, state.anchor_ids[i])
     table.remove(state.anchor_ids, i)
     table.remove(state.sections, i)
     table.remove(state.hl_ids, i)
+    -- The path is gone from the canvas; drop its collapsed flag too, so a
+    -- different file that later reuses this path doesn't inherit it.
+    if replaced_path and state.collapsed then
+      state.collapsed[replaced_path] = nil
+    end
   end
 
   set_modifiable(state.buf, false)
@@ -311,6 +354,14 @@ function M.replace_section(state, i, new_section)
       -- Only clamp lnum, in case the cursor itself was inside the replaced
       -- range and the buffer is now shorter than the cursor's old row.
       view.lnum = math.min(view.lnum, vim.api.nvim_buf_line_count(state.buf))
+      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+    elseif new_section ~= nil and collapsed_topline then
+      -- The replaced section was collapsed and the viewport top sat at or
+      -- below its start row: with no entries to resolve a semantic anchor
+      -- from, scroll to the (still 1-row) section's own start.
+      local topline = start_row + 1
+      view.topline = topline
+      view.lnum = topline
       vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
     elseif new_section ~= nil then
       local resolved = viewport.resolve(anchor, new_section.entries) or 1
@@ -350,7 +401,7 @@ end
 --- (#state.sections >= 1) -- the 0 -> N transition goes through render_all.
 function M.insert_section(state, i, section)
   local row = get_row(state, state.anchor_ids[i])
-  local new_lines = render.section_lines(section)
+  local new_lines = section_lines_for(state, section)
 
   local win_ok = win_showing_canvas(state)
   local branch, view
@@ -379,7 +430,8 @@ function M.insert_section(state, i, section)
   table.insert(state.anchor_ids, i,
     vim.api.nvim_buf_set_extmark(state.buf, ANCHOR_NS, row, 0, ANCHOR_OPTS))
   table.insert(state.sections, i, section)
-  table.insert(state.hl_ids, i, apply_section_hl(state.buf, row, section))
+  table.insert(state.hl_ids, i,
+    apply_section_hl(state.buf, row, section, state.collapsed and state.collapsed[section.path]))
   set_modifiable(state.buf, false)
 
   -- View correction, same synchronous tick.
@@ -397,6 +449,67 @@ function M.insert_section(state, i, section)
     vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
   end
   -- "below"/"none": the edit cannot move rows the user is looking at.
+end
+
+--- Collapse or expand section i to/from its single placeholder line,
+--- splicing in place with the same same-tick view correction as
+--- replace_section (a collapsed section is just a 1-row section for
+--- viewport-classification purposes). No-op when the section is missing or
+--- already at the requested state.
+function M.set_collapsed(state, i, collapsed)
+  local sec = state.sections[i]
+  if not sec then return end
+  collapsed = collapsed and true or false
+  if (state.collapsed[sec.path] or false) == collapsed then return end
+
+  local start_row, end_row_exclusive = M.section_rows(state, i)
+  local win_ok = win_showing_canvas(state)
+  local branch, top0, view
+  if win_ok then
+    local info = win_view_info(state.win)
+    top0 = info.top - 1
+    view = info.view
+    local bot0 = info.bot - 1
+    if start_row > bot0 then branch = "below"
+    elseif end_row_exclusive <= top0 then branch = "above"
+    else branch = "intersect" end
+  else
+    branch = "none"
+  end
+
+  state.collapsed[sec.path] = collapsed or nil
+  local new_lines = section_lines_for(state, sec)
+
+  set_modifiable(state.buf, true)
+  vim.api.nvim_buf_set_lines(state.buf, start_row, end_row_exclusive, false, new_lines)
+  replace_boundary_extmark(state, i + 1, start_row + #new_lines)
+  for _, id in ipairs(state.hl_ids[i] or {}) do
+    pcall(vim.api.nvim_buf_del_extmark, state.buf, HL_NS, id)
+  end
+  state.hl_ids[i] = apply_section_hl(state.buf, start_row, sec, collapsed)
+  set_modifiable(state.buf, false)
+
+  if state.hooks and state.hooks.on_section_replaced then
+    state.hooks.on_section_replaced(sec.path)
+  end
+
+  if branch == "above" then
+    local delta = #new_lines - (end_row_exclusive - start_row)
+    view.topline = math.max(1, view.topline + delta)
+    view.lnum = math.max(1, view.lnum + delta)
+    vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+  elseif branch == "intersect" then
+    if top0 < start_row then
+      view.lnum = math.min(view.lnum, vim.api.nvim_buf_line_count(state.buf))
+      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+    else
+      local topline = start_row + 1
+      view.topline = topline
+      view.lnum = topline
+      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+    end
+  end
+  -- "below"/"none": nothing to do.
 end
 
 return M
