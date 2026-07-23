@@ -10,6 +10,129 @@ local W = {}
 --- (all changes gone), so the owner can render its empty-state message.
 W.on_empty = nil
 
+local uv = vim.uv
+
+-- Trigger state: one live watched canvas at a time (mirrors init's
+-- singleton). All handles are torn down by stop().
+local live = nil
+local debounce_ms = 200
+local timer = nil
+local aug = nil
+local fs_handles = {}
+
+local function close_fs_handles()
+  for _, h in ipairs(fs_handles) do
+    pcall(function()
+      h:stop()
+      h:close()
+    end)
+  end
+  fs_handles = {}
+end
+
+-- Forward-declared local (not global): mark_dirty's scheduled callback calls
+-- this, but it's only defined below. Declaring the upvalue here lets both
+-- functions close over the same local.
+local refresh_fs_watches
+
+local function mark_dirty()
+  if not live then
+    return
+  end
+  if not timer then
+    timer = uv.new_timer()
+  end
+  timer:stop()
+  timer:start(debounce_ms, 0, vim.schedule_wrap(function()
+    local state = live
+    if state then
+      W.reconcile(state)
+      refresh_fs_watches(state)
+    end
+  end))
+end
+
+local function watch_dir(path, filter)
+  local h = uv.new_fs_event()
+  if not h then
+    return
+  end
+  local ok = h:start(path, {}, function(_, filename, _)
+    if filter and filename and not filter(filename) then
+      return
+    end
+    mark_dirty()
+  end)
+  if not ok then
+    pcall(function() h:close() end)
+    return
+  end
+  fs_handles[#fs_handles + 1] = h
+end
+
+--- (Re)build the fs_event watcher set: repo root (non-recursive -- Linux
+--- inotify has no recursive watch), .git (index/HEAD flips; *.lock churn
+--- filtered), and the parent dirs of currently-changed files. Subdir
+--- changes with no watcher are covered by BufWritePost/FocusGained.
+refresh_fs_watches = function(state)
+  close_fs_handles()
+  if not live then
+    return
+  end
+  watch_dir(state.root)
+  watch_dir(vim.fs.joinpath(state.root, ".git"), function(name)
+    return not name:match("%.lock$")
+  end)
+  local seen = {}
+  for _, sec in ipairs(state.sections) do
+    local dir = vim.fs.dirname(vim.fs.joinpath(state.root, sec.path))
+    if dir ~= state.root and not seen[dir] then
+      seen[dir] = true
+      watch_dir(dir)
+    end
+  end
+end
+
+--- Start live-watching for `state` (stopping any previous watch first).
+function W.start(state, opts)
+  W.stop()
+  live = state
+  debounce_ms = (opts and opts.debounce_ms) or 200
+
+  aug = vim.api.nvim_create_augroup("finding_myself.watch", { clear = true })
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = aug,
+    callback = function(ev)
+      if not live then
+        return
+      end
+      local name = vim.api.nvim_buf_get_name(ev.buf)
+      if name ~= "" and vim.startswith(name, live.root .. "/") then
+        mark_dirty()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = aug,
+    callback = mark_dirty,
+  })
+
+  refresh_fs_watches(state)
+end
+
+--- Tear everything down. Safe when never started.
+function W.stop()
+  if timer then
+    timer:stop()
+  end
+  close_fs_handles()
+  if aug then
+    pcall(vim.api.nvim_del_augroup_by_id, aug)
+    aug = nil
+  end
+  live = nil
+end
+
 --- Synchronous full reconcile of the live canvas against the working tree:
 --- collect desired sections, then splice the difference section-by-section.
 --- Sections whose old_text AND new_text are unchanged are never touched, so

@@ -13,6 +13,10 @@ M.defaults = {
     margin = 100,
     debounce_ms = 30,
   },
+  watch = {
+    enabled = true,
+    debounce_ms = 200,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)

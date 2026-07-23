@@ -5,6 +5,7 @@ local jump = require("finding_myself.jump")
 local config = require("finding_myself.config")
 local hl = require("finding_myself.hl")
 local collect = require("finding_myself.collect")
+local watch = require("finding_myself.watch")
 
 local M = {}
 
@@ -71,6 +72,13 @@ function M.open()
   if config.options.highlight.enabled then
     hl.attach(st, config.options.highlight)
   end
+
+  if config.options.watch.enabled then
+    watch.on_empty = function()
+      show_empty_message(st)
+    end
+    watch.start(st, config.options.watch)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -102,6 +110,9 @@ function M.close()
   if vim.api.nvim_win_get_buf(win) ~= state.buf then
     return
   end
+
+  watch.stop()
+  hl.detach(state)
 
   local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then

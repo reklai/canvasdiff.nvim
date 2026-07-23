@@ -162,4 +162,50 @@ T["watch_reconcile untouched sections keep their anchors and view (niri)"] = fun
   H.eq(after_top, before_top, "visible text pinned through above-viewport splice")
 end
 
+T["watch_trigger BufWritePost reconciles after debounce"] = function()
+  local root = fixture()
+  local st = open_state(root)
+  watch.start(st, { debounce_ms = 20 })
+
+  -- edit b.txt through a real buffer + :write, firing BufWritePost
+  local abs = vim.fs.joinpath(root, "b.txt")
+  vim.cmd.edit(abs)
+  vim.api.nvim_buf_set_lines(0, 4, 5, false, { "b line 5 WRITTEN" })
+  vim.cmd.write()
+  vim.api.nvim_win_set_buf(0, st.buf) -- back to the canvas
+
+  local ok = vim.wait(2000, function()
+    return st.sections[1] and st.sections[1].new_text:find("b line 5 WRITTEN", 1, true) ~= nil
+  end, 10)
+  H.eq(ok, true, "debounced reconcile picked up the written change")
+  watch.stop()
+end
+
+T["watch_trigger fs_event catches external writes at repo root"] = function()
+  local root = fixture()
+  local st = open_state(root)
+  watch.start(st, { debounce_ms = 20 })
+
+  -- external write: no nvim buffer involved
+  write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 7", "b line 7 EXTERNAL")))
+
+  local ok = vim.wait(4000, function()
+    return st.sections[1] and st.sections[1].new_text:find("b line 7 EXTERNAL", 1, true) ~= nil
+  end, 10)
+  H.eq(ok, true, "fs_event triggered a reconcile")
+  watch.stop()
+end
+
+T["watch_trigger stop() really stops"] = function()
+  local root = fixture()
+  local st = open_state(root)
+  watch.start(st, { debounce_ms = 20 })
+  watch.stop()
+
+  write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 9", "b line 9 IGNORED")))
+  vim.wait(300, function() return false end, 50) -- give any stray timer a chance
+  H.eq(st.sections[1].new_text:find("b line 9 IGNORED", 1, true), nil,
+    "no reconcile after stop")
+end
+
 return T

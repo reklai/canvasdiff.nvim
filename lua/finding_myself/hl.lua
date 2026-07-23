@@ -289,4 +289,17 @@ function M.attach(state, opts)
   M.apply_now(state)
 end
 
+--- Undo attach: remove the scroll trigger, cancel any pending debounce, and
+--- release the live-state guard so a stale callback can never fire against
+--- this state. Nil-safe; safe to call when never attached.
+function M.detach(state)
+  pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.hl")
+  if timer then
+    timer:stop()
+  end
+  if live_state == state then
+    live_state = nil
+  end
+end
+
 return M

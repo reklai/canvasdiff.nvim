@@ -69,6 +69,10 @@ require("finding_myself").setup({
     margin = 100,       -- rows beyond the viewport kept highlighted
     debounce_ms = 30,   -- scroll debounce before re-applying highlights
   },
+  watch = {
+    enabled = true,     -- auto-refresh the canvas on save/focus/external changes
+    debounce_ms = 200,  -- delay before reconciling after a detected change
+  },
 })
 ```
 
@@ -89,6 +93,18 @@ word-level diff emphasis, applied/evicted as you scroll (debounced by
 whatever you like -- `FmWordAdd` and `FmWordDel`, both linked to `DiffText`
 by default.
 
+The canvas auto-refreshes on `:write`, on regaining focus, and on file
+changes made outside Neovim, debounced by `watch.debounce_ms` (200ms
+default) so a burst of changes settles into a single reconcile. Only
+sections that actually changed are touched -- untouched sections keep their
+scroll position, so you generally never notice the refresh happen under
+you. Because Linux `inotify` has no recursive watch, external-change
+detection watches the repo root and `.git` non-recursively plus the parent
+directories of files currently shown on the canvas; a change to a file in
+some other, not-yet-watched subdirectory is picked up the next time you
+save or refocus Neovim (or with a manual `R`) rather than instantly. Set
+`watch.enabled = false` to go back to manual-refresh-only behavior.
+
 ## MVP scope
 
 What's here today:
@@ -99,8 +115,9 @@ What's here today:
   plus lazy treesitter syntax highlighting and intra-line word-diff
   emphasis of the diffed code itself, applied within `margin` rows of the
   viewport.
-- Manual refresh (`R` / `:FindingMyself refresh`) — the canvas does not
-  watch the filesystem or auto-update.
+- Auto-refresh on save, focus, and external filesystem changes (see
+  Configuration above), plus manual refresh (`R` / `:FindingMyself
+  refresh`) for a full re-scan on demand.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.
 
@@ -108,12 +125,10 @@ What's here today:
 
 Rough order, each phase independently useful:
 
-1. **Live watch / auto-refresh** — pick up filesystem and buffer changes
-   without a manual `R`.
-2. **Sidebar / file list** — a persistent index of changed files alongside
+1. **Sidebar / file list** — a persistent index of changed files alongside
    the canvas for quick navigation.
-3. **Scrollbar** — a visual indicator of where you are across all sections.
-4. **Virtualization** — render only the visible window's worth of diff for
+2. **Scrollbar** — a visual indicator of where you are across all sections.
+3. **Virtualization** — render only the visible window's worth of diff for
    large repos/diffs, instead of the whole canvas up front.
-5. **Session persistence** — remember canvas state (open files, scroll
+4. **Session persistence** — remember canvas state (open files, scroll
    position) across Neovim restarts.
