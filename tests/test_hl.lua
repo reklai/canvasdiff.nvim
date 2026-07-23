@@ -230,4 +230,21 @@ T["hl_engine render_all clears the ts namespace via hook"] = function()
   assert(st.ts.ids_by_path["f1.lua"], "reapplies after re-render")
 end
 
+T["hl_engine reattach after reopen leaves no stale marks"] = function()
+  local st1 = canvas.open(big_sections(), {})
+  hl.attach(st1, { margin = 50 })
+  -- reopen on the same cached buffer: render_all runs on a hookless fresh
+  -- state, then attach must start from a clean namespace
+  local st2 = canvas.open(big_sections(), {})
+  hl.attach(st2, { margin = 50 })
+  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local total = #vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
+  local tracked = 0
+  for _, ids in pairs(st2.ts.ids_by_path) do
+    tracked = tracked + #ids
+  end
+  H.eq(total, tracked, "every mark in the namespace is tracked by the live state")
+  assert(total > 0, "sanity: attach applied marks")
+end
+
 return T

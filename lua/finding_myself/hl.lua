@@ -253,6 +253,11 @@ function M.attach(state, opts)
     debounce_ms = opts.debounce_ms or 30,
   }
 
+  -- A cached canvas buffer can carry a previous session's marks (render_all
+  -- ran before this attach installed the clearing hook, collapsing them onto
+  -- one row instead of deleting them). Start from a clean namespace.
+  vim.api.nvim_buf_clear_namespace(state.buf, TS_NS, 0, -1)
+
   state.hooks = state.hooks or {}
   state.hooks.on_render_all = function()
     vim.api.nvim_buf_clear_namespace(state.buf, TS_NS, 0, -1)
