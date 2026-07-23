@@ -150,6 +150,7 @@ function M.build_section(path, old_text, new_text, status, context)
   return {
     path = path, status = status, adds = adds, dels = dels, nhunks = #groups,
     entries = entries,
+    old_text = old_text or "", new_text = new_text or "",
   }
 end
 

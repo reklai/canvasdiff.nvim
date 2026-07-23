@@ -147,4 +147,11 @@ return {
     H.eq(hl[3], { row = 3, group = "DiffDelete" })
     H.eq(hl[4], { row = 4, group = "DiffAdd" })
   end,
+  ["model_section carries old_text and new_text"] = function()
+    local s = model.build_section("t.lua", "a\n", "b\n", "M")
+    H.eq(s.old_text, "a\n")
+    H.eq(s.new_text, "b\n")
+    local s2 = model.build_section("n.lua", nil, "b\n", "?")
+    H.eq(s2.old_text, "")
+  end,
 }
