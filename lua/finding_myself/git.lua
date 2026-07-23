@@ -89,14 +89,22 @@ function M.changed_files(root)
 end
 
 --- @param root string
+--- @param rev string "HEAD" or ":0" (the index/staged blob)
 --- @param path string
 --- @return string|nil
-function M.show_head(root, path)
-  local res = run(root, { "show", "HEAD:" .. path })
+function M.show(root, rev, path)
+  local res = run(root, { "show", rev .. ":" .. path })
   if res.code ~= 0 or res.stdout == nil then
     return nil
   end
   return res.stdout
+end
+
+--- @param root string
+--- @param path string
+--- @return string|nil
+function M.show_head(root, path)
+  return M.show(root, "HEAD", path)
 end
 
 return M

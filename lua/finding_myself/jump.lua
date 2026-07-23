@@ -131,7 +131,7 @@ function M.back()
   local state = ex.state
   local abs_path = vim.fs.joinpath(state.root, ex.path)
   local content = read_current_content(ex.buf, abs_path)
-  local old = git.show_head(state.root, ex.path)
+  local old = git.show(state.root, state.base == "index" and ":0" or "HEAD", ex.path)
   local new_section = model.build_section(ex.path, old or "", content, ex.status, config.options.context)
 
   local idx

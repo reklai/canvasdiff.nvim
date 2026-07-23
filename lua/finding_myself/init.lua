@@ -133,10 +133,11 @@ function M.open()
   local win = vim.api.nvim_get_current_win()
   local prev_buf = vim.api.nvim_win_get_buf(win)
 
-  local sections = model.build(collect.files(root), config.options.context)
+  local sections = model.build(collect.files(root, config.options.base), config.options.context)
 
   local st = canvas.open(sections, {})
   st.root = root
+  st.base = config.options.base
   st.prev_buf = prev_buf
   state = st
 
@@ -250,7 +251,7 @@ function M.refresh()
   if not state then
     return
   end
-  local sections = model.build(collect.files(state.root), config.options.context)
+  local sections = model.build(collect.files(state.root, state.base), config.options.context)
   canvas.render_all(state, sections)
   state.sections = sections
   if #sections == 0 then
@@ -260,6 +261,22 @@ function M.refresh()
   sidebar.refresh(state)
   scrollbar.update(state)
   virt.apply(state, config.options.virt)
+end
+
+--- Flip the diff base between "worktree vs HEAD" and "worktree vs index"
+--- (unstaged-only review) and refresh the live canvas. No live canvas ⇒
+--- notify and return.
+function M.toggle_base()
+  if not state then
+    vim.notify("finding_myself: no live diff canvas", vim.log.levels.WARN)
+    return
+  end
+  state.base = (state.base == "index") and "HEAD" or "index"
+  M.refresh()
+  vim.notify(
+    "finding_myself: diff base = worktree vs "
+      .. (state.base == "index" and "index (unstaged)" or "HEAD")
+  )
 end
 
 return M

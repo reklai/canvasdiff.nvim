@@ -1,0 +1,113 @@
+local H = require("helpers")
+local git = require("finding_myself.git")
+local collect = require("finding_myself.collect")
+local model = require("finding_myself.model")
+
+--- Stage the current worktree content of `rel` (via `git add -A`), leaving
+--- the index holding whatever's on disk right now.
+local function git_add_all(root)
+  local res = vim.system({ "git", "add", "-A" }, { cwd = root, text = true }):wait()
+  assert(res.code == 0, "git add -A failed: " .. (res.stderr or ""))
+end
+
+local function write_file(root, rel, content)
+  local abs = vim.fs.joinpath(root, rel)
+  local f = assert(io.open(abs, "w"))
+  f:write(content)
+  f:close()
+end
+
+--- Fixture with one file that has BOTH a staged edit and a further, still
+--- unstaged edit: HEAD content ≠ index content ≠ worktree content.
+local function staged_and_unstaged_fixture()
+  local root = H.git_fixture({ committed = { ["f.txt"] = "head\n" } })
+  write_file(root, "f.txt", "staged\n")
+  git_add_all(root)
+  write_file(root, "f.txt", "worktree\n")
+  return root
+end
+
+--- Fixture with one file that's fully staged (index == worktree, both
+--- differ from HEAD) and nothing else changed.
+local function fully_staged_fixture()
+  local root = H.git_fixture({ committed = { ["g.txt"] = "head\n" } })
+  write_file(root, "g.txt", "staged\n")
+  git_add_all(root)
+  return root
+end
+
+return {
+  ["base_ git.show reads HEAD and index objects"] = function()
+    local root = staged_and_unstaged_fixture()
+    H.eq(git.show(root, "HEAD", "f.txt"), "head\n")
+    H.eq(git.show(root, ":0", "f.txt"), "staged\n")
+  end,
+
+  ["base_ index mode diffs worktree against the index"] = function()
+    local root = staged_and_unstaged_fixture()
+
+    local function old_text_for(files)
+      for _, f in ipairs(files) do
+        if f.path == "f.txt" then
+          return f.old_text
+        end
+      end
+    end
+
+    H.eq(old_text_for(collect.files(root, "index")), "staged\n")
+    H.eq(old_text_for(collect.files(root, "HEAD")), "head\n")
+    H.eq(old_text_for(collect.files(root, nil)), "head\n")
+  end,
+
+  ["base_ fully-staged file disappears in index mode"] = function()
+    local root = fully_staged_fixture()
+
+    local function has_section(base)
+      local sections = model.build(collect.files(root, base), 3)
+      for _, s in ipairs(sections) do
+        if s.path == "g.txt" then
+          return true
+        end
+      end
+      return false
+    end
+
+    H.eq(has_section("HEAD"), true, "HEAD mode: worktree differs from HEAD")
+    H.eq(has_section("index"), false, "index mode: worktree == index, no diff")
+  end,
+
+  ["base_ toggle_base refreshes sections"] = function()
+    local root = fully_staged_fixture()
+    local old_cwd = vim.fn.getcwd()
+
+    local ok, err = pcall(function()
+      vim.api.nvim_set_current_dir(root)
+      package.loaded["finding_myself"] = nil
+      local fm = require("finding_myself")
+      fm.open()
+
+      local function headers()
+        local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+        local order = {}
+        for _, l in ipairs(lines) do
+          local p = l:match("^▎ (%S+)")
+          if p then
+            order[#order + 1] = p
+          end
+        end
+        return order
+      end
+
+      H.eq(headers(), { "g.txt" }, "HEAD mode: g.txt's diff is showing")
+
+      fm.toggle_base()
+      H.eq(headers(), {}, "index mode: g.txt fully staged, no diff to show")
+
+      fm.toggle_base()
+      H.eq(headers(), { "g.txt" }, "back to HEAD mode: g.txt reappears")
+    end)
+
+    vim.api.nvim_set_current_dir(old_cwd)
+    assert(ok, err)
+  end,
+}

@@ -15,6 +15,7 @@ M.defaults = {
     prev_hunk = "[h",
   },
   context = 3,
+  base = "HEAD",
   sidebar = {
     enabled = true,
     width = 32,

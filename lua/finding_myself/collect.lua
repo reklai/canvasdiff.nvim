@@ -39,15 +39,17 @@ local function read_worktree_content(root, rel_path, status)
   return content
 end
 
---- All changed files with their HEAD and worktree contents, ready for
---- model.build.
-function M.files(root)
+--- All changed files with their old-side (HEAD or index) and worktree
+--- contents, ready for model.build.
+--- @param base string|nil "HEAD" (default when nil) or "index"
+function M.files(root, base)
+  local rev = (base == "index") and ":0" or "HEAD"
   local files = {}
   for _, f in ipairs(git.changed_files(root)) do
     files[#files + 1] = {
       path = f.path,
       status = f.status,
-      old_text = git.show_head(root, f.path) or "",
+      old_text = git.show(root, rev, f.path) or "",
       new_text = read_worktree_content(root, f.path, f.status),
     }
   end

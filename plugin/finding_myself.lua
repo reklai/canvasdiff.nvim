@@ -3,7 +3,7 @@ if vim.g.loaded_finding_myself then
 end
 vim.g.loaded_finding_myself = true
 
-local SUBCOMMANDS = { "open", "close", "toggle", "refresh" }
+local SUBCOMMANDS = { "open", "close", "toggle", "refresh", "base" }
 
 vim.api.nvim_create_user_command("FindingMyself", function(opts)
   local sub = opts.fargs[1] or "toggle"
@@ -15,10 +15,14 @@ vim.api.nvim_create_user_command("FindingMyself", function(opts)
     return
   end
   local fm = require("finding_myself")
-  fm[sub]()
+  if sub == "base" then
+    fm.toggle_base()
+  else
+    fm[sub]()
+  end
 end, {
   nargs = "?",
-  desc = "Open/close/toggle/refresh the finding_myself diff canvas",
+  desc = "Open/close/toggle/refresh/base the finding_myself diff canvas",
   complete = function(arglead)
     return vim.tbl_filter(function(c)
       return c:sub(1, #arglead) == arglead

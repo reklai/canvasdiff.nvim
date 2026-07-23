@@ -152,7 +152,7 @@ function W.reconcile(state)
   if not state or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
-  local desired = model.build(collect.files(state.root), config.options.context)
+  local desired = model.build(collect.files(state.root, state.base), config.options.context)
 
   -- 0 <-> N transitions: the empty canvas holds a placeholder line, not
   -- sections; splicing against it is meaningless. Full re-render instead.
