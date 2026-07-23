@@ -125,6 +125,13 @@ function S.update(state)
     return
   end
 
+  -- A squashed window (winminheight=0) reports height 0; a zero-height
+  -- float is invalid. Hide and let WinResized/BufWinEnter re-show later.
+  if vim.api.nvim_win_get_height(state.win) < 1 then
+    hide()
+    return
+  end
+
   if not (bar.buf and vim.api.nvim_buf_is_valid(bar.buf)) then
     bar.buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_set_option_value("buftype", "nofile", { buf = bar.buf })

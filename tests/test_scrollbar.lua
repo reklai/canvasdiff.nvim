@@ -183,19 +183,13 @@ end
 T["scroll_win canvas WinClosed tears the bar down"] = function()
   local st = open_with_bar()
   vim.cmd("vsplit") -- ensure the canvas window isn't the last one
-  local cur = vim.api.nvim_get_current_win()
-  if cur == st.win then
-    -- vsplit focused the new window in most configs; make sure we don't
-    -- close the wrong one
-    cur = nil
-  end
   vim.api.nvim_win_close(st.win, true)
   vim.wait(300, function() return not scrollbar.is_open() end, 10)
   H.eq(scrollbar.is_open(), false, "bar cleaned up after canvas window closed")
 end
 
 T["scroll_win file boundary rows are drawn"] = function()
-  local st = open_with_bar()
+  open_with_bar()
   local w = bar_win()
   local bbuf = vim.api.nvim_win_get_buf(w)
   local lines = vim.api.nvim_buf_get_lines(bbuf, 0, -1, false)
@@ -204,6 +198,21 @@ T["scroll_win file boundary rows are drawn"] = function()
     if l == "─" then dashes = dashes + 1 end
   end
   H.eq(dashes, 2, "two file-boundary rows for two sections")
+  scrollbar.close()
+end
+
+T["scroll_win zero-height canvas window hides instead of erroring"] = function()
+  local st = open_with_bar()
+  vim.cmd("set winminheight=0")
+  vim.cmd("split") -- need a second window so the canvas can be squashed
+  vim.api.nvim_win_set_height(st.win, 0)
+  local ok, err = pcall(scrollbar.update, st)
+  H.eq(ok, true, "update must not throw on zero-height window: " .. tostring(err))
+  H.eq(scrollbar.is_open(), false, "bar hidden while squashed")
+  vim.api.nvim_win_set_height(st.win, 10)
+  scrollbar.update(st)
+  H.eq(scrollbar.is_open(), true, "bar re-shows once height returns")
+  vim.cmd("only")
   scrollbar.close()
 end
 

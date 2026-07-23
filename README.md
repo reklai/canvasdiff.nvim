@@ -54,10 +54,10 @@ A 1-column scrollbar minimap floats over the canvas's right edge, showing
 file boundaries (─), add/del density per stretch of lines (│, colored), and
 a highlighted thumb tracking your current viewport across the whole canvas.
 Double-click a line in the canvas (`<2-LeftMouse>`) to jump into that file,
-same as `<CR>`. It's purely visual and non-focusable -- your mouse wheel and
-any scrollbar plugin (satellite.nvim, nvim-scrollbar, ...) still work
-normally on the canvas window underneath it. Set `scrollbar.enabled = false`
-to turn it off (e.g. if you'd rather rely on one of those plugins alone).
+same as `<CR>`. It's purely visual and non-focusable — your mouse wheel still
+works normally on the canvas window underneath it. satellite.nvim / nvim-scrollbar
+still function on the canvas window, but they draw at the same right edge as
+the built-in bar — disable one (`scrollbar = { enabled = false }`).
 
 `:FindingMyself` with no argument toggles the canvas (open if not showing,
 close if showing). It also accepts an explicit subcommand, with completion:
