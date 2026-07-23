@@ -110,4 +110,16 @@ return {
     vim.api.nvim_set_current_dir(old_cwd)
     assert(ok, err)
   end,
+
+  ["base_ staged deletion produces no phantom section in index mode"] = function()
+    local root = H.git_fixture({ committed = { ["gone.txt"] = "a\nb\nc\n" } })
+    vim.system({ "git", "rm", "-q", "gone.txt" }, { cwd = root }):wait()
+    local files = collect.files(root, "index")
+    local sections = model.build(files, 3)
+    H.eq(sections, {}, "staged-deleted file must not render a section in index mode")
+    -- and in HEAD mode the deletion IS visible (all lines deleted)
+    local head_sections = model.build(collect.files(root, "HEAD"), 3)
+    H.eq(#head_sections, 1, "HEAD mode: one section for the deleted file")
+    assert(head_sections[1].dels > 0, "HEAD mode: deletion section must have dels > 0")
+  end,
 }

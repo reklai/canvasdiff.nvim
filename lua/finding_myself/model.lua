@@ -68,7 +68,7 @@ function M.build_section(path, old_text, new_text, status, context)
   local new_lines = split_lines(new_text)
   local raw_hunks = differ.hunks(old_text or "", new_text or "")
 
-  if #raw_hunks == 0 and status == "M" then
+  if #raw_hunks == 0 then
     return nil
   end
 
