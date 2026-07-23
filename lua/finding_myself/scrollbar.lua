@@ -55,9 +55,10 @@ function S.column(kinds, height, top0, bot0)
       char, hl = "│", "FmScrollDel"
     end
 
-    -- Thumb: this row's bucket intersects the viewport line range. For the
-    -- degenerate n == 0 canvas every bucket is empty -> no thumb.
-    local thumb = n > 0 and lo <= bot0 and hi > top0
+    -- Thumb: this row's non-empty bucket intersects the viewport line
+    -- range. Empty buckets (lo == hi, when n < height) are blank and never
+    -- claim the thumb.
+    local thumb = hi > lo and lo <= bot0 and hi > top0
 
     cells[r] = { char = char, hl = hl, thumb = thumb }
   end

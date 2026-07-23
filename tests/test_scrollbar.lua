@@ -63,4 +63,13 @@ T["scroll_column degenerate inputs are safe"] = function()
   H.eq(#one, 4)
 end
 
+T["scroll_column empty buckets never claim the thumb"] = function()
+  -- n=2, height=5: buckets r1=[0,0) r2=[0,0) r3=[0,1) r4=[1,1) r5=[1,2);
+  -- viewport [0,1] covers both lines; only the NON-empty buckets r3/r5 thumb
+  local cells = scrollbar.column({ "ctx", "ctx" }, 5, 0, 1)
+  local thumbs = {}
+  for r = 1, 5 do thumbs[r] = cells[r].thumb end
+  H.eq(thumbs, { false, false, true, false, true })
+end
+
 return T
