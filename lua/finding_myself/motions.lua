@@ -1,0 +1,78 @@
+local canvas = require("finding_myself.canvas")
+
+local M = {}
+
+local function canvas_showing(state)
+  return state.win and vim.api.nvim_win_is_valid(state.win)
+    and vim.api.nvim_win_get_buf(state.win) == state.buf
+end
+
+--- Jump `count` sections forward (dir=1) or backward (dir=-1) from the
+--- section under the cursor, clamping at the ends. `count` defaults to
+--- `vim.v.count1` (so a real `]f`/`[f` mapping honors a leading count).
+function M.goto_file(state, dir, count)
+  count = count or vim.v.count1
+  local n = #state.sections
+  if n == 0 or not canvas_showing(state) then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(state.win)
+  local i = (canvas.locate(state, cursor[1] - 1)) or 1
+  local target = math.min(math.max(i + dir * count, 1), n)
+  local start0 = (canvas.section_rows(state, target))
+  vim.api.nvim_win_set_cursor(state.win, { start0 + 1, 0 })
+end
+
+--- Jump `count` hunk headers forward/backward from the cursor row, across
+--- every NON-collapsed section, clamping at the list ends. No-op when there
+--- are no hunk headers at all.
+function M.goto_hunk(state, dir, count)
+  count = count or vim.v.count1
+  if not canvas_showing(state) then
+    return
+  end
+
+  local rows = {}
+  for i, section in ipairs(state.sections) do
+    if not (state.collapsed and state.collapsed[section.path]) then
+      local start0 = (canvas.section_rows(state, i))
+      for idx, entry in ipairs(section.entries) do
+        if entry.kind == "hunk_hdr" then
+          rows[#rows + 1] = start0 + idx - 1
+        end
+      end
+    end
+  end
+  if #rows == 0 then
+    return
+  end
+  table.sort(rows)
+
+  local cursor_row0 = vim.api.nvim_win_get_cursor(state.win)[1] - 1
+  -- `anchor_idx` is the index of the nearest qualifying row (first row
+  -- strictly after the cursor for dir=1, or the closest strictly-before row
+  -- for dir=-1), defaulting to the appropriate end of the list when no row
+  -- qualifies. Stepping `count - 1` further in the same direction from there
+  -- and clamping gives the count-th qualifying row.
+  local anchor_idx = dir > 0 and #rows or 1
+  if dir > 0 then
+    for i, r in ipairs(rows) do
+      if r > cursor_row0 then
+        anchor_idx = i
+        break
+      end
+    end
+  else
+    for i = #rows, 1, -1 do
+      if rows[i] < cursor_row0 then
+        anchor_idx = i
+        break
+      end
+    end
+  end
+
+  local target_idx = math.min(math.max(anchor_idx + dir * (count - 1), 1), #rows)
+  vim.api.nvim_win_set_cursor(state.win, { rows[target_idx] + 1, 0 })
+end
+
+return M

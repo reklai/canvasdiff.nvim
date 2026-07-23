@@ -9,6 +9,10 @@ M.defaults = {
     cycle_next = "<C-n>",
     cycle_prev = "<C-p>",
     collapse = "<Tab>",
+    next_file = "]f",
+    prev_file = "[f",
+    next_hunk = "]h",
+    prev_hunk = "[h",
   },
   context = 3,
   sidebar = {
@@ -25,6 +29,9 @@ M.defaults = {
     debounce_ms = 200,
   },
   scrollbar = {
+    enabled = true,
+  },
+  statuscolumn = {
     enabled = true,
   },
   virt = {

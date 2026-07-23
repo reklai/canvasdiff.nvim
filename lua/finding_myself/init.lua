@@ -9,6 +9,8 @@ local watch = require("finding_myself.watch")
 local sidebar = require("finding_myself.sidebar")
 local scrollbar = require("finding_myself.scrollbar")
 local virt = require("finding_myself.virt")
+local motions = require("finding_myself.motions")
+local statuscol = require("finding_myself.statuscol")
 
 local M = {}
 
@@ -93,6 +95,18 @@ local function set_canvas_keymaps(st)
   vim.keymap.set("n", cfg.keymaps.cycle_prev, function()
     sidebar.cycle(st, -1)
   end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.next_file, function()
+    motions.goto_file(st, 1)
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.prev_file, function()
+    motions.goto_file(st, -1)
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.next_hunk, function()
+    motions.goto_hunk(st, 1)
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.prev_hunk, function()
+    motions.goto_hunk(st, -1)
+  end, map_opts)
 end
 
 --- Open the canvas in the current window for the current cwd's git repo.
@@ -154,6 +168,10 @@ function M.open()
   if config.options.virt.enabled then
     virt.attach(st, config.options.virt)
   end
+
+  if config.options.statuscolumn.enabled then
+    statuscol.attach(st)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -191,6 +209,7 @@ function M.close()
   sidebar.close()
   scrollbar.close()
   virt.detach()
+  statuscol.detach()
 
   local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
