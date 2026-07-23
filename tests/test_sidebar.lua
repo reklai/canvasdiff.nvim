@@ -319,4 +319,88 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   sidebar.close()
 end
 
+-- --- Final-review regression tests: window-lifecycle traps -------------
+
+T["sidebar_win is_sidebar_win identifies only the live sidebar window"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+  H.eq(sidebar.is_sidebar_win(side_win), true)
+  H.eq(sidebar.is_sidebar_win(st.win), false)
+  H.eq(sidebar.is_sidebar_win(-1), false)
+  sidebar.close()
+  H.eq(sidebar.is_sidebar_win(side_win), false, "false once the sidebar is closed")
+end
+
+T["sidebar_integration toggle from inside the sidebar redirects instead of throwing E1513"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a\n" },
+    worktree = { ["a.txt"] = "A\n" },
+  })
+  vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["finding_myself"] = nil
+  local fm = require("finding_myself")
+  fm.open()
+
+  local canvas_mod = require("finding_myself.canvas")
+  local side_win
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if not canvas_mod.is_canvas_buf(vim.api.nvim_win_get_buf(w)) then
+      side_win = w
+    end
+  end
+  assert(side_win, "sidebar window should exist after open() with sidebar enabled")
+  vim.api.nvim_set_current_win(side_win)
+
+  local ok, err = pcall(fm.toggle)
+  H.eq(ok, true, "toggle from inside the sidebar must not throw E1513: " .. tostring(err))
+  H.eq(sidebar.is_open(), false, "toggle closed the sidebar along with the canvas")
+  H.eq(canvas_mod.is_canvas_buf(vim.api.nvim_get_current_buf()), false,
+    "canvas closed; the focused window no longer shows it")
+
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+end
+
+T["sidebar_win close() recovers a stranded last-window sidebar instead of erroring"] = function()
+  -- `nvim_win_close` on the last window of a NON-final tab just closes the
+  -- tab (no error) -- that would silently defeat this test. `:only` instead
+  -- collapses down to a single window in the session's one and only tab, so
+  -- killing the canvas window genuinely leaves the sidebar as the last
+  -- window in the whole editor, and close() really does hit E444.
+  vim.cmd("silent only")
+  local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  sidebar.close() -- reset singleton across tests
+  sidebar.open(st, { width = 30 })
+  H.eq(#vim.api.nvim_tabpage_list_wins(0), 2, "canvas + sidebar are the session's only two windows")
+
+  vim.api.nvim_win_close(st.win, true) -- canvas dies; sidebar becomes the LAST window
+  H.eq(#vim.api.nvim_tabpage_list_wins(0), 1)
+  local win = vim.api.nvim_tabpage_list_wins(0)[1]
+
+  local ok, err = pcall(sidebar.close)
+  H.eq(ok, true, "close() on a last-window sidebar must not throw (E444): " .. tostring(err))
+  H.eq(sidebar.is_open(), false)
+  H.eq(vim.api.nvim_win_is_valid(win), true, "the stranded window survives, recovered rather than abandoned")
+  H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = win }), false, "winfixbuf cleared")
+  local buf = vim.api.nvim_win_get_buf(win)
+  H.eq(vim.api.nvim_get_option_value("modifiable", { buf = buf }), true, "usable scratch buffer left behind")
+end
+
+T["sidebar_win canvas WinClosed cleans up a stranded sidebar"] = function()
+  vim.cmd("silent only")
+  local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  sidebar.close()
+  sidebar.open(st, { width = 30 })
+  vim.api.nvim_set_current_win(st.win)
+  vim.cmd("split") -- extra scratch split so closing the canvas isn't closing the last-but-one
+  H.eq(#vim.api.nvim_tabpage_list_wins(0), 3)
+
+  vim.api.nvim_win_close(st.win, true)
+  vim.wait(100, function() return not sidebar.is_open() end)
+  H.eq(sidebar.is_open(), false, "the canvas window's WinClosed cleaned the sidebar up")
+end
+
 return T

@@ -84,6 +84,11 @@ function S.is_open()
   return side ~= nil and side.win ~= nil and vim.api.nvim_win_is_valid(side.win)
 end
 
+--- True when `win` is the live sidebar window.
+function S.is_sidebar_win(win)
+  return S.is_open() and win == side.win
+end
+
 local function set_modifiable(buf, val)
   vim.api.nvim_set_option_value("modifiable", val, { buf = buf })
 end
@@ -151,7 +156,12 @@ function S.sync(state)
     line_hl_group = "FmSidebarActive",
     priority = 100,
   })
-  pcall(vim.api.nvim_win_set_cursor, side.win, { best + 1, 0 })
+  -- Don't yank the cursor out from under the user while they're actually
+  -- navigating the sidebar themselves -- only steer it when focus is
+  -- elsewhere (e.g. the canvas window scrolled).
+  if vim.api.nvim_get_current_win() ~= side.win then
+    pcall(vim.api.nvim_win_set_cursor, side.win, { best + 1, 0 })
+  end
 end
 
 --- Act on the entry under the sidebar cursor: dir toggles its fold; file
@@ -213,8 +223,57 @@ function S.close()
     pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
+      -- nvim_win_close silently fails (E444) when `win` is the tabpage's
+      -- last window -- e.g. the canvas window already died out from under
+      -- the sidebar, leaving it as the sole survivor. Rather than abandon a
+      -- winfixbuf'd window with nothing to attach to, reclaim it as a plain
+      -- scratch window so it stays usable.
+      if vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_set_option_value("winfixbuf", false, { win = win })
+        vim.api.nvim_win_call(win, function() vim.cmd("enew") end)
+      end
     end
   end
+end
+
+--- (Re)install the sidebar's autocmds against the CURRENT `side.win` and
+--- `state.win` pair. An `augroup(..., { clear = true })` makes this
+--- idempotent, so it's safe to call both on a fresh open and whenever an
+--- already-open sidebar is rebound to a new canvas state (a different
+--- `state.win` means the old WinClosed pattern would otherwise go stale and
+--- never fire).
+local function install_autocmds(state)
+  local aug = vim.api.nvim_create_augroup("finding_myself.sidebar", { clear = true })
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = aug,
+    callback = function(ev)
+      local st = side and side.state
+      local w = tonumber(ev.match)
+      if st and w == st.win and vim.api.nvim_win_get_buf(st.win) == st.buf then
+        S.sync(st)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = aug,
+    pattern = tostring(side.win),
+    callback = function()
+      side = nil
+      pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
+    end,
+  })
+  -- The canvas window closing (e.g. `:q` there) must not strand a live
+  -- sidebar pointed at a dead state.win -- that's exactly the setup for the
+  -- "last window" winfixbuf trap in S.close(). Closing another window from
+  -- inside a WinClosed callback can be fragile (empirically: recursing into
+  -- window-close logic mid-autocmd), so defer the actual close a tick.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = aug,
+    pattern = tostring(state.win),
+    callback = function()
+      vim.schedule(S.close)
+    end,
+  })
 end
 
 --- Open (or refresh) the sidebar as a non-focused fixed vsplit left of the
@@ -226,6 +285,7 @@ function S.open(state, opts)
   end
   if S.is_open() then
     side.state = state
+    install_autocmds(state)
     S.refresh(state)
     return
   end
@@ -265,25 +325,7 @@ function S.open(state, opts)
   vim.keymap.set("n", "za", select_current, map_opts)
   vim.keymap.set("n", "q", function() S.close() end, map_opts)
 
-  local aug = vim.api.nvim_create_augroup("finding_myself.sidebar", { clear = true })
-  vim.api.nvim_create_autocmd("WinScrolled", {
-    group = aug,
-    callback = function(ev)
-      local st = side and side.state
-      local w = tonumber(ev.match)
-      if st and w == st.win and vim.api.nvim_win_get_buf(st.win) == st.buf then
-        S.sync(st)
-      end
-    end,
-  })
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = aug,
-    pattern = tostring(win),
-    callback = function()
-      side = nil
-      pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
-    end,
-  })
+  install_autocmds(state)
 
   S.refresh(state)
 end

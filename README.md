@@ -147,7 +147,7 @@ What's here today:
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.
 - A persistent file-tree sidebar (directory folding, scroll-synced active
-  entry, click-to-scroll) plus `<C-n>`/`<C-p>` section cycling, both live
+  entry, `<CR>`-to-scroll) plus `<C-n>`/`<C-p>` section cycling, both live
   updated as the canvas reconciles.
 
 ## Roadmap

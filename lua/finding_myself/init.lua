@@ -54,6 +54,18 @@ end
 --- Open the canvas in the current window for the current cwd's git repo.
 --- Not a repo ⇒ notify and return (never throws).
 function M.open()
+  -- Invoked from inside our own sidebar (winfixbuf): the canvas can't be
+  -- opened INTO that window. Redirect to the live canvas window if there is
+  -- one; otherwise treat the sidebar as an appendage of an open canvas.
+  if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
+    if state and state.win and vim.api.nvim_win_is_valid(state.win)
+        and vim.api.nvim_win_get_buf(state.win) == state.buf then
+      vim.api.nvim_set_current_win(state.win)
+    else
+      return
+    end
+  end
+
   local root = git.root(vim.fn.getcwd())
   if not root then
     vim.notify("finding_myself: not inside a git repository", vim.log.levels.WARN)
@@ -137,7 +149,22 @@ function M.close()
 end
 
 --- Toggle: close if the canvas is showing in the current window, else open.
+--- Being focused inside our own sidebar counts as "the canvas is open": jump
+--- to the live canvas window and close from there, or just close the
+--- sidebar if the canvas it was attached to is already gone. Never errors.
 function M.toggle()
+  local current_win = vim.api.nvim_get_current_win()
+  if sidebar.is_sidebar_win(current_win) then
+    if state and state.win and vim.api.nvim_win_is_valid(state.win)
+        and vim.api.nvim_win_get_buf(state.win) == state.buf then
+      vim.api.nvim_set_current_win(state.win)
+      M.close()
+    else
+      sidebar.close()
+    end
+    return
+  end
+
   if canvas.is_canvas_buf(vim.api.nvim_get_current_buf()) then
     M.close()
   else
