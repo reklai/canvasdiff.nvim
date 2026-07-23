@@ -3,6 +3,7 @@ local git = require("finding_myself.git")
 local model = require("finding_myself.model")
 local jump = require("finding_myself.jump")
 local config = require("finding_myself.config")
+local hl = require("finding_myself.hl")
 
 local M = {}
 
@@ -115,6 +116,10 @@ function M.open()
   end
 
   set_canvas_keymaps(st)
+
+  if config.options.highlight.enabled then
+    hl.attach(st, config.options.highlight)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -177,6 +182,7 @@ function M.refresh()
   if #sections == 0 then
     show_empty_message(state)
   end
+  hl.apply_now(state)
 end
 
 return M

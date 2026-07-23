@@ -24,6 +24,9 @@ current window's buffer with a single scrollable "canvas": every changed
 file's diff, one after another, in alphabetical path order, each with a
 `▎ path (+adds −dels)` header and unified-diff-style hunks (3 lines of
 context by default -- configurable via `context`, see Configuration below).
+Diff content is syntax-highlighted with your own treesitter setup (whatever
+parsers/queries you already have installed), plus intra-line word-diff
+emphasis on changed spans within a hunk's paired `-`/`+` lines.
 
 - Move the cursor onto any line and press `<CR>` to jump into that file as a
   real `:edit` buffer, landing on the corresponding line (LSP/treesitter/
@@ -61,6 +64,11 @@ require("finding_myself").setup({
     refresh = "R",      -- re-scan and re-render
   },
   context = 3,          -- unified-diff context lines around each hunk
+  highlight = {
+    enabled = true,     -- syntax + word-diff highlighting of hunk content
+    margin = 100,       -- rows beyond the viewport kept highlighted
+    debounce_ms = 30,   -- scroll debounce before re-applying highlights
+  },
 })
 ```
 
@@ -73,14 +81,24 @@ Any subset of these can be overridden; unspecified keys keep their default.
 | `close` | `q` | Close the canvas, restore the previous buffer |
 | `refresh` | `R` | Re-collect changed files and re-render the canvas |
 
+Diff content is highlighted lazily: only sections within `margin` rows of
+the current viewport get real treesitter syntax highlighting (using
+whatever parser/highlight query you already have for that filetype) plus
+word-level diff emphasis, applied/evicted as you scroll (debounced by
+`debounce_ms`). Word-diff spans use two highlight groups you can link to
+whatever you like -- `FmWordAdd` and `FmWordDel`, both linked to `DiffText`
+by default.
+
 ## MVP scope
 
 What's here today:
 
 - One scrollable canvas per invocation, built from `git status` +
   `git show HEAD:<path>` + current worktree/buffer content.
-- Line-tier highlighting only (`+`/`-`/context lines, file and hunk
-  headers) — no syntax highlighting of the diffed code itself yet.
+- Line-tier highlighting (`+`/`-`/context lines, file and hunk headers)
+  plus lazy treesitter syntax highlighting and intra-line word-diff
+  emphasis of the diffed code itself, applied within `margin` rows of the
+  viewport.
 - Manual refresh (`R` / `:FindingMyself refresh`) — the canvas does not
   watch the filesystem or auto-update.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
@@ -90,14 +108,12 @@ What's here today:
 
 Rough order, each phase independently useful:
 
-1. **Treesitter highlight tier** — real syntax highlighting of hunk content
-   instead of plain diff-line coloring.
-2. **Live watch / auto-refresh** — pick up filesystem and buffer changes
+1. **Live watch / auto-refresh** — pick up filesystem and buffer changes
    without a manual `R`.
-3. **Sidebar / file list** — a persistent index of changed files alongside
+2. **Sidebar / file list** — a persistent index of changed files alongside
    the canvas for quick navigation.
-4. **Scrollbar** — a visual indicator of where you are across all sections.
-5. **Virtualization** — render only the visible window's worth of diff for
+3. **Scrollbar** — a visual indicator of where you are across all sections.
+4. **Virtualization** — render only the visible window's worth of diff for
    large repos/diffs, instead of the whole canvas up front.
-6. **Session persistence** — remember canvas state (open files, scroll
+5. **Session persistence** — remember canvas state (open files, scroll
    position) across Neovim restarts.

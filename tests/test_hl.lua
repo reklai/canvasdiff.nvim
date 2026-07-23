@@ -1,6 +1,7 @@
 local H = require("helpers")
 local model = require("finding_myself.model")
 local hl = require("finding_myself.hl")
+local canvas = require("finding_myself.canvas")
 
 local T = {}
 
@@ -117,6 +118,116 @@ T["hl_cache evicted path still produces correct marks on re-request"] = function
   end
   local after = hl.section_ts_marks(s1)
   H.eq(after, before, "reparse after eviction yields identical marks")
+end
+
+-- ~90-row sections: 100 lines with a change every 10th line = 10 separated
+-- hunks (context 3), each ~9 rows, plus headers.
+local function big_lua(n, seed)
+  local t = {}
+  for i = 1, n do
+    t[i] = ("local v%d_%d = %d"):format(seed, i, i)
+  end
+  return table.concat(t, "\n") .. "\n"
+end
+
+local function changed_every(text, step)
+  local lines = vim.split(text, "\n", { plain = true })
+  for i = step, #lines, step do
+    if lines[i] ~= "" then
+      lines[i] = lines[i] .. " + 1"
+    end
+  end
+  return table.concat(lines, "\n")
+end
+
+local function big_sections()
+  local secs = {}
+  for k = 1, 3 do
+    local old = big_lua(100, k)
+    secs[k] = model.build_section(("f%d.lua"):format(k), old, changed_every(old, 10), "M")
+  end
+  return secs
+end
+
+-- canvas.lua caches its scratch buffer at module scope and reuses it across
+-- `canvas.open` calls, so Neovim's per-(window, buffer) remembered view can
+-- carry a scroll position left behind by an earlier test in this same
+-- headless process into this test's "top of viewport" assumption. Pin the
+-- view deterministically, matching the same idiom test_canvas.lua already
+-- uses for this exact reason.
+--
+-- Likewise, `render_all`'s TS_NS clear only fires through `state.hooks`,
+-- which belongs to whichever *state table* last called `hl.attach` -- and
+-- `canvas.open` always builds a brand-new state table, so a fresh attach's
+-- first `render_all` runs before its own hook exists. Across many
+-- `canvas.open` calls sharing this one process's singleton scratch buffer,
+-- that leaves an earlier test's TS_NS marks sitting in the buffer for a
+-- later test to trip over. Clearing it here isolates each test the same
+-- way a truly first-ever `canvas.open` in a real session would start clean.
+local TS_NS = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+
+local function reset_view(st)
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  vim.api.nvim_buf_clear_namespace(st.buf, TS_NS, 0, -1)
+end
+
+T["hl_engine marks visible sections and skips far ones"] = function()
+  local st = canvas.open(big_sections(), {})
+  reset_view(st)
+  hl.attach(st, { margin = 5 })
+  assert(st.ts.ids_by_path["f1.lua"] and #st.ts.ids_by_path["f1.lua"] > 0,
+    "section under viewport highlighted on attach")
+  H.eq(st.ts.ids_by_path["f3.lua"], nil, "far section untouched")
+end
+
+T["hl_engine applies on scroll and evicts at 2x margin"] = function()
+  local st = canvas.open(big_sections(), {})
+  reset_view(st)
+  hl.attach(st, { margin = 5 })
+  vim.api.nvim_win_call(st.win, function()
+    vim.cmd("normal! G")
+  end)
+  hl.apply_now(st)
+  assert(st.ts.ids_by_path["f3.lua"] and #st.ts.ids_by_path["f3.lua"] > 0,
+    "bottom section highlighted after scroll")
+  H.eq(st.ts.ids_by_path["f1.lua"], nil, "top section evicted beyond 2x margin")
+end
+
+T["hl_engine replace_section invalidates and reapplies inside new rows"] = function()
+  local old = big_lua(30, 9)
+  local sec = model.build_section("r.lua", old, changed_every(old, 5), "M")
+  local st = canvas.open({ sec }, {})
+  reset_view(st)
+  hl.attach(st, { margin = 200 })
+  assert(st.ts.ids_by_path["r.lua"] and #st.ts.ids_by_path["r.lua"] > 0)
+
+  local sec2 = model.build_section("r.lua", old, changed_every(old, 7), "M")
+  canvas.replace_section(st, 1, sec2)
+  H.eq(st.ts.ids_by_path["r.lua"], nil, "hook cleared marks on splice")
+
+  hl.apply_now(st)
+  assert(st.ts.ids_by_path["r.lua"] and #st.ts.ids_by_path["r.lua"] > 0, "reapplied")
+
+  local srow, erow = canvas.section_rows(st, 1)
+  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
+    assert(m[2] >= srow and m[2] < erow,
+      ("stale mark at row %d outside [%d, %d)"):format(m[2], srow, erow))
+  end
+end
+
+T["hl_engine render_all clears the ts namespace via hook"] = function()
+  local st = canvas.open(big_sections(), {})
+  reset_view(st)
+  hl.attach(st, { margin = 5 })
+  canvas.render_all(st, big_sections())
+  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  H.eq(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {}), {}, "namespace cleared")
+  H.eq(next(st.ts.ids_by_path), nil, "bookkeeping reset")
+  hl.apply_now(st)
+  assert(st.ts.ids_by_path["f1.lua"], "reapplies after re-render")
 end
 
 return T

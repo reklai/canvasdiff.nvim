@@ -130,6 +130,10 @@ function M.render_all(state, sections)
   vim.api.nvim_buf_clear_namespace(buf, ANCHOR_NS, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, HL_NS, 0, -1)
 
+  if state.hooks and state.hooks.on_render_all then
+    state.hooks.on_render_all()
+  end
+
   local all_lines = {}
   local starts = {}
   for idx, sec in ipairs(sections) do
@@ -221,6 +225,7 @@ end
 --- holds (content changes outside the viewport never move what the user is
 --- reading). `new_section == nil` deletes the section.
 function M.replace_section(state, i, new_section)
+  local replaced_path = state.sections[i] and state.sections[i].path
   local start_row, end_row_exclusive = M.section_rows(state, i)
   local new_lines = new_section and render.section_lines(new_section) or {}
 
@@ -286,6 +291,12 @@ function M.replace_section(state, i, new_section)
   end
 
   set_modifiable(state.buf, false)
+
+  -- Extmarks inside a replaced range collapse rather than die, so the
+  -- treesitter/word tier must delete its marks by id NOW, in the same tick.
+  if replaced_path and state.hooks and state.hooks.on_section_replaced then
+    state.hooks.on_section_replaced(replaced_path)
+  end
 
   -- --- view correction (same synchronous tick, no vim.schedule) ---
   if branch == "above" then

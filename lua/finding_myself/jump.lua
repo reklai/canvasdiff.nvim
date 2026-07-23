@@ -3,6 +3,7 @@ local viewport = require("finding_myself.viewport")
 local model = require("finding_myself.model")
 local git = require("finding_myself.git")
 local config = require("finding_myself.config")
+local hl = require("finding_myself.hl")
 
 local M = {}
 
@@ -176,6 +177,7 @@ function M.back()
   end
 
   vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+  hl.apply_now(state)
 end
 
 return M

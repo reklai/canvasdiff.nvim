@@ -8,6 +8,11 @@ M.defaults = {
     refresh = "R",
   },
   context = 3,
+  highlight = {
+    enabled = true,
+    margin = 100,
+    debounce_ms = 30,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)

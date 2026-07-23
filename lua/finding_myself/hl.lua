@@ -1,5 +1,10 @@
 local M = {}
 
+local canvas = require("finding_myself.canvas")
+local worddiff = require("finding_myself.worddiff")
+
+local TS_NS = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+
 -- Whole-file parse cache, keyed by section path. Capacity-bounded LRU so a
 -- huge changeset can't pin every file's syntax tree in memory at once.
 local CACHE_CAP = 20
@@ -157,6 +162,120 @@ function M.section_ts_marks(section)
   side_marks("new")
   side_marks("old")
   return marks
+end
+
+local function ensure_hl_groups()
+  vim.api.nvim_set_hl(0, "FmWordAdd", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "FmWordDel", { link = "DiffText", default = true })
+end
+
+local function del_path_marks(state, path)
+  local ids = state.ts.ids_by_path[path]
+  if not ids then
+    return
+  end
+  for _, id in ipairs(ids) do
+    pcall(vim.api.nvim_buf_del_extmark, state.buf, TS_NS, id)
+  end
+  state.ts.ids_by_path[path] = nil
+end
+
+local function apply_section(state, i)
+  local sec = state.sections[i]
+  local srow = (canvas.section_rows(state, i))
+  local ids = {}
+  local function place(list)
+    for _, m in ipairs(list) do
+      ids[#ids + 1] = vim.api.nvim_buf_set_extmark(state.buf, TS_NS, srow + m.row, m.col, {
+        end_row = srow + m.row,
+        end_col = m.end_col,
+        hl_group = m.group,
+        priority = m.priority,
+        strict = false,
+      })
+    end
+  end
+  place(M.section_ts_marks(sec))
+  place(worddiff.section_marks(sec))
+  state.ts.ids_by_path[sec.path] = ids
+end
+
+--- Synchronously apply marks for sections within viewport±margin and evict
+--- applied sections fully outside 2x margin. Safe to call any time; no-ops
+--- when highlighting isn't attached or the canvas isn't showing.
+function M.apply_now(state)
+  local ts = state.ts
+  if not ts then
+    return
+  end
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)
+      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
+    return
+  end
+  local info = vim.api.nvim_win_call(state.win, function()
+    return { top0 = vim.fn.line("w0") - 1, bot0 = vim.fn.line("w$") - 1 }
+  end)
+  local lo, hi = info.top0 - ts.margin, info.bot0 + ts.margin
+  local evict_lo, evict_hi = info.top0 - 2 * ts.margin, info.bot0 + 2 * ts.margin
+
+  for i, sec in ipairs(state.sections) do
+    local srow, erow = canvas.section_rows(state, i)
+    local in_window = srow <= hi and erow > lo
+    local has = ts.ids_by_path[sec.path] ~= nil
+    if in_window and not has then
+      apply_section(state, i)
+    elseif has and (erow <= evict_lo or srow > evict_hi) then
+      del_path_marks(state, sec.path)
+    end
+  end
+end
+
+local timer
+
+local function debounce(state, ms)
+  if not timer then
+    timer = vim.uv.new_timer()
+  end
+  timer:stop()
+  timer:start(ms, 0, vim.schedule_wrap(function()
+    M.apply_now(state)
+  end))
+end
+
+--- Attach lazy treesitter+word highlighting to a live canvas state: install
+--- invalidation hooks, a debounced WinScrolled trigger, and apply once now.
+function M.attach(state, opts)
+  opts = opts or {}
+  ensure_hl_groups()
+  state.ts = {
+    ids_by_path = {},
+    margin = opts.margin or 100,
+    debounce_ms = opts.debounce_ms or 30,
+  }
+
+  state.hooks = state.hooks or {}
+  state.hooks.on_render_all = function()
+    vim.api.nvim_buf_clear_namespace(state.buf, TS_NS, 0, -1)
+    state.ts.ids_by_path = {}
+  end
+  state.hooks.on_section_replaced = function(path)
+    del_path_marks(state, path)
+    M.invalidate(path)
+  end
+
+  local aug = vim.api.nvim_create_augroup("finding_myself.hl", { clear = true })
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = aug,
+    callback = function(ev)
+      local win = tonumber(ev.match)
+      if win and vim.api.nvim_win_is_valid(win)
+          and vim.api.nvim_win_get_buf(win) == state.buf then
+        debounce(state, state.ts.debounce_ms)
+      end
+    end,
+  })
+
+  M.apply_now(state)
 end
 
 return M
