@@ -182,6 +182,30 @@ function S.select(state)
   end
 end
 
+--- Cycle the canvas view to the next/previous section (wrapping), keeping
+--- the sidebar selection in step. Usable with or without the sidebar open;
+--- focus never moves.
+function S.cycle(state, delta)
+  local n = #state.sections
+  if n == 0 then
+    return
+  end
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)
+      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
+    return
+  end
+  local top0 = vim.api.nvim_win_call(state.win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  local i = (canvas.locate(state, top0)) or 1
+  local target = ((i - 1 + delta) % n) + 1
+  local start0 = (canvas.section_rows(state, target))
+  vim.api.nvim_win_call(state.win, function()
+    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+  end)
+  S.sync(state)
+end
+
 function S.close()
   if side then
     local win = side.win

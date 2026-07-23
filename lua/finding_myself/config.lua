@@ -6,8 +6,14 @@ M.defaults = {
     back = "<M-CR>",
     close = "q",
     refresh = "R",
+    cycle_next = "<C-n>",
+    cycle_prev = "<C-p>",
   },
   context = 3,
+  sidebar = {
+    enabled = true,
+    width = 32,
+  },
   highlight = {
     enabled = true,
     margin = 100,

@@ -260,4 +260,63 @@ T["sidebar_win select survives a dead canvas window"] = function()
   sidebar.close()
 end
 
+T["sidebar_cycle moves canvas by sections and wraps"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+
+  sidebar.cycle(st, 1)
+  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, (canvas.section_rows(st, 2)) + 1, "moved to section 2")
+  H.eq(active_row(sbuf), 3, "sidebar followed")
+
+  sidebar.cycle(st, 1)
+  sidebar.cycle(st, 1) -- wraps past the last section
+  top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, (canvas.section_rows(st, 1)) + 1, "wrapped to section 1")
+
+  sidebar.cycle(st, -1) -- wraps backwards
+  top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, (canvas.section_rows(st, 3)) + 1, "wrapped to last section")
+  sidebar.close()
+end
+
+T["sidebar_cycle works without a sidebar open"] = function()
+  local secs = { big_section("a/one.txt", "a"), big_section("b/two.txt", "b") }
+  local st = canvas.open(secs, {})
+  sidebar.close()
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.cycle(st, 1)
+  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, (canvas.section_rows(st, 2)) + 1)
+end
+
+T["sidebar_integration reconcile refreshes the tree"] = function()
+  local watch = require("finding_myself.watch")
+  local root = H.git_fixture({
+    committed = { ["m/a.txt"] = bigtext(40, "a") },
+    worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
+  })
+  local st = canvas.open(require("finding_myself.model").build(
+    require("finding_myself.collect").files(root), 3), {})
+  st.root = root
+  sidebar.close()
+  sidebar.open(st, { width = 30 })
+  local sbuf = sidebar_buf()
+  H.eq(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false), 2, "dir + one file")
+
+  local abs = vim.fs.joinpath(root, "m", "b.txt")
+  local f = assert(io.open(abs, "w")); f:write("new\n"); f:close()
+  watch.reconcile(st)
+
+  local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
+  H.eq(#lines, 3, "new file appears in the sidebar after reconcile")
+  assert(lines[3]:find("b.txt", 1, true), "b.txt rendered: " .. lines[3])
+  sidebar.close()
+end
+
 return T

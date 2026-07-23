@@ -6,6 +6,7 @@ local config = require("finding_myself.config")
 local hl = require("finding_myself.hl")
 local collect = require("finding_myself.collect")
 local watch = require("finding_myself.watch")
+local sidebar = require("finding_myself.sidebar")
 
 local M = {}
 
@@ -41,6 +42,12 @@ local function set_canvas_keymaps(st)
   end, map_opts)
   vim.keymap.set("n", cfg.keymaps.refresh, function()
     M.refresh()
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.cycle_next, function()
+    sidebar.cycle(st, 1)
+  end, map_opts)
+  vim.keymap.set("n", cfg.keymaps.cycle_prev, function()
+    sidebar.cycle(st, -1)
   end, map_opts)
 end
 
@@ -79,6 +86,10 @@ function M.open()
     end
     watch.start(st, config.options.watch)
   end
+
+  if config.options.sidebar.enabled then
+    sidebar.open(st, config.options.sidebar)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -113,6 +124,7 @@ function M.close()
 
   watch.stop()
   hl.detach(state)
+  sidebar.close()
 
   local prev_buf = (win == state.win) and state.prev_buf or nil
   if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
@@ -145,6 +157,7 @@ function M.refresh()
     show_empty_message(state)
   end
   hl.apply_now(state)
+  sidebar.refresh(state)
 end
 
 return M

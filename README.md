@@ -39,6 +39,16 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
   window before.
 - Press `R` to refresh the whole canvas: re-scan the repo for changed files
   and re-render everything from scratch.
+- Press `<C-n>` / `<C-p>` to jump straight to the next/previous file's diff,
+  wrapping around at either end. Focus stays in the canvas.
+
+A file-tree sidebar opens automatically alongside the canvas (a fixed,
+non-focused vsplit), listing every changed file in an indented directory
+tree and tracking your scroll position with a highlighted active entry.
+From the sidebar: `<CR>` (or `<Tab>`/`za` on a directory) scrolls the canvas
+to the entry under the cursor / toggles that directory's fold, and `q`
+closes just the sidebar (the canvas stays open). Set `sidebar.enabled =
+false` to turn it off.
 
 `:FindingMyself` with no argument toggles the canvas (open if not showing,
 close if showing). It also accepts an explicit subcommand, with completion:
@@ -58,10 +68,12 @@ open` notifies you and does nothing further (it never errors).
 ```lua
 require("finding_myself").setup({
   keymaps = {
-    jump = "<CR>",     -- jump into the file under the cursor
-    back = "<M-CR>",   -- jump back to the canvas from an excursion
-    close = "q",       -- close the canvas
-    refresh = "R",      -- re-scan and re-render
+    jump = "<CR>",       -- jump into the file under the cursor
+    back = "<M-CR>",     -- jump back to the canvas from an excursion
+    close = "q",         -- close the canvas
+    refresh = "R",       -- re-scan and re-render
+    cycle_next = "<C-n>", -- scroll to the next file's diff (wraps)
+    cycle_prev = "<C-p>", -- scroll to the previous file's diff (wraps)
   },
   context = 3,          -- unified-diff context lines around each hunk
   highlight = {
@@ -72,6 +84,10 @@ require("finding_myself").setup({
   watch = {
     enabled = true,     -- auto-refresh the canvas on save/focus/external changes
     debounce_ms = 200,  -- delay before reconciling after a detected change
+  },
+  sidebar = {
+    enabled = true,     -- auto-open the file-tree sidebar alongside the canvas
+    width = 32,         -- sidebar window width, in columns
   },
 })
 ```
@@ -84,6 +100,13 @@ Any subset of these can be overridden; unspecified keys keep their default.
 | `back` | `<M-CR>` | (set on the excursed file buffer) return to the canvas |
 | `close` | `q` | Close the canvas, restore the previous buffer |
 | `refresh` | `R` | Re-collect changed files and re-render the canvas |
+| `cycle_next` | `<C-n>` | Scroll to the next file's diff, wrapping |
+| `cycle_prev` | `<C-p>` | Scroll to the previous file's diff, wrapping |
+
+| Keymap (sidebar buffer only) | Default | Action |
+| --- | --- | --- |
+| `<CR>` / `<Tab>` / `za` | -- | Scroll the canvas to the entry, or toggle a directory's fold |
+| `q` | -- | Close the sidebar (canvas stays open) |
 
 Diff content is highlighted lazily: only sections within `margin` rows of
 the current viewport get real treesitter syntax highlighting (using
@@ -123,15 +146,16 @@ What's here today:
   refresh`) for a full re-scan on demand.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.
+- A persistent file-tree sidebar (directory folding, scroll-synced active
+  entry, click-to-scroll) plus `<C-n>`/`<C-p>` section cycling, both live
+  updated as the canvas reconciles.
 
 ## Roadmap
 
 Rough order, each phase independently useful:
 
-1. **Sidebar / file list** — a persistent index of changed files alongside
-   the canvas for quick navigation.
-2. **Scrollbar** — a visual indicator of where you are across all sections.
-3. **Virtualization** — render only the visible window's worth of diff for
+1. **Scrollbar** — a visual indicator of where you are across all sections.
+2. **Virtualization** — render only the visible window's worth of diff for
    large repos/diffs, instead of the whole canvas up front.
-4. **Session persistence** — remember canvas state (open files, scroll
+3. **Session persistence** — remember canvas state (open files, scroll
    position) across Neovim restarts.
