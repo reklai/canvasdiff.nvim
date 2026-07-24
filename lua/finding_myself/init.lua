@@ -52,6 +52,20 @@ local function expand_section(st, i)
   sync_after_collapse(st)
 end
 
+--- Jump into the section/entry under the cursor, expanding it instead when
+--- it's a collapsed placeholder. Shared by the jump keymap and the
+--- double-click mapping so both intercept a jump into a placeholder the
+--- same way.
+local function jump_or_expand(st, cfg)
+  local cursor = vim.api.nvim_win_get_cursor(st.win)
+  local i = canvas.locate(st, cursor[1] - 1)
+  if i and st.collapsed[st.sections[i].path] then
+    expand_section(st, i)
+    return
+  end
+  jump.enter(st, { back_key = cfg.keymaps.back })
+end
+
 --- Toggle collapse of the section under the cursor.
 local function toggle_collapse_under_cursor(st)
   local cursor = vim.api.nvim_win_get_cursor(st.win)
@@ -67,16 +81,10 @@ local function set_canvas_keymaps(st)
   local cfg = config.options
   local map_opts = { buffer = st.buf, silent = true, noremap = true }
   vim.keymap.set("n", cfg.keymaps.jump, function()
-    local cursor = vim.api.nvim_win_get_cursor(st.win)
-    local i = canvas.locate(st, cursor[1] - 1)
-    if i and st.collapsed[st.sections[i].path] then
-      expand_section(st, i)
-      return
-    end
-    jump.enter(st, { back_key = cfg.keymaps.back })
+    jump_or_expand(st, cfg)
   end, map_opts)
   vim.keymap.set("n", "<2-LeftMouse>", function()
-    jump.enter(st, { back_key = cfg.keymaps.back })
+    jump_or_expand(st, cfg)
   end, map_opts)
   vim.keymap.set("n", cfg.keymaps.collapse, function()
     toggle_collapse_under_cursor(st)

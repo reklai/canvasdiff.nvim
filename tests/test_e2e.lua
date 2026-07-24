@@ -35,6 +35,41 @@ return {
     for _, l in ipairs(after) do if l == "+return 99" then found = true end end
     assert(found, "canvas must show the edited content")
   end,
+  ["e2e: double-click on a collapsed placeholder expands instead of jumping"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a1\na2\na3\n" },
+      worktree = { ["a.txt"] = "A1\na2\na3\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["finding_myself"] = nil
+    local fm = require("finding_myself")
+    fm.open()
+
+    local canvas_buf = vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    assert(lines[1]:match("^▸ a%.txt"), "sanity: a.txt collapsed to its placeholder: " .. lines[1])
+
+    local dblclick
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(canvas_buf, "n")) do
+      if m.lhs == "<2-LeftMouse>" then
+        dblclick = m.callback
+      end
+    end
+    assert(dblclick, "sanity: <2-LeftMouse> mapping exists on the canvas buffer")
+
+    vim.api.nvim_win_set_cursor(0, { 1, 0 }) -- on the collapsed placeholder row
+    dblclick()
+
+    local lines2 = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    assert(not lines2[1]:match("^▸"),
+      "double-click on the placeholder must expand it instead of jumping: " .. lines2[1])
+    H.eq(vim.api.nvim_get_current_buf(), canvas_buf, "double-click must not jump out of the canvas")
+
+    fm.close()
+  end,
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)
