@@ -16,7 +16,7 @@ end
 
 T["config_ setup is optional and defaults are live without it"] = function()
   H.eq(config.options.keymaps.canvas.close, "q")
-  H.eq(config.options.keymaps.sidebar.select, { "<CR>", "<Tab>", "za" })
+  H.eq(config.options.keymaps.sidebar.select, { "<CR>", "<Tab>", "za", "<2-LeftMouse>" })
   H.eq(config.options.keymaps.file.back, "<M-CR>")
 end
 
@@ -43,7 +43,7 @@ end
 
 T["config_ unrelated contexts are untouched by a partial override"] = function()
   with_setup({ keymaps = { canvas = { help = "g?" } } }, function(opts)
-    H.eq(opts.keymaps.sidebar.select, { "<CR>", "<Tab>", "za" })
+    H.eq(opts.keymaps.sidebar.select, { "<CR>", "<Tab>", "za", "<2-LeftMouse>" })
     H.eq(opts.keymaps.file.back, "<M-CR>")
   end)
 end

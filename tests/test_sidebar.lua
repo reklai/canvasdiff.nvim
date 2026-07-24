@@ -407,4 +407,51 @@ T["sidebar_win canvas WinClosed cleans up a stranded sidebar"] = function()
   H.eq(sidebar.is_open(), false, "the canvas window's WinClosed cleaned the sidebar up")
 end
 
+-- The canvas has bound <2-LeftMouse> since the scrollbar landed, but the
+-- sidebar never did -- so clicking a file in the tree did nothing, which is
+-- the opposite of what every file tree trains you to expect.
+T["sidebar_win double-click selects, same as <CR>"] = function()
+  local st = open_with_sidebar()
+  local sbuf = sidebar_buf()
+  local side_win = vim.fn.bufwinid(sbuf)
+
+  local dbl
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
+    if m.lhs == "<2-LeftMouse>" then dbl = m.callback end
+  end
+  assert(dbl, "the sidebar must bind <2-LeftMouse>")
+
+  -- a file row scrolls the canvas to that section
+  local file_row
+  for i, e in ipairs(require("galley.sidebar").build_entries(st.sections, {})) do
+    if e.kind == "file" and e.section_i == #st.sections then file_row = i end
+  end
+  assert(file_row, "a file row for the last section")
+  vim.api.nvim_win_set_cursor(side_win, { file_row, 0 })
+  dbl()
+  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+  H.eq((canvas.locate(st, top)), #st.sections, "canvas scrolled to the clicked file")
+
+  -- a dir row folds instead, exactly as <CR> does there
+  local dir_row
+  for i, e in ipairs(require("galley.sidebar").build_entries(st.sections, {})) do
+    if e.kind == "dir" then dir_row = i break end
+  end
+  if dir_row then
+    local before = #vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
+    vim.api.nvim_win_set_cursor(side_win, { dir_row, 0 })
+    dbl()
+    assert(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false) < before,
+      "double-clicking a directory folds it rather than scrolling")
+  end
+  -- This test deliberately scrolls the canvas to its last section, and the
+  -- canvas buffer is a name-keyed singleton that REMEMBERS its cursor across
+  -- close/open. Leaving it parked at the bottom leaks into whichever test
+  -- opens the canvas next. Put it back.
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.close()
+end
+
 return T

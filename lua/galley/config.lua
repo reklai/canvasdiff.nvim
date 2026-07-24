@@ -27,7 +27,9 @@ M.defaults = {
       close      = "q",
     },
     sidebar = {
-      select = { "<CR>", "<Tab>", "za" },
+      -- Double-click, not single: <LeftMouse> is how you position the cursor,
+      -- and stealing it would make the tree impossible to browse.
+      select = { "<CR>", "<Tab>", "za", "<2-LeftMouse>" },
       close  = "q",
     },
     -- Set on the real file's buffer for the duration of a jump, then removed.

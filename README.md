@@ -53,10 +53,10 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
 A file-tree sidebar opens automatically alongside the canvas (a fixed,
 non-focused vsplit), listing every changed file in an indented directory
 tree and tracking your scroll position with a highlighted active entry.
-From the sidebar: `<CR>` (or `<Tab>`/`za` on a directory) scrolls the canvas
-to the entry under the cursor / toggles that directory's fold, and `q`
-closes just the sidebar (the canvas stays open). Set `sidebar.enabled =
-false` to turn it off.
+From the sidebar: `<CR>`, `<Tab>`, `za`, or a double-click scrolls the canvas
+to the file under the cursor — or toggles that directory's fold if you're on
+a directory row. `q` closes just the sidebar (the canvas stays open). Set
+`sidebar.enabled = false` to turn it off.
 
 A 1-column scrollbar minimap floats over the canvas's right edge, showing
 file boundaries (─), add/del density per stretch of lines (│, colored), and
@@ -152,7 +152,7 @@ require("galley").setup({
       close      = "q",      -- close the canvas
     },
     sidebar = {
-      select = { "<CR>", "<Tab>", "za" }, -- scroll canvas here / fold a directory
+      select = { "<CR>", "<Tab>", "za", "<2-LeftMouse>" }, -- scroll canvas here / fold a dir
       close  = "q",          -- close the sidebar (canvas stays open)
     },
     file = {
@@ -223,7 +223,7 @@ An override **replaces** the list rather than merging into it, so
 
 | Sidebar | Default | Action |
 | --- | --- | --- |
-| `select` | `<CR>`, `<Tab>`, `za` | Scroll the canvas to the entry, or toggle a directory's fold |
+| `select` | `<CR>`, `<Tab>`, `za`, `<2-LeftMouse>` | Scroll the canvas to the entry, or toggle a directory's fold |
 | `close` | `q` | Close the sidebar (canvas stays open) |
 
 | File buffer (during a jump) | Default | Action |
