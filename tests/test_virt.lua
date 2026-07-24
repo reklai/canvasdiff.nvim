@@ -2,6 +2,7 @@ local H = require("helpers")
 local canvas = require("finding_myself.canvas")
 local model = require("finding_myself.model")
 local virt = require("finding_myself.virt")
+local hl = require("finding_myself.hl")
 
 local T = {}
 
@@ -185,6 +186,60 @@ T["virt_ stays active while its own collapses shrink the buffer"] = function()
   H.eq(count_collapsed(st), collapsed_after_first,
     "a second apply keeps the same sections collapsed")
   assert(next(virt.auto_set()) ~= nil, "auto-set survives the second apply")
+end
+
+T["virt_ on_change fires once per mutating apply"] = function()
+  local st = open_six()
+  reset_view(st)
+  local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
+
+  local n, seen = 0, nil
+  virt.on_change = function(s)
+    n = n + 1
+    seen = s
+  end
+
+  virt.apply(st, opts)
+  H.eq(n, 1, "one notification for the apply that collapsed sections")
+  H.eq(seen, st, "on_change receives the state that was applied")
+
+  virt.apply(st, opts)
+  H.eq(n, 1, "an apply that changes nothing stays silent")
+
+  virt.on_change = nil
+end
+
+-- hl's WinScrolled debounce (30ms) beats virt's (50ms), so a section virt
+-- expands was still collapsed -- and therefore skipped -- when highlighting
+-- last ran. The splice fires no further WinScrolled of its own, so without
+-- the resync the expanded content would sit unhighlighted until the user
+-- scrolled again.
+T["virt_ expanded sections get their highlights back"] = function()
+  local st = open_six()
+  reset_view(st)
+  local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 0, max_expanded = 1 }
+
+  hl.attach(st, { margin = 0, debounce_ms = 30 })
+  virt.on_change = function(s)
+    hl.apply_now(s)
+  end
+
+  virt.apply(st, opts)
+  local path = st.sections[6].path
+  assert(st.collapsed[path], "sanity: section 6 auto-collapsed while far from the viewport")
+  H.eq(st.ts.ids_by_path[path], nil, "sanity: a collapsed section carries no marks")
+
+  local s6 = (canvas.section_rows(st, 6))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = s6 + 1, lnum = s6 + 1 })
+  end)
+  virt.apply(st, opts)
+
+  H.eq(st.collapsed[path], nil, "section 6 expanded back once it was near")
+  assert(st.ts.ids_by_path[path] ~= nil, "the expanded section got its highlights back")
+
+  virt.on_change = nil
+  hl.detach(st)
 end
 
 return T

@@ -185,6 +185,9 @@ function M.open()
   end
 
   if config.options.virt.enabled then
+    -- Must precede attach: attach applies immediately, and that first pass
+    -- can already splice.
+    virt.on_change = sync_after_collapse
     virt.attach(st, config.options.virt)
   end
 

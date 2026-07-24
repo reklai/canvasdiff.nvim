@@ -2,6 +2,15 @@ local canvas = require("finding_myself.canvas")
 
 local M = {}
 
+--- Assignable callback: fired once at the end of an apply that actually
+--- changed collapse state, so the owner can resync the consumers that read
+--- state.collapsed (highlighting, sidebar, scrollbar). None of them sees
+--- these splices on its own -- they land on this module's private debounce,
+--- after the other consumers' own scroll handlers have already run, and a
+--- collapse fully below the viewport moves no rows and so fires no further
+--- WinScrolled to bring them back.
+M.on_change = nil
+
 -- Tier-1 auto-virtualization: when a changeset is huge, far-from-viewport
 -- sections auto-collapse and near ones auto-expand. `auto` is the set of
 -- paths THIS module collapsed on its own (module intent, never persisted as
@@ -68,8 +77,15 @@ function M.unauto(path)
   tick_of[path] = nil
 end
 
+local function notify_change(state, changed)
+  if changed and M.on_change then
+    M.on_change(state)
+  end
+end
+
 --- Apply the AUTO virtualization policy once, synchronously, against the
 --- live viewport. No-op unless the canvas is actually showing in state.win.
+--- Fires M.on_change once at the end when the pass moved anything.
 function M.apply(state, opts)
   opts = opts or {}
   if not state or not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
@@ -87,14 +103,18 @@ function M.apply(state, opts)
   local active = opts.enabled ~= false
     and (#state.sections > max_files or natural_line_count(state) > max_lines)
 
+  local changed = false
+
   if not active then
     for path in pairs(auto) do
       local idx = index_of_path(state, path)
       if idx then
         canvas.set_collapsed(state, idx, false)
+        changed = true
       end
     end
     auto = {}
+    notify_change(state, changed)
     return
   end
 
@@ -131,6 +151,7 @@ function M.apply(state, opts)
     if in_window[i] and auto[sec.path] then
       canvas.set_collapsed(state, i, false)
       auto[sec.path] = nil
+      changed = true
     end
   end
 
@@ -169,7 +190,10 @@ function M.apply(state, opts)
     canvas.set_collapsed(state, best_i, true)
     auto[state.sections[best_i].path] = true
     count = count - 1
+    changed = true
   end
+
+  notify_change(state, changed)
 end
 
 --- Install a debounced (50ms) WinScrolled trigger for `state` and run one
@@ -204,8 +228,9 @@ function M.attach(state, opts)
   M.apply(state, opts)
 end
 
---- Tear everything down: timer, augroup, and the module's own auto-set/tick
---- bookkeeping. Nil-safe; safe to call when never attached.
+--- Tear everything down: timer, augroup, the resync callback, and the
+--- module's own auto-set/tick bookkeeping. Nil-safe; safe to call when never
+--- attached.
 function M.detach()
   if timer then
     timer:stop()
@@ -216,6 +241,7 @@ function M.detach()
   tick = 0
   live = nil
   live_opts = nil
+  M.on_change = nil
 end
 
 return M
