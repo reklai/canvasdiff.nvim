@@ -209,6 +209,53 @@ T["session_ auto-collapsed sections are not persisted"] = function()
   cleanup(root)
 end
 
+T["session_ restored user collapse survives virt's auto-set and persists"] = function()
+  local root = H.tmpdir()
+  virt.detach()
+
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("b/two.txt", "b"),
+    big_section("c/three.txt", "c"),
+  }, {})
+  st.root = root
+  st.base = "HEAD"
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+
+  local opts = { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 0 }
+  virt.attach(st, opts)
+
+  assert(st.collapsed["c/three.txt"], "sanity: virt already auto-collapsed the far section")
+  assert(virt.auto_set()["c/three.txt"], "sanity: it's virt's own auto-set claim")
+
+  -- A previously-saved USER collapse of that same path, restored onto this
+  -- virt-active canvas (mirrors init.M.open's restore-LAST ordering).
+  session.restore(st, { version = 1, base = "HEAD", collapsed = { "c/three.txt" } })
+
+  local c_row = (canvas.section_rows(st, 3))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = c_row + 1, lnum = c_row + 1 })
+  end)
+
+  virt.apply(st, opts)
+
+  assert(st.collapsed["c/three.txt"],
+    "restored user collapse must survive a virt.apply pass near the section")
+
+  session.save(st)
+  local data = session.load(root)
+  local found = false
+  for _, p in ipairs(data.collapsed or {}) do
+    if p == "c/three.txt" then found = true end
+  end
+  assert(found, "restored user collapse must still be persisted after session.save")
+
+  virt.detach()
+  cleanup(root)
+end
+
 T["session_ init round trip"] = function()
   local orig_cwd = vim.fn.getcwd()
   local root = H.git_fixture({

@@ -117,6 +117,7 @@ function M.restore(state, data)
       if idx then
         canvas.set_collapsed(state, idx, true)
       end
+      virt.unauto(path)
     end
   end)
 

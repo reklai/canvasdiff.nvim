@@ -42,6 +42,16 @@ function M.auto_set()
   return copy
 end
 
+--- Disclaim `path` as module intent: delete it from the auto-set and its
+--- tick bookkeeping. Safe no-op when virt is inactive/unattached or `path`
+--- was never auto-collapsed. Used by session.restore so a restored USER
+--- collapse landing on a path virt already auto-collapsed is never later
+--- auto-expanded back or excluded from a future session.save.
+function M.unauto(path)
+  auto[path] = nil
+  tick_of[path] = nil
+end
+
 --- Apply the AUTO virtualization policy once, synchronously, against the
 --- live viewport. No-op unless the canvas is actually showing in state.win.
 function M.apply(state, opts)
