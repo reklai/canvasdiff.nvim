@@ -6,6 +6,11 @@ local root = vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "
 vim.opt.runtimepath:prepend(root)
 package.path = root .. "/tests/?.lua;" .. package.path
 
+-- Session persistence writes under stdpath("state"); tests must never
+-- touch the user's real state dir. Redirect it for this whole process.
+local state_dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "fm_test_state_" .. vim.uv.hrtime())
+vim.env.XDG_STATE_HOME = state_dir
+
 local pattern = _G.arg and _G.arg[1] or nil
 local files = vim.fn.glob(root .. "/tests/test_*.lua", false, true)
 table.sort(files)
