@@ -130,7 +130,12 @@ end
 
 --- Open the canvas in the current window for the current cwd's git repo.
 --- Not a repo ⇒ notify and return (never throws).
-function M.open()
+---
+--- `opts.base` ("HEAD" | "index") overrides both the saved session's base and
+--- the configured default, so a command naming a state can open straight into
+--- it rather than opening and then re-rendering.
+function M.open(opts)
+  opts = opts or {}
   -- Invoked from inside our own sidebar (winfixbuf): the canvas can't be
   -- opened INTO that window. Redirect to the live canvas window if there is
   -- one; otherwise treat the sidebar as an appendage of an open canvas.
@@ -154,7 +159,7 @@ function M.open()
   -- Load any saved session BEFORE collect, so a restored base is honored
   -- from the very first collect.files call -- not just after the fact.
   local sess = config.options.session.enabled and session.load(root) or nil
-  local base = (sess and sess.base) or config.options.base
+  local base = opts.base or (sess and sess.base) or config.options.base
 
   local sections = model.build(collect.files(root, base), config.options.context)
 
@@ -320,19 +325,42 @@ function M.refresh()
   virt.apply(state, config.options.virt)
 end
 
+local function base_label(base)
+  return base == "index" and "index (unstaged)" or "HEAD"
+end
+
+--- Set the diff base explicitly to "HEAD" or "index", opening the canvas if
+--- it isn't showing.
+---
+--- Idempotent, which is the whole point: commands get put inside user
+--- mappings, and `:Galley unstaged` must always land unstaged. A toggle in a
+--- mapping is a coin flip. Opening rather than warning is likewise the only
+--- sensible reading of a command that names a state.
+function M.set_base(base)
+  if not (state and canvas_showing(state)) then
+    M.open({ base = base })
+    return
+  end
+  if state.base == base then
+    return
+  end
+  state.base = base
+  M.refresh()
+  util.notify("diff base = worktree vs " .. base_label(base))
+end
+
 --- Flip the diff base between "worktree vs HEAD" and "worktree vs index"
 --- (unstaged-only review) and refresh the live canvas. Canvas not currently
 --- showing (never opened, or closed again) ⇒ notify and return.
+---
+--- Deliberately still warns rather than opening: this is the keymap's entry
+--- point, and a keypress on no canvas is a mistake, not a request to open one.
 function M.toggle_base()
   if not (state and canvas_showing(state)) then
     util.warn("no live diff canvas")
     return
   end
-  state.base = (state.base == "index") and "HEAD" or "index"
-  M.refresh()
-  util.notify(
-    "diff base = worktree vs " .. (state.base == "index" and "index (unstaged)" or "HEAD")
-  )
+  M.set_base(state.base == "index" and "HEAD" or "index")
 end
 
 return M

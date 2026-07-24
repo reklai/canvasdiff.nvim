@@ -3,28 +3,15 @@ if vim.g.loaded_galley then
 end
 vim.g.loaded_galley = true
 
-local SUBCOMMANDS = { "open", "close", "toggle", "refresh", "base" }
-
 vim.api.nvim_create_user_command("Galley", function(opts)
-  local sub = opts.fargs[1] or "toggle"
-  if not vim.tbl_contains(SUBCOMMANDS, sub) then
-    require("galley.util").err(
-      "unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")"
-    )
-    return
-  end
-  local fm = require("galley")
-  if sub == "base" then
-    fm.toggle_base()
-  else
-    fm[sub]()
-  end
+  local cmd = require("galley.cmd")
+  cmd.run(cmd.parse(opts.fargs))
 end, {
-  nargs = "?",
-  desc = "Open/close/toggle/refresh/base the galley diff canvas",
+  -- "*" rather than "?" so arity errors come from us with a real message,
+  -- instead of Vim's generic trailing-characters complaint.
+  nargs = "*",
+  desc = "galley diff canvas: :Galley [open|close|toggle|refresh|unstaged|all]",
   complete = function(arglead)
-    return vim.tbl_filter(function(c)
-      return c:sub(1, #arglead) == arglead
-    end, SUBCOMMANDS)
+    return require("galley.cmd").complete(arglead)
   end,
 })

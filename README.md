@@ -80,25 +80,39 @@ visible line's number in the file it belongs to (not the canvas buffer's own
 line number) — blank for headers and collapsed placeholders, `·` for pure
 deletions.
 
-`:Galley base` toggles the diff base between the worktree vs `HEAD`
-(default — everything changed, staged or not) and the worktree vs the index
-(unstaged content only — what a plain `git diff --cached` would show is
-excluded, since it's comparing against what's already staged), refreshing
-the canvas and notifying which mode is now active.
+## Commands
 
-`:Galley` with no argument toggles the canvas (open if not showing,
-close if showing). It also accepts an explicit subcommand, with completion:
+`:Galley` with no argument toggles the canvas — that's the one you'll use.
+The rest exist so you can drive it from your own mappings and scripts:
 
 ```vim
-:Galley open
-:Galley close
-:Galley toggle
-:Galley refresh
-:Galley base
+:Galley             " toggle the canvas
+:Galley open        " open it
+:Galley close       " close it
+:Galley refresh     " re-scan the repo and re-render
+:Galley unstaged    " diff base: worktree vs index  (what plain `git diff` shows)
+:Galley all         " diff base: worktree vs HEAD   (the default)
 ```
 
-If the current directory isn't inside a git repository, `:Galley
-open` notifies you and does nothing further (it never errors).
+All of them complete with `<Tab>`.
+
+`unstaged` and `all` **set** a base rather than flipping one, so they're safe
+to put in a mapping — `:Galley unstaged` always lands unstaged, which a toggle
+can't promise. Either will open the canvas if it isn't already showing. The
+`B` key toggles between the two, because a keypress does want a flip.
+
+> `--staged` is deliberately not accepted. In git it means index vs `HEAD` —
+> the *staged* changes — which is the opposite of `unstaged` and is content
+> galley can't render yet. It reports that rather than quietly showing you
+> something else.
+
+An argument that isn't one of those words is treated as a revision spec
+(`:Galley main...HEAD`). Revision mode isn't implemented yet, so it says so and
+does nothing — the grammar is reserved now so that adding it later won't be a
+breaking change.
+
+If the current directory isn't inside a git repository, `:Galley open`
+notifies you and does nothing further (it never errors).
 
 The canvas remembers, per repository, which files you collapsed, which
 sidebar directories you folded, and roughly where you were scrolled/where
