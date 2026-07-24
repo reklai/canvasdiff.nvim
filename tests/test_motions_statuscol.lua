@@ -33,6 +33,22 @@ local function three_sections()
   }
 end
 
+-- 0-based row of the LAST hunk header across all sections, and the
+-- 0-based exclusive end row of the section it belongs to.
+local function last_hunk_row_and_section_end(st)
+  local last_row, seg_end
+  for i, section in ipairs(st.sections) do
+    local s0, e0 = canvas.section_rows(st, i)
+    for idx, entry in ipairs(section.entries) do
+      if entry.kind == "hunk_hdr" then
+        last_row = s0 + idx - 1
+        seg_end = e0
+      end
+    end
+  end
+  return last_row, seg_end
+end
+
 T["motions_ ]f [f move between section starts and clamp"] = function()
   local st = canvas.open(three_sections(), {})
   local b_start = (canvas.section_rows(st, 2))
@@ -83,6 +99,29 @@ T["motions_ ]h steps hunk headers across sections and skips collapsed"] = functi
   H.eq(final_row >= c_start, true, "eventually reached section 3's first hunk")
 end
 
+T["motions_ ]h inside the last hunk's body does not reverse direction"] = function()
+  local st = canvas.open(three_sections(), {})
+  local last_row, seg_end = last_hunk_row_and_section_end(st)
+  local body_row0 = math.min(last_row + 2, seg_end - 1)
+  vim.api.nvim_win_set_cursor(st.win, { body_row0 + 1, 0 })
+
+  local before = vim.api.nvim_win_get_cursor(st.win)
+  motions.goto_hunk(st, 1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win), before,
+    "]h past the last hunk header must not move the cursor backward")
+end
+
+T["motions_ [h before the first hunk header does not reverse direction"] = function()
+  local st = canvas.open(three_sections(), {})
+  local a_start = (canvas.section_rows(st, 1))
+  vim.api.nvim_win_set_cursor(st.win, { a_start + 1, 0 }) -- file_hdr row, before any hunk header
+
+  local before = vim.api.nvim_win_get_cursor(st.win)
+  motions.goto_hunk(st, -1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win), before,
+    "[h before the first hunk header must not move the cursor forward")
+end
+
 T["motions_ count is honored"] = function()
   local st = canvas.open(three_sections(), {})
   local a_start = (canvas.section_rows(st, 1))
@@ -93,10 +132,44 @@ T["motions_ count is honored"] = function()
   H.eq(vim.api.nvim_win_get_cursor(st.win), { c_start + 1, 0 })
 end
 
+T["motions_ [h steps back to the previous hunk header"] = function()
+  local st = canvas.open(three_sections(), {})
+  local a_start = (canvas.section_rows(st, 1))
+  vim.api.nvim_win_set_cursor(st.win, { a_start + 1, 0 }) -- file_hdr row
+
+  motions.goto_hunk(st, 1, 1)
+  local first_header = vim.api.nvim_win_get_cursor(st.win)
+  motions.goto_hunk(st, 1, 1)
+  local second_header = vim.api.nvim_win_get_cursor(st.win)
+  assert(second_header[1] > first_header[1], "sanity: forward step actually advanced")
+
+  motions.goto_hunk(st, -1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win), first_header, "[h steps back to the previous header")
+end
+
+T["motions_ 2]h skips one hunk header ahead"] = function()
+  local st = canvas.open(three_sections(), {})
+  local a_start = (canvas.section_rows(st, 1))
+  vim.api.nvim_win_set_cursor(st.win, { a_start + 1, 0 }) -- file_hdr row
+
+  motions.goto_hunk(st, 1, 1)
+  local one_step = vim.api.nvim_win_get_cursor(st.win)
+
+  vim.api.nvim_win_set_cursor(st.win, { a_start + 1, 0 }) -- reset
+  motions.goto_hunk(st, 1, 2)
+  local two_step = vim.api.nvim_win_get_cursor(st.win)
+
+  assert(two_step[1] > one_step[1], "2]h must land further than a single ]h step")
+end
+
 T["statuscol_ text maps rows to new-file numbers"] = function()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_set_current_win(st.win)
   statuscol.attach(st)
+
+  -- Production sets g:statusline_winid to the window being drawn before
+  -- evaluating the `%!` statuscolumn expression; simulate that eval context.
+  vim.g.statusline_winid = st.win
 
   -- file_hdr row (section start) -> 5 spaces.
   local a_start = (canvas.section_rows(st, 1))
@@ -117,6 +190,47 @@ T["statuscol_ text maps rows to new-file numbers"] = function()
   H.eq(entry.new_lnum ~= nil, true, "found a row with a new_lnum")
   H.eq(statuscol.text_for(row0 + 1), ("%4d "):format(entry.new_lnum))
 
+  vim.g.statusline_winid = nil
+  statuscol.detach()
+end
+
+T["statuscol_ renders for the drawn window even while focus is elsewhere"] = function()
+  local st = canvas.open(three_sections(), {})
+  vim.api.nvim_set_current_win(st.win)
+  statuscol.attach(st)
+
+  local a_start = (canvas.section_rows(st, 1))
+  local row0 = a_start + 2
+  local entry
+  while true do
+    local i, off = canvas.locate(st, row0)
+    entry = st.sections[i].entries[off]
+    if entry.kind ~= "hunk_hdr" and entry.kind ~= "file_hdr" then
+      break
+    end
+    row0 = row0 + 1
+  end
+  assert(entry.new_lnum ~= nil, "sanity: found a row with a new_lnum")
+
+  -- Focus moves to another window entirely; the canvas window (st.win) is
+  -- still SHOWING st.buf, just not the current one.
+  local other_win = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, {
+    relative = "editor", row = 0, col = 0, width = 20, height = 5,
+  })
+  assert(vim.api.nvim_get_current_win() ~= st.win)
+  assert(vim.api.nvim_get_current_buf() ~= st.buf)
+
+  -- Simulate the eval context production runs under: Neovim sets
+  -- g:statusline_winid to the window being DRAWN before invoking the `%!`
+  -- statuscolumn expression.
+  vim.g.statusline_winid = st.win
+  local text = statuscol.text_for(row0 + 1)
+  vim.g.statusline_winid = nil
+
+  H.eq(text, ("%4d "):format(entry.new_lnum),
+    "statuscolumn for the canvas window's own row renders even while focus is in another window")
+
+  vim.api.nvim_win_close(other_win, true)
   statuscol.detach()
 end
 
@@ -128,7 +242,9 @@ T["statuscol_ never leaks into a foreign buffer"] = function()
   local other_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(st.win, other_buf)
 
-  H.eq(statuscol.text_for(1), "", "text_for returns empty for a foreign current buffer")
+  vim.g.statusline_winid = st.win
+  H.eq(statuscol.text_for(1), "", "text_for returns empty once the drawn window shows a foreign buffer")
+  vim.g.statusline_winid = nil
 
   vim.wait(300, function()
     return vim.api.nvim_get_option_value("statuscolumn", { win = st.win }) == ""

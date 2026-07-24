@@ -51,10 +51,12 @@ function M.goto_hunk(state, dir, count)
   local cursor_row0 = vim.api.nvim_win_get_cursor(state.win)[1] - 1
   -- `anchor_idx` is the index of the nearest qualifying row (first row
   -- strictly after the cursor for dir=1, or the closest strictly-before row
-  -- for dir=-1), defaulting to the appropriate end of the list when no row
-  -- qualifies. Stepping `count - 1` further in the same direction from there
-  -- and clamping gives the count-th qualifying row.
-  local anchor_idx = dir > 0 and #rows or 1
+  -- for dir=-1). No qualifying row means nothing lies in the direction of
+  -- travel: clamp at the end and never reverse direction, so return without
+  -- moving the cursor. Stepping `count - 1` further in the same direction
+  -- from an anchor that DOES qualify and clamping gives the count-th
+  -- qualifying row.
+  local anchor_idx
   if dir > 0 then
     for i, r in ipairs(rows) do
       if r > cursor_row0 then
@@ -69,6 +71,9 @@ function M.goto_hunk(state, dir, count)
         break
       end
     end
+  end
+  if not anchor_idx then
+    return
   end
 
   local target_idx = math.min(math.max(anchor_idx + dir * (count - 1), 1), #rows)

@@ -21,14 +21,22 @@ local function canvas_showing(state)
 end
 
 --- Core statuscolumn text for canvas buffer line `lnum` (1-based). "" unless
---- the CURRENT buffer is the live canvas; pcall-guarded so a stale/racing
---- `live` (e.g. mid-splice) never surfaces an error into the statusline.
+--- the window being DRAWN (`v:lua`-eval sets `g:statusline_winid` to it,
+--- mirroring 'statusline') is showing the live canvas -- NOT whichever
+--- window happens to be focused, so the column keeps rendering for the
+--- canvas window while focus is elsewhere (e.g. the sidebar). pcall-guarded
+--- so a stale/racing `live` (e.g. mid-splice) never surfaces an error into
+--- the statusline.
 function M.text_for(lnum)
   local ok, result = pcall(function()
     if not live then
       return ""
     end
-    if vim.api.nvim_get_current_buf() ~= live.buf then
+    local win = vim.g.statusline_winid
+    if not win or not vim.api.nvim_win_is_valid(win) then
+      return ""
+    end
+    if vim.api.nvim_win_get_buf(win) ~= live.buf then
       return ""
     end
     local i, offset = canvas.locate(live, lnum - 1)
