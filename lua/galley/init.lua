@@ -128,8 +128,35 @@ local function set_canvas_keymaps(st)
   end
 end
 
---- Open the canvas in the current window for the current cwd's git repo.
+--- Directory of `buf`'s own file, or nil when it doesn't have one.
+--- Restricted to ordinary file buffers, so scratch buffers, terminals and
+--- URI-backed buffers (oil://, fugitive://, our own galley://) never
+--- contribute a bogus path.
+local function buf_dir(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return nil
+  end
+  if vim.api.nvim_get_option_value("buftype", { buf = buf }) ~= "" then
+    return nil
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  if name == "" then
+    return nil
+  end
+  local dir = vim.fn.fnamemodify(name, ":p:h")
+  return vim.fn.isdirectory(dir) == 1 and dir or nil
+end
+
+--- Open the canvas in the current window for the git repo we're working in.
 --- Not a repo ⇒ notify and return (never throws).
+---
+--- The repo is resolved from the cwd first, falling back to the current
+--- buffer's own file. cwd wins because in Neovim the cwd IS the project, and
+--- keeping it first means this changes nothing for anyone already working
+--- that way. The fallback exists because `nvim path/to/repo/file.lua` from a
+--- parent directory -- or hopping projects with a file picker -- otherwise
+--- refuses to open at all, with a message that looks like the plugin is
+--- broken rather than looking in the wrong place.
 ---
 --- `opts.base` ("HEAD" | "index") overrides both the saved session's base and
 --- the configured default, so a command naming a state can open straight into
@@ -147,14 +174,19 @@ function M.open(opts)
     end
   end
 
-  local root = git.root(vim.fn.getcwd())
-  if not root then
-    util.warn("not inside a git repository")
-    return
-  end
-
   local win = vim.api.nvim_get_current_win()
   local prev_buf = vim.api.nvim_win_get_buf(win)
+
+  local cwd = vim.fn.getcwd()
+  local root = git.root(cwd)
+  if not root then
+    local dir = buf_dir(prev_buf)
+    root = dir and git.root(dir) or nil
+  end
+  if not root then
+    util.warn("not inside a git repository (looked in " .. cwd .. ")")
+    return
+  end
 
   -- Load any saved session BEFORE collect, so a restored base is honored
   -- from the very first collect.files call -- not just after the fact.
