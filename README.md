@@ -37,8 +37,14 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
   the canvas. The diff for that file is regenerated from the file's current
   content (including unsaved edits) and the canvas view is restored to
   roughly where you left it.
-- Press `q` to close the canvas and restore whatever buffer was in the
-  window before.
+- Press `q` to close the canvas. Closing is non-destructive: you land back on
+  the buffer the canvas opened over, cursor and column intact. The two exits
+  mean different things on purpose — `<CR>` is "I want to work on this file",
+  `q` is "I'm done reading" — so a jump never changes where `q` puts you. If
+  the buffer you came from was deleted meanwhile, it falls back to the file
+  your review last touched, then to the alternate file, and only then to a
+  blank one. `:Galley close` works from any window in the tab, not just the
+  one showing the canvas.
 - Press `R` to refresh the whole canvas: re-scan the repo for changed files
   and re-render everything from scratch.
 - Press `<C-n>` / `<C-p>` to jump straight to the next/previous file's diff,

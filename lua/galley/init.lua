@@ -265,33 +265,79 @@ function M.open(opts)
   end
 end
 
---- Restore the window's previous buffer (or `enew` if it's gone). The
---- canvas buffer itself is left alone -- canvas.lua keeps it cached/hidden.
+--- Windows in the CURRENT tabpage showing the canvas buffer.
 ---
---- Only ever acts on the CURRENT window, and only when that window is
---- actually showing the canvas buffer right now -- never on `state.win`
---- blindly. This matters because `state` is a single module-level
---- singleton: the window it was captured in at `open()` time can since
---- have navigated to a different buffer (e.g. `:edit`'d away), or a later
---- `open()`/`toggle()` invoked from a *different* window can have
---- overwritten `state.win`/`state.prev_buf` entirely. In either case
---- blindly restoring `state.prev_buf` into `state.win` would clobber
---- whatever the user is actually looking at in some other window.
+--- Tabpage-scoped on purpose: tabs are separate workspaces, so closing here
+--- must not reach into a canvas someone left open in another one.
+local function canvas_wins(st)
+  local out = {}
+  if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
+    return out
+  end
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == st.buf then
+      out[#out + 1] = w
+    end
+  end
+  return out
+end
+
+--- Is `buf` something we could sensibly leave a window sitting on?
+local function restorable(buf, st)
+  return buf
+    and buf ~= st.buf
+    and vim.api.nvim_buf_is_valid(buf)
+    and vim.api.nvim_buf_is_loaded(buf)
+end
+
+--- Put `win` back on something useful now that the canvas is leaving it.
 ---
---- If the current window isn't showing the canvas at all, close() is a
---- no-op. If it is showing the canvas but isn't the window `state`
---- remembers a `prev_buf` for (the multi-window case above), it falls
---- back to `enew` there instead of guessing at some other window's
---- previous buffer. Any *other* window still showing the canvas buffer
---- besides the current one is left untouched -- multi-window canvas
---- display is a documented MVP limitation, not handled here.
+--- Preference order, most to least specific: the buffer this window had when
+--- the canvas took it over; the last file an excursion landed in (if you were
+--- reviewing, that's the file you most recently touched); the window's
+--- alternate file; and only then a blank buffer. The chain exists because
+--- landing on [No Name] reads as something having gone wrong, when in fact
+--- nothing did -- the buffer we came from was simply deleted meanwhile.
+local function restore_window(win, st)
+  local candidates = {
+    (win == st.win) and st.prev_buf or nil,
+    jump.last_buf(),
+    vim.api.nvim_win_call(win, function() return vim.fn.bufnr("#") end),
+  }
+  for _, buf in ipairs(candidates) do
+    if restorable(buf, st) then
+      vim.api.nvim_win_set_buf(win, buf)
+      return
+    end
+  end
+  vim.api.nvim_win_call(win, function()
+    vim.cmd("enew")
+  end)
+end
+
+--- Take the canvas off screen and put every window it occupied back on
+--- something useful. The canvas buffer itself is left alone -- canvas.lua
+--- keeps it cached/hidden, which is what makes reopening cheap.
+---
+--- Acts on every window in this tabpage showing the canvas, not just the
+--- current one. Restricting it to the current window meant `:Galley close`
+--- from a neighbouring split was a silent no-op that read as the plugin being
+--- broken. `state` is still a single module-level singleton, so only the one
+--- window it remembers a `prev_buf` for gets that buffer back; the others go
+--- through the same fallback chain rather than being handed another window's
+--- history.
+---
+--- No canvas on screen ⇒ no-op. Closing what isn't open is not an error.
+---
+--- A stale 'statuscolumn' left on a restored window is harmless: statuscol's
+--- text function returns "" as soon as the window isn't showing the canvas.
 function M.close()
   if not state then
     return
   end
 
-  local win = vim.api.nvim_get_current_win()
-  if vim.api.nvim_win_get_buf(win) ~= state.buf then
+  local wins = canvas_wins(state)
+  if #wins == 0 then
     return
   end
 
@@ -307,25 +353,27 @@ function M.close()
   virt.detach()
   statuscol.detach()
 
-  local prev_buf = (win == state.win) and state.prev_buf or nil
-  if prev_buf and prev_buf ~= state.buf and vim.api.nvim_buf_is_valid(prev_buf) then
-    vim.api.nvim_win_set_buf(win, prev_buf)
-  else
-    vim.api.nvim_win_call(win, function()
-      vim.cmd("enew")
-    end)
+  for _, win in ipairs(wins) do
+    restore_window(win, state)
   end
 end
 
---- Toggle: close if the canvas is showing in the current window, else open.
---- Being focused inside our own sidebar counts as "the canvas is open": jump
---- to the live canvas window and close from there, or just close the
---- sidebar if the canvas it was attached to is already gone. Never errors.
+--- Toggle: if the canvas is on screen anywhere in this tabpage, take it off;
+--- otherwise open it here.
+---
+--- Keyed on "is it showing at all", not "is it showing in THIS window".
+--- Toggling from a neighbouring split used to fall through to open() and put
+--- a second view of the same canvas on screen, so the key that is supposed to
+--- dismiss it added another one instead.
+---
+--- Being focused inside our own sidebar counts as "the canvas is open": close
+--- it, or just close the sidebar if the canvas it was attached to is already
+--- gone. Never errors.
 function M.toggle()
-  local current_win = vim.api.nvim_get_current_win()
-  if sidebar.is_sidebar_win(current_win) then
-    if state and canvas_showing(state) then
-      vim.api.nvim_set_current_win(state.win)
+  local showing = state and #canvas_wins(state) > 0
+
+  if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
+    if showing then
       M.close()
     else
       sidebar.close()
@@ -333,7 +381,7 @@ function M.toggle()
     return
   end
 
-  if canvas.is_canvas_buf(vim.api.nvim_get_current_buf()) then
+  if showing then
     M.close()
   else
     M.open()

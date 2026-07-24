@@ -16,6 +16,19 @@ local M = {}
 -- ever acts on the current excursion).
 local excursion = nil
 
+-- The last real file buffer an excursion landed in, remembered past the
+-- excursion itself so close() can fall back to it when the buffer the canvas
+-- was opened over has since been deleted.
+local last_buf = nil
+
+--- Most recent excursion target that is still a live buffer, or nil.
+function M.last_buf()
+  if last_buf and vim.api.nvim_buf_is_valid(last_buf) then
+    return last_buf
+  end
+  return nil
+end
+
 --- Read the "current" content of an excursed file: unsaved buffer content
 --- when the buffer is still loaded (edits count even if not written), else
 --- a fresh disk read, else "" when the file is gone entirely.
@@ -111,6 +124,7 @@ function M.enter(state, opts)
   vim.api.nvim_win_set_cursor(state.win, { clamped, 0 })
 
   excursion.buf = buf
+  last_buf = buf
   -- Never map `q` in the real file buffer.
   for _, lhs in ipairs(back_keys) do
     vim.keymap.set("n", lhs, function()
