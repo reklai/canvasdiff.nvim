@@ -63,11 +63,13 @@ Press `<Tab>` (or `za`) on any line to collapse that line's file down to a
 single placeholder row (`▸ path  (N hunks, +adds −dels)`), and again to
 expand it back. Pressing `<CR>` on a collapsed placeholder expands it
 instead of jumping. For very large changesets (past `virt.max_files` files
-or `virt.max_lines` total canvas lines), the same collapse mechanism kicks
-in automatically: sections far from your current viewport auto-collapse and
-ones you scroll near auto-expand, keeping at most `virt.max_expanded`
-sections rendered in full at once. This auto-virtualization never touches
-(or persists) anything you collapsed yourself.
+or `virt.max_lines` fully-expanded canvas lines), the same collapse
+mechanism kicks in automatically: sections far from your current viewport
+auto-collapse and ones you scroll near auto-expand, keeping at most
+`virt.max_expanded` sections rendered in full at once. Both thresholds
+describe the changeset itself, so what is collapsed right now never changes
+whether virtualization is on. This auto-virtualization never touches (or
+persists) anything you collapsed yourself.
 
 Use `]f` / `[f` to jump the cursor to the next/previous file's diff start
 (clamping at the ends, honoring a count), and `]h` / `[h` to step between
@@ -147,7 +149,7 @@ require("finding_myself").setup({
   virt = {
     enabled = true,     -- tier-1 auto-virtualization for huge changesets
     max_files = 200,    -- section count past which auto-collapse activates
-    max_lines = 100000, -- total canvas lines past which auto-collapse activates
+    max_lines = 100000, -- fully-expanded canvas lines past which it activates
     margin = 100,       -- rows around the viewport treated as "near"
     max_expanded = 20,  -- sections kept rendered in full at once, once active
   },

@@ -161,4 +161,30 @@ T["virt_ deactivation auto-expands only the auto set"] = function()
   H.eq(next(virt.auto_set()), nil, "auto-set cleared")
 end
 
+-- The max_lines threshold must describe the CHANGESET, not the current
+-- rendering. Six big_sections are 312 rows fully expanded; once virt
+-- collapses four of them the buffer is only 108 rows. Measuring the buffer
+-- would put a max_lines of 200 on the wrong side of the threshold on the
+-- second pass, deactivating virt, expanding everything back, and leaving the
+-- canvas oscillating between virtualized and fully rendered on every scroll.
+T["virt_ stays active while its own collapses shrink the buffer"] = function()
+  local st = open_six()
+  reset_view(st)
+  local opts = { enabled = true, max_files = 1000, max_lines = 200, margin = 10, max_expanded = 2 }
+
+  virt.apply(st, opts)
+
+  local collapsed_after_first = count_collapsed(st)
+  assert(collapsed_after_first > 0, "sanity: the first apply auto-collapsed something")
+  local rendered = vim.api.nvim_buf_line_count(st.buf)
+  assert(rendered < 200,
+    "sanity: collapsing dropped the buffer below max_lines (got " .. rendered .. ")")
+
+  virt.apply(st, opts)
+
+  H.eq(count_collapsed(st), collapsed_after_first,
+    "a second apply keeps the same sections collapsed")
+  assert(next(virt.auto_set()) ~= nil, "auto-set survives the second apply")
+end
+
 return T

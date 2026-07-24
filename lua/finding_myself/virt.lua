@@ -32,6 +32,21 @@ local function index_of_path(state, path)
   end
 end
 
+--- The changeset's FULLY-EXPANDED row count: one row per entry in every
+--- section (render.section_lines emits exactly that), whatever is collapsed
+--- right now. Deliberately NOT nvim_buf_line_count -- the rendered buffer
+--- shrinks as this module's own collapses land, so a changeset only just
+--- over max_lines would fall back under it on the next apply, deactivate,
+--- expand everything back, and leave the canvas oscillating between
+--- virtualized and fully rendered on every scroll.
+local function natural_line_count(state)
+  local n = 0
+  for _, sec in ipairs(state.sections) do
+    n = n + #sec.entries
+  end
+  return n
+end
+
 --- Snapshot of the module's own auto-collapsed paths (shallow copy -- the
 --- caller must not be able to mutate module state through it).
 function M.auto_set()
@@ -69,7 +84,7 @@ function M.apply(state, opts)
   local max_expanded = opts.max_expanded or math.huge
 
   local active = opts.enabled ~= false
-    and (#state.sections > max_files or vim.api.nvim_buf_line_count(state.buf) > max_lines)
+    and (#state.sections > max_files or natural_line_count(state) > max_lines)
 
   if not active then
     for path in pairs(auto) do
