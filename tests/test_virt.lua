@@ -214,6 +214,11 @@ end
 -- last ran. The splice fires no further WinScrolled of its own, so without
 -- the resync the expanded content would sit unhighlighted until the user
 -- scrolled again.
+--
+-- Driven by hand rather than through the real events: WinScrolled is emitted
+-- from the redraw path and never fires headlessly, so the debounce race this
+-- guards against cannot be staged directly. Wiring on_change here pins the
+-- contract that the race relies on instead.
 T["virt_ expanded sections get their highlights back"] = function()
   local st = open_six()
   reset_view(st)

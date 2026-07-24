@@ -206,6 +206,13 @@ function M.open()
   -- viewport, so it leaves the section the user is looking at expanded.
   if sess then
     session.restore(st, sess)
+    -- Restored collapses reshape the canvas after the sidebar and scrollbar
+    -- were built from the fully-expanded one, and restoring the view doesn't
+    -- necessarily scroll (it may already be at the top, or not be saved at
+    -- all when the top section is the collapsed one) -- so nothing else
+    -- brings them back in sync. Also fixes up the sidebar's active row,
+    -- which set_folds drew before the view step moved the viewport.
+    sync_after_collapse(st)
   end
 
   if config.options.virt.enabled then

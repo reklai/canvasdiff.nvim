@@ -4,6 +4,7 @@ local model = require("finding_myself.model")
 local virt = require("finding_myself.virt")
 local session = require("finding_myself.session")
 local config = require("finding_myself.config")
+local scrollbar = require("finding_myself.scrollbar")
 
 local T = {}
 
@@ -323,9 +324,10 @@ T["session_ explicit collapse of an auto-collapsed section is persisted"] = func
     fm.open()
     assert(virt.auto_set()["c.txt"], "sanity: virt auto-collapsed c.txt at open")
 
-    -- G lands on the last row, which is c.txt's placeholder. This scrolls,
-    -- arming virt's 50ms debounce -- but nothing in this test yields to the
-    -- event loop long enough for it to fire, so the claim is still virt's.
+    -- G lands on the last row, which is c.txt's placeholder. WinScrolled is
+    -- emitted from the redraw path and never fires without an attached UI,
+    -- so this scroll cannot arm virt's debounce headlessly -- the claim is
+    -- still virt's when the toggle below runs.
     vim.cmd("normal! G")
     assert(virt.auto_set()["c.txt"], "sanity: still virt's claim after scrolling to it")
 
@@ -386,6 +388,48 @@ T["session_ saved view survives virt's immediate auto-collapse"] = function()
     local top = vim.fn.getline(vim.fn.line("w0"))
     assert(top:match("c line"),
       "reopened inside the saved section, not back at the top; got: " .. top)
+  end)
+end
+
+-- Saved collapses are reapplied after scrollbar.open has already drawn the
+-- bar from the fully-expanded canvas. When the restored view doesn't itself
+-- scroll -- here it isn't saved at all, because the top section is the
+-- collapsed one -- nothing redraws the minimap and it keeps depicting a
+-- canvas that no longer exists. virt is disabled so its own resync can't
+-- stand in for the missing one.
+T["session_ restored collapses reach the scrollbar"] = function()
+  local root = big_repo()
+  in_repo(root, { virt = { enabled = false } }, function(fm)
+    fm.open()
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user collapses a.txt
+    fm.close()
+    H.eq(session.load(root).collapsed, { "a.txt" }, "sanity: the collapse was persisted")
+    H.eq(session.load(root).view, nil, "sanity: no saved view, so the restore won't scroll")
+
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if canvas.is_canvas_buf(b) then
+        vim.api.nvim_buf_delete(b, { force = true })
+      end
+    end
+    vim.cmd("tabnew")
+
+    -- Record what the bar was drawn from on each redraw. state.collapsed is
+    -- mutated in place, so it has to be copied per call or every snapshot
+    -- ends up being the same final table.
+    local real_update = scrollbar.update
+    local seen = {}
+    scrollbar.update = function(state, ...)
+      seen[#seen + 1] = vim.deepcopy((state and state.collapsed) or {})
+      return real_update(state, ...)
+    end
+    local ok_open, open_err = pcall(fm.open)
+    scrollbar.update = real_update
+    assert(ok_open, open_err)
+
+    assert(#seen > 0, "sanity: the scrollbar was drawn at all")
+    H.eq(seen[#seen], { ["a.txt"] = true },
+      "the last redraw saw the restored collapse, not the fully-expanded canvas")
   end)
 end
 
