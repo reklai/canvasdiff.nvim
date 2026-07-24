@@ -78,7 +78,7 @@ deletions.
 
 `:FindingMyself base` toggles the diff base between the worktree vs `HEAD`
 (default — everything changed, staged or not) and the worktree vs the index
-(staged content only — what a plain `git diff --cached` would show is
+(unstaged content only — what a plain `git diff --cached` would show is
 excluded, since it's comparing against what's already staged), refreshing
 the canvas and notifying which mode is now active.
 
