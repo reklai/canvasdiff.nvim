@@ -29,16 +29,20 @@ end
 -- an explicit reset, a leftover auto-set entry from an earlier test could
 -- leak into a later one (only test execution order coincidentally hides
 -- this); detach() clears it deterministically before each test.
-local function open_six()
-  virt.detach()
-  return canvas.open({
+local function six_sections()
+  return {
     big_section("a/one.txt", "a"),
     big_section("b/two.txt", "b"),
     big_section("c/three.txt", "c"),
     big_section("d/four.txt", "d"),
     big_section("e/five.txt", "e"),
     big_section("f/six.txt", "f"),
-  }, {})
+  }
+end
+
+local function open_six()
+  virt.detach()
+  return canvas.open(six_sections(), {})
 end
 
 local function reset_view(st)
@@ -245,6 +249,37 @@ T["virt_ expanded sections get their highlights back"] = function()
 
   virt.on_change = nil
   hl.detach(st)
+end
+
+-- auto/tick_of are module-level and keyed by path, but canvas.open always
+-- hands back a fresh state.collapsed. Re-opening without an intervening
+-- detach (reachable through M.open's sidebar-redirect branch) therefore
+-- carried the previous canvas's visibility history into the new one, and
+-- those stale ticks outranked everything the new canvas had actually seen --
+-- so the LRU kept the FARTHEST section rendered and collapsed the nearest,
+-- exactly inverting the policy.
+T["virt_ attach to a new canvas forgets the previous one's history"] = function()
+  local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
+
+  local st1 = open_six()
+  -- Park canvas one at the BOTTOM, so its last sections look recently-seen.
+  vim.api.nvim_win_call(st1.win, function()
+    vim.cmd("normal! G")
+  end)
+  virt.apply(st1, opts)
+  assert(virt.auto_set()["a/one.txt"], "sanity: canvas one auto-collapsed its far (top) sections")
+
+  -- Re-open WITHOUT detaching, and look at the TOP of the new canvas.
+  local st2 = canvas.open(six_sections(), {})
+  reset_view(st2)
+  virt.attach(st2, opts)
+
+  H.eq(st2.collapsed[st2.sections[2].path], nil,
+    "the section just below the viewport stays expanded")
+  assert(st2.collapsed[st2.sections[6].path],
+    "the farthest section is collapsed, not kept alive by the old canvas's ticks")
+
+  virt.detach()
 end
 
 return T

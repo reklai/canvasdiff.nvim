@@ -203,6 +203,21 @@ function M.attach(state, opts)
   if timer then
     timer:stop()
   end
+
+  -- Binding to a DIFFERENT canvas: auto/tick_of are keyed by path, but
+  -- canvas.open always hands back a fresh state.collapsed, so the previous
+  -- canvas's bookkeeping describes nothing in this one. Carrying it over
+  -- would claim paths nothing has collapsed and -- worse -- let stale
+  -- visibility ticks outrank everything the new canvas has actually seen,
+  -- so the LRU would keep the farthest section rendered and collapse the
+  -- nearest. (M.open can re-open without an intervening close via its
+  -- sidebar-redirect branch, so this is reachable.)
+  if live ~= state then
+    auto = {}
+    tick_of = {}
+    tick = 0
+  end
+
   live = state
   live_opts = opts
 
