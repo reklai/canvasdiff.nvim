@@ -64,6 +64,7 @@ local VIRT_FORCED = { virt = { max_files = 1, max_expanded = 1, margin = 0 } }
 -- later test in the run.
 local function in_repo(root, opts, fn)
   local orig_cwd = vim.fn.getcwd()
+  local orig_tab = vim.api.nvim_get_current_tabpage()
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
@@ -72,7 +73,14 @@ local function in_repo(root, opts, fn)
     fm.setup(opts)
     fn(fm)
   end)
-  vim.cmd("tabclose")
+  -- tabonly, not tabclose: a test may open more than one tab (a reopen needs
+  -- a window with no remembered view for the canvas buffer -- see below).
+  pcall(function()
+    if vim.api.nvim_tabpage_is_valid(orig_tab) then
+      vim.api.nvim_set_current_tabpage(orig_tab)
+    end
+    vim.cmd("tabonly!")
+  end)
   vim.api.nvim_set_current_dir(orig_cwd)
   config.setup({})
   virt.detach()
@@ -337,6 +345,47 @@ T["session_ explicit collapse of an auto-collapsed section is persisted"] = func
       if p == "c.txt" then found = true end
     end
     assert(found, "the user's explicit collapse must be persisted, not discarded as virt's")
+  end)
+end
+
+-- virt.attach applies immediately, and on a freshly-opened canvas the
+-- viewport is still at the top -- so it auto-collapses exactly the far
+-- section a saved view wants to scroll to, and restore's view step then
+-- bails on it. Reopening a large changeset has to land where the user left
+-- off, not back at section one.
+T["session_ saved view survives virt's immediate auto-collapse"] = function()
+  local root = big_repo()
+  in_repo(root, VIRT_FORCED, function(fm)
+    fm.open()
+
+    -- G lands on c.txt's placeholder (the last row); <Tab> expands it, and a
+    -- second G parks the viewport deep inside it so the saved view names
+    -- c.txt rather than whatever is above it.
+    vim.cmd("normal! G")
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    vim.cmd("normal! G")
+    assert(vim.fn.getline(vim.fn.line("w0")):match("c line"),
+      "sanity: parked inside c.txt before saving, got: " .. vim.fn.getline(vim.fn.line("w0")))
+
+    fm.close()
+    H.eq(session.load(root).view.path, "c.txt", "sanity: the saved view names c.txt")
+
+    -- Wipe the singleton canvas buffer and reopen in a fresh window. Both
+    -- halves matter: a surviving buffer carries a remembered cursor that
+    -- Neovim restores on load, which would park the reopened viewport near
+    -- the saved section by accident and hide the defect. This is the real
+    -- scenario -- a new Neovim process, where the canvas starts at row 1.
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if canvas.is_canvas_buf(b) then
+        vim.api.nvim_buf_delete(b, { force = true })
+      end
+    end
+    vim.cmd("tabnew")
+    fm.open()
+
+    local top = vim.fn.getline(vim.fn.line("w0"))
+    assert(top:match("c line"),
+      "reopened inside the saved section, not back at the top; got: " .. top)
   end)
 end
 

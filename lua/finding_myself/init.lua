@@ -184,13 +184,6 @@ function M.open()
     scrollbar.open(st, config.options.scrollbar)
   end
 
-  if config.options.virt.enabled then
-    -- Must precede attach: attach applies immediately, and that first pass
-    -- can already splice.
-    virt.on_change = sync_after_collapse
-    virt.attach(st, config.options.virt)
-  end
-
   if config.options.statuscolumn.enabled then
     statuscol.attach(st)
   end
@@ -205,11 +198,21 @@ function M.open()
     })
   end
 
-  -- Restore LAST: virt's immediate apply (above) may already have
-  -- auto-collapsed sections before this runs; restore's own view step
-  -- handles landing on an already-collapsed target section by skipping it.
+  -- Restore BEFORE the auto-virtualizer's first pass. A freshly-opened
+  -- canvas sits at row 1, so a virt.apply here would auto-collapse whatever
+  -- far section the saved view points at -- and restore's view step skips a
+  -- collapsed target, silently reopening large changesets at section one.
+  -- Restoring first also means the first apply classifies against the real
+  -- viewport, so it leaves the section the user is looking at expanded.
   if sess then
     session.restore(st, sess)
+  end
+
+  if config.options.virt.enabled then
+    -- Must precede attach: attach applies immediately, and that first pass
+    -- can already splice.
+    virt.on_change = sync_after_collapse
+    virt.attach(st, config.options.virt)
   end
 end
 

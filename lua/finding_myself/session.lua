@@ -134,9 +134,12 @@ function M.restore(state, data)
     if not idx then
       return
     end
-    -- virt's immediate apply (attached before restore runs) may have
-    -- auto-collapsed this very section already; a collapsed section's
-    -- entries don't map to buffer rows, so there is nothing to resolve.
+    -- A collapsed section is just its placeholder row -- its entries don't
+    -- map to buffer rows, so there is nothing to resolve. save() never
+    -- records a view onto a collapsed section, so this only fires on a
+    -- stale or hand-written payload whose collapse set covers its own view
+    -- path. (init.M.open runs this restore BEFORE attaching the
+    -- auto-virtualizer, precisely so virt can't collapse the target first.)
     if state.collapsed and state.collapsed[v.path] then
       return
     end
