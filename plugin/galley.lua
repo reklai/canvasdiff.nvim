@@ -8,9 +8,8 @@ local SUBCOMMANDS = { "open", "close", "toggle", "refresh", "base" }
 vim.api.nvim_create_user_command("Galley", function(opts)
   local sub = opts.fargs[1] or "toggle"
   if not vim.tbl_contains(SUBCOMMANDS, sub) then
-    vim.notify(
-      "galley: unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")",
-      vim.log.levels.ERROR
+    require("galley.util").err(
+      "unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")"
     )
     return
   end

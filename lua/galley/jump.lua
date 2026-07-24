@@ -6,6 +6,7 @@ local config = require("galley.config")
 local hl = require("galley.hl")
 local sidebar = require("galley.sidebar")
 local scrollbar = require("galley.scrollbar")
+local util = require("galley.util")
 
 local M = {}
 
@@ -118,7 +119,7 @@ end
 --- restore the canvas viewport to the semantic position the user left.
 function M.back()
   if not excursion then
-    vim.notify("no diff-canvas excursion", vim.log.levels.INFO)
+    util.notify("no diff-canvas excursion")
     return
   end
   local ex = excursion
@@ -149,9 +150,8 @@ function M.back()
     -- canvas at all (e.g. some other operation removed it out from under
     -- us). Nothing to splice; just warn and leave the canvas viewport as
     -- `nvim_win_set_buf` left it.
-    vim.notify(
-      "galley: excursion section for '" .. ex.path .. "' not found in canvas; view not updated",
-      vim.log.levels.WARN
+    util.warn(
+      "excursion section for '" .. ex.path .. "' not found in canvas; view not updated"
     )
     return
   end

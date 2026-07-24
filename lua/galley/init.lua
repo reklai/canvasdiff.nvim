@@ -12,6 +12,7 @@ local virt = require("galley.virt")
 local motions = require("galley.motions")
 local statuscol = require("galley.statuscol")
 local session = require("galley.session")
+local util = require("galley.util")
 
 local M = {}
 
@@ -152,7 +153,7 @@ function M.open()
 
   local root = git.root(vim.fn.getcwd())
   if not root then
-    vim.notify("galley: not inside a git repository", vim.log.levels.WARN)
+    util.warn("not inside a git repository")
     return
   end
 
@@ -333,14 +334,13 @@ end
 --- showing (never opened, or closed again) ⇒ notify and return.
 function M.toggle_base()
   if not (state and canvas_showing(state)) then
-    vim.notify("galley: no live diff canvas", vim.log.levels.WARN)
+    util.warn("no live diff canvas")
     return
   end
   state.base = (state.base == "index") and "HEAD" or "index"
   M.refresh()
-  vim.notify(
-    "galley: diff base = worktree vs "
-      .. (state.base == "index" and "index (unstaged)" or "HEAD")
+  util.notify(
+    "diff base = worktree vs " .. (state.base == "index" and "index (unstaged)" or "HEAD")
   )
 end
 
