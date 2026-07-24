@@ -24,6 +24,22 @@ function U.warn(msg) U.notify(msg, vim.log.levels.WARN) end
 
 function U.err(msg) U.notify(msg, vim.log.levels.ERROR) end
 
+-- git's own heuristic: it only sniffs the head of a blob for NUL.
+local BINARY_SNIFF_BYTES = 8000
+
+--- Does `text` look like binary content?
+---
+--- A NUL byte is the tell, and it is also what makes binary actively
+--- dangerous here rather than merely useless: Vim strings cannot hold NUL, so
+--- passing one to a Vimscript function (vim.fn.split, in the word-diff tier)
+--- silently converts it to a Blob and throws E976.
+function U.is_binary(text)
+  if not text or text == "" then
+    return false
+  end
+  return text:sub(1, BINARY_SNIFF_BYTES):find("\0", 1, true) ~= nil
+end
+
 --- Byte-exact text of a loaded buffer, as it sits on disk.
 ---
 --- `nvim_buf_get_lines` returns bare lines: Neovim strips `\r` on read and

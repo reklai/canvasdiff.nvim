@@ -26,6 +26,7 @@ local canvas_buf = nil
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyFileHeader", { link = "Title", default = true })
   vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
+  vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
 end
 
 local function set_modifiable(buf, val)

@@ -76,6 +76,13 @@ function M.enter(state, opts)
   end
 
   local section = state.sections[i]
+  -- We showed "no diff shown" for this file; dropping the user into a buffer
+  -- of raw zip bytes would be a worse answer than declining. `:edit` it by
+  -- hand if that really is what you want.
+  if section.binary then
+    util.warn("binary file — nothing to jump into (" .. section.path .. ")")
+    return
+  end
   local entries = section.entries
   local entry = entries[entry_idx]
   local target = target_lnum(entries, entry_idx, entry)

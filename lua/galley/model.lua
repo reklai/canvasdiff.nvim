@@ -1,4 +1,5 @@
 local differ = require("galley.differ")
+local util = require("galley.util")
 
 local M = {}
 
@@ -62,8 +63,40 @@ local function hunk_header(a, b, c, d)
   return ("@@ -%d,%d +%d,%d @@"):format(a, b, c, d)
 end
 
+--- Section shown for a file we refuse to diff. Carries no ctx/add/del
+--- entries at all, which is what keeps every downstream consumer safe without
+--- each needing its own binary check: the word-diff tier only pairs del/add
+--- runs, treesitter highlighting only colors content rows, the statuscolumn
+--- only numbers rows with a new_lnum, and hunk motions only stop at hunk
+--- headers. None of them find anything here.
+local function binary_section(path, old_text, new_text, status)
+  return {
+    path = path, status = status, binary = true,
+    adds = 0, dels = 0, nhunks = 0,
+    entries = {
+      { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
+      { kind = "binary", content = "binary file — no diff shown",
+        new_lnum = nil, old_lnum = nil, hunk_idx = nil },
+    },
+    old_text = old_text or "", new_text = new_text or "",
+  }
+end
+
 function M.build_section(path, old_text, new_text, status, context)
   context = context or DEFAULT_CONTEXT
+
+  -- Binary never gets diffed. vim.text.diff would emit meaningless line noise
+  -- for a zip, and the NUL bytes are actively fatal: Vim strings cannot hold
+  -- NUL, so one reaching vim.fn.split in the word-diff tier becomes a Blob and
+  -- throws E976, taking the whole open() down. git refuses too, printing
+  -- "Binary files differ" rather than a patch.
+  if util.is_binary(old_text) or util.is_binary(new_text) then
+    if (old_text or "") == (new_text or "") then
+      return nil
+    end
+    return binary_section(path, old_text, new_text, status)
+  end
+
   local old_lines = split_lines(old_text)
   local new_lines = split_lines(new_text)
   local raw_hunks = differ.hunks(old_text or "", new_text or "")
