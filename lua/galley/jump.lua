@@ -21,11 +21,7 @@ local excursion = nil
 --- a fresh disk read, else "" when the file is gone entirely.
 local function read_current_content(buf, abs_path)
   if buf and vim.api.nvim_buf_is_valid(buf) then
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    if #lines == 0 or (#lines == 1 and lines[1] == "") then
-      return ""
-    end
-    return table.concat(lines, "\n") .. "\n"
+    return util.buf_text(buf)
   end
 
   local f = io.open(abs_path, "r")

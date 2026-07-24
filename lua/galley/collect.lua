@@ -1,4 +1,5 @@
 local git = require("galley.git")
+local util = require("galley.util")
 
 local M = {}
 
@@ -23,11 +24,7 @@ local function read_worktree_content(root, rel_path, status)
   local abs_path = vim.fs.joinpath(root, rel_path)
   local buf = find_loaded_buf(abs_path)
   if buf then
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    if #lines == 0 or (#lines == 1 and lines[1] == "") then
-      return ""
-    end
-    return table.concat(lines, "\n") .. "\n"
+    return util.buf_text(buf)
   end
 
   local f = io.open(abs_path, "r")

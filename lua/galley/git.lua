@@ -1,12 +1,18 @@
 local M = {}
 
 --- Run `git -C dir <args...>` synchronously.
+---
+--- Deliberately NOT `{ text = true }`: that option rewrites `\r\n` to `\n` in
+--- stdout, which would corrupt every blob `M.show` returns for a CRLF file and
+--- make it mismatch the worktree side line for line. Both remaining consumers
+--- are safe with raw bytes -- `M.root` strips trailing whitespace (`%s` covers
+--- `\r`), and `changed_files` splits porcelain-v2 `-z` output on NUL.
 local function run(dir, args)
   local cmd = { "git", "-C", dir }
   for _, a in ipairs(args) do
     cmd[#cmd + 1] = a
   end
-  return vim.system(cmd, { text = true }):wait()
+  return vim.system(cmd, { text = false }):wait()
 end
 
 --- @param dir string
