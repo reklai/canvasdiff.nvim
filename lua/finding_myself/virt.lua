@@ -59,9 +59,10 @@ end
 
 --- Disclaim `path` as module intent: delete it from the auto-set and its
 --- tick bookkeeping. Safe no-op when virt is inactive/unattached or `path`
---- was never auto-collapsed. Used by session.restore so a restored USER
---- collapse landing on a path virt already auto-collapsed is never later
---- auto-expanded back or excluded from a future session.save.
+--- was never auto-collapsed. Called whenever USER intent takes over a path
+--- this module had claimed -- the explicit collapse keymaps (init's
+--- user_set_collapsed) and session.restore -- so that collapse is never
+--- later auto-expanded back or excluded from a future session.save.
 function M.unauto(path)
   auto[path] = nil
   tick_of[path] = nil

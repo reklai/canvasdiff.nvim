@@ -45,10 +45,15 @@ local function sync_after_collapse(st)
   scrollbar.update(st)
 end
 
---- Expand section i if it's currently collapsed. Used by the jump keymap
---- to intercept a jump into a collapsed section.
-local function expand_section(st, i)
-  canvas.set_collapsed(st, i, false)
+--- Set section i's collapse state on behalf of the USER (the <Tab>/za/<CR>
+--- keymaps). Drops virt's ownership claim on the path first: an explicit
+--- action is user intent, so the auto-virtualizer must never expand it back
+--- on a later in-window pass, and session.save must never discard it as
+--- module intent. virt.apply only runs on scroll/refresh, so without this a
+--- stale claim can outlive the toggle indefinitely.
+local function user_set_collapsed(st, i, collapsed)
+  virt.unauto(st.sections[i].path)
+  canvas.set_collapsed(st, i, collapsed)
   sync_after_collapse(st)
 end
 
@@ -60,7 +65,7 @@ local function jump_or_expand(st, cfg)
   local cursor = vim.api.nvim_win_get_cursor(st.win)
   local i = canvas.locate(st, cursor[1] - 1)
   if i and st.collapsed[st.sections[i].path] then
-    expand_section(st, i)
+    user_set_collapsed(st, i, false)
     return
   end
   jump.enter(st, { back_key = cfg.keymaps.back })
@@ -73,8 +78,7 @@ local function toggle_collapse_under_cursor(st)
   if not i then
     return
   end
-  canvas.set_collapsed(st, i, not st.collapsed[st.sections[i].path])
-  sync_after_collapse(st)
+  user_set_collapsed(st, i, not st.collapsed[st.sections[i].path])
 end
 
 local function set_canvas_keymaps(st)

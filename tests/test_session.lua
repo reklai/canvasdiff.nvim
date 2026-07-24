@@ -3,6 +3,7 @@ local canvas = require("finding_myself.canvas")
 local model = require("finding_myself.model")
 local virt = require("finding_myself.virt")
 local session = require("finding_myself.session")
+local config = require("finding_myself.config")
 
 local T = {}
 
@@ -29,6 +30,54 @@ end
 -- directory doesn't accumulate fixture debris across runs.
 local function cleanup(root)
   os.remove(session.path_for(root))
+end
+
+-- A real three-file repo whose sections are each ~65 rows -- taller than the
+-- ~22-row headless window, so virt's collapse pass actually has fully
+-- out-of-window sections to evict. Paired with VIRT_FORCED below this is the
+-- smallest fixture that makes auto-virtualization kick in for real.
+local function big_repo()
+  local committed, worktree = {}, {}
+  for _, tag in ipairs({ "a", "b", "c" }) do
+    local old = bigtext(60, tag)
+    local lines = vim.split(old, "\n", { plain = true })
+    for i = 10, 60, 10 do
+      lines[i] = lines[i] .. " changed"
+    end
+    committed[tag .. ".txt"] = old
+    worktree[tag .. ".txt"] = table.concat(lines, "\n")
+  end
+  return H.git_fixture({ committed = committed, worktree = worktree })
+end
+
+-- Thresholds that force virtualization on big_repo(): 3 files > max_files,
+-- and only the section under the viewport stays expanded. At open that
+-- leaves a.txt rendered (rows 1-65) with b.txt and c.txt as placeholders on
+-- rows 66 and 67.
+local VIRT_FORCED = { virt = { max_files = 1, max_expanded = 1, margin = 0 } }
+
+-- Run `fn(fm)` against a freshly-required plugin, cwd'd into `root` in its
+-- own tab, restoring tab/cwd/config/virt state and deleting the session file
+-- afterwards however it exits. fm.setup mutates the process-global
+-- config.options (config.lua:50-57), so the config.setup({}) reset is
+-- load-bearing -- without it these tiny virt thresholds leak into every
+-- later test in the run.
+local function in_repo(root, opts, fn)
+  local orig_cwd = vim.fn.getcwd()
+  local ok, err = pcall(function()
+    vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["finding_myself"] = nil
+    local fm = require("finding_myself")
+    fm.setup(opts)
+    fn(fm)
+  end)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  config.setup({})
+  virt.detach()
+  cleanup(root)
+  assert(ok, err)
 end
 
 T["session_ save and load round-trip the payload"] = function()
@@ -254,6 +303,41 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
 
   virt.detach()
   cleanup(root)
+end
+
+-- The <Tab> keymap is an EXPLICIT user action, so it must revoke virt's
+-- ownership claim on the path. Without that, the auto-set still names the
+-- section: session.save discards the collapse as module intent and the next
+-- in-window apply expands it straight back.
+T["session_ explicit collapse of an auto-collapsed section is persisted"] = function()
+  local root = big_repo()
+  in_repo(root, VIRT_FORCED, function(fm)
+    fm.open()
+    assert(virt.auto_set()["c.txt"], "sanity: virt auto-collapsed c.txt at open")
+
+    -- G lands on the last row, which is c.txt's placeholder. This scrolls,
+    -- arming virt's 50ms debounce -- but nothing in this test yields to the
+    -- event loop long enough for it to fire, so the claim is still virt's.
+    vim.cmd("normal! G")
+    assert(virt.auto_set()["c.txt"], "sanity: still virt's claim after scrolling to it")
+
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user expands
+    H.eq(virt.auto_set()["c.txt"], nil, "an explicit expand drops virt's claim")
+
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user re-collapses
+    H.eq(virt.auto_set()["c.txt"], nil, "the re-collapse is the user's, not virt's")
+    assert(vim.api.nvim_buf_get_lines(0, -2, -1, false)[1]:match("^▸ c%.txt"),
+      "c.txt is collapsed back to its placeholder")
+
+    fm.close()
+
+    local data = session.load(root)
+    local found = false
+    for _, p in ipairs(data.collapsed or {}) do
+      if p == "c.txt" then found = true end
+    end
+    assert(found, "the user's explicit collapse must be persisted, not discarded as virt's")
+  end)
 end
 
 T["session_ init round trip"] = function()
