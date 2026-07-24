@@ -114,18 +114,30 @@ last looked. Set `session.enabled = false` to turn this off entirely.
 
 ```lua
 require("galley").setup({
+  -- Grouped by the buffer each key lives on, because the same key means
+  -- different things in different places (`q` closes the canvas, but only the
+  -- sidebar when pressed there). Every value takes one key or a list of them.
   keymaps = {
-    jump = "<CR>",       -- jump into the file under the cursor
-    back = "<M-CR>",     -- jump back to the canvas from an excursion
-    close = "q",         -- close the canvas
-    refresh = "R",       -- re-scan and re-render
-    cycle_next = "<C-n>", -- scroll to the next file's diff (wraps)
-    cycle_prev = "<C-p>", -- scroll to the previous file's diff (wraps)
-    collapse = "<Tab>",   -- toggle collapse of the section under the cursor
-    next_file = "]f",     -- cursor to the next file's diff start (clamps)
-    prev_file = "[f",     -- cursor to the previous file's diff start (clamps)
-    next_hunk = "]h",     -- cursor to the next hunk header (clamps)
-    prev_hunk = "[h",     -- cursor to the previous hunk header (clamps)
+    canvas = {
+      jump       = { "<CR>", "<2-LeftMouse>" }, -- open the file under the cursor
+      collapse   = { "<Tab>", "za" },  -- toggle collapse of this file's diff
+      next_file  = "]f",     -- cursor to the next file's diff start (clamps)
+      prev_file  = "[f",     -- cursor to the previous file's diff start (clamps)
+      next_hunk  = "]h",     -- cursor to the next hunk header (clamps)
+      prev_hunk  = "[h",     -- cursor to the previous hunk header (clamps)
+      cycle_next = "<C-n>",  -- scroll to the next file's diff (wraps)
+      cycle_prev = "<C-p>",  -- scroll to the previous file's diff (wraps)
+      refresh    = "R",      -- re-scan and re-render
+      base       = "B",      -- toggle diff base: worktree vs HEAD / vs index
+      close      = "q",      -- close the canvas
+    },
+    sidebar = {
+      select = { "<CR>", "<Tab>", "za" }, -- scroll canvas here / fold a directory
+      close  = "q",          -- close the sidebar (canvas stays open)
+    },
+    file = {
+      back = "<M-CR>",       -- set on the jumped-to file buffer; return to canvas
+    },
   },
   context = 3,          -- unified-diff context lines around each hunk
   base = "HEAD",        -- diff base: "HEAD" or "index" (staged-only review)
@@ -163,23 +175,43 @@ require("galley").setup({
 
 Any subset of these can be overridden; unspecified keys keep their default.
 
-| Keymap (canvas buffer only) | Default | Action |
+### Keymaps
+
+**Every** binding the plugin installs is listed above and can be changed — there
+are no hidden ones. Each value takes a single key or a list of keys:
+
+```lua
+keymaps = { canvas  = { collapse = "<Tab>" } }        -- one key: drops `za`
+keymaps = { canvas  = { jump = { "<CR>", "o" } } }    -- a different pair
+keymaps = { canvas  = { close = false } }             -- disable it
+keymaps = { sidebar = { close = {} } }                -- also disables
+```
+
+An override **replaces** the list rather than merging into it, so
+`collapse = "<Tab>"` really does remove `za`.
+
+| Canvas | Default | Action |
 | --- | --- | --- |
-| `jump` | `<CR>` | Open the file under the cursor as a real buffer |
-| `back` | `<M-CR>` | (set on the excursed file buffer) return to the canvas |
-| `close` | `q` | Close the canvas, restore the previous buffer |
-| `refresh` | `R` | Re-collect changed files and re-render the canvas |
-| `cycle_next` | `<C-n>` | Scroll to the next file's diff, wrapping |
-| `cycle_prev` | `<C-p>` | Scroll to the previous file's diff, wrapping |
-| `collapse` / `za` | `<Tab>` | Toggle collapse of the section under the cursor |
+| `jump` | `<CR>`, `<2-LeftMouse>` | Open the file under the cursor as a real buffer |
+| `collapse` | `<Tab>`, `za` | Toggle collapse of this file's diff |
 | `next_file` / `prev_file` | `]f` / `[f` | Cursor to the next/previous file's diff start, clamping |
 | `next_hunk` / `prev_hunk` | `]h` / `[h` | Cursor to the next/previous hunk header, clamping |
-| (mouse) | `<2-LeftMouse>` | Double-click a line to jump into that file, same as `jump` |
+| `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | Scroll to the next/previous file's diff, wrapping |
+| `refresh` | `R` | Re-collect changed files and re-render the canvas |
+| `base` | `B` | Toggle diff base: worktree vs HEAD / vs index |
+| `close` | `q` | Close the canvas, restore the previous buffer |
 
-| Keymap (sidebar buffer only) | Default | Action |
+| Sidebar | Default | Action |
 | --- | --- | --- |
-| `<CR>` / `<Tab>` / `za` | -- | Scroll the canvas to the entry, or toggle a directory's fold |
-| `q` | -- | Close the sidebar (canvas stays open) |
+| `select` | `<CR>`, `<Tab>`, `za` | Scroll the canvas to the entry, or toggle a directory's fold |
+| `close` | `q` | Close the sidebar (canvas stays open) |
+
+| File buffer (during a jump) | Default | Action |
+| --- | --- | --- |
+| `back` | `<M-CR>` | Return to the canvas at the same spot |
+
+Every mapping is registered with a `desc`, so they show up in `:map`,
+which-key.nvim and telescope keymaps without extra configuration.
 
 Diff content is highlighted lazily: only sections within `margin` rows of
 the current viewport get real treesitter syntax highlighting (using

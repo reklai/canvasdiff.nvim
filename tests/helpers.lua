@@ -36,6 +36,15 @@ function H.git_fixture(spec)
   return root
 end
 
+--- Canonical form of a keymap lhs, as nvim_buf_get_keymap reports it.
+--- That API case-normalizes modifier notation (`<C-n>` comes back `<C-N>`)
+--- while leaving `<CR>`, `<Tab>`, `]f`, `za` and friends untouched, so a
+--- literal comparison passes or fails depending on which keys the test
+--- happens to use. Put BOTH sides through this.
+function H.norm_lhs(lhs)
+  return vim.fn.keytrans(vim.keycode(lhs))
+end
+
 function H.eq(a, b, msg)
   if not vim.deep_equal(a, b) then
     error((msg or "not equal") .. "\nleft:  " .. vim.inspect(a) .. "\nright: " .. vim.inspect(b), 2)

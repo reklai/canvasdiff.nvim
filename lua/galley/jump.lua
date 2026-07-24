@@ -66,7 +66,7 @@ end
 --- and restore the canvas viewport semantically.
 function M.enter(state, opts)
   opts = opts or {}
-  local back_key = opts.back_key or "<M-CR>"
+  local back_keys = opts.back_keys or { "<M-CR>" }
 
   local cursor = vim.api.nvim_win_get_cursor(state.win)
   local row0 = cursor[1] - 1
@@ -90,7 +90,7 @@ function M.enter(state, opts)
     view = view,
     anchor = viewport.capture_from_entries(entries, top_offset),
     cursor = { new_lnum = target, content = entry.content },
-    back_key = back_key,
+    back_keys = back_keys,
   }
 
   local abs_path = vim.fs.joinpath(state.root, section.path)
@@ -105,9 +105,14 @@ function M.enter(state, opts)
 
   excursion.buf = buf
   -- Never map `q` in the real file buffer.
-  vim.keymap.set("n", back_key, function()
-    require("galley.jump").back()
-  end, { buffer = buf, silent = true, noremap = true })
+  for _, lhs in ipairs(back_keys) do
+    vim.keymap.set("n", lhs, function()
+      require("galley.jump").back()
+    end, {
+      buffer = buf, silent = true, noremap = true,
+      desc = "Return to the galley canvas at the same spot",
+    })
+  end
 end
 
 --- Regenerate the excursed file's diff section from the CURRENT buffer
@@ -121,8 +126,10 @@ function M.back()
   local ex = excursion
   excursion = nil
 
-  if ex.back_key and ex.buf then
-    pcall(vim.keymap.del, "n", ex.back_key, { buffer = ex.buf })
+  if ex.back_keys and ex.buf then
+    for _, lhs in ipairs(ex.back_keys) do
+      pcall(vim.keymap.del, "n", lhs, { buffer = ex.buf })
+    end
   end
 
   local state = ex.state

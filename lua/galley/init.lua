@@ -13,6 +13,7 @@ local motions = require("galley.motions")
 local statuscol = require("galley.statuscol")
 local session = require("galley.session")
 local util = require("galley.util")
+local keys = require("galley.keys")
 
 local M = {}
 
@@ -83,7 +84,7 @@ local function jump_or_expand(st, cfg)
     user_set_collapsed(st, i, false)
     return
   end
-  jump.enter(st, { back_key = cfg.keymaps.back })
+  jump.enter(st, { back_keys = keys.list(cfg.keymaps.file.back) })
 end
 
 --- Toggle collapse of the section under the cursor.
@@ -96,45 +97,35 @@ local function toggle_collapse_under_cursor(st)
   user_set_collapsed(st, i, not st.collapsed[st.sections[i].path])
 end
 
+--- What each canvas action does. Keyed by `keys.specs` action names; an action
+--- with no handler here simply installs no map, which is what lets a spec land
+--- before the feature behind it does.
+local function canvas_actions(st, cfg)
+  return {
+    jump       = function() jump_or_expand(st, cfg) end,
+    collapse   = function() toggle_collapse_under_cursor(st) end,
+    close      = function() M.close() end,
+    refresh    = function() M.refresh() end,
+    base       = function() M.toggle_base() end,
+    cycle_next = function() sidebar.cycle(st, 1) end,
+    cycle_prev = function() sidebar.cycle(st, -1) end,
+    next_file  = function() motions.goto_file(st, 1) end,
+    prev_file  = function() motions.goto_file(st, -1) end,
+    next_hunk  = function() motions.goto_hunk(st, 1) end,
+    prev_hunk  = function() motions.goto_hunk(st, -1) end,
+  }
+end
+
 local function set_canvas_keymaps(st)
   local cfg = config.options
-  local map_opts = { buffer = st.buf, silent = true, noremap = true }
-  vim.keymap.set("n", cfg.keymaps.jump, function()
-    jump_or_expand(st, cfg)
-  end, map_opts)
-  vim.keymap.set("n", "<2-LeftMouse>", function()
-    jump_or_expand(st, cfg)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.collapse, function()
-    toggle_collapse_under_cursor(st)
-  end, map_opts)
-  vim.keymap.set("n", "za", function()
-    toggle_collapse_under_cursor(st)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.close, function()
-    M.close()
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.refresh, function()
-    M.refresh()
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.cycle_next, function()
-    sidebar.cycle(st, 1)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.cycle_prev, function()
-    sidebar.cycle(st, -1)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.next_file, function()
-    motions.goto_file(st, 1)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.prev_file, function()
-    motions.goto_file(st, -1)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.next_hunk, function()
-    motions.goto_hunk(st, 1)
-  end, map_opts)
-  vim.keymap.set("n", cfg.keymaps.prev_hunk, function()
-    motions.goto_hunk(st, -1)
-  end, map_opts)
+  local acts = canvas_actions(st, cfg)
+  for _, m in ipairs(keys.resolved("canvas", cfg.keymaps)) do
+    local fn = acts[m.action]
+    if fn then
+      vim.keymap.set("n", m.lhs, fn,
+        { buffer = st.buf, silent = true, noremap = true, desc = m.desc })
+    end
+  end
 end
 
 --- Open the canvas in the current window for the current cwd's git repo.

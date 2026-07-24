@@ -1,4 +1,6 @@
 local canvas = require("galley.canvas")
+local config = require("galley.config")
+local keys = require("galley.keys")
 
 local S = {}
 
@@ -341,17 +343,22 @@ function S.open(state, opts)
 
   side = { buf = buf, win = win, entries = {}, folded = {}, active_mark = nil, state = state }
 
-  local map_opts = { buffer = buf, silent = true, noremap = true }
-  local function select_current()
-    local st = side and side.state
-    if st then
-      S.select(st)
+  local actions = {
+    select = function()
+      local st = side and side.state
+      if st then
+        S.select(st)
+      end
+    end,
+    close = function() S.close() end,
+  }
+  for _, m in ipairs(keys.resolved("sidebar", config.options.keymaps)) do
+    local fn = actions[m.action]
+    if fn then
+      vim.keymap.set("n", m.lhs, fn,
+        { buffer = buf, silent = true, noremap = true, desc = m.desc })
     end
   end
-  vim.keymap.set("n", "<CR>", select_current, map_opts)
-  vim.keymap.set("n", "<Tab>", select_current, map_opts)
-  vim.keymap.set("n", "za", select_current, map_opts)
-  vim.keymap.set("n", "q", function() S.close() end, map_opts)
 
   install_autocmds(state)
 
