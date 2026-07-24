@@ -11,6 +11,7 @@ local scrollbar = require("finding_myself.scrollbar")
 local virt = require("finding_myself.virt")
 local motions = require("finding_myself.motions")
 local statuscol = require("finding_myself.statuscol")
+local session = require("finding_myself.session")
 
 local M = {}
 
@@ -133,11 +134,16 @@ function M.open()
   local win = vim.api.nvim_get_current_win()
   local prev_buf = vim.api.nvim_win_get_buf(win)
 
-  local sections = model.build(collect.files(root, config.options.base), config.options.context)
+  -- Load any saved session BEFORE collect, so a restored base is honored
+  -- from the very first collect.files call -- not just after the fact.
+  local sess = config.options.session.enabled and session.load(root) or nil
+  local base = (sess and sess.base) or config.options.base
+
+  local sections = model.build(collect.files(root, base), config.options.context)
 
   local st = canvas.open(sections, {})
   st.root = root
-  st.base = config.options.base
+  st.base = base
   st.prev_buf = prev_buf
   state = st
 
@@ -173,6 +179,23 @@ function M.open()
   if config.options.statuscolumn.enabled then
     statuscol.attach(st)
   end
+
+  if config.options.session.enabled then
+    local aug = vim.api.nvim_create_augroup("finding_myself.session", { clear = true })
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+      group = aug,
+      callback = function()
+        session.save(st)
+      end,
+    })
+  end
+
+  -- Restore LAST: virt's immediate apply (above) may already have
+  -- auto-collapsed sections before this runs; restore's own view step
+  -- handles landing on an already-collapsed target section by skipping it.
+  if sess then
+    session.restore(st, sess)
+  end
 end
 
 --- Restore the window's previous buffer (or `enew` if it's gone). The
@@ -204,6 +227,11 @@ function M.close()
   if vim.api.nvim_win_get_buf(win) ~= state.buf then
     return
   end
+
+  if config.options.session.enabled then
+    session.save(state)
+  end
+  pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.session")
 
   watch.stop()
   hl.detach(state)

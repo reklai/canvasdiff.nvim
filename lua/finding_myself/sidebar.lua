@@ -216,6 +216,34 @@ function S.cycle(state, delta)
   S.sync(state)
 end
 
+--- Sorted array of currently-folded directory paths, or `{}` when the
+--- sidebar is closed (nothing to persist).
+function S.get_folds()
+  if not S.is_open() then
+    return {}
+  end
+  local folds = {}
+  for path in pairs(side.folded) do
+    folds[#folds + 1] = path
+  end
+  table.sort(folds)
+  return folds
+end
+
+--- Replace the sidebar's fold set from a saved array of dir paths and
+--- redraw. No-op when the sidebar is closed.
+function S.set_folds(folds, state)
+  if not S.is_open() then
+    return
+  end
+  local set = {}
+  for _, path in ipairs(folds or {}) do
+    set[path] = true
+  end
+  side.folded = set
+  S.refresh(state)
+end
+
 function S.close()
   if side then
     local win = side.win

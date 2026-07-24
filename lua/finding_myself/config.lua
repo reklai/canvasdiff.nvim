@@ -42,6 +42,9 @@ M.defaults = {
     margin = 100,
     max_expanded = 20,
   },
+  session = {
+    enabled = true,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)
