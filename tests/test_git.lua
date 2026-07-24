@@ -1,5 +1,5 @@
 local H = require("helpers")
-local git = require("finding_myself.git")
+local git = require("galley.git")
 return {
   ["git: root finds toplevel, nil outside"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })

@@ -1,10 +1,10 @@
 local H = require("helpers")
-local canvas = require("finding_myself.canvas")
-local model = require("finding_myself.model")
-local virt = require("finding_myself.virt")
-local session = require("finding_myself.session")
-local config = require("finding_myself.config")
-local scrollbar = require("finding_myself.scrollbar")
+local canvas = require("galley.canvas")
+local model = require("galley.model")
+local virt = require("galley.virt")
+local session = require("galley.session")
+local config = require("galley.config")
+local scrollbar = require("galley.scrollbar")
 
 local T = {}
 
@@ -69,8 +69,8 @@ local function in_repo(root, opts, fn)
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
-    package.loaded["finding_myself"] = nil
-    local fm = require("finding_myself")
+    package.loaded["galley"] = nil
+    local fm = require("galley")
     fm.setup(opts)
     fn(fm)
   end)
@@ -443,8 +443,8 @@ T["session_ init round trip"] = function()
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
-    package.loaded["finding_myself"] = nil
-    local fm = require("finding_myself")
+    package.loaded["galley"] = nil
+    local fm = require("galley")
     fm.open()
 
     -- alphabetical order: a.txt's file_hdr is row 1; collapse it the same

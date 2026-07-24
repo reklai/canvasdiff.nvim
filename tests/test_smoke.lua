@@ -1,5 +1,5 @@
 local H = require("helpers")
-local U = require("finding_myself.util")
+local U = require("galley.util")
 return {
   ["smoke: util.clamp"] = function()
     H.eq(U.clamp(5, 1, 3), 3)

@@ -15,31 +15,31 @@
 - **Boundary-anchor landmine:** every splice recreates the following boundary anchor via `replace_boundary_extmark` (never trust a left-gravity mark at a splice's end row).
 - Position identity is ALWAYS `{path, new_lnum, content}` resolved via `viewport.resolve` — persistence stores ONLY semantic anchors, never canvas line numbers.
 - `state.collapsed` = `{ [path] = true }`, owned by canvas state (created in `canvas.open`, preserved by `render_all`); it is the ONLY collapse predicate renderers may read. virt.lua's auto-set is separate bookkeeping (module-level) so user intent is never auto-expanded and only user intent persists.
-- Collapsed placeholder line: `"▸ " .. path .. ("  (%d hunks, +%d −%d)"):format(nhunks, adds, dels)` (U+2212), highlighted `FmFileHeader`, exactly 1 row.
+- Collapsed placeholder line: `"▸ " .. path .. ("  (%d hunks, +%d −%d)"):format(nhunks, adds, dels)` (U+2212), highlighted `GalleyFileHeader`, exactly 1 row.
 - `canvas.locate` on a collapsed section returns `(i, 1)`; consumers must treat offset 1 of a collapsed section as the placeholder (jump `<CR>` expands instead of jumping).
 - Keymap defaults (all configurable under `config.keymaps`): `collapse = "<Tab>"` (plus a fixed extra `za` mapping to the same fn), `next_file = "]f"`, `prev_file = "[f"`, `next_hunk = "]h"`, `prev_hunk = "[h"`. Motions clamp (no wrap), honor `vim.v.count1`, move only the cursor.
 - Config additions: `statuscolumn = { enabled = true }`; `virt = { enabled = true, max_files = 200, max_lines = 100000, margin = 100, max_expanded = 20 }`; `base = "HEAD"`.
 - The statuscolumn must never leak into a real file buffer: window-local `statuscolumn` is set when the canvas shows in a window and cleared when it leaves (the scrollbar's BufWinEnter/BufWinLeave scheduled pattern), and the eval function pcall-guards and returns "" for non-canvas buffers.
-- Base semantics: `"HEAD"` = worktree vs HEAD (current behavior); `"index"` = worktree vs index (`git show :0:path`) — unstaged-only review. `state.base` threads through collect/jump/watch; `:FindingMyself base` toggles + refreshes + notifies.
-- Session file: `stdpath("state") .. "/finding_myself/" .. vim.fn.sha256(root) .. ".json"`; contents `{version=1, base, collapsed=[paths...], folds=[dirpaths...], view={path,new_lnum,content,screen_offset}, cursor={path,new_lnum,content}}`; written on canvas close + `VimLeavePre`; restore skips silently on any resolution failure or version mismatch.
+- Base semantics: `"HEAD"` = worktree vs HEAD (current behavior); `"index"` = worktree vs index (`git show :0:path`) — unstaged-only review. `state.base` threads through collect/jump/watch; `:Galley base` toggles + refreshes + notifies.
+- Session file: `stdpath("state") .. "/galley/" .. vim.fn.sha256(root) .. ".json"`; contents `{version=1, base, collapsed=[paths...], folds=[dirpaths...], view={path,new_lnum,content,screen_offset}, cursor={path,new_lnum,content}}`; written on canvas close + `VimLeavePre`; restore skips silently on any resolution failure or version mismatch.
 - Phase 4/5 singleton discipline for anything with autocmds: callbacks resolve live module state, liveness guards everywhere, close-safe-always, augroups cleared on rebind.
 - Require graph stays acyclic: `virt` → {canvas}; `motions` → {canvas}; `statuscol` → {canvas}; `session` → {canvas, viewport, sidebar (fold accessors)}; init/watch/jump may require any of them; canvas requires none of them.
 - Commit per green cycle; trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ## File Structure
 
-- `lua/finding_myself/render.lua` — MODIFY: `placeholder(section)`.
-- `lua/finding_myself/canvas.lua` — MODIFY: collapse-aware line/hl building, `set_collapsed`, `state.collapsed`.
-- `lua/finding_myself/scrollbar.lua` — MODIFY: `line_kinds(sections, collapsed)`.
-- `lua/finding_myself/hl.lua` — MODIFY: skip collapsed sections in `apply_now`.
-- `lua/finding_myself/virt.lua` — NEW: Tier-1 auto-virtualization policy.
-- `lua/finding_myself/motions.lua` — NEW: `]f [f ]h [h`.
-- `lua/finding_myself/statuscol.lua` — NEW: statuscolumn text + attach/detach autocmds.
-- `lua/finding_myself/git.lua` — MODIFY: `show(root, rev, path)` generalization.
-- `lua/finding_myself/collect.lua` — MODIFY: `files(root, base)`.
-- `lua/finding_myself/session.lua` — NEW: save/restore.
-- `lua/finding_myself/sidebar.lua` — MODIFY: `get_folds()`/`set_folds(folds, state)` accessors.
-- `lua/finding_myself/{config,init,jump,watch}.lua`, `plugin/finding_myself.lua`, `README.md` — MODIFY (wiring).
+- `lua/galley/render.lua` — MODIFY: `placeholder(section)`.
+- `lua/galley/canvas.lua` — MODIFY: collapse-aware line/hl building, `set_collapsed`, `state.collapsed`.
+- `lua/galley/scrollbar.lua` — MODIFY: `line_kinds(sections, collapsed)`.
+- `lua/galley/hl.lua` — MODIFY: skip collapsed sections in `apply_now`.
+- `lua/galley/virt.lua` — NEW: Tier-1 auto-virtualization policy.
+- `lua/galley/motions.lua` — NEW: `]f [f ]h [h`.
+- `lua/galley/statuscol.lua` — NEW: statuscolumn text + attach/detach autocmds.
+- `lua/galley/git.lua` — MODIFY: `show(root, rev, path)` generalization.
+- `lua/galley/collect.lua` — MODIFY: `files(root, base)`.
+- `lua/galley/session.lua` — NEW: save/restore.
+- `lua/galley/sidebar.lua` — MODIFY: `get_folds()`/`set_folds(folds, state)` accessors.
+- `lua/galley/{config,init,jump,watch}.lua`, `plugin/galley.lua`, `README.md` — MODIFY (wiring).
 - Tests: `tests/test_collapse.lua`, `tests/test_virt.lua`, `tests/test_motions_statuscol.lua`, `tests/test_base.lua`, `tests/test_session.lua` — NEW.
 
 ---
@@ -52,7 +52,7 @@
 - Consumes: existing canvas internals (`section_rows`, `replace_boundary_extmark`, `win_showing_canvas`, `win_view_info`, `apply_section_hl`, hooks).
 - Produces:
   - `render.placeholder(section) -> line` (format per Global Constraints).
-  - `canvas.open` initializes `state.collapsed = {}`; `render_all`/`replace_section`/`insert_section` render a section as `{ render.placeholder(sec) }` with a single `FmFileHeader` hl mark when `state.collapsed[sec.path]`, else as before. (Introduce two small locals in canvas.lua — `section_lines_for(state, sec)` and a collapsed flag threaded into `apply_section_hl(buf, start_row, sec, collapsed)` — and use them at ALL THREE render sites.)
+  - `canvas.open` initializes `state.collapsed = {}`; `render_all`/`replace_section`/`insert_section` render a section as `{ render.placeholder(sec) }` with a single `GalleyFileHeader` hl mark when `state.collapsed[sec.path]`, else as before. (Introduce two small locals in canvas.lua — `section_lines_for(state, sec)` and a collapsed flag threaded into `apply_section_hl(buf, start_row, sec, collapsed)` — and use them at ALL THREE render sites.)
   - `canvas.set_collapsed(state, i, collapsed)` — no-op when unchanged or section missing; updates `state.collapsed`, splices section i in place (same-tick view correction: below→nothing; above→topline/lnum shift by delta; intersect: when `top0 < start_row` preserve the captured view (clamp lnum to the new line count), else `topline = start_row + 1`, `lnum = topline`); recreates boundary anchor; deletes old hl-mark ids and applies the collapse-aware ones; fires `state.hooks.on_section_replaced(path)` (hl/ts invalidation) after the splice; `"none"` branch when the canvas isn't showing.
   - `scrollbar.line_kinds(sections, collapsed)` — a collapsed section contributes exactly one `"hdr"`; `S.update` passes `state.collapsed`.
   - `hl.apply_now` — never applies TS/word marks to a collapsed section (skip like "not in window"; eviction of previously-applied marks happens via the `on_section_replaced` hook at collapse time).
@@ -125,7 +125,7 @@ function M.set_collapsed(state, i, collapsed)
 end
 ```
 
-  Also: `render_all` must NOT reset `state.collapsed` (initialize only in `canvas.open` via `state.collapsed = state.collapsed or {}` before render). `replace_section`/`insert_section`/`render_all` switch to `section_lines_for` + collapse-aware `apply_section_hl` (collapsed ⇒ one `{row=0, group="FmFileHeader"}` mark). `replace_section`'s intersect anchor-capture must short-circuit like `preserve_view` when the section is collapsed (entries don't map to rows): treat collapsed-replace as `topline = start_row + 1` when `top0 >= start_row`, preserve otherwise.
+  Also: `render_all` must NOT reset `state.collapsed` (initialize only in `canvas.open` via `state.collapsed = state.collapsed or {}` before render). `replace_section`/`insert_section`/`render_all` switch to `section_lines_for` + collapse-aware `apply_section_hl` (collapsed ⇒ one `{row=0, group="GalleyFileHeader"}` mark). `replace_section`'s intersect anchor-capture must short-circuit like `preserve_view` when the section is collapsed (entries don't map to rows): treat collapsed-replace as `topline = start_row + 1` when `top0 >= start_row`, preserve otherwise.
 - [ ] **Step 4:** `make test FILTER=collapse_` green, then full suite (existing scrollbar `line_kinds` tests: keep the old 1-arg call working — `collapsed = collapsed or {}`).
 - [ ] **Step 5:** commit `feat: section collapse with placeholder splice (tier 2)`.
 
@@ -133,14 +133,14 @@ end
 
 ### Task 2: Tier-1 auto-virtualization (`virt.lua`)
 
-**Files:** Create `lua/finding_myself/virt.lua`. Modify `init.lua`, `watch.lua`, `config.lua`. Test: `tests/test_virt.lua`.
+**Files:** Create `lua/galley/virt.lua`. Modify `init.lua`, `watch.lua`, `config.lua`. Test: `tests/test_virt.lua`.
 
 **Interfaces:**
 - Consumes: `canvas.set_collapsed`, `canvas.section_rows`, `state.collapsed`.
 - Produces:
   - `virt.apply(state, opts)` — `opts = config.options.virt` (`{enabled, max_files, max_lines, margin, max_expanded}`). Inactive (disabled, or `#sections <= max_files` AND buffer lines `<= max_lines`): auto-expand everything in the module's auto-set and return. Active: sections intersecting `[top0 - margin, bot0 + margin]` that are in the auto-set get expanded (never touches user-collapsed ones — those aren't in the auto-set); sections fully outside get auto-collapsed (added to the auto-set) when the number of currently-expanded sections exceeds `max_expanded`, evicting least-recently-visible first (tick = last time the section intersected the window). No-op when the canvas isn't showing.
   - `virt.auto_set() -> { [path]=true }` — snapshot for session.lua (auto-collapsed paths are NOT persisted as user intent).
-  - `virt.attach(state, opts)` — installs a debounced (50ms) WinScrolled trigger (augroup `finding_myself.virt`, singleton discipline: callback resolves module `live` state, timer stopped on re-attach) + runs one immediate `apply`. `virt.detach()` clears augroup/timer/auto-set.
+  - `virt.attach(state, opts)` — installs a debounced (50ms) WinScrolled trigger (augroup `galley.virt`, singleton discipline: callback resolves module `live` state, timer stopped on re-attach) + runs one immediate `apply`. `virt.detach()` clears augroup/timer/auto-set.
   - init: attach after scrollbar when `config.options.virt.enabled`; detach in close; `virt.apply(state, config.options.virt)` at the end of `M.refresh`. watch: `virt.apply(state, config.options.virt)` after each of the three `scrollbar.update(state)` sites.
 - [ ] **Step 1: failing tests** — `tests/test_virt.lua` (drive `virt.apply` directly with tiny thresholds; 6 sections of ~55 rows each):
   1. `virt_ inactive under thresholds leaves everything expanded` (max_files 100).
@@ -154,11 +154,11 @@ end
 
 ### Task 3: Motions + statuscolumn
 
-**Files:** Create `lua/finding_myself/motions.lua`, `lua/finding_myself/statuscol.lua`. Modify `init.lua`, `config.lua`. Test: `tests/test_motions_statuscol.lua`.
+**Files:** Create `lua/galley/motions.lua`, `lua/galley/statuscol.lua`. Modify `init.lua`, `config.lua`. Test: `tests/test_motions_statuscol.lua`.
 
 **Interfaces:**
 - `motions.goto_file(state, dir)` — cursor's section via `canvas.locate`, target `clamp(i + dir * vim.v.count1, 1, n)`, cursor to the target's start row+1 (col 0). `motions.goto_hunk(state, dir)` — collect absolute rows of `hunk_hdr` entries across NON-collapsed sections (section start_row + entry_index − 1), pick the count-th strictly after (dir=1) / before (dir=−1) the cursor row, clamp at the ends; no-op when none.
-- `statuscol.text()` — for `%!v:lua.require'finding_myself.statuscol'.text()`: pcall-guarded; `""` unless the current buffer is the canvas and a state is attached; per `vim.v.lnum`: entry `new_lnum` ⇒ `"%4d "`, del ⇒ `"   · "`, headers/collapsed/missing ⇒ 5 spaces. `statuscol.attach(state)` — stores the state, sets window-local `statuscolumn` on `state.win`, installs BufWinEnter (set on entering window, update stored win) / BufWinLeave (scheduled clear from `state.win` when the canvas left it) autocmds in augroup `finding_myself.statuscol` (singleton discipline). `statuscol.detach()` — clears option (liveness-guarded), augroup, state.
+- `statuscol.text()` — for `%!v:lua.require'galley.statuscol'.text()`: pcall-guarded; `""` unless the current buffer is the canvas and a state is attached; per `vim.v.lnum`: entry `new_lnum` ⇒ `"%4d "`, del ⇒ `"   · "`, headers/collapsed/missing ⇒ 5 spaces. `statuscol.attach(state)` — stores the state, sets window-local `statuscolumn` on `state.win`, installs BufWinEnter (set on entering window, update stored win) / BufWinLeave (scheduled clear from `state.win` when the canvas left it) autocmds in augroup `galley.statuscol` (singleton discipline). `statuscol.detach()` — clears option (liveness-guarded), augroup, state.
 - init: keymaps `next_file/prev_file/next_hunk/prev_hunk` (canvas-local, from config defaults `]f [f ]h [h`); `statuscol.attach(st)` when `config.options.statuscolumn.enabled`; `statuscol.detach()` in close. config: `statuscolumn = { enabled = true }` + the four keymap defaults.
 - [ ] **Step 1: failing tests** (three ~55-row sections):
   1. `motions_ ]f [f move between section starts and clamp` (cursor mid section 2 → goto_file(+1) lands on section 3 start; three more +1 stay clamped at 3; goto_file(−1)×5 clamps at 1).
@@ -172,14 +172,14 @@ end
 
 ### Task 4: Base toggle (worktree vs HEAD / index)
 
-**Files:** Modify `git.lua`, `collect.lua`, `init.lua`, `jump.lua`, `watch.lua`, `config.lua`, `plugin/finding_myself.lua`. Test: `tests/test_base.lua`.
+**Files:** Modify `git.lua`, `collect.lua`, `init.lua`, `jump.lua`, `watch.lua`, `config.lua`, `plugin/galley.lua`. Test: `tests/test_base.lua`.
 
 **Interfaces:**
 - `git.show(root, rev, path)` — `rev ∈ {"HEAD", ":0"}` ⇒ `git show <rev>:<path>` (for `":0"` the object spec is `":0:" .. path`); returns content or nil (keep `git.show_head` as a one-line delegate for compatibility).
 - `collect.files(root, base)` — `base` `"HEAD"` (default when nil) or `"index"`; old side from `git.show(root, base == "index" and ":0" or "HEAD", path)`.
-- init: `state.base = config.options.base` at open; both `collect.files` call sites pass `state.base`/`st.base`; `M.toggle_base()` — no state ⇒ notify+return; flips `state.base`, calls `M.refresh()`, notifies `"finding_myself: diff base = worktree vs " .. (base == "index" and "index (unstaged)" or "HEAD")`.
+- init: `state.base = config.options.base` at open; both `collect.files` call sites pass `state.base`/`st.base`; `M.toggle_base()` — no state ⇒ notify+return; flips `state.base`, calls `M.refresh()`, notifies `"galley: diff base = worktree vs " .. (base == "index" and "index (unstaged)" or "HEAD")`.
 - jump.back: `git.show(state.root, state.base == "index" and ":0" or "HEAD", ex.path)` instead of `show_head`. watch.reconcile: `collect.files(state.root, state.base)`.
-- plugin command: add `"base"` to SUBCOMMANDS → `require("finding_myself").toggle_base()`. config: `base = "HEAD"`.
+- plugin command: add `"base"` to SUBCOMMANDS → `require("galley").toggle_base()`. config: `base = "HEAD"`.
 - [ ] **Step 1: failing tests** — `tests/test_base.lua` with a fixture that has BOTH staged and unstaged edits to one file (git_fixture, then `git add` via `vim.system`, then edit the worktree again):
   1. `base_ git.show reads HEAD and index objects` (HEAD content ≠ index content ≠ worktree; assert both `git.show` revs).
   2. `base_ index mode diffs worktree against the index` (collect.files(root, "index") old_text == staged content; "HEAD"/nil == committed content).
@@ -191,15 +191,15 @@ end
 
 ### Task 5: Session persistence (`session.lua`)
 
-**Files:** Create `lua/finding_myself/session.lua`. Modify `sidebar.lua` (fold accessors), `init.lua`, `config.lua` (`session = { enabled = true }`). Test: `tests/test_session.lua`.
+**Files:** Create `lua/galley/session.lua`. Modify `sidebar.lua` (fold accessors), `init.lua`, `config.lua` (`session = { enabled = true }`). Test: `tests/test_session.lua`.
 
 **Interfaces:**
 - `sidebar.get_folds() -> {dirpath,...}` (sorted array; `{}` when closed) and `sidebar.set_folds(folds, state)` (no-op when closed; replaces `side.folded`, refreshes).
-- `session.path_for(root)` — `stdpath("state") .. "/finding_myself/" .. vim.fn.sha256(root) .. ".json"`.
+- `session.path_for(root)` — `stdpath("state") .. "/galley/" .. vim.fn.sha256(root) .. ".json"`.
 - `session.save(state)` — nil-safe; captures: `base = state.base`; `collapsed` = keys of `state.collapsed` MINUS `virt.auto_set()`; `folds = sidebar.get_folds()`; `view`/`cursor` semantic anchors ONLY when the canvas is showing in `state.win`: topline section via `canvas.locate(state, top0)`, `view = viewport.capture_from_entries(entries, top_offset)` + `view.path`; cursor entry's `{path, new_lnum, content}` (skip both when the topline section is collapsed). `vim.fn.mkdir(dir, "p")`, `vim.json.encode`, write; errors swallowed (pcall) — persistence must never break closing.
 - `session.load(root) -> data|nil` — nil on missing/undecodable/`version ~= 1`.
 - `session.restore(state, data)` — apply collapsed (paths that still exist: `set_collapsed` by index), folds (`sidebar.set_folds`), then view: find section by `data.view.path`; if found and not collapsed, `resolved = viewport.resolve(data.view, entries)`, `topline = start_row + resolved - data.view.screen_offset` (≥1), cursor via `viewport.resolve(data.cursor, cursor-section entries)`; one `winrestview`; every step pcall/nil-guarded — any failure skips just that step.
-- init: in `M.open`, load ONCE before collect (`local sess = config.options.session.enabled and session.load(root) or nil`); `st.base = (sess and sess.base) or config.options.base`; after all attach blocks: `if sess then session.restore(st, sess) end`. In `M.close` (the branch that really closes): `session.save(state)` BEFORE teardown calls. A `VimLeavePre` autocmd (augroup `finding_myself.session`, installed at open, cleared at close) saves too.
+- init: in `M.open`, load ONCE before collect (`local sess = config.options.session.enabled and session.load(root) or nil`); `st.base = (sess and sess.base) or config.options.base`; after all attach blocks: `if sess then session.restore(st, sess) end`. In `M.close` (the branch that really closes): `session.save(state)` BEFORE teardown calls. A `VimLeavePre` autocmd (augroup `galley.session`, installed at open, cleared at close) saves too.
 - [ ] **Step 1: failing tests** — `tests/test_session.lua` (fixture repos; drive canvas/module APIs directly plus one init-level round trip; point `stdpath("state")` writes at a temp dir by testing `session.path_for` separately and passing through the real path — the suite may write real state files; use unique tmp roots so hashes never collide):
   1. `session_ save and load round-trip the payload` (build state, collapse one section, scroll mid-canvas, save; load → base/collapsed/view.path/cursor fields as expected; view.new_lnum is a number, never a canvas row).
   2. `session_ restore reapplies collapse and view semantically` (fresh `canvas.open` of the SAME sections, restore → collapsed section is 1 row; `line("w0")` content matches the pre-save topline content).
@@ -207,7 +207,7 @@ end
   4. `session_ auto-collapsed sections are not persisted` (virt-collapse + user-collapse different sections; save; loaded collapsed contains only the user one).
   5. `session_ init round trip` (init.open in fixture cwd → collapse a section via `<Tab>` handler equivalent (`canvas.set_collapsed`), close → reopen → still collapsed; restore cwd).
 - [ ] **Step 2:** RED. **Step 3:** implement. **Step 4:** green + full suite TWICE. **Step 5:** commit `feat: session persistence of view, collapse, and folds`.
-- [ ] **Step 6 (phase wrap):** README — document collapse (`<Tab>`/`za`, `<CR>` expands), virtualization thresholds, motions, statuscolumn, `:FindingMyself base`, session persistence (+ `session = { enabled = false }` opt-out). Commit `docs: phase 6 README`.
+- [ ] **Step 6 (phase wrap):** README — document collapse (`<Tab>`/`za`, `<CR>` expands), virtualization thresholds, motions, statuscolumn, `:Galley base`, session persistence (+ `session = { enabled = false }` opt-out). Commit `docs: phase 6 README`.
 
 ---
 

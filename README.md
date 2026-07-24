@@ -1,6 +1,8 @@
-# Finding Myself
+# galley
 
-Infinite-scroll git diff canvas for Neovim — review all your uncommitted changes in one scrollable view, jump into any hunk as a real buffer, jump back to the exact spot. Status: pre-alpha MVP.
+Galley proofs for your git diff — read the whole change as one continuous strip, fix it in place.
+
+Every changed file's diff, concatenated into a single scrollable buffer. Jump into any hunk as a real, LSP-attached buffer and jump back to the exact spot. Status: pre-alpha MVP.
 
 ## Install
 
@@ -8,8 +10,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "your-name/finding_myself", -- adjust to wherever this repo lives
-  cmd = "FindingMyself",
+  "your-name/galley", -- adjust to wherever this repo lives
+  cmd = "Galley",
   opts = {}, -- optional; see Configuration below
 }
 ```
@@ -19,7 +21,7 @@ works with its defaults even if `setup()` is never called.
 
 ## Usage
 
-Run `:FindingMyself` in any window inside a git repository. It replaces the
+Run `:Galley` in any window inside a git repository. It replaces the
 current window's buffer with a single scrollable "canvas": every changed
 file's diff, one after another, in alphabetical path order, each with a
 `▎ path (+adds −dels)` header and unified-diff-style hunks (3 lines of
@@ -78,24 +80,24 @@ visible line's number in the file it belongs to (not the canvas buffer's own
 line number) — blank for headers and collapsed placeholders, `·` for pure
 deletions.
 
-`:FindingMyself base` toggles the diff base between the worktree vs `HEAD`
+`:Galley base` toggles the diff base between the worktree vs `HEAD`
 (default — everything changed, staged or not) and the worktree vs the index
 (unstaged content only — what a plain `git diff --cached` would show is
 excluded, since it's comparing against what's already staged), refreshing
 the canvas and notifying which mode is now active.
 
-`:FindingMyself` with no argument toggles the canvas (open if not showing,
+`:Galley` with no argument toggles the canvas (open if not showing,
 close if showing). It also accepts an explicit subcommand, with completion:
 
 ```vim
-:FindingMyself open
-:FindingMyself close
-:FindingMyself toggle
-:FindingMyself refresh
-:FindingMyself base
+:Galley open
+:Galley close
+:Galley toggle
+:Galley refresh
+:Galley base
 ```
 
-If the current directory isn't inside a git repository, `:FindingMyself
+If the current directory isn't inside a git repository, `:Galley
 open` notifies you and does nothing further (it never errors).
 
 The canvas remembers, per repository, which files you collapsed, which
@@ -103,7 +105,7 @@ sidebar directories you folded, and roughly where you were scrolled/where
 your cursor was — restored the next time you open the canvas there, even
 across a Neovim restart. It's saved when you close the canvas and again on
 Neovim exit, to a small JSON file under `stdpath("state") ..
-"/finding_myself/"`, keyed by the repo root. Nothing here is a raw line
+"/galley/"`, keyed by the repo root. Nothing here is a raw line
 number: the saved position is content-based (which line, near what text), so
 it still lands close to the right spot even if the file changed since you
 last looked. Set `session.enabled = false` to turn this off entirely.
@@ -111,7 +113,7 @@ last looked. Set `session.enabled = false` to turn this off entirely.
 ## Configuration
 
 ```lua
-require("finding_myself").setup({
+require("galley").setup({
   keymaps = {
     jump = "<CR>",       -- jump into the file under the cursor
     back = "<M-CR>",     -- jump back to the canvas from an excursion
@@ -184,7 +186,7 @@ the current viewport get real treesitter syntax highlighting (using
 whatever parser/highlight query you already have for that filetype) plus
 word-level diff emphasis, applied/evicted as you scroll (debounced by
 `debounce_ms`). Word-diff spans use two highlight groups you can link to
-whatever you like -- `FmWordAdd` and `FmWordDel`, both linked to `DiffText`
+whatever you like -- `GalleyWordAdd` and `GalleyWordDel`, both linked to `DiffText`
 by default.
 
 The canvas auto-refreshes on `:write`, on regaining focus, and on file
@@ -213,7 +215,7 @@ What's here today:
   emphasis of the diffed code itself, applied within `margin` rows of the
   viewport.
 - Auto-refresh on save, focus, and external filesystem changes (see
-  Configuration above), plus manual refresh (`R` / `:FindingMyself
+  Configuration above), plus manual refresh (`R` / `:Galley
   refresh`) for a full re-scan on demand.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.
@@ -227,7 +229,7 @@ What's here today:
   file/line thresholds, so huge diffs stay responsive.
 - `]f [f ]h [h` file/hunk motions and a statuscolumn showing each line's
   number in the file it belongs to.
-- A worktree-vs-HEAD / worktree-vs-index diff base toggle (`:FindingMyself
+- A worktree-vs-HEAD / worktree-vs-index diff base toggle (`:Galley
   base`) for reviewing staged-only changes.
 - Session persistence: collapse state, sidebar folds, and semantic
   scroll/cursor position are remembered per repo across Neovim restarts.

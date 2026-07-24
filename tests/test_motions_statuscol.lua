@@ -1,8 +1,8 @@
 local H = require("helpers")
-local canvas = require("finding_myself.canvas")
-local model = require("finding_myself.model")
-local motions = require("finding_myself.motions")
-local statuscol = require("finding_myself.statuscol")
+local canvas = require("galley.canvas")
+local model = require("galley.model")
+local motions = require("galley.motions")
+local statuscol = require("galley.statuscol")
 
 local T = {}
 
@@ -257,7 +257,7 @@ T["statuscol_ never leaks into a foreign buffer"] = function()
     return vim.api.nvim_get_option_value("statuscolumn", { win = st.win }) ~= ""
   end)
   H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = st.win }),
-    "%!v:lua.require'finding_myself.statuscol'.text()",
+    "%!v:lua.require'galley.statuscol'.text()",
     "statuscolumn restored once the canvas is showing again")
 
   statuscol.detach()

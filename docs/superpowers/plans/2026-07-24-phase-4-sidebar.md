@@ -17,18 +17,18 @@
 - Sidebar sync/refresh must be nil-safe no-ops when the sidebar isn't open, and sync must no-op when the canvas window isn't currently showing the canvas buffer (jump excursion in progress).
 - Require graph stays acyclic: `sidebar` → {canvas}; `init`/`watch`/`jump` → sidebar; canvas/hl never require sidebar.
 - Pure half (`build_entries`, `render_lines`) must not touch windows/buffers.
-- Highlight groups: `FmSidebarDir` → `Directory` (default=true), `FmSidebarActive` → `Visual` (default=true); active entry marked via `line_hl_group` extmark in namespace `finding_myself.sidebar`.
+- Highlight groups: `GalleySidebarDir` → `Directory` (default=true), `GalleySidebarActive` → `Visual` (default=true); active entry marked via `line_hl_group` extmark in namespace `galley.sidebar`.
 - Config additions: `sidebar = { enabled = true, width = 32 }`; `keymaps.cycle_next = "<C-n>"`, `keymaps.cycle_prev = "<C-p>"`. Sidebar-buffer-local keys are fixed: `<CR>` select, `<Tab>` and `za` fold-toggle (dir rows), `q` closes the sidebar only.
 - Commit after each green cycle; trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Current suite is 74/74 green and must stay green.
 
 ## File Structure
 
-- `lua/finding_myself/sidebar.lua` — NEW: pure tree building/rendering + window lifecycle/sync/select/cycle.
-- `lua/finding_myself/config.lua` — MODIFY: sidebar + cycle-key defaults.
-- `lua/finding_myself/init.lua` — MODIFY: open/close/refresh wiring + canvas cycle keymaps.
-- `lua/finding_myself/watch.lua` — MODIFY: `sidebar.refresh(state)` after reconcile mutations.
-- `lua/finding_myself/jump.lua` — MODIFY: `sidebar.refresh(state)` after back-splice.
+- `lua/galley/sidebar.lua` — NEW: pure tree building/rendering + window lifecycle/sync/select/cycle.
+- `lua/galley/config.lua` — MODIFY: sidebar + cycle-key defaults.
+- `lua/galley/init.lua` — MODIFY: open/close/refresh wiring + canvas cycle keymaps.
+- `lua/galley/watch.lua` — MODIFY: `sidebar.refresh(state)` after reconcile mutations.
+- `lua/galley/jump.lua` — MODIFY: `sidebar.refresh(state)` after back-splice.
 - `tests/test_sidebar.lua` — NEW.
 - `README.md` — MODIFY.
 
@@ -37,7 +37,7 @@
 ### Task 1: Pure tree — `build_entries` + `render_lines`
 
 **Files:**
-- Create: `lua/finding_myself/sidebar.lua` (pure half only)
+- Create: `lua/galley/sidebar.lua` (pure half only)
 - Test: `tests/test_sidebar.lua`
 
 **Interfaces:**
@@ -52,7 +52,7 @@ Create `tests/test_sidebar.lua`:
 
 ```lua
 local H = require("helpers")
-local sidebar = require("finding_myself.sidebar")
+local sidebar = require("galley.sidebar")
 
 local T = {}
 
@@ -124,11 +124,11 @@ return T
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `make test FILTER=sidebar_`
-Expected: FAIL — `module 'finding_myself.sidebar' not found`.
+Expected: FAIL — `module 'galley.sidebar' not found`.
 
 - [ ] **Step 3: Implement the pure half**
 
-Create `lua/finding_myself/sidebar.lua`:
+Create `lua/galley/sidebar.lua`:
 
 ```lua
 local S = {}
@@ -211,7 +211,7 @@ Run: `make test FILTER=sidebar_` then `make test` (78/78 expected).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/finding_myself/sidebar.lua tests/test_sidebar.lua
+git add lua/galley/sidebar.lua tests/test_sidebar.lua
 git commit -m "feat: sidebar tree building and rendering (pure)"
 ```
 
@@ -220,22 +220,22 @@ git commit -m "feat: sidebar tree building and rendering (pure)"
 ### Task 2: Sidebar window — lifecycle, sync, select, fold
 
 **Files:**
-- Modify: `lua/finding_myself/sidebar.lua` (window half)
+- Modify: `lua/galley/sidebar.lua` (window half)
 - Test: `tests/test_sidebar.lua` (window cases appended)
 
 **Interfaces:**
 - Consumes: `canvas.locate(state, row0) -> section_i, offset`; `canvas.section_rows(state, i) -> start0, end0_exclusive`; canvas state `{buf, win, sections}`.
 - Produces (module-level singleton `side = {buf, win, entries, folded, active_row}`, mirroring init.lua's state pattern):
-  - `sidebar.open(state, opts)` — `opts = { width = 32 }`. Creates a scratch buffer (`nofile`, `bufhidden=wipe`, `swapfile=false`, `modifiable=false` toggled around writes) in a NON-entered left vsplit of `state.win` (`nvim_open_win(buf, false, { split = "left", width = opts.width or 32, win = state.win })`), sets sidebar-window options (`winfixwidth`, `winfixbuf`, `wrap=false`, `cursorline=true`, `number=false`, `relativenumber=false`, `signcolumn="no"`, `foldenable=false`), defines the two highlight groups, installs buffer-local keymaps (`<CR>` → `sidebar.select(state)`, `<Tab>`/`za` → `sidebar.select(state)` restricted to dir rows — same function, see select semantics, `q` → `sidebar.close()`), installs autocmds in augroup `finding_myself.sidebar` (cleared on re-open): `WinScrolled` (canvas-window match → `sidebar.sync(state)`) and `WinClosed` for the sidebar window (clears the singleton). Idempotent: open while open = refresh. Ends with `refresh` + `sync`.
+  - `sidebar.open(state, opts)` — `opts = { width = 32 }`. Creates a scratch buffer (`nofile`, `bufhidden=wipe`, `swapfile=false`, `modifiable=false` toggled around writes) in a NON-entered left vsplit of `state.win` (`nvim_open_win(buf, false, { split = "left", width = opts.width or 32, win = state.win })`), sets sidebar-window options (`winfixwidth`, `winfixbuf`, `wrap=false`, `cursorline=true`, `number=false`, `relativenumber=false`, `signcolumn="no"`, `foldenable=false`), defines the two highlight groups, installs buffer-local keymaps (`<CR>` → `sidebar.select(state)`, `<Tab>`/`za` → `sidebar.select(state)` restricted to dir rows — same function, see select semantics, `q` → `sidebar.close()`), installs autocmds in augroup `galley.sidebar` (cleared on re-open): `WinScrolled` (canvas-window match → `sidebar.sync(state)`) and `WinClosed` for the sidebar window (clears the singleton). Idempotent: open while open = refresh. Ends with `refresh` + `sync`.
   - `sidebar.close()` — closes the window if valid, clears the singleton + augroup; safe always.
   - `sidebar.is_open() -> bool`.
-  - `sidebar.refresh(state)` — no-op when closed; rebuilds entries from `state.sections` + current folds, renders lines, re-applies `FmSidebarDir` marks to dir rows, re-syncs.
-  - `sidebar.sync(state)` — no-op when closed OR when `state.win` isn't showing `state.buf`. Finds the section under the canvas topline (`canvas.locate`), picks the entry to activate: the file entry with that `section_i`, else the deepest visible dir entry whose `path` prefixes the section's path; applies `line_hl_group = "FmSidebarActive"` (namespace `finding_myself.sidebar`, previous active mark cleared) and moves the sidebar cursor to that row.
+  - `sidebar.refresh(state)` — no-op when closed; rebuilds entries from `state.sections` + current folds, renders lines, re-applies `GalleySidebarDir` marks to dir rows, re-syncs.
+  - `sidebar.sync(state)` — no-op when closed OR when `state.win` isn't showing `state.buf`. Finds the section under the canvas topline (`canvas.locate`), picks the entry to activate: the file entry with that `section_i`, else the deepest visible dir entry whose `path` prefixes the section's path; applies `line_hl_group = "GalleySidebarActive"` (namespace `galley.sidebar`, previous active mark cleared) and moves the sidebar cursor to that row.
   - `sidebar.select(state)` — acts on the sidebar-cursor row's entry: dir ⇒ toggle `folded[path]` + refresh; file ⇒ scroll the canvas (`winrestview{ topline = start0 + 1, lnum = start0 + 1 }` inside `state.win`) + sync. Never changes any window's buffer or the focused window.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_sidebar.lua` (add `local canvas = require("finding_myself.canvas")` and `local model = require("finding_myself.model")` at the top):
+Append to `tests/test_sidebar.lua` (add `local canvas = require("galley.canvas")` and `local model = require("galley.model")` at the top):
 
 ```lua
 local function bigtext(n, tag)
@@ -289,12 +289,12 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(sidebar.is_open(), false)
 end
 
-local SIDE_NS = vim.api.nvim_create_namespace("finding_myself.sidebar")
+local SIDE_NS = vim.api.nvim_create_namespace("galley.sidebar")
 
 local function active_row(side_buf)
   local marks = vim.api.nvim_buf_get_extmarks(side_buf, SIDE_NS, 0, -1, { details = true })
   for _, m in ipairs(marks) do
-    if m[4] and m[4].line_hl_group == "FmSidebarActive" then
+    if m[4] and m[4].line_hl_group == "GalleySidebarActive" then
       return m[2]
     end
   end
@@ -303,7 +303,7 @@ end
 
 local function sidebar_buf()
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("finding%-myself://sidebar") then
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("galley://sidebar") then
       return b
     end
   end
@@ -378,19 +378,19 @@ Expected: FAIL — `attempt to call field 'open' (a nil value)`.
 
 - [ ] **Step 3: Implement the window half**
 
-Append to `lua/finding_myself/sidebar.lua` (before `return S`; add `local canvas = require("finding_myself.canvas")` at the top):
+Append to `lua/galley/sidebar.lua` (before `return S`; add `local canvas = require("galley.canvas")` at the top):
 
 ```lua
-local NS = vim.api.nvim_create_namespace("finding_myself.sidebar")
-local BUFNAME = "finding-myself://sidebar"
+local NS = vim.api.nvim_create_namespace("galley.sidebar")
+local BUFNAME = "galley://sidebar"
 
 -- Module-level singleton, mirroring init.lua's state pattern: at most one
 -- sidebar, always attached to the one live canvas.
 local side = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "FmSidebarDir", { link = "Directory", default = true })
-  vim.api.nvim_set_hl(0, "FmSidebarActive", { link = "Visual", default = true })
+  vim.api.nvim_set_hl(0, "GalleySidebarDir", { link = "Directory", default = true })
+  vim.api.nvim_set_hl(0, "GalleySidebarActive", { link = "Visual", default = true })
 end
 
 function S.is_open()
@@ -418,7 +418,7 @@ function S.refresh(state)
   for row0, e in ipairs(side.entries) do
     if e.kind == "dir" then
       vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, 0, {
-        line_hl_group = "FmSidebarDir",
+        line_hl_group = "GalleySidebarDir",
         priority = 90,
       })
     end
@@ -461,7 +461,7 @@ function S.sync(state)
     pcall(vim.api.nvim_buf_del_extmark, side.buf, NS, side.active_mark)
   end
   side.active_mark = vim.api.nvim_buf_set_extmark(side.buf, NS, best, 0, {
-    line_hl_group = "FmSidebarActive",
+    line_hl_group = "GalleySidebarActive",
     priority = 100,
   })
   pcall(vim.api.nvim_win_set_cursor, side.win, { best + 1, 0 })
@@ -495,7 +495,7 @@ function S.close()
   if side then
     local win = side.win
     side = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
+    pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
@@ -540,7 +540,7 @@ function S.open(state, opts)
   vim.keymap.set("n", "za", function() S.select(state) end, map_opts)
   vim.keymap.set("n", "q", function() S.close() end, map_opts)
 
-  local aug = vim.api.nvim_create_augroup("finding_myself.sidebar", { clear = true })
+  local aug = vim.api.nvim_create_augroup("galley.sidebar", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = aug,
     callback = function(ev)
@@ -556,7 +556,7 @@ function S.open(state, opts)
     pattern = tostring(win),
     callback = function()
       side = nil
-      pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
+      pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
     end,
   })
 
@@ -573,7 +573,7 @@ Run: `make test FILTER=sidebar_win` then `make test` (83/83 expected).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/finding_myself/sidebar.lua tests/test_sidebar.lua
+git add lua/galley/sidebar.lua tests/test_sidebar.lua
 git commit -m "feat: sidebar window with scroll-sync, select, and folding"
 ```
 
@@ -582,8 +582,8 @@ git commit -m "feat: sidebar window with scroll-sync, select, and folding"
 ### Task 3: Cycling + wiring
 
 **Files:**
-- Modify: `lua/finding_myself/sidebar.lua` (`S.cycle`)
-- Modify: `lua/finding_myself/config.lua`, `lua/finding_myself/init.lua`, `lua/finding_myself/watch.lua`, `lua/finding_myself/jump.lua`
+- Modify: `lua/galley/sidebar.lua` (`S.cycle`)
+- Modify: `lua/galley/config.lua`, `lua/galley/init.lua`, `lua/galley/watch.lua`, `lua/galley/jump.lua`
 - Modify: `README.md`
 - Test: `tests/test_sidebar.lua` (cycle + integration cases appended)
 
@@ -636,13 +636,13 @@ T["sidebar_cycle works without a sidebar open"] = function()
 end
 
 T["sidebar_integration reconcile refreshes the tree"] = function()
-  local watch = require("finding_myself.watch")
+  local watch = require("galley.watch")
   local root = H.git_fixture({
     committed = { ["m/a.txt"] = bigtext(40, "a") },
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
   })
-  local st = canvas.open(require("finding_myself.model").build(
-    require("finding_myself.collect").files(root), 3), {})
+  local st = canvas.open(require("galley.model").build(
+    require("galley.collect").files(root), 3), {})
   st.root = root
   sidebar.close()
   sidebar.open(st, { width = 30 })
@@ -696,7 +696,7 @@ end
 
 `config.lua` — add to `M.defaults`: `sidebar = { enabled = true, width = 32 }` and inside `keymaps`: `cycle_next = "<C-n>", cycle_prev = "<C-p>"`.
 
-`init.lua` — add `local sidebar = require("finding_myself.sidebar")`; in `set_canvas_keymaps` add:
+`init.lua` — add `local sidebar = require("galley.sidebar")`; in `set_canvas_keymaps` add:
 
 ```lua
   vim.keymap.set("n", cfg.keymaps.cycle_next, function()
@@ -717,9 +717,9 @@ in `M.open`, after the watch block:
 
 in `M.close`, next to `watch.stop()` / `hl.detach(state)`: `sidebar.close()`. In `M.refresh`, after `hl.apply_now(state)`: `sidebar.refresh(state)`.
 
-`watch.lua` — add `local sidebar = require("finding_myself.sidebar")`; in `W.reconcile`, add `sidebar.refresh(state)` immediately after BOTH `hl.apply_now(state)` call sites (the 0↔N/guard path and the merge-walk tail).
+`watch.lua` — add `local sidebar = require("galley.sidebar")`; in `W.reconcile`, add `sidebar.refresh(state)` immediately after BOTH `hl.apply_now(state)` call sites (the 0↔N/guard path and the merge-walk tail).
 
-`jump.lua` — add `local sidebar = require("finding_myself.sidebar")`; in `M.back`, after the final `hl.apply_now(state)`: `sidebar.refresh(state)`.
+`jump.lua` — add `local sidebar = require("galley.sidebar")`; in `M.back`, after the final `hl.apply_now(state)`: `sidebar.refresh(state)`.
 
 `README.md` — document the sidebar (auto-opens; `<CR>` scrolls the canvas, `<Tab>`/`za` fold dirs, `q` closes the sidebar), `<C-n>/<C-p>` cycling, and the `sidebar`/keymap config.
 
@@ -730,7 +730,7 @@ Run: `make test FILTER=sidebar_` then `make test` twice (86/86 both runs).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/finding_myself/ tests/test_sidebar.lua README.md
+git add lua/galley/ tests/test_sidebar.lua README.md
 git commit -m "feat: section cycling and sidebar wiring"
 ```
 

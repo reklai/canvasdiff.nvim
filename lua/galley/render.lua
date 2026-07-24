@@ -7,8 +7,8 @@ local PREFIX = {
 }
 
 local HL_GROUP = {
-  file_hdr = "FmFileHeader",
-  hunk_hdr = "FmHunkHeader",
+  file_hdr = "GalleyFileHeader",
+  hunk_hdr = "GalleyHunkHeader",
   del = "DiffDelete",
   add = "DiffAdd",
 }

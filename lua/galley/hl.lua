@@ -1,9 +1,9 @@
 local M = {}
 
-local canvas = require("finding_myself.canvas")
-local worddiff = require("finding_myself.worddiff")
+local canvas = require("galley.canvas")
+local worddiff = require("galley.worddiff")
 
-local TS_NS = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
 
 -- Whole-file parse cache, keyed by section path. Capacity-bounded LRU so a
 -- huge changeset can't pin every file's syntax tree in memory at once.
@@ -165,8 +165,8 @@ function M.section_ts_marks(section)
 end
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "FmWordAdd", { link = "DiffText", default = true })
-  vim.api.nvim_set_hl(0, "FmWordDel", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "GalleyWordAdd", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "GalleyWordDel", { link = "DiffText", default = true })
 end
 
 local live_state
@@ -286,7 +286,7 @@ function M.attach(state, opts)
     M.invalidate(path)
   end
 
-  local aug = vim.api.nvim_create_augroup("finding_myself.hl", { clear = true })
+  local aug = vim.api.nvim_create_augroup("galley.hl", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = aug,
     callback = function(ev)
@@ -315,7 +315,7 @@ end
 --- release the live-state guard so a stale callback can never fire against
 --- this state. Nil-safe; safe to call when never attached.
 function M.detach(state)
-  pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.hl")
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.hl")
   if timer then
     timer:stop()
   end

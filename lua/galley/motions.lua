@@ -1,4 +1,4 @@
-local canvas = require("finding_myself.canvas")
+local canvas = require("galley.canvas")
 
 local M = {}
 

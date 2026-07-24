@@ -1,7 +1,7 @@
 local H = require("helpers")
-local sidebar = require("finding_myself.sidebar")
-local canvas = require("finding_myself.canvas")
-local model = require("finding_myself.model")
+local sidebar = require("galley.sidebar")
+local canvas = require("galley.canvas")
+local model = require("galley.model")
 
 local T = {}
 
@@ -118,12 +118,12 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(sidebar.is_open(), false)
 end
 
-local SIDE_NS = vim.api.nvim_create_namespace("finding_myself.sidebar")
+local SIDE_NS = vim.api.nvim_create_namespace("galley.sidebar")
 
 local function active_row(side_buf)
   local marks = vim.api.nvim_buf_get_extmarks(side_buf, SIDE_NS, 0, -1, { details = true })
   for _, m in ipairs(marks) do
-    if m[4] and m[4].line_hl_group == "FmSidebarActive" then
+    if m[4] and m[4].line_hl_group == "GalleySidebarActive" then
       return m[2]
     end
   end
@@ -132,7 +132,7 @@ end
 
 local function sidebar_buf()
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("finding%-myself://sidebar") then
+    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b):find("galley://sidebar") then
       return b
     end
   end
@@ -223,7 +223,7 @@ T["sidebar_win reopen rebinds callbacks to the new state"] = function()
   vim.cmd("vsplit")
   local win_b = vim.api.nvim_get_current_win()
   local secs = { big_section("x/new.txt", "x"), big_section("y/other.txt", "y") }
-  local canvas_mod = require("finding_myself.canvas")
+  local canvas_mod = require("galley.canvas")
   local st2 = canvas_mod.open(secs, {})
   H.eq(st2.win, win_b, "sanity: st2 opened in the new window, not win_a")
 
@@ -296,13 +296,13 @@ T["sidebar_cycle works without a sidebar open"] = function()
 end
 
 T["sidebar_integration reconcile refreshes the tree"] = function()
-  local watch = require("finding_myself.watch")
+  local watch = require("galley.watch")
   local root = H.git_fixture({
     committed = { ["m/a.txt"] = bigtext(40, "a") },
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
   })
-  local st = canvas.open(require("finding_myself.model").build(
-    require("finding_myself.collect").files(root), 3), {})
+  local st = canvas.open(require("galley.model").build(
+    require("galley.collect").files(root), 3), {})
   st.root = root
   sidebar.close()
   sidebar.open(st, { width = 30 })
@@ -340,11 +340,11 @@ T["sidebar_integration toggle from inside the sidebar redirects instead of throw
   })
   vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
   vim.api.nvim_set_current_dir(root)
-  package.loaded["finding_myself"] = nil
-  local fm = require("finding_myself")
+  package.loaded["galley"] = nil
+  local fm = require("galley")
   fm.open()
 
-  local canvas_mod = require("finding_myself.canvas")
+  local canvas_mod = require("galley.canvas")
   -- Identify the sidebar window specifically (not just "any non-canvas
   -- window"): the scrollbar float is also a non-canvas window in this
   -- tabpage now, and picking it here would set focus on a non-focusable

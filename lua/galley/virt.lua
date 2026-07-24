@@ -1,4 +1,4 @@
-local canvas = require("finding_myself.canvas")
+local canvas = require("galley.canvas")
 
 local M = {}
 
@@ -221,9 +221,9 @@ function M.attach(state, opts)
   live = state
   live_opts = opts
 
-  vim.api.nvim_create_augroup("finding_myself.virt", { clear = true })
+  vim.api.nvim_create_augroup("galley.virt", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
-    group = "finding_myself.virt",
+    group = "galley.virt",
     callback = function(ev)
       local win = tonumber(ev.match)
       if not (live and win == live.win and vim.api.nvim_win_is_valid(win)
@@ -250,7 +250,7 @@ function M.detach()
   if timer then
     timer:stop()
   end
-  pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.virt")
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.virt")
   auto = {}
   tick_of = {}
   tick = 0

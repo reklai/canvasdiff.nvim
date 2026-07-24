@@ -1,6 +1,6 @@
 local H = require("helpers")
-local model = require("finding_myself.model")
-local worddiff = require("finding_myself.worddiff")
+local model = require("galley.model")
+local worddiff = require("galley.worddiff")
 
 local T = {}
 
@@ -21,9 +21,9 @@ T["word_marks highlight only the changed span of a paired line"] = function()
   -- and produces hunks for "2"→"2" (row 3 and 4, cols 11-12) and insertion of
   -- "0 -- changed" (row 4, cols 12-24). Together they cover bytes 10-23.
   H.eq(marks, {
-    { row = 3, col = 11, end_col = 12, group = "FmWordDel", priority = 105 },
-    { row = 4, col = 11, end_col = 12, group = "FmWordAdd", priority = 105 },
-    { row = 4, col = 12, end_col = 24, group = "FmWordAdd", priority = 105 },
+    { row = 3, col = 11, end_col = 12, group = "GalleyWordDel", priority = 105 },
+    { row = 4, col = 11, end_col = 12, group = "GalleyWordAdd", priority = 105 },
+    { row = 4, col = 12, end_col = 24, group = "GalleyWordAdd", priority = 105 },
   })
 end
 
@@ -35,9 +35,9 @@ T["word_marks are byte-correct on multibyte lines"] = function()
   -- (the rendered prefix), so col = 7; é/á are 2 UTF-8 bytes, so end_col = 9.
   H.eq(#marks, 2)
   local del, add = marks[1], marks[2]
-  if del.group == "FmWordAdd" then del, add = add, del end
-  H.eq(del.group, "FmWordDel")
-  H.eq(add.group, "FmWordAdd")
+  if del.group == "GalleyWordAdd" then del, add = add, del end
+  H.eq(del.group, "GalleyWordDel")
+  H.eq(add.group, "GalleyWordAdd")
   H.eq(del.col, 7)
   H.eq(del.end_col, 9)  -- é is 2 bytes
   H.eq(add.col, 7)
@@ -54,7 +54,7 @@ T["word_marks skip unpaired and blank lines"] = function()
   -- The second del (row 4) is unpaired and should have no marks.
   local rows_with_del_marks = {}
   for _, m in ipairs(marks) do
-    if m.group == "FmWordDel" then
+    if m.group == "GalleyWordDel" then
       rows_with_del_marks[m.row] = true
     end
   end

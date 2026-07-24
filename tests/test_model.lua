@@ -1,6 +1,6 @@
 local H = require("helpers")
-local model = require("finding_myself.model")
-local render = require("finding_myself.render")
+local model = require("galley.model")
+local render = require("galley.render")
 
 return {
   ["model: modified file entries"] = function()
@@ -142,8 +142,8 @@ return {
     H.eq(lines[4], "-b")
     H.eq(lines[5], "+B")
     local hl = render.section_hl(s)
-    H.eq(hl[1], { row = 0, group = "FmFileHeader" })
-    H.eq(hl[2], { row = 1, group = "FmHunkHeader" })
+    H.eq(hl[1], { row = 0, group = "GalleyFileHeader" })
+    H.eq(hl[2], { row = 1, group = "GalleyHunkHeader" })
     H.eq(hl[3], { row = 3, group = "DiffDelete" })
     H.eq(hl[4], { row = 4, group = "DiffAdd" })
   end,

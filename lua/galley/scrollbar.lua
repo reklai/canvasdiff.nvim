@@ -54,13 +54,13 @@ function S.column(kinds, height, top0, bot0)
 
     local char, hl = " ", nil
     if has_hdr then
-      char, hl = "─", "FmScrollFile"
+      char, hl = "─", "GalleyScrollFile"
     elseif has_add and has_del then
-      char, hl = "│", "FmScrollChanged"
+      char, hl = "│", "GalleyScrollChanged"
     elseif has_add then
-      char, hl = "│", "FmScrollAdd"
+      char, hl = "│", "GalleyScrollAdd"
     elseif has_del then
-      char, hl = "│", "FmScrollDel"
+      char, hl = "│", "GalleyScrollDel"
     end
 
     -- Thumb: this row's non-empty bucket intersects the viewport line
@@ -74,18 +74,18 @@ function S.column(kinds, height, top0, bot0)
   return cells
 end
 
-local NS = vim.api.nvim_create_namespace("finding_myself.scrollbar")
+local NS = vim.api.nvim_create_namespace("galley.scrollbar")
 
 -- Module singleton (Phase 4 discipline): callbacks resolve bar.state at
 -- call time; every window op liveness-guarded; close() safe always.
 local bar = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "FmScrollFile", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "FmScrollAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "FmScrollDel", { link = "DiffDelete", default = true })
-  vim.api.nvim_set_hl(0, "FmScrollChanged", { link = "DiffChange", default = true })
-  vim.api.nvim_set_hl(0, "FmScrollThumb", { link = "PmenuThumb", default = true })
+  vim.api.nvim_set_hl(0, "GalleyScrollFile", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "GalleyScrollAdd", { link = "DiffAdd", default = true })
+  vim.api.nvim_set_hl(0, "GalleyScrollDel", { link = "DiffDelete", default = true })
+  vim.api.nvim_set_hl(0, "GalleyScrollChanged", { link = "DiffChange", default = true })
+  vim.api.nvim_set_hl(0, "GalleyScrollThumb", { link = "PmenuThumb", default = true })
 end
 
 function S.is_open()
@@ -173,7 +173,7 @@ function S.update(state)
     end
     if cell.thumb then
       vim.api.nvim_buf_set_extmark(bar.buf, NS, r - 1, 0, {
-        line_hl_group = "FmScrollThumb",
+        line_hl_group = "GalleyScrollThumb",
         priority = 200,
       })
     end
@@ -184,7 +184,7 @@ function S.close()
   if bar then
     local b = bar
     bar = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.scrollbar")
+    pcall(vim.api.nvim_del_augroup_by_name, "galley.scrollbar")
     if b.win and vim.api.nvim_win_is_valid(b.win) then
       pcall(vim.api.nvim_win_close, b.win, true)
     end
@@ -195,7 +195,7 @@ function S.close()
 end
 
 local function install_autocmds(state)
-  local aug = vim.api.nvim_create_augroup("finding_myself.scrollbar", { clear = true })
+  local aug = vim.api.nvim_create_augroup("galley.scrollbar", { clear = true })
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
     group = aug,
     callback = function(ev)

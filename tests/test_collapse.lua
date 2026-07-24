@@ -1,9 +1,9 @@
 local H = require("helpers")
-local canvas = require("finding_myself.canvas")
-local model = require("finding_myself.model")
-local render = require("finding_myself.render")
-local scrollbar = require("finding_myself.scrollbar")
-local hl = require("finding_myself.hl")
+local canvas = require("galley.canvas")
+local model = require("galley.model")
+local render = require("galley.render")
+local scrollbar = require("galley.scrollbar")
+local hl = require("galley.hl")
 
 local T = {}
 
@@ -120,7 +120,7 @@ T["collapse_ hl never marks a collapsed section"] = function()
   hl.apply_now(st)
   H.eq(st.ts.ids_by_path["a/one.txt"], nil, "ids_by_path has no entry for the collapsed section")
 
-  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   local s1, e1 = canvas.section_rows(st, 1)
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(not (m[2] >= s1 and m[2] < e1), "no TS-namespace mark within the collapsed section's rows")

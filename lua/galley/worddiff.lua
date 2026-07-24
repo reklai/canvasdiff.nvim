@@ -1,4 +1,4 @@
-local differ = require("finding_myself.differ")
+local differ = require("galley.differ")
 
 local W = {}
 
@@ -36,7 +36,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
         row = del_row,
         col = doff[old_start] + 1,
         end_col = doff[old_start + old_count] + 1,
-        group = "FmWordDel",
+        group = "GalleyWordDel",
         priority = 105,
       }
     end
@@ -45,7 +45,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
         row = add_row,
         col = aoff[new_start] + 1,
         end_col = aoff[new_start + new_count] + 1,
-        group = "FmWordAdd",
+        group = "GalleyWordAdd",
         priority = 105,
       }
     end

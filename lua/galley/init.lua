@@ -1,17 +1,17 @@
-local canvas = require("finding_myself.canvas")
-local git = require("finding_myself.git")
-local model = require("finding_myself.model")
-local jump = require("finding_myself.jump")
-local config = require("finding_myself.config")
-local hl = require("finding_myself.hl")
-local collect = require("finding_myself.collect")
-local watch = require("finding_myself.watch")
-local sidebar = require("finding_myself.sidebar")
-local scrollbar = require("finding_myself.scrollbar")
-local virt = require("finding_myself.virt")
-local motions = require("finding_myself.motions")
-local statuscol = require("finding_myself.statuscol")
-local session = require("finding_myself.session")
+local canvas = require("galley.canvas")
+local git = require("galley.git")
+local model = require("galley.model")
+local jump = require("galley.jump")
+local config = require("galley.config")
+local hl = require("galley.hl")
+local collect = require("galley.collect")
+local watch = require("galley.watch")
+local sidebar = require("galley.sidebar")
+local scrollbar = require("galley.scrollbar")
+local virt = require("galley.virt")
+local motions = require("galley.motions")
+local statuscol = require("galley.statuscol")
+local session = require("galley.session")
 
 local M = {}
 
@@ -152,7 +152,7 @@ function M.open()
 
   local root = git.root(vim.fn.getcwd())
   if not root then
-    vim.notify("finding_myself: not inside a git repository", vim.log.levels.WARN)
+    vim.notify("galley: not inside a git repository", vim.log.levels.WARN)
     return
   end
 
@@ -202,7 +202,7 @@ function M.open()
   end
 
   if config.options.session.enabled then
-    local aug = vim.api.nvim_create_augroup("finding_myself.session", { clear = true })
+    local aug = vim.api.nvim_create_augroup("galley.session", { clear = true })
     vim.api.nvim_create_autocmd("VimLeavePre", {
       group = aug,
       callback = function()
@@ -269,7 +269,7 @@ function M.close()
   if config.options.session.enabled then
     session.save(state)
   end
-  pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.session")
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.session")
 
   watch.stop()
   hl.detach(state)
@@ -333,13 +333,13 @@ end
 --- showing (never opened, or closed again) ⇒ notify and return.
 function M.toggle_base()
   if not (state and canvas_showing(state)) then
-    vim.notify("finding_myself: no live diff canvas", vim.log.levels.WARN)
+    vim.notify("galley: no live diff canvas", vim.log.levels.WARN)
     return
   end
   state.base = (state.base == "index") and "HEAD" or "index"
   M.refresh()
   vim.notify(
-    "finding_myself: diff base = worktree vs "
+    "galley: diff base = worktree vs "
       .. (state.base == "index" and "index (unstaged)" or "HEAD")
   )
 end

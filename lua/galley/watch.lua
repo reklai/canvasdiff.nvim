@@ -1,11 +1,11 @@
-local canvas = require("finding_myself.canvas")
-local model = require("finding_myself.model")
-local collect = require("finding_myself.collect")
-local config = require("finding_myself.config")
-local hl = require("finding_myself.hl")
-local sidebar = require("finding_myself.sidebar")
-local scrollbar = require("finding_myself.scrollbar")
-local virt = require("finding_myself.virt")
+local canvas = require("galley.canvas")
+local model = require("galley.model")
+local collect = require("galley.collect")
+local config = require("galley.config")
+local hl = require("galley.hl")
+local sidebar = require("galley.sidebar")
+local scrollbar = require("galley.scrollbar")
+local virt = require("galley.virt")
 
 local W = {}
 
@@ -102,7 +102,7 @@ function W.start(state, opts)
   live = state
   debounce_ms = (opts and opts.debounce_ms) or 200
 
-  aug = vim.api.nvim_create_augroup("finding_myself.watch", { clear = true })
+  aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = aug,
     callback = function(ev)

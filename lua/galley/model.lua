@@ -1,4 +1,4 @@
-local differ = require("finding_myself.differ")
+local differ = require("galley.differ")
 
 local M = {}
 

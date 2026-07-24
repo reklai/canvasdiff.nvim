@@ -12,7 +12,7 @@ return {
       },
     })
     vim.api.nvim_set_current_dir(root)
-    local fm = require("finding_myself")
+    local fm = require("galley")
     fm.open()
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     -- alphabetical file order: new.txt, src/a.lua, src/z.lua, top.txt
@@ -41,8 +41,8 @@ return {
       worktree = { ["a.txt"] = "A1\na2\na3\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["finding_myself"] = nil
-    local fm = require("finding_myself")
+    package.loaded["galley"] = nil
+    local fm = require("galley")
     fm.open()
 
     local canvas_buf = vim.api.nvim_get_current_buf()
@@ -73,7 +73,7 @@ return {
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)
-    local fm = require("finding_myself")
+    local fm = require("galley")
     local ok = pcall(fm.open)
     assert(ok, "open outside a repo must not throw (notify instead)")
   end,
@@ -86,10 +86,10 @@ return {
     local other = vim.fs.joinpath(root, "other.txt")
     local f = assert(io.open(other, "w")); f:write("other content\n"); f:close()
 
-    local fm = require("finding_myself")
+    local fm = require("galley")
     fm.open()
     assert(
-      require("finding_myself.canvas").is_canvas_buf(vim.api.nvim_get_current_buf()),
+      require("galley.canvas").is_canvas_buf(vim.api.nvim_get_current_buf()),
       "canvas should be showing after open()"
     )
 
@@ -105,8 +105,8 @@ return {
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh module instance so its module-level `state` is nil,
     -- regardless of what earlier test cases in this process did.
-    package.loaded["finding_myself"] = nil
-    local fm = require("finding_myself")
+    package.loaded["galley"] = nil
+    local fm = require("galley")
 
     local buf_before = vim.api.nvim_get_current_buf()
     local ok = pcall(fm.close)

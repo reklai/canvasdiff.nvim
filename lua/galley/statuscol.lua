@@ -1,9 +1,9 @@
-local canvas = require("finding_myself.canvas")
+local canvas = require("galley.canvas")
 
 local M = {}
 
-local AUGROUP = "finding_myself.statuscol"
-local STATUSCOL_EXPR = "%!v:lua.require'finding_myself.statuscol'.text()"
+local AUGROUP = "galley.statuscol"
+local STATUSCOL_EXPR = "%!v:lua.require'galley.statuscol'.text()"
 
 -- Module singleton (mirrors scrollbar/sidebar's discipline): the one live
 -- canvas state the statuscolumn is bound to, or nil when detached.

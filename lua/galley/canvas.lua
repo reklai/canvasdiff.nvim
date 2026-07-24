@@ -1,12 +1,12 @@
-local render = require("finding_myself.render")
-local viewport = require("finding_myself.viewport")
+local render = require("galley.render")
+local viewport = require("galley.viewport")
 
 local M = {}
 
-local BUFNAME = "finding-myself://canvas"
+local BUFNAME = "galley://canvas"
 
-local ANCHOR_NS = vim.api.nvim_create_namespace("finding_myself.canvas.anchors")
-local HL_NS = vim.api.nvim_create_namespace("finding_myself.canvas.hl")
+local ANCHOR_NS = vim.api.nvim_create_namespace("galley.canvas.anchors")
+local HL_NS = vim.api.nvim_create_namespace("galley.canvas.hl")
 
 -- Anchors are placed with right_gravity = false. Empirically (verified via a
 -- headless probe, not just the docs) a left-gravity mark sitting at the exact
@@ -24,8 +24,8 @@ local ANCHOR_OPTS = { right_gravity = false, invalidate = false, undo_restore = 
 local canvas_buf = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "FmFileHeader", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "FmHunkHeader", { link = "Comment", default = true })
+  vim.api.nvim_set_hl(0, "GalleyFileHeader", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
 end
 
 local function set_modifiable(buf, val)
@@ -87,7 +87,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
     return { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
       end_row = start_row + 1,
       end_col = 0,
-      hl_group = "FmFileHeader",
+      hl_group = "GalleyFileHeader",
       hl_eol = true,
       priority = 100,
     }) }

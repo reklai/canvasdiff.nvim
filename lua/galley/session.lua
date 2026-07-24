@@ -1,7 +1,7 @@
-local canvas = require("finding_myself.canvas")
-local viewport = require("finding_myself.viewport")
-local sidebar = require("finding_myself.sidebar")
-local virt = require("finding_myself.virt")
+local canvas = require("galley.canvas")
+local viewport = require("galley.viewport")
+local sidebar = require("galley.sidebar")
+local virt = require("galley.virt")
 
 local M = {}
 
@@ -22,7 +22,7 @@ end
 
 --- Where a root's session file lives on disk.
 function M.path_for(root)
-  return vim.fn.stdpath("state") .. "/finding_myself/" .. vim.fn.sha256(root) .. ".json"
+  return vim.fn.stdpath("state") .. "/galley/" .. vim.fn.sha256(root) .. ".json"
 end
 
 --- Persist `state`'s base/collapsed/folds and (when the canvas is actually

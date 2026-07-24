@@ -1,5 +1,5 @@
 local H = require("helpers")
-local V = require("finding_myself.viewport")
+local V = require("galley.viewport")
 
 local function mkentries(n)
   local es = {}

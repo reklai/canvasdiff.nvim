@@ -1,8 +1,8 @@
 local H = require("helpers")
-local model = require("finding_myself.model")
-local canvas = require("finding_myself.canvas")
-local collect = require("finding_myself.collect")
-local watch = require("finding_myself.watch")
+local model = require("galley.model")
+local canvas = require("galley.canvas")
+local collect = require("galley.collect")
+local watch = require("galley.watch")
 
 local T = {}
 
@@ -266,12 +266,12 @@ T["watch_start stops itself when the canvas buffer is wiped"] = function()
   local root = fixture()
   local st = open_state(root)
   watch.start(st, { debounce_ms = 20 })
-  assert(pcall(vim.api.nvim_get_autocmds, { group = "finding_myself.watch" }),
+  assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
     "augroup exists while watching")
 
   vim.api.nvim_buf_delete(st.buf, { force = true })
 
-  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "finding_myself.watch" })
+  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" })
   H.eq(group_gone, true, "BufWipeout stopped the watch (augroup torn down)")
 end
 

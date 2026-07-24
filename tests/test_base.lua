@@ -1,8 +1,8 @@
 local H = require("helpers")
-local git = require("finding_myself.git")
-local collect = require("finding_myself.collect")
-local model = require("finding_myself.model")
-local canvas = require("finding_myself.canvas")
+local git = require("galley.git")
+local collect = require("galley.collect")
+local model = require("galley.model")
+local canvas = require("galley.canvas")
 
 --- Stage the current worktree content of `rel` (via `git add -A`), leaving
 --- the index holding whatever's on disk right now.
@@ -83,8 +83,8 @@ return {
 
     local ok, err = pcall(function()
       vim.api.nvim_set_current_dir(root)
-      package.loaded["finding_myself"] = nil
-      local fm = require("finding_myself")
+      package.loaded["galley"] = nil
+      local fm = require("galley")
       fm.open()
 
       local function headers()
@@ -135,8 +135,8 @@ return {
     local ok, err = pcall(function()
       vim.cmd("tabnew")
       vim.api.nvim_set_current_dir(root)
-      package.loaded["finding_myself"] = nil
-      local fm = require("finding_myself")
+      package.loaded["galley"] = nil
+      local fm = require("galley")
       fm.open()
       fm.close()
 

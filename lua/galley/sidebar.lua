@@ -1,4 +1,4 @@
-local canvas = require("finding_myself.canvas")
+local canvas = require("galley.canvas")
 
 local S = {}
 
@@ -68,16 +68,16 @@ function S.render_lines(entries)
   return lines
 end
 
-local NS = vim.api.nvim_create_namespace("finding_myself.sidebar")
-local BUFNAME = "finding-myself://sidebar"
+local NS = vim.api.nvim_create_namespace("galley.sidebar")
+local BUFNAME = "galley://sidebar"
 
 -- Module-level singleton, mirroring init.lua's state pattern: at most one
 -- sidebar, always attached to the one live canvas.
 local side = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "FmSidebarDir", { link = "Directory", default = true })
-  vim.api.nvim_set_hl(0, "FmSidebarActive", { link = "Visual", default = true })
+  vim.api.nvim_set_hl(0, "GalleySidebarDir", { link = "Directory", default = true })
+  vim.api.nvim_set_hl(0, "GalleySidebarActive", { link = "Visual", default = true })
 end
 
 function S.is_open()
@@ -110,7 +110,7 @@ function S.refresh(state)
   for row0, e in ipairs(side.entries) do
     if e.kind == "dir" then
       vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, 0, {
-        line_hl_group = "FmSidebarDir",
+        line_hl_group = "GalleySidebarDir",
         priority = 90,
       })
     end
@@ -153,7 +153,7 @@ function S.sync(state)
     pcall(vim.api.nvim_buf_del_extmark, side.buf, NS, side.active_mark)
   end
   side.active_mark = vim.api.nvim_buf_set_extmark(side.buf, NS, best, 0, {
-    line_hl_group = "FmSidebarActive",
+    line_hl_group = "GalleySidebarActive",
     priority = 100,
   })
   -- Don't yank the cursor out from under the user while they're actually
@@ -248,7 +248,7 @@ function S.close()
   if side then
     local win = side.win
     side = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
+    pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
       -- nvim_win_close silently fails (E444) when `win` is the tabpage's
@@ -271,7 +271,7 @@ end
 --- `state.win` means the old WinClosed pattern would otherwise go stale and
 --- never fire).
 local function install_autocmds(state)
-  local aug = vim.api.nvim_create_augroup("finding_myself.sidebar", { clear = true })
+  local aug = vim.api.nvim_create_augroup("galley.sidebar", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = aug,
     callback = function(ev)
@@ -287,7 +287,7 @@ local function install_autocmds(state)
     pattern = tostring(side.win),
     callback = function()
       side = nil
-      pcall(vim.api.nvim_del_augroup_by_name, "finding_myself.sidebar")
+      pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
     end,
   })
   -- The canvas window closing (e.g. `:q` there) must not strand a live

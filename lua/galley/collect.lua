@@ -1,4 +1,4 @@
-local git = require("finding_myself.git")
+local git = require("galley.git")
 
 local M = {}
 

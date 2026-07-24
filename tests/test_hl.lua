@@ -1,7 +1,7 @@
 local H = require("helpers")
-local model = require("finding_myself.model")
-local hl = require("finding_myself.hl")
-local canvas = require("finding_myself.canvas")
+local model = require("galley.model")
+local hl = require("galley.hl")
+local canvas = require("galley.canvas")
 
 local T = {}
 
@@ -164,7 +164,7 @@ end
 -- that leaves an earlier test's TS_NS marks sitting in the buffer for a
 -- later test to trip over. Clearing it here isolates each test the same
 -- way a truly first-ever `canvas.open` in a real session would start clean.
-local TS_NS = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
 
 local function reset_view(st)
   vim.api.nvim_win_call(st.win, function()
@@ -211,7 +211,7 @@ T["hl_engine replace_section invalidates and reapplies inside new rows"] = funct
   assert(st.ts.ids_by_path["r.lua"] and #st.ts.ids_by_path["r.lua"] > 0, "reapplied")
 
   local srow, erow = canvas.section_rows(st, 1)
-  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(m[2] >= srow and m[2] < erow,
       ("stale mark at row %d outside [%d, %d)"):format(m[2], srow, erow))
@@ -223,7 +223,7 @@ T["hl_engine render_all clears the ts namespace via hook"] = function()
   reset_view(st)
   hl.attach(st, { margin = 5 })
   canvas.render_all(st, big_sections())
-  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   H.eq(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {}), {}, "namespace cleared")
   H.eq(next(st.ts.ids_by_path), nil, "bookkeeping reset")
   hl.apply_now(st)
@@ -237,7 +237,7 @@ T["hl_engine reattach after reopen leaves no stale marks"] = function()
   -- state, then attach must start from a clean namespace
   local st2 = canvas.open(big_sections(), {})
   hl.attach(st2, { margin = 50 })
-  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   local total = #vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
   local tracked = 0
   for _, ids in pairs(st2.ts.ids_by_path) do
@@ -260,7 +260,7 @@ T["hl_engine stale state apply is a no-op after reattach"] = function()
     vim.cmd("normal! G")
   end)
 
-  local ns = vim.api.nvim_create_namespace("finding_myself.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   local before = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
 
   hl.apply_now(st1) -- simulated stale debounce callback

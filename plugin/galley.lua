@@ -1,20 +1,20 @@
-if vim.g.loaded_finding_myself then
+if vim.g.loaded_galley then
   return
 end
-vim.g.loaded_finding_myself = true
+vim.g.loaded_galley = true
 
 local SUBCOMMANDS = { "open", "close", "toggle", "refresh", "base" }
 
-vim.api.nvim_create_user_command("FindingMyself", function(opts)
+vim.api.nvim_create_user_command("Galley", function(opts)
   local sub = opts.fargs[1] or "toggle"
   if not vim.tbl_contains(SUBCOMMANDS, sub) then
     vim.notify(
-      "finding_myself: unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")",
+      "galley: unknown subcommand '" .. sub .. "' (valid: " .. table.concat(SUBCOMMANDS, ", ") .. ")",
       vim.log.levels.ERROR
     )
     return
   end
-  local fm = require("finding_myself")
+  local fm = require("galley")
   if sub == "base" then
     fm.toggle_base()
   else
@@ -22,7 +22,7 @@ vim.api.nvim_create_user_command("FindingMyself", function(opts)
   end
 end, {
   nargs = "?",
-  desc = "Open/close/toggle/refresh/base the finding_myself diff canvas",
+  desc = "Open/close/toggle/refresh/base the galley diff canvas",
   complete = function(arglead)
     return vim.tbl_filter(function(c)
       return c:sub(1, #arglead) == arglead

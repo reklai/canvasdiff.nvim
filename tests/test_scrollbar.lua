@@ -1,7 +1,7 @@
 local H = require("helpers")
-local model = require("finding_myself.model")
-local scrollbar = require("finding_myself.scrollbar")
-local canvas = require("finding_myself.canvas")
+local model = require("galley.model")
+local scrollbar = require("galley.scrollbar")
+local canvas = require("galley.canvas")
 
 local T = {}
 
@@ -27,10 +27,10 @@ T["scroll_column buckets density and file boundaries"] = function()
   kinds[36] = "del"       -- bucket 4: mixed
   local cells = scrollbar.column(kinds, 4, 100, 100) -- viewport far away: no thumb
   H.eq(#cells, 4)
-  H.eq({ cells[1].char, cells[1].hl }, { "─", "FmScrollFile" })
-  H.eq({ cells[2].char, cells[2].hl }, { "│", "FmScrollAdd" })
-  H.eq({ cells[3].char, cells[3].hl }, { "│", "FmScrollDel" })
-  H.eq({ cells[4].char, cells[4].hl }, { "│", "FmScrollChanged" })
+  H.eq({ cells[1].char, cells[1].hl }, { "─", "GalleyScrollFile" })
+  H.eq({ cells[2].char, cells[2].hl }, { "│", "GalleyScrollAdd" })
+  H.eq({ cells[3].char, cells[3].hl }, { "│", "GalleyScrollDel" })
+  H.eq({ cells[4].char, cells[4].hl }, { "│", "GalleyScrollChanged" })
   for r = 1, 4 do H.eq(cells[r].thumb, false) end
 end
 
@@ -102,12 +102,12 @@ local function bar_win()
   end
 end
 
-local SCROLL_NS = vim.api.nvim_create_namespace("finding_myself.scrollbar")
+local SCROLL_NS = vim.api.nvim_create_namespace("galley.scrollbar")
 
 local function thumb_rows(bbuf)
   local rows = {}
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bbuf, SCROLL_NS, 0, -1, { details = true })) do
-    if m[4] and m[4].line_hl_group == "FmScrollThumb" then
+    if m[4] and m[4].line_hl_group == "GalleyScrollThumb" then
       rows[#rows + 1] = m[2]
     end
   end

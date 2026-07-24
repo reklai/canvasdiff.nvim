@@ -1,8 +1,8 @@
 local H = require("helpers")
-local git = require("finding_myself.git")
-local model = require("finding_myself.model")
-local canvas = require("finding_myself.canvas")
-local jump = require("finding_myself.jump")
+local git = require("galley.git")
+local model = require("galley.model")
+local canvas = require("galley.canvas")
+local jump = require("galley.jump")
 
 local function setup_repo()
   local root = H.git_fixture({

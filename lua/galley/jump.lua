@@ -1,11 +1,11 @@
-local canvas = require("finding_myself.canvas")
-local viewport = require("finding_myself.viewport")
-local model = require("finding_myself.model")
-local git = require("finding_myself.git")
-local config = require("finding_myself.config")
-local hl = require("finding_myself.hl")
-local sidebar = require("finding_myself.sidebar")
-local scrollbar = require("finding_myself.scrollbar")
+local canvas = require("galley.canvas")
+local viewport = require("galley.viewport")
+local model = require("galley.model")
+local git = require("galley.git")
+local config = require("galley.config")
+local hl = require("galley.hl")
+local sidebar = require("galley.sidebar")
+local scrollbar = require("galley.scrollbar")
 
 local M = {}
 
@@ -109,7 +109,7 @@ function M.enter(state, opts)
   excursion.buf = buf
   -- Never map `q` in the real file buffer.
   vim.keymap.set("n", back_key, function()
-    require("finding_myself.jump").back()
+    require("galley.jump").back()
   end, { buffer = buf, silent = true, noremap = true })
 end
 
@@ -150,7 +150,7 @@ function M.back()
     -- us). Nothing to splice; just warn and leave the canvas viewport as
     -- `nvim_win_set_buf` left it.
     vim.notify(
-      "finding_myself: excursion section for '" .. ex.path .. "' not found in canvas; view not updated",
+      "galley: excursion section for '" .. ex.path .. "' not found in canvas; view not updated",
       vim.log.levels.WARN
     )
     return
