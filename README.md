@@ -59,6 +59,29 @@ works normally on the canvas window underneath it. satellite.nvim / nvim-scrollb
 still function on the canvas window, but they draw at the same right edge as
 the built-in bar — disable one (`scrollbar = { enabled = false }`).
 
+Press `<Tab>` (or `za`) on any line to collapse that line's file down to a
+single placeholder row (`▸ path  (N hunks, +adds −dels)`), and again to
+expand it back. Pressing `<CR>` on a collapsed placeholder expands it
+instead of jumping. For very large changesets (past `virt.max_files` files
+or `virt.max_lines` total canvas lines), the same collapse mechanism kicks
+in automatically: sections far from your current viewport auto-collapse and
+ones you scroll near auto-expand, keeping at most `virt.max_expanded`
+sections rendered in full at once. This auto-virtualization never touches
+(or persists) anything you collapsed yourself.
+
+Use `]f` / `[f` to jump the cursor to the next/previous file's diff start
+(clamping at the ends, honoring a count), and `]h` / `[h` to step between
+hunk headers across every non-collapsed section. A statuscolumn shows each
+visible line's number in the file it belongs to (not the canvas buffer's own
+line number) — blank for headers and collapsed placeholders, `·` for pure
+deletions.
+
+`:FindingMyself base` toggles the diff base between the worktree vs `HEAD`
+(default — everything changed, staged or not) and the worktree vs the index
+(staged content only — what a plain `git diff --cached` would show is
+excluded, since it's comparing against what's already staged), refreshing
+the canvas and notifying which mode is now active.
+
 `:FindingMyself` with no argument toggles the canvas (open if not showing,
 close if showing). It also accepts an explicit subcommand, with completion:
 
@@ -67,10 +90,21 @@ close if showing). It also accepts an explicit subcommand, with completion:
 :FindingMyself close
 :FindingMyself toggle
 :FindingMyself refresh
+:FindingMyself base
 ```
 
 If the current directory isn't inside a git repository, `:FindingMyself
 open` notifies you and does nothing further (it never errors).
+
+The canvas remembers, per repository, which files you collapsed, which
+sidebar directories you folded, and roughly where you were scrolled/where
+your cursor was — restored the next time you open the canvas there, even
+across a Neovim restart. It's saved when you close the canvas and again on
+Neovim exit, to a small JSON file under `stdpath("state") ..
+"/finding_myself/"`, keyed by the repo root. Nothing here is a raw line
+number: the saved position is content-based (which line, near what text), so
+it still lands close to the right spot even if the file changed since you
+last looked. Set `session.enabled = false` to turn this off entirely.
 
 ## Configuration
 
@@ -83,8 +117,14 @@ require("finding_myself").setup({
     refresh = "R",       -- re-scan and re-render
     cycle_next = "<C-n>", -- scroll to the next file's diff (wraps)
     cycle_prev = "<C-p>", -- scroll to the previous file's diff (wraps)
+    collapse = "<Tab>",   -- toggle collapse of the section under the cursor
+    next_file = "]f",     -- cursor to the next file's diff start (clamps)
+    prev_file = "[f",     -- cursor to the previous file's diff start (clamps)
+    next_hunk = "]h",     -- cursor to the next hunk header (clamps)
+    prev_hunk = "[h",     -- cursor to the previous hunk header (clamps)
   },
   context = 3,          -- unified-diff context lines around each hunk
+  base = "HEAD",        -- diff base: "HEAD" or "index" (staged-only review)
   highlight = {
     enabled = true,     -- syntax + word-diff highlighting of hunk content
     margin = 100,       -- rows beyond the viewport kept highlighted
@@ -101,6 +141,19 @@ require("finding_myself").setup({
   scrollbar = {
     enabled = true,     -- overlay the minimap scrollbar on the canvas
   },
+  statuscolumn = {
+    enabled = true,     -- show each line's number in the file it belongs to
+  },
+  virt = {
+    enabled = true,     -- tier-1 auto-virtualization for huge changesets
+    max_files = 200,    -- section count past which auto-collapse activates
+    max_lines = 100000, -- total canvas lines past which auto-collapse activates
+    margin = 100,       -- rows around the viewport treated as "near"
+    max_expanded = 20,  -- sections kept rendered in full at once, once active
+  },
+  session = {
+    enabled = true,     -- remember collapse/folds/view per repo across restarts
+  },
 })
 ```
 
@@ -114,6 +167,9 @@ Any subset of these can be overridden; unspecified keys keep their default.
 | `refresh` | `R` | Re-collect changed files and re-render the canvas |
 | `cycle_next` | `<C-n>` | Scroll to the next file's diff, wrapping |
 | `cycle_prev` | `<C-p>` | Scroll to the previous file's diff, wrapping |
+| `collapse` / `za` | `<Tab>` | Toggle collapse of the section under the cursor |
+| `next_file` / `prev_file` | `]f` / `[f` | Cursor to the next/previous file's diff start, clamping |
+| `next_hunk` / `prev_hunk` | `]h` / `[h` | Cursor to the next/previous hunk header, clamping |
 | (mouse) | `<2-LeftMouse>` | Double-click a line to jump into that file, same as `jump` |
 
 | Keymap (sidebar buffer only) | Default | Action |
@@ -164,12 +220,17 @@ What's here today:
   updated as the canvas reconciles.
 - A scrollbar minimap (file boundaries, add/del density, viewport thumb)
   overlaid on the canvas, plus double-click-to-jump.
+- Manual section collapse (`<Tab>`/`za`) plus tier-1 auto-virtualization that
+  collapses far-from-viewport sections once a changeset crosses configurable
+  file/line thresholds, so huge diffs stay responsive.
+- `]f [f ]h [h` file/hunk motions and a statuscolumn showing each line's
+  number in the file it belongs to.
+- A worktree-vs-HEAD / worktree-vs-index diff base toggle (`:FindingMyself
+  base`) for reviewing staged-only changes.
+- Session persistence: collapse state, sidebar folds, and semantic
+  scroll/cursor position are remembered per repo across Neovim restarts.
 
 ## Roadmap
 
-Rough order, each phase independently useful:
-
-1. **Virtualization** — render only the visible window's worth of diff for
-   large repos/diffs, instead of the whole canvas up front.
-2. **Session persistence** — remember canvas state (open files, scroll
-   position) across Neovim restarts.
+All phases from the original plan (virtualization, session persistence) are
+now implemented; there's no pending roadmap.
