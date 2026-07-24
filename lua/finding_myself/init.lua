@@ -17,6 +17,20 @@ local M = {}
 
 local EMPTY_MSG = "-- no changes --"
 
+--- Is `st`'s canvas actually live and on screen right now? `state` outlives
+--- M.close (the canvas buffer is cached and reopened), so a bare nil check
+--- is not enough to tell an open canvas from a closed one.
+---
+--- Keys on state.win, which the scrollbar/hl/statuscolumn refresh on
+--- BufWinEnter -- with all three disabled it can go stale, and multi-window
+--- canvas display is a documented MVP limitation anyway. Note M.close
+--- deliberately does NOT use this: it tests the CURRENT window instead, for
+--- the reasons in its own docstring.
+local function canvas_showing(st)
+  return st.win and vim.api.nvim_win_is_valid(st.win)
+    and vim.api.nvim_win_get_buf(st.win) == st.buf
+end
+
 -- The single live canvas excursion state, cached across close()/open() so
 -- the canvas buffer content survives being hidden (canvas.lua itself keeps
 -- the scratch buffer alive; this just remembers our bookkeeping around it:
@@ -129,8 +143,7 @@ function M.open()
   -- opened INTO that window. Redirect to the live canvas window if there is
   -- one; otherwise treat the sidebar as an appendage of an open canvas.
   if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
-    if state and state.win and vim.api.nvim_win_is_valid(state.win)
-        and vim.api.nvim_win_get_buf(state.win) == state.buf then
+    if state and canvas_showing(state) then
       vim.api.nvim_set_current_win(state.win)
     else
       return
@@ -282,8 +295,7 @@ end
 function M.toggle()
   local current_win = vim.api.nvim_get_current_win()
   if sidebar.is_sidebar_win(current_win) then
-    if state and state.win and vim.api.nvim_win_is_valid(state.win)
-        and vim.api.nvim_win_get_buf(state.win) == state.buf then
+    if state and canvas_showing(state) then
       vim.api.nvim_set_current_win(state.win)
       M.close()
     else
@@ -317,10 +329,10 @@ function M.refresh()
 end
 
 --- Flip the diff base between "worktree vs HEAD" and "worktree vs index"
---- (unstaged-only review) and refresh the live canvas. No live canvas ⇒
---- notify and return.
+--- (unstaged-only review) and refresh the live canvas. Canvas not currently
+--- showing (never opened, or closed again) ⇒ notify and return.
 function M.toggle_base()
-  if not state then
+  if not (state and canvas_showing(state)) then
     vim.notify("finding_myself: no live diff canvas", vim.log.levels.WARN)
     return
   end

@@ -2,6 +2,7 @@ local H = require("helpers")
 local git = require("finding_myself.git")
 local collect = require("finding_myself.collect")
 local model = require("finding_myself.model")
+local canvas = require("finding_myself.canvas")
 
 --- Stage the current worktree content of `rel` (via `git add -A`), leaving
 --- the index holding whatever's on disk right now.
@@ -105,8 +106,61 @@ return {
 
       fm.toggle_base()
       H.eq(headers(), { "g.txt" }, "back to HEAD mode: g.txt reappears")
+
+      fm.close() -- don't leak an open canvas into the tests that follow
     end)
 
+    vim.api.nvim_set_current_dir(old_cwd)
+    assert(ok, err)
+  end,
+
+  -- `state` deliberately outlives M.close (the canvas buffer is cached), so
+  -- a bare `if not state` guard still passes once the canvas is gone. The
+  -- command would then flip the base of a hidden canvas and re-render it
+  -- against a possibly stale root -- announcing a base the next open()
+  -- discards, potentially for an entirely different repository.
+  ["base_ toggle is a no-op on a closed canvas"] = function()
+    local root = fully_staged_fixture()
+    local old_cwd = vim.fn.getcwd()
+    local real_notify = vim.notify
+
+    local function canvas_lines()
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if canvas.is_canvas_buf(b) then
+          return vim.api.nvim_buf_get_lines(b, 0, -1, false)
+        end
+      end
+    end
+
+    local ok, err = pcall(function()
+      vim.cmd("tabnew")
+      vim.api.nvim_set_current_dir(root)
+      package.loaded["finding_myself"] = nil
+      local fm = require("finding_myself")
+      fm.open()
+      fm.close()
+
+      local before = canvas_lines()
+      assert(before, "sanity: the canvas buffer survives close")
+
+      local msgs = {}
+      vim.notify = function(msg, level)
+        msgs[#msgs + 1] = { msg = msg, level = level }
+      end
+      fm.toggle_base()
+      vim.notify = real_notify
+
+      -- g.txt is fully staged, so a base flip to "index" would re-render the
+      -- hidden canvas to its empty-state message.
+      H.eq(canvas_lines(), before, "the hidden canvas was not re-rendered")
+      H.eq(#msgs, 1, "exactly one notification")
+      assert(msgs[1].msg:match("no live diff canvas"),
+        "warns instead of toggling, got: " .. msgs[1].msg)
+      H.eq(msgs[1].level, vim.log.levels.WARN, "and it's a warning")
+    end)
+
+    vim.notify = real_notify
+    vim.cmd("tabclose")
     vim.api.nvim_set_current_dir(old_cwd)
     assert(ok, err)
   end,
