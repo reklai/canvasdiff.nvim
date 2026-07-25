@@ -19,8 +19,12 @@ S.on_change = nil
 --- slash); a folded dir is shown itself but none of its descendants are.
 --- Sections are sorted by path, so each dir is emitted exactly once,
 --- immediately before its first descendant.
-function S.build_entries(sections, folded)
+---
+--- `aside` is an optional set of file paths the user has set aside, used only
+--- to flag their rows. Both are plain tables, so this stays pure.
+function S.build_entries(sections, folded, aside)
   folded = folded or {}
+  aside = aside or {}
   local entries = {}
   local prev_dirs = {}
 
@@ -58,6 +62,7 @@ function S.build_entries(sections, folded)
       entries[#entries + 1] = {
         kind = "file", path = section.path, name = fname, depth = #parts,
         section_i = i, adds = section.adds, dels = section.dels,
+        aside = aside[section.path] or false,
       }
     end
     prev_dirs = parts
@@ -67,6 +72,12 @@ function S.build_entries(sections, folded)
 end
 
 --- Render entries to display lines (pure).
+---
+--- File rows carry the same two-column gutter as dir rows, holding "▸ " when
+--- the file is set aside -- the same glyph render.placeholder uses in the
+--- canvas and a folded dir uses here, so one symbol means one thing
+--- everywhere. Without it the tree and the navigation disagree: ]f skips a
+--- file and nothing on screen explains why.
 function S.render_lines(entries)
   local lines = {}
   for i, e in ipairs(entries) do
@@ -74,7 +85,8 @@ function S.render_lines(entries)
     if e.kind == "dir" then
       lines[i] = indent .. (e.folded and "▸ " or "▾ ") .. e.name
     else
-      lines[i] = indent .. e.name .. ("  +%d −%d"):format(e.adds, e.dels)
+      lines[i] = indent .. (e.aside and "▸ " or "  ")
+        .. e.name .. ("  +%d −%d"):format(e.adds, e.dels)
     end
   end
   return lines
@@ -118,7 +130,12 @@ function S.refresh(state)
   if not S.is_open() then
     return
   end
-  side.entries = S.build_entries(state.sections, state.folded)
+  -- set_aside, not hidden: this runs on virt.on_change, so keying the markers
+  -- off the rendering predicate would churn every row in the tree on every
+  -- scroll of a large changeset -- and would claim the user set aside what the
+  -- virtualizer collapsed on its own.
+  local aside = fold.aside_set(state.sections, state.collapsed, state.folded, virt.auto_set())
+  side.entries = S.build_entries(state.sections, state.folded, aside)
   local lines = S.render_lines(side.entries)
   if #lines == 0 then
     lines = { "" }

@@ -3,6 +3,7 @@ local sidebar = require("galley.sidebar")
 local canvas = require("galley.canvas")
 local model = require("galley.model")
 local render = require("galley.render")
+local virt = require("galley.virt")
 
 local T = {}
 
@@ -14,7 +15,7 @@ T["sidebar_entries flat root files need no dir rows"] = function()
   local entries = sidebar.build_entries({ sec("a.txt"), sec("b.txt") }, {})
   H.eq(#entries, 2)
   H.eq(entries[1], { kind = "file", path = "a.txt", name = "a.txt", depth = 0,
-    section_i = 1, adds = 1, dels = 0 })
+    section_i = 1, adds = 1, dels = 0, aside = false })
   H.eq(entries[2].section_i, 2)
 end
 
@@ -56,6 +57,25 @@ T["sidebar_entries folded dir hides all descendants"] = function()
   H.eq(entries[2].folded, true)
 end
 
+T["sidebar_entries a set-aside file is flagged"] = function()
+  local entries = sidebar.build_entries(
+    { sec("a.txt"), sec("b.txt") }, {}, { ["b.txt"] = true })
+  H.eq(entries[1].aside, false, "a.txt is in play")
+  H.eq(entries[2].aside, true, "b.txt was set aside")
+  H.eq(sidebar.build_entries({ sec("a.txt") }, {})[1].aside, false,
+    "omitting the set means nothing is set aside")
+end
+
+T["sidebar_render marks set-aside files with the placeholder glyph"] = function()
+  local lines = sidebar.render_lines(sidebar.build_entries(
+    { sec("lua/a.lua", 1, 2), sec("root.md", 0, 5) }, {}, { ["root.md"] = true }))
+  H.eq(lines, {
+    "▾ lua/",
+    "    a.lua  +1 −2",
+    "▸ root.md  +0 −5",
+  }, "the same ▸ that marks a folded dir and a collapsed section in the canvas")
+end
+
 T["sidebar_render formats dirs, files, indent, and counts"] = function()
   local entries = sidebar.build_entries({
     sec("lua/mod/a.lua", 12, 3), sec("root.md", 0, 5),
@@ -64,7 +84,7 @@ T["sidebar_render formats dirs, files, indent, and counts"] = function()
   H.eq(lines, {
     "▾ lua/",
     "  ▸ mod/",
-    "root.md  +0 −5",
+    "  root.md  +0 −5",
   })
 end
 
@@ -590,6 +610,35 @@ T["sidebar_fold folding the section you are reading lands on its placeholder"] =
   H.eq(canvas_top0(st), s2, "viewport top sits on a/two.txt's placeholder row")
   H.eq(vim.api.nvim_buf_get_lines(st.buf, s2, s2 + 1, false)[1],
     render.placeholder(st.sections[2]), "and that row is the placeholder")
+  done(st)
+end
+
+T["sidebar_fold the tree marks what you set aside, but not virt's own work"] = function()
+  virt.detach()
+  local st = open_ab()
+
+  -- Collapse b/three.txt by hand: its tree row should say so, otherwise ]f
+  -- skips past a file with nothing on screen to explain why.
+  canvas.set_collapsed(st, 3, true)
+  sidebar.refresh(st)
+  local lines = vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)
+  assert(lines[B_THREE_ROW]:match("^%s*▸ three%.txt"),
+    "the hand-collapsed file is marked: " .. lines[B_THREE_ROW])
+  assert(lines[2]:match("^%s+one%.txt"), "the others are not: " .. lines[2])
+
+  -- virt collapsing something is bookkeeping, not a decision the user made,
+  -- so it must not churn markers across the tree on every scroll.
+  canvas.set_collapsed(st, 3, false)
+  virt.apply(st, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
+  assert(next(virt.auto_set()), "sanity: virt auto-collapsed something")
+  sidebar.refresh(st)
+  for _, line in ipairs(vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)) do
+    if not line:match("/$") then -- skip dir rows, whose ▸ means "folded"
+      assert(not line:match("^%s*▸"), "virt's collapses must not be marked: " .. line)
+    end
+  end
+
+  virt.detach()
   done(st)
 end
 
