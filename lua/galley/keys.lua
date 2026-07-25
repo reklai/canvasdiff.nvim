@@ -17,23 +17,23 @@ local K = {}
 --- group  section header in the cheatsheet and the helpfile
 --- desc   `desc=` on vim.keymap.set, and the cheatsheet text
 K.specs = {
-  { ctx = "canvas", action = "next_file",  group = "Navigate", desc = "Next file" },
-  { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file" },
+  { ctx = "canvas", action = "next_file",  group = "Navigate", desc = "Next file (skips what you set aside)" },
+  { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (skips what you set aside)" },
   { ctx = "canvas", action = "next_hunk",  group = "Navigate", desc = "Next hunk" },
   { ctx = "canvas", action = "prev_hunk",  group = "Navigate", desc = "Previous hunk" },
-  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next file (wraps)" },
-  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous file (wraps)" },
+  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next file (wraps, skips what you set aside)" },
+  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous file (wraps, skips what you set aside)" },
 
-  { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (expand if collapsed)" },
+  { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (brings it back if set aside)" },
   { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas at the same spot" },
 
-  { ctx = "canvas", action = "collapse",   group = "View",     desc = "Collapse or expand this file's diff" },
+  { ctx = "canvas", action = "collapse",   group = "View",     desc = "Set this file aside / bring it back (unfolds the directory when that's what hides it)" },
 
   { ctx = "canvas", action = "refresh",    group = "Canvas",   desc = "Re-scan the repo and re-render" },
   { ctx = "canvas", action = "base",       group = "Canvas",   desc = "Toggle diff base: worktree vs HEAD / vs index" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Close the canvas, restore the previous buffer" },
 
-  { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory" },
+  { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (sets its files aside too)" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
 }
 

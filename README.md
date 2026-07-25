@@ -54,9 +54,9 @@ A file-tree sidebar opens automatically alongside the canvas (a fixed,
 non-focused vsplit), listing every changed file in an indented directory
 tree and tracking your scroll position with a highlighted active entry.
 From the sidebar: `<CR>`, `<Tab>`, `za`, or a double-click scrolls the canvas
-to the file under the cursor — or toggles that directory's fold if you're on
-a directory row. `q` closes just the sidebar (the canvas stays open). Set
-`sidebar.enabled = false` to turn it off.
+to the file under the cursor — expanding it first if you had set it aside —
+or folds that directory if you're on a directory row. `q` closes just the
+sidebar (the canvas stays open). Set `sidebar.enabled = false` to turn it off.
 
 A 1-column scrollbar minimap floats over the canvas's right edge, showing
 file boundaries (─), add/del density per stretch of lines (│, colored), and
@@ -67,24 +67,44 @@ works normally on the canvas window underneath it. satellite.nvim / nvim-scrollb
 still function on the canvas window, but they draw at the same right edge as
 the built-in bar — disable one (`scrollbar = { enabled = false }`).
 
-Press `<Tab>` (or `za`) on any line to collapse that line's file down to a
-single placeholder row (`▸ path  (N hunks, +adds −dels)`), and again to
-expand it back. Pressing `<CR>` on a collapsed placeholder expands it
-instead of jumping. For very large changesets (past `virt.max_files` files
-or `virt.max_lines` fully-expanded canvas lines), the same collapse
-mechanism kicks in automatically: sections far from your current viewport
-auto-collapse and ones you scroll near auto-expand, keeping at most
-`virt.max_expanded` sections rendered in full at once. Both thresholds
-describe the changeset itself, so what is collapsed right now never changes
-whether virtualization is on. This auto-virtualization never touches (or
-persists) anything you collapsed yourself.
+### Setting things aside
 
-Use `]f` / `[f` to jump the cursor to the next/previous file's diff start
-(clamping at the ends, honoring a count), and `]h` / `[h` to step between
-hunk headers across every non-collapsed section. A statuscolumn shows each
-visible line's number in the file it belongs to (not the canvas buffer's own
-line number) — blank for headers and collapsed placeholders, `·` for pure
-deletions.
+Collapsing a file and folding a directory are one gesture with two scopes.
+
+Press `<Tab>` (or `za`) on any line to set that line's file aside: it
+collapses to a single placeholder row (`▸ path  (N hunks, +adds −dels)`).
+Press it again to bring the file back. Folding a directory in the sidebar
+does the same thing to every file under it, so the canvas shows their
+placeholders too — folding is never a hidden filter, you always see what
+you put away.
+
+Anything you set aside is stepped over by every file-level motion: `]f`,
+`[f`, `<C-n>` and `<C-p>` all skip it, and counts apply to what's left
+(`3]f` means three files you haven't put away). `]h` / `[h` skip it too,
+since a placeholder has no hunk rows to land on. Its sidebar row is marked
+with the same `▸`, so the tree always agrees with where the motions take
+you. Set `navigate.skip_set_aside = false` if you'd rather they step by
+plain index.
+
+`<Tab>` on a placeholder that a *folded directory* is hiding unfolds that
+directory instead — including a whole chain of nested folds — and says so.
+That is also the only way back when `sidebar.enabled = false`. `<CR>` on any
+placeholder brings the file back rather than jumping into it.
+
+For very large changesets (past `virt.max_files` files or `virt.max_lines`
+fully-expanded canvas lines), the same collapse mechanism kicks in
+automatically: sections far from your current viewport auto-collapse and
+ones you scroll near auto-expand, keeping at most `virt.max_expanded`
+sections rendered in full at once. Both thresholds describe the changeset
+itself, so what is collapsed right now never changes whether virtualization
+is on. This auto-virtualization never touches (or persists) anything you set
+aside yourself — and because it is bookkeeping rather than a decision you
+made, motions still stop at what it collapsed and the sidebar doesn't mark
+it.
+
+A statuscolumn shows each visible line's number in the file it belongs to
+(not the canvas buffer's own line number) — blank for headers and
+placeholders, `·` for pure deletions.
 
 ## Commands
 
@@ -120,8 +140,8 @@ breaking change.
 If the current directory isn't inside a git repository, `:Galley open`
 notifies you and does nothing further (it never errors).
 
-The canvas remembers, per repository, which files you collapsed, which
-sidebar directories you folded, and roughly where you were scrolled/where
+The canvas remembers, per repository, which files you set aside, which
+directories you folded, and roughly where you were scrolled/where
 your cursor was — restored the next time you open the canvas there, even
 across a Neovim restart. It's saved when you close the canvas and again on
 Neovim exit, to a small JSON file under `stdpath("state") ..
@@ -140,7 +160,7 @@ require("galley").setup({
   keymaps = {
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" }, -- open the file under the cursor
-      collapse   = { "<Tab>", "za" },  -- toggle collapse of this file's diff
+      collapse   = { "<Tab>", "za" },  -- set this file aside / bring it back
       next_file  = "]f",     -- cursor to the next file's diff start (clamps)
       prev_file  = "[f",     -- cursor to the previous file's diff start (clamps)
       next_hunk  = "]h",     -- cursor to the next hunk header (clamps)
@@ -161,6 +181,11 @@ require("galley").setup({
   },
   context = 3,          -- unified-diff context lines around each hunk
   base = "HEAD",        -- diff base: "HEAD" or "index" (staged-only review)
+  navigate = {
+    -- Whether ]f [f <C-n> <C-p> step over files you set aside. Never applies
+    -- to auto-virtualized sections -- those are bookkeeping, not your choice.
+    skip_set_aside = true,
+  },
   highlight = {
     enabled = true,     -- syntax + word-diff highlighting of hunk content
     margin = 100,       -- rows beyond the viewport kept highlighted
@@ -188,7 +213,7 @@ require("galley").setup({
     max_expanded = 20,  -- sections kept rendered in full at once, once active
   },
   session = {
-    enabled = true,     -- remember collapse/folds/view per repo across restarts
+    enabled = true,     -- remember set-aside/folds/view per repo across restarts
   },
 })
 ```
@@ -212,18 +237,18 @@ An override **replaces** the list rather than merging into it, so
 
 | Canvas | Default | Action |
 | --- | --- | --- |
-| `jump` | `<CR>`, `<2-LeftMouse>` | Open the file under the cursor as a real buffer |
-| `collapse` | `<Tab>`, `za` | Toggle collapse of this file's diff |
-| `next_file` / `prev_file` | `]f` / `[f` | Cursor to the next/previous file's diff start, clamping |
+| `jump` | `<CR>`, `<2-LeftMouse>` | Open the file under the cursor as a real buffer (brings a set-aside file back instead) |
+| `collapse` | `<Tab>`, `za` | Set this file aside, or bring it back — unfolds the directory when that is what's hiding it |
+| `next_file` / `prev_file` | `]f` / `[f` | Cursor to the next/previous file's diff start, clamping, skipping what you set aside |
 | `next_hunk` / `prev_hunk` | `]h` / `[h` | Cursor to the next/previous hunk header, clamping |
-| `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | Scroll to the next/previous file's diff, wrapping |
+| `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | Scroll to the next/previous file's diff, wrapping, skipping what you set aside |
 | `refresh` | `R` | Re-collect changed files and re-render the canvas |
 | `base` | `B` | Toggle diff base: worktree vs HEAD / vs index |
 | `close` | `q` | Close the canvas, restore the previous buffer |
 
 | Sidebar | Default | Action |
 | --- | --- | --- |
-| `select` | `<CR>`, `<Tab>`, `za`, `<2-LeftMouse>` | Scroll the canvas to the entry, or toggle a directory's fold |
+| `select` | `<CR>`, `<Tab>`, `za`, `<2-LeftMouse>` | Scroll the canvas to the file (bringing it back if set aside), or fold the directory — which sets its files aside on the canvas too |
 | `close` | `q` | Close the sidebar (canvas stays open) |
 
 | File buffer (during a jump) | Default | Action |
@@ -276,15 +301,18 @@ What's here today:
   updated as the canvas reconciles.
 - A scrollbar minimap (file boundaries, add/del density, viewport thumb)
   overlaid on the canvas, plus double-click-to-jump.
-- Manual section collapse (`<Tab>`/`za`) plus tier-1 auto-virtualization that
-  collapses far-from-viewport sections once a changeset crosses configurable
-  file/line thresholds, so huge diffs stay responsive.
+- One "set aside" gesture at two scopes: `<Tab>`/`za` puts a file away,
+  folding a directory puts everything under it away, and both look the same
+  in the canvas, the tree, and every file motion.
+- Tier-1 auto-virtualization that collapses far-from-viewport sections once a
+  changeset crosses configurable file/line thresholds, so huge diffs stay
+  responsive — kept distinct from what you set aside yourself.
 - `]f [f ]h [h` file/hunk motions and a statuscolumn showing each line's
   number in the file it belongs to.
 - A worktree-vs-HEAD / worktree-vs-index diff base toggle (`:Galley
   base`) for reviewing staged-only changes.
-- Session persistence: collapse state, sidebar folds, and semantic
-  scroll/cursor position are remembered per repo across Neovim restarts.
+- Session persistence: what you set aside, which directories are folded, and
+  semantic scroll/cursor position are remembered per repo across restarts.
 
 ## Roadmap
 
