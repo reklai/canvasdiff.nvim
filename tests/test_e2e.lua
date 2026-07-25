@@ -70,6 +70,82 @@ return {
 
     fm.close()
   end,
+  ["e2e: <Tab> and <CR> on a folded-away placeholder reveal the directory"] = function()
+    local root = H.git_fixture({
+      committed = { ["a/one.txt"] = "1\n", ["a/two.txt"] = "2\n", ["b/three.txt"] = "3\n" },
+      worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n", ["b/three.txt"] = "3x\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local canvas_win = vim.api.nvim_get_current_win()
+
+    -- Fold a/ the way a user does: drive the sidebar's own <CR> mapping.
+    local sbuf
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
+        sbuf = b
+      end
+    end
+    assert(sbuf, "sanity: the sidebar is open")
+    local select_cr
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
+      if m.lhs == "<CR>" then select_cr = m.callback end
+    end
+    assert(select_cr, "sanity: the sidebar binds <CR>")
+    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 }) -- the a/ dir row
+    select_cr()
+
+    local function canvas_lines()
+      return vim.api.nvim_win_call(canvas_win, function()
+        return vim.api.nvim_buf_get_lines(0, 0, -1, false)
+      end)
+    end
+    local folded = canvas_lines()
+    assert(folded[1]:match("^▸ a/one%.txt"), "sanity: folded away: " .. folded[1])
+    assert(folded[2]:match("^▸ a/two%.txt"), "sanity: folded away: " .. folded[2])
+
+    -- <Tab> on one of those placeholders reveals the whole directory, and says
+    -- so -- one keypress bringing back siblings needs to announce itself.
+    local notified = {}
+    local real_notify = vim.notify
+    vim.notify = function(msg) notified[#notified + 1] = msg end
+    local ok, err = pcall(function()
+      vim.api.nvim_set_current_win(canvas_win)
+      vim.api.nvim_win_set_cursor(canvas_win, { 1, 0 })
+      vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    end)
+    vim.notify = real_notify
+    assert(ok, err)
+
+    local revealed = canvas_lines()
+    assert(not revealed[1]:match("^▸"),
+      "<Tab> must reveal the folded directory, not sit there dead: " .. revealed[1])
+    assert(not revealed[2]:match("^▸ a/two%.txt"),
+      "revealing clears the whole directory, not just the row under the cursor")
+    assert(#notified > 0 and notified[1]:find("a/", 1, true),
+      "the reveal is announced, naming the directory: " .. vim.inspect(notified))
+
+    -- The tree agrees: a/ is expanded again and its files are back as rows.
+    local slines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
+    H.eq(slines[1], "▾ a/", "the sidebar shows it unfolded")
+
+    -- And <CR> does the same, rather than jumping into a one-row section.
+    -- Re-fold a/: the reveal's sidebar.sync moved the tree cursor onto the
+    -- newly-visible file row, so put it back on the dir row first.
+    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 })
+    select_cr()
+    assert(canvas_lines()[1]:match("^▸ a/one%.txt"), "sanity: folded again")
+    vim.api.nvim_set_current_win(canvas_win)
+    vim.api.nvim_win_set_cursor(canvas_win, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    H.eq(vim.api.nvim_get_current_win(), canvas_win, "<CR> must not jump out of the canvas")
+    assert(not canvas_lines()[1]:match("^▸"), "<CR> reveals it too")
+
+    fm.close()
+  end,
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)

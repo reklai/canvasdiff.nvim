@@ -517,6 +517,61 @@ T["session_ restored collapses reach the scrollbar"] = function()
   end)
 end
 
+-- The stranding case, end to end. Folds restore onto state.folded whether or
+-- not the sidebar is enabled, so a user who saved a fold and then turned the
+-- sidebar off has no tree to unfold from -- <Tab> on the placeholder is the
+-- only way back, and without it those files are permanently invisible.
+T["session_folds reveal works after reopening with the sidebar disabled"] = function()
+  local root = H.git_fixture({
+    committed = { ["a/one.txt"] = "1\n", ["a/two.txt"] = "2\n", ["b/three.txt"] = "3\n" },
+    worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n", ["b/three.txt"] = "3x\n" },
+  })
+  in_repo(root, {}, function(fm)
+    fm.open()
+
+    -- Fold a/ by driving the sidebar's own <CR>.
+    local sbuf
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
+        sbuf = b
+      end
+    end
+    assert(sbuf, "sanity: the sidebar is open")
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
+      if m.lhs == "<CR>" then
+        vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 })
+        m.callback()
+      end
+    end
+    fm.close()
+    H.eq(session.load(root).folds, { "a/" }, "sanity: the fold was persisted")
+
+    -- Reopen with no sidebar, in a window that has no remembered view.
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if canvas.is_canvas_buf(b) then
+        vim.api.nvim_buf_delete(b, { force = true })
+      end
+    end
+    vim.cmd("tabnew")
+    fm.setup({ sidebar = { enabled = false } })
+    fm.open()
+    H.eq(require("galley.sidebar").is_open(), false, "sanity: no sidebar this time")
+
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    assert(lines[1]:match("^▸ a/one%.txt"),
+      "sanity: the fold restored with no tree to undo it: " .. lines[1])
+
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    local after = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    assert(not after[1]:match("^▸"),
+      "<Tab> is the only escape when the sidebar is off: " .. after[1])
+
+    fm.close()
+  end)
+end
+
 T["session_ init round trip"] = function()
   local orig_cwd = vim.fn.getcwd()
   local root = H.git_fixture({

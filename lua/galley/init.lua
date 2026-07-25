@@ -79,6 +79,33 @@ local function section_under_cursor(st)
   return canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1)
 end
 
+--- Clear every folded directory hiding `path`. Returns the directories that
+--- were cleared, or nil when nothing was hiding it.
+---
+--- The whole chain has to go: with both "lua/" and "lua/mod/" folded, dropping
+--- either alone leaves the file hidden and the keypress looks broken. That
+--- brings back siblings as well, so it announces itself -- one keypress
+--- reopening a directory should not be silent.
+---
+--- This is also the only way out of a fold when the sidebar is disabled: folds
+--- restore onto state.folded regardless of the sidebar, so without it those
+--- files would be permanently invisible.
+local function reveal(st, path)
+  local dirs = fold.folds_hiding(st.folded, path)
+  if #dirs == 0 then
+    return nil
+  end
+  for _, dir in ipairs(dirs) do
+    st.folded[dir] = nil
+  end
+  -- Every section, not just this one -- unfolding an ancestor un-hides the
+  -- whole subtree, not the row under the cursor.
+  canvas.resync_visibility(st)
+  sync_after_collapse(st)
+  util.notify("unfolded " .. table.concat(dirs, ", "))
+  return dirs
+end
+
 --- Jump into the section/entry under the cursor, expanding it instead when
 --- it's a collapsed placeholder. Shared by the jump keymap and the
 --- double-click mapping so both intercept a jump into a placeholder the
@@ -87,32 +114,29 @@ local function jump_or_expand(st, cfg)
   local i = section_under_cursor(st)
   if i then
     local path = st.sections[i].path
-    if st.collapsed[path] then
-      user_set_collapsed(st, i, false)
+    -- Reveal takes priority: while a folded ancestor hides the section, its
+    -- own collapse flag is moot, and jumping in would leave jump.back
+    -- resolving a view against a section that still renders as one row.
+    if reveal(st, path) then
       return
     end
-    if fold.hides(st.folded, path) then
-      -- Folded away: expanding it would change nothing visible, and jumping
-      -- in would leave jump.back resolving a view against a section that
-      -- still renders as one row.
+    if st.collapsed[path] then
+      user_set_collapsed(st, i, false)
       return
     end
   end
   jump.enter(st, { back_keys = keys.list(cfg.keymaps.file.back) })
 end
 
---- Toggle whether the section under the cursor is set aside.
+--- Toggle whether the section under the cursor is set aside: reveal it when a
+--- folded directory is what's hiding it, otherwise flip its own collapse flag.
 local function toggle_collapse_under_cursor(st)
   local i = section_under_cursor(st)
   if not i then
     return
   end
   local path = st.sections[i].path
-  if fold.hides(st.folded, path) then
-    -- A folded ancestor is what's hiding it, so its own collapse flag is
-    -- irrelevant. Writing one here would change nothing visible and would
-    -- still be persisted as user intent, surfacing weeks later as a
-    -- mysteriously-collapsed file once the directory is unfolded.
+  if reveal(st, path) then
     return
   end
   user_set_collapsed(st, i, not st.collapsed[path])
