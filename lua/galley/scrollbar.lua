@@ -1,15 +1,18 @@
+local fold = require("galley.fold")
+
 local S = {}
 
 --- One kind per canvas line, sections in render order. hunk_hdr counts as
 --- "ctx" (structural, uncolored); file_hdr becomes "hdr" (boundary rows). A
---- collapsed section (`collapsed[section.path]` truthy) renders as its
---- single placeholder row -- exactly one "hdr" entry. `collapsed` is
---- optional so pre-Tier-2 callers keep working unchanged.
-function S.line_kinds(sections, collapsed)
-  collapsed = collapsed or {}
+--- set-aside section (`hidden[section.path]` truthy) renders as its single
+--- placeholder row -- exactly one "hdr" entry. Callers build the set with
+--- fold.hidden_set, which keeps this function pure over plain tables;
+--- `hidden` is optional so pre-Tier-2 callers keep working unchanged.
+function S.line_kinds(sections, hidden)
+  hidden = hidden or {}
   local kinds = {}
   for _, section in ipairs(sections) do
-    if collapsed[section.path] then
+    if hidden[section.path] then
       kinds[#kinds + 1] = "hdr"
     else
       for _, e in ipairs(section.entries) do
@@ -156,7 +159,8 @@ function S.update(state)
     return { top0 = vim.fn.line("w0") - 1, bot0 = vim.fn.line("w$") - 1 }
   end)
   local height = vim.api.nvim_win_get_height(state.win)
-  local cells = S.column(S.line_kinds(state.sections, state.collapsed), height, info.top0, info.bot0)
+  local hidden = fold.hidden_set(state.sections, state.collapsed, state.folded)
+  local cells = S.column(S.line_kinds(state.sections, hidden), height, info.top0, info.bot0)
 
   local lines = {}
   for r = 1, #cells do

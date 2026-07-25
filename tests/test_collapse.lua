@@ -39,6 +39,31 @@ local function reset_view(st)
   end)
 end
 
+-- Guard. canvas.resplice decides "the buffer already shows the right form" by
+-- comparing a section's row span against the line count it should render as.
+-- That comparison is only exact because an expanded section can never be one
+-- row: build_section returns nil rather than a hunkless section, so entries are
+-- always a file_hdr plus at least one hunk header. If that ever changes,
+-- resplice starts silently skipping real work.
+T["collapse_ an expanded section is never one row"] = function()
+  local paths = { "a/one.txt", "b/two.txt", "c/three.txt" }
+  for _, path in ipairs(paths) do
+    local sec = big_section(path, "x")
+    assert(sec, path .. " built no section")
+    assert(#render.section_lines(sec) >= 2,
+      path .. " rendered as " .. #render.section_lines(sec)
+        .. " row(s) -- a placeholder is 1 row, so this must be >= 2")
+  end
+  -- A one-line file whose only change is that line: the smallest real section.
+  local tiny = model.build_section("t.txt", "a\n", "b\n", "M")
+  assert(tiny, "no section for a single changed line")
+  assert(#render.section_lines(tiny) >= 2,
+    "even the smallest section is more than a placeholder")
+  -- And a hunkless pair genuinely yields no section at all.
+  H.eq(model.build_section("same.txt", "a\n", "a\n", "M"), nil,
+    "identical content builds no section, so there is no 1-row expanded form")
+end
+
 T["collapse_ renders one placeholder row and restores on expand"] = function()
   local st = open_three()
   reset_view(st)

@@ -1,4 +1,5 @@
 local canvas = require("galley.canvas")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -24,8 +25,12 @@ function M.goto_file(state, dir, count)
 end
 
 --- Jump `count` hunk headers forward/backward from the cursor row, across
---- every NON-collapsed section, clamping at the list ends. No-op when there
---- are no hunk headers at all.
+--- every section that isn't set aside, clamping at the list ends. No-op when
+--- there are no hunk headers at all.
+---
+--- The set-aside check is not an optimization: a set-aside section renders as
+--- one row but still carries all its entries, so `start0 + idx - 1` for its
+--- hunk headers points into the FOLLOWING files' bodies.
 function M.goto_hunk(state, dir, count)
   count = count or vim.v.count1
   if not canvas_showing(state) then
@@ -34,7 +39,7 @@ function M.goto_hunk(state, dir, count)
 
   local rows = {}
   for i, section in ipairs(state.sections) do
-    if not (state.collapsed and state.collapsed[section.path]) then
+    if not fold.hidden(state, section.path) then
       local start0 = (canvas.section_rows(state, i))
       for idx, entry in ipairs(section.entries) do
         if entry.kind == "hunk_hdr" then

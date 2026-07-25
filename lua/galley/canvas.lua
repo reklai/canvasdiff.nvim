@@ -1,5 +1,6 @@
 local render = require("galley.render")
 local viewport = require("galley.viewport")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -108,10 +109,11 @@ local function apply_section_hl(buf, start_row, section, collapsed)
   return ids
 end
 
---- The lines a section renders as right now: its single placeholder line
---- when `state.collapsed[sec.path]` is truthy, else its full body.
+--- The lines a section renders as right now: its single placeholder line when
+--- it is set aside -- collapsed outright, or hidden by a folded ancestor
+--- directory -- else its full body.
 local function section_lines_for(state, sec)
-  if state.collapsed and state.collapsed[sec.path] then
+  if fold.hidden(state, sec.path) then
     return { render.placeholder(sec) }
   end
   return render.section_lines(sec)
@@ -170,7 +172,7 @@ function M.render_all(state, sections)
   local anchor_ids, hl_ids = {}, {}
   for idx, sec in ipairs(sections) do
     anchor_ids[idx] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, starts[idx], 0, ANCHOR_OPTS)
-    hl_ids[idx] = apply_section_hl(buf, starts[idx], sec, state.collapsed and state.collapsed[sec.path])
+    hl_ids[idx] = apply_section_hl(buf, starts[idx], sec, fold.hidden(state, sec.path))
   end
   local eof_row = #sections > 0 and #all_lines or 0
   anchor_ids[#sections + 1] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, eof_row, 0, ANCHOR_OPTS)
@@ -194,8 +196,11 @@ function M.open(sections, opts)
   local state = { buf = buf, win = win, sections = {}, anchor_ids = {}, hl_ids = {} }
   -- Never reset on a later render_all -- only initialized here, once, so a
   -- refresh() on an already-open state (which calls render_all directly)
-  -- keeps whatever the user has collapsed.
+  -- keeps whatever the user has collapsed or folded away. `folded` is a set of
+  -- directory paths with a trailing slash, owned by the sidebar but living
+  -- here because rendering, navigation and session all derive from it.
   state.collapsed = state.collapsed or {}
+  state.folded = state.folded or {}
   M.render_all(state, sections)
   return state
 end
@@ -250,7 +255,7 @@ end
 --- reading). `new_section == nil` deletes the section.
 function M.replace_section(state, i, new_section)
   local replaced_path = state.sections[i] and state.sections[i].path
-  local was_collapsed = replaced_path and state.collapsed and state.collapsed[replaced_path]
+  local was_collapsed = replaced_path ~= nil and fold.hidden(state, replaced_path)
   local start_row, end_row_exclusive = M.section_rows(state, i)
   local new_lines = new_section and section_lines_for(state, new_section) or {}
 
@@ -320,7 +325,7 @@ function M.replace_section(state, i, new_section)
 
   if new_section ~= nil then
     state.hl_ids[i] = apply_section_hl(state.buf, start_row, new_section,
-      state.collapsed and state.collapsed[new_section.path])
+      fold.hidden(state, new_section.path))
     state.sections[i] = new_section
   else
     pcall(vim.api.nvim_buf_del_extmark, state.buf, ANCHOR_NS, state.anchor_ids[i])
@@ -432,7 +437,7 @@ function M.insert_section(state, i, section)
     vim.api.nvim_buf_set_extmark(state.buf, ANCHOR_NS, row, 0, ANCHOR_OPTS))
   table.insert(state.sections, i, section)
   table.insert(state.hl_ids, i,
-    apply_section_hl(state.buf, row, section, state.collapsed and state.collapsed[section.path]))
+    apply_section_hl(state.buf, row, section, fold.hidden(state, section.path)))
   set_modifiable(state.buf, false)
 
   -- View correction, same synchronous tick.
@@ -452,18 +457,34 @@ function M.insert_section(state, i, section)
   -- "below"/"none": the edit cannot move rows the user is looking at.
 end
 
---- Collapse or expand section i to/from its single placeholder line,
---- splicing in place with the same same-tick view correction as
---- replace_section (a collapsed section is just a 1-row section for
---- viewport-classification purposes). No-op when the section is missing or
---- already at the requested state.
-function M.set_collapsed(state, i, collapsed)
+--- Re-splice section i so the buffer shows what it should render as right now,
+--- with the same same-tick view correction as replace_section (a set-aside
+--- section is just a 1-row section for viewport-classification purposes).
+---
+--- The target form is DERIVED here rather than passed in: a caller handing
+--- over a form that contradicts fold.hidden would replace a placeholder with
+--- an identical placeholder, destroy and rebuild its highlight marks, fire
+--- on_section_replaced, and -- classified as "intersect" -- scroll the user to
+--- start_row + 1 for no reason.
+---
+--- No-op when the section is missing, when its anchors don't resolve against
+--- this buffer (same staleness case hl.apply_now guards), or when the buffer
+--- already shows the right form.
+local function resplice(state, i)
   local sec = state.sections[i]
   if not sec then return end
-  collapsed = collapsed and true or false
-  if (state.collapsed[sec.path] or false) == collapsed then return end
 
   local start_row, end_row_exclusive = M.section_rows(state, i)
+  if not (start_row and end_row_exclusive) then return end
+
+  local collapsed = fold.hidden(state, sec.path)
+  local new_lines = section_lines_for(state, sec)
+  -- Already in the desired form. Comparing row spans is exact: build_section
+  -- always emits a file_hdr plus at least one hunk_hdr/binary entry, so an
+  -- expanded section is never one row and can never be mistaken for a
+  -- placeholder.
+  if end_row_exclusive - start_row == #new_lines then return end
+
   local win_ok = win_showing_canvas(state)
   local branch, top0, view
   if win_ok then
@@ -477,9 +498,6 @@ function M.set_collapsed(state, i, collapsed)
   else
     branch = "none"
   end
-
-  state.collapsed[sec.path] = collapsed or nil
-  local new_lines = section_lines_for(state, sec)
 
   set_modifiable(state.buf, true)
   vim.api.nvim_buf_set_lines(state.buf, start_row, end_row_exclusive, false, new_lines)
@@ -511,6 +529,46 @@ function M.set_collapsed(state, i, collapsed)
     end
   end
   -- "below"/"none": nothing to do.
+end
+
+--- Collapse or expand section i outright. The guard is on `state.collapsed`
+--- rather than on the rendered form, because this records the path's OWN
+--- collapse state independently of whether a folded ancestor also happens to
+--- be hiding it -- resplice then no-ops when nothing visible changes.
+function M.set_collapsed(state, i, collapsed)
+  local sec = state.sections[i]
+  if not sec then return end
+  collapsed = collapsed and true or false
+  if (state.collapsed[sec.path] or false) == collapsed then return end
+
+  state.collapsed[sec.path] = collapsed or nil
+  resplice(state, i)
+end
+
+--- Re-splice sections so the buffer matches the current visibility predicate,
+--- for when `state.folded` changed rather than `state.collapsed`. `indices`
+--- defaults to every section, which is what revealing a directory needs (it
+--- un-hides siblings, not just one file).
+---
+--- Iterate ASCENDING. Every correction leaves the viewport top sitting exactly
+--- at a section boundary, so once the first intersecting section collapses,
+--- each later one satisfies `top0 < start_row` and its correction is a no-op.
+--- It also makes the behaviour fall out: fold a directory while reading one of
+--- its files and you land on that file's placeholder, with the rest collapsing
+--- below you. Same N-splices-with-correction shape virt.apply already runs.
+---
+--- The caller owns the single follow-up sync of the other UI pieces
+--- (highlighting / sidebar / scrollbar), mirroring session.restore.
+function M.resync_visibility(state, indices)
+  if indices then
+    for _, i in ipairs(indices) do
+      resplice(state, i)
+    end
+    return
+  end
+  for i = 1, #state.sections do
+    resplice(state, i)
+  end
 end
 
 return M

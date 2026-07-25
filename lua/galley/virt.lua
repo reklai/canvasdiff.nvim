@@ -1,4 +1,5 @@
 local canvas = require("galley.canvas")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -156,11 +157,17 @@ function M.apply(state, opts)
   end
 
   -- Collapse pass: while too many sections are expanded, evict the
-  -- least-recently-visible one that's fully outside the window.
+  -- least-recently-visible one that's fully outside the window. Both this
+  -- count and the candidate filter below use the DERIVED predicate, so a
+  -- section a folded directory already reduced to one row is invisible to this
+  -- module. Counting one as expanded would make it an eviction candidate:
+  -- set_collapsed would claim it in `auto` while splicing nothing, the loop
+  -- would decrement having freed zero rows, and the user would inherit a
+  -- collapse on unfold.
   local function count_expanded()
     local n = 0
     for _, sec in ipairs(state.sections) do
-      if not state.collapsed[sec.path] then
+      if not fold.hidden(state, sec.path) then
         n = n + 1
       end
     end
@@ -176,7 +183,7 @@ function M.apply(state, opts)
     -- auto-expand".
     local best_i, best_tick, best_dist
     for i, sec in ipairs(state.sections) do
-      if not in_window[i] and not state.collapsed[sec.path] then
+      if not in_window[i] and not fold.hidden(state, sec.path) then
         local t = tick_of[sec.path] or 0
         local d = distance[i] or 0
         if not best_tick or t < best_tick or (t == best_tick and d > best_dist) then

@@ -2,6 +2,7 @@ local M = {}
 
 local canvas = require("galley.canvas")
 local worddiff = require("galley.worddiff")
+local fold = require("galley.fold")
 
 local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
 
@@ -227,13 +228,14 @@ function M.apply_now(state)
     -- other, unrelated state table has since re-rendered without going
     -- through this state's bookkeeping). Nothing safe to do; skip it.
     if srow and erow then
-      -- A collapsed section is just its placeholder line -- there is no
+      -- A set-aside section is just its placeholder line -- there is no
       -- content to highlight, so treat it like "not in window" and never
-      -- (re-)apply. Eviction of marks applied before it was collapsed
-      -- happens synchronously via the on_section_replaced hook at collapse
-      -- time (canvas.set_collapsed), not here.
-      local collapsed = state.collapsed and state.collapsed[sec.path]
-      local in_window = not collapsed and srow <= hi and erow > lo
+      -- (re-)apply. Marks applied before it was set aside are evicted
+      -- synchronously via the on_section_replaced hook at splice time
+      -- (canvas.resplice), not here. This MUST use the derived predicate: the
+      -- section still carries all its entries, so believing it expanded would
+      -- place marks at srow + m.row inside the following files.
+      local in_window = not fold.hidden(state, sec.path) and srow <= hi and erow > lo
       local has = ts.ids_by_path[sec.path] ~= nil
       if in_window and not has then
         apply_section(state, i)

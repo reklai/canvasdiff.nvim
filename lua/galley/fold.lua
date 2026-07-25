@@ -1,0 +1,113 @@
+--- Which sections are "set aside" right now, and what that means.
+---
+--- Two gestures hide a file, and they are one concept to the user:
+---   * collapsing it outright  -- state.collapsed[filepath]
+---   * folding a parent dir    -- state.folded["lua/mod/"]
+---
+--- Visibility is DERIVED from both rather than stored once. Folding never
+--- writes into state.collapsed, so unfolding restores the exact per-file
+--- collapse state that was there before the fold -- no ownership bookkeeping,
+--- and a file the user collapsed by hand before folding its parent survives
+--- the round trip.
+---
+--- Pure, and requires nothing, so every module can read the predicate without
+--- a dependency cycle and it unit-tests standalone.
+local F = {}
+
+--- True when a folded ancestor directory of `path` is in `folded`.
+---
+--- Walks `path`'s own cumulative prefixes instead of iterating `folded`, so
+--- the cost is O(depth) hash lookups no matter how many directories are
+--- folded -- this runs per section per scroll (scrollbar.update) and per
+--- navigation keypress.
+---
+--- Fold keys carry a trailing slash ("lua/", "lua/mod/" -- the cumulative form
+--- sidebar.build_entries creates). That slash is load-bearing: it is what
+--- stops a folded "lua/mod/" from also hiding "lua/modules/x.lua".
+function F.hides(folded, path)
+  if not folded or not path then
+    return false
+  end
+  local from = 1
+  while true do
+    local slash = string.find(path, "/", from, true)
+    if not slash then
+      return false
+    end
+    if folded[string.sub(path, 1, slash)] then
+      return true
+    end
+    from = slash + 1
+  end
+end
+
+--- Every folded ancestor of `path`, outermost first; empty when nothing hides
+--- it. Revealing a path means clearing the WHOLE chain -- with both "lua/" and
+--- "lua/mod/" folded, dropping either one alone leaves the file hidden and
+--- nothing visibly happens.
+function F.folds_hiding(folded, path)
+  local dirs = {}
+  if not folded or not path then
+    return dirs
+  end
+  local from = 1
+  while true do
+    local slash = string.find(path, "/", from, true)
+    if not slash then
+      return dirs
+    end
+    local dir = string.sub(path, 1, slash)
+    if folded[dir] then
+      dirs[#dirs + 1] = dir
+    end
+    from = slash + 1
+  end
+end
+
+--- True when `path`'s section renders as its single placeholder row right now.
+---
+--- This is the RENDERING predicate. Every reader that maps section.entries
+--- onto buffer rows has to agree with it: a section rendered as one row still
+--- has all its entries, so a reader that thinks it is expanded computes rows
+--- that land inside the FOLLOWING files (highlight marks, hunk jump targets,
+--- viewport anchors). Navigation wants F.set_aside instead -- see there.
+function F.hidden(state, path)
+  if not state then
+    return false
+  end
+  if state.collapsed and state.collapsed[path] then
+    return true
+  end
+  return F.hides(state.folded, path)
+end
+
+--- `{[path] = true}` for every hidden section. Takes plain tables rather than
+--- `state` so callers that are pure over a set stay pure (scrollbar.line_kinds
+--- is the one that matters).
+function F.hidden_set(sections, collapsed, folded)
+  local set = {}
+  for _, sec in ipairs(sections or {}) do
+    if (collapsed and collapsed[sec.path]) or F.hides(folded, sec.path) then
+      set[sec.path] = true
+    end
+  end
+  return set
+end
+
+--- Indices of the sections under directory `dir` (a fold key, trailing
+--- slash). Ascending, and contiguous in practice because sections are
+--- path-sorted (model.build) and a fold key is a path prefix.
+function F.indices_under(sections, dir)
+  local out = {}
+  if not sections or not dir or dir == "" then
+    return out
+  end
+  for i, sec in ipairs(sections) do
+    if string.sub(sec.path, 1, #dir) == dir then
+      out[#out + 1] = i
+    end
+  end
+  return out
+end
+
+return F

@@ -2,6 +2,7 @@ local canvas = require("galley.canvas")
 local viewport = require("galley.viewport")
 local sidebar = require("galley.sidebar")
 local virt = require("galley.virt")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -55,7 +56,7 @@ function M.save(state)
         return vim.fn.line("w0") - 1
       end)
       local i, top_offset = canvas.locate(state, top0)
-      if i and not (state.collapsed and state.collapsed[state.sections[i].path]) then
+      if i and not fold.hidden(state, state.sections[i].path) then
         local sec = state.sections[i]
         local view = viewport.capture_from_entries(sec.entries, top_offset)
         view.path = sec.path
@@ -134,13 +135,13 @@ function M.restore(state, data)
     if not idx then
       return
     end
-    -- A collapsed section is just its placeholder row -- its entries don't
+    -- A set-aside section is just its placeholder row -- its entries don't
     -- map to buffer rows, so there is nothing to resolve. save() never
-    -- records a view onto a collapsed section, so this only fires on a
-    -- stale or hand-written payload whose collapse set covers its own view
-    -- path. (init.M.open runs this restore BEFORE attaching the
-    -- auto-virtualizer, precisely so virt can't collapse the target first.)
-    if state.collapsed and state.collapsed[v.path] then
+    -- records a view onto one, so this only fires on a stale or hand-written
+    -- payload whose collapse/fold set covers its own view path.
+    -- (init.M.open runs this restore BEFORE attaching the auto-virtualizer,
+    -- precisely so virt can't collapse the target first.)
+    if fold.hidden(state, v.path) then
       return
     end
 
@@ -156,7 +157,7 @@ function M.restore(state, data)
     local c = data.cursor
     if c and c.path then
       local cidx = index_of_path(state, c.path)
-      if cidx and not (state.collapsed and state.collapsed[c.path]) then
+      if cidx and not fold.hidden(state, c.path) then
         local csec = state.sections[cidx]
         local cresolved = viewport.resolve(c, csec.entries)
         if cresolved then

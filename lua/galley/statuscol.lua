@@ -1,4 +1,5 @@
 local canvas = require("galley.canvas")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -43,7 +44,7 @@ function M.text_for(lnum)
     if not i then
       return "     "
     end
-    if live.collapsed and live.collapsed[live.sections[i].path] then
+    if fold.hidden(live, live.sections[i].path) then
       return "     "
     end
     local entry = live.sections[i].entries[offset]
