@@ -86,6 +86,107 @@ T["fold_hidden_set covers both axes over plain tables"] = function()
   H.eq(fold.hidden_set(nil, nil, nil), {}, "nil sections")
 end
 
+-- --- F.set_aside / F.aside_set -----------------------------------------
+
+T["fold_set_aside excludes what the virtualizer collapsed on its own"] = function()
+  local st = { collapsed = { ["a/x.lua"] = true, ["b/y.lua"] = true }, folded = {} }
+  local auto = { ["b/y.lua"] = true }
+  H.eq(fold.set_aside(st, "a/x.lua", auto), true, "the user collapsed this one")
+  H.eq(fold.set_aside(st, "b/y.lua", auto), false,
+    "virt collapsed this one -- bookkeeping, not intent, so navigation may land on it")
+  H.eq(fold.set_aside(st, "c/z.lua", auto), false, "not collapsed at all")
+end
+
+T["fold_set_aside counts a folded ancestor even for an auto path"] = function()
+  local st = { collapsed = { ["a/x.lua"] = true }, folded = { ["a/"] = true } }
+  H.eq(fold.set_aside(st, "a/x.lua", { ["a/x.lua"] = true }), true,
+    "the fold is the user's decision regardless of who collapsed the file")
+  H.eq(fold.set_aside(st, "a/z.lua", { ["a/z.lua"] = true }), true, "same for a sibling")
+end
+
+T["fold_set_aside is nil-safe on auto and state"] = function()
+  H.eq(fold.set_aside(nil, "a/x.lua", nil), false, "nil state")
+  H.eq(fold.set_aside({ collapsed = { ["a/x.lua"] = true } }, "a/x.lua", nil), true,
+    "no auto set means nothing is auto")
+end
+
+T["fold_aside_set matches set_aside over a section list"] = function()
+  local secs = sections("a/one.txt", "b/two.txt", "c/three.txt")
+  local collapsed = { ["b/two.txt"] = true, ["c/three.txt"] = true }
+  local auto = { ["c/three.txt"] = true }
+  H.eq(fold.aside_set(secs, collapsed, { ["a/"] = true }, auto), {
+    ["a/one.txt"] = true,
+    ["b/two.txt"] = true,
+  }, "folded and hand-collapsed, but not the auto-collapsed one")
+  H.eq(fold.aside_set(secs, nil, nil, nil), {}, "nil-safe")
+end
+
+-- --- F.navigable -------------------------------------------------------
+
+T["fold_navigable lists only the sections a motion may land on"] = function()
+  local secs = sections("a/one.txt", "a/two.txt", "b/three.txt", "c/four.txt")
+  H.eq(fold.navigable(secs, { collapsed = {}, folded = {} }, {}), { 1, 2, 3, 4 },
+    "nothing set aside")
+  H.eq(fold.navigable(secs, { collapsed = {}, folded = { ["a/"] = true } }, {}), { 3, 4 },
+    "a folded dir removes its whole subtree")
+  H.eq(fold.navigable(secs, { collapsed = { ["c/four.txt"] = true }, folded = {} },
+    { ["c/four.txt"] = true }), { 1, 2, 3, 4 }, "an auto-collapsed section stays navigable")
+  H.eq(fold.navigable(secs, { collapsed = {}, folded = { ["a/"] = true, ["b/"] = true,
+    ["c/"] = true } }, {}), {}, "everything set aside")
+end
+
+-- --- F.step_clamped ----------------------------------------------------
+
+T["fold_step_clamped walks the navigable list and clamps"] = function()
+  local nav = { 1, 3, 5 }
+  H.eq(fold.step_clamped(nav, 1, 1, 1), 3, "forward one")
+  H.eq(fold.step_clamped(nav, 3, -1, 1), 1, "back one")
+  H.eq(fold.step_clamped(nav, 1, 1, 2), 5, "count counts navigable entries")
+  H.eq(fold.step_clamped(nav, 1, 1, 99), 5, "clamps at the far end")
+  H.eq(fold.step_clamped(nav, 5, -1, 99), 1, "clamps at the near end")
+end
+
+-- ]f on the last section has always snapped the cursor to that section's own
+-- start rather than doing nothing. Returning `i` itself is what preserves it.
+T["fold_step_clamped returns its own index at the far end"] = function()
+  H.eq(fold.step_clamped({ 1, 3, 5 }, 5, 1, 1), 5, "forward from the last one")
+  H.eq(fold.step_clamped({ 1, 3, 5 }, 1, -1, 1), 1, "back from the first one")
+end
+
+T["fold_step_clamped from a set-aside section never reverses"] = function()
+  local nav = { 1, 5 }
+  H.eq(fold.step_clamped(nav, 3, 1, 1), 5, "forward reaches the nearest navigable ahead")
+  H.eq(fold.step_clamped(nav, 3, -1, 1), 1, "back reaches the nearest navigable behind")
+  H.eq(fold.step_clamped(nav, 3, 1, 2), 5, "the first step consumed one of the count")
+  H.eq(fold.step_clamped({ 5 }, 3, -1, 1), nil, "nothing behind: do not move")
+  H.eq(fold.step_clamped({ 1 }, 3, 1, 1), nil, "nothing ahead: do not move")
+end
+
+T["fold_step_clamped returns nil when nothing is navigable"] = function()
+  H.eq(fold.step_clamped({}, 1, 1, 1), nil, "forward")
+  H.eq(fold.step_clamped({}, 1, -1, 1), nil, "backward")
+end
+
+-- --- F.step_wrapped ---------------------------------------------------
+
+T["fold_step_wrapped wraps in both directions"] = function()
+  local nav = { 1, 3, 5 }
+  H.eq(fold.step_wrapped(nav, 5, 1, 1), 1, "past the end wraps to the front")
+  H.eq(fold.step_wrapped(nav, 1, -1, 1), 5, "before the front wraps to the end")
+  H.eq(fold.step_wrapped(nav, 1, 1, 2), 5, "count counts navigable entries")
+  H.eq(fold.step_wrapped(nav, 1, 1, 4), 3, "and keeps wrapping past a full lap")
+  H.eq(fold.step_wrapped({ 3 }, 3, 1, 1), 3, "a single navigable section cycles to itself")
+end
+
+T["fold_step_wrapped from a set-aside section wraps its first step"] = function()
+  local nav = { 1, 5 }
+  H.eq(fold.step_wrapped(nav, 3, 1, 1), 5, "forward to the nearest ahead")
+  H.eq(fold.step_wrapped(nav, 3, -1, 1), 1, "back to the nearest behind")
+  H.eq(fold.step_wrapped({ 1 }, 3, 1, 1), 1, "nothing ahead wraps to the front")
+  H.eq(fold.step_wrapped({ 5 }, 3, -1, 1), 5, "nothing behind wraps to the end")
+  H.eq(fold.step_wrapped({}, 3, 1, 1), nil, "nothing navigable at all")
+end
+
 -- --- F.indices_under ---------------------------------------------------
 
 T["fold_indices_under is ascending and contiguous"] = function()

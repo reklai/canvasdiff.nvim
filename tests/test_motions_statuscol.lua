@@ -3,6 +3,9 @@ local canvas = require("galley.canvas")
 local model = require("galley.model")
 local motions = require("galley.motions")
 local statuscol = require("galley.statuscol")
+local virt = require("galley.virt")
+local config = require("galley.config")
+local sidebar = require("galley.sidebar")
 
 local T = {}
 
@@ -70,6 +73,129 @@ T["motions_ ]f [f move between section starts and clamp"] = function()
   H.eq(vim.api.nvim_win_get_cursor(st.win), { a_start + 1, 0 }, "clamped at first section")
 end
 
+-- --- navigation steps over what you set aside -----------------------------
+
+local function cursor_section(st)
+  return (canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1))
+end
+
+local function put_cursor_in(st, i, offset)
+  local s = (canvas.section_rows(st, i))
+  vim.api.nvim_win_set_cursor(st.win, { s + 1 + (offset or 0), 0 })
+end
+
+local function set_folds(st, dirs)
+  st.folded = dirs
+  canvas.resync_visibility(st)
+end
+
+T["motions_ ]f [f step over a folded-away section"] = function()
+  virt.detach()
+  local st = canvas.open(three_sections(), {})
+  set_folds(st, { ["b/"] = true })
+
+  put_cursor_in(st, 1, 3)
+  motions.goto_file(st, 1, 1)
+  H.eq(cursor_section(st), 3, "]f skipped the folded-away middle section")
+
+  motions.goto_file(st, -1, 1)
+  H.eq(cursor_section(st), 1, "[f skipped it going back too")
+  set_folds(st, {})
+end
+
+-- Guard: passes before and after. It exists to fail if someone swaps the
+-- navigation predicate for the rendering one. The virtualizer collapsing a
+-- far-away section is bookkeeping, not the user putting it away, so navigation
+-- must still be able to land there.
+T["motions_ ]f stops at an auto-collapsed section"] = function()
+  virt.detach()
+  local st = canvas.open(three_sections(), {})
+  vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
+  virt.apply(st, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
+  local auto = virt.auto_set()
+  assert(auto["b/two.txt"], "sanity: virt auto-collapsed section 2")
+
+  put_cursor_in(st, 1, 0)
+  motions.goto_file(st, 1, 1)
+  H.eq(cursor_section(st), 2, "]f lands on the auto-collapsed section, not past it")
+  virt.detach()
+end
+
+T["motions_ ]f [f from a set-aside placeholder move only in the direction of travel"] = function()
+  virt.detach()
+  -- TWO sections under a/, so the nearest navigable section forwards is 3 --
+  -- not merely the next index, which would pass without any skipping.
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("a/two.txt", "b"),
+    big_section("b/three.txt", "c"),
+  }, {})
+  set_folds(st, { ["a/"] = true })
+
+  put_cursor_in(st, 1, 0) -- on a/one.txt's placeholder row
+  motions.goto_file(st, -1, 1)
+  H.eq(cursor_section(st), 1, "nothing navigable backwards: never reverse, never move")
+
+  motions.goto_file(st, 1, 1)
+  H.eq(cursor_section(st), 3, "forwards it reaches the nearest navigable section")
+  set_folds(st, {})
+end
+
+T["motions_ ]f [f do not move when nothing is navigable"] = function()
+  virt.detach()
+  local st = canvas.open(three_sections(), {})
+  set_folds(st, { ["a/"] = true, ["b/"] = true, ["c/"] = true })
+
+  put_cursor_in(st, 2, 0)
+  local before = vim.api.nvim_win_get_cursor(st.win)
+  motions.goto_file(st, 1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win), before, "]f is a no-op with everything set aside")
+  motions.goto_file(st, -1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win), before, "[f too")
+  set_folds(st, {})
+end
+
+T["motions_ ]f counts only navigable sections"] = function()
+  virt.detach()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("b/two.txt", "b"),
+    big_section("c/three.txt", "c"),
+    big_section("d/four.txt", "d"),
+  }, {})
+  set_folds(st, { ["b/"] = true })
+
+  put_cursor_in(st, 1, 0)
+  motions.goto_file(st, 1, 2)
+  H.eq(cursor_section(st), 4, "2]f counted c/ and d/, not the folded-away b/")
+  set_folds(st, {})
+end
+
+T["motions_ navigate.skip_set_aside = false restores plain index stepping"] = function()
+  virt.detach()
+  local st = canvas.open(three_sections(), {})
+  set_folds(st, { ["b/"] = true })
+
+  config.setup({ navigate = { skip_set_aside = false } })
+  local ok, err = pcall(function()
+    put_cursor_in(st, 1, 3)
+    motions.goto_file(st, 1, 1)
+    H.eq(cursor_section(st), 2, "with the gate off, ]f lands on the placeholder")
+
+    -- cycle reads the TOPLINE, not the cursor, so park it deliberately.
+    local s1 = (canvas.section_rows(st, 1))
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = s1 + 1, lnum = s1 + 1 })
+    end)
+    sidebar.cycle(st, 1)
+    local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+    H.eq((canvas.locate(st, top0)), 2, "and cycle steps by index too")
+  end)
+  config.setup({})
+  set_folds(st, {})
+  assert(ok, err)
+end
+
 T["motions_ ]h steps hunk headers across sections and skips collapsed"] = function()
   local st = canvas.open(three_sections(), {})
   canvas.set_collapsed(st, 2, true)
@@ -89,8 +215,10 @@ T["motions_ ]h steps hunk headers across sections and skips collapsed"] = functi
     if row >= c_start then
       break
     end
-    -- Must never land inside collapsed section 2's row range.
-    local b_start, b_end = (canvas.section_rows(st, 2))
+    -- Must never land inside collapsed section 2's row range. (The parens
+    -- around this call used to truncate it to one value, leaving b_end nil and
+    -- the assertion below unable to fire at all.)
+    local b_start, b_end = canvas.section_rows(st, 2)
     assert(not (row >= b_start and row < b_end), "landed inside collapsed section 2")
     assert(row > prev_row, "hunk motion must move forward")
     prev_row = row

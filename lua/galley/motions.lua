@@ -1,5 +1,7 @@
 local canvas = require("galley.canvas")
 local fold = require("galley.fold")
+local config = require("galley.config")
+local virt = require("galley.virt")
 
 local M = {}
 
@@ -8,9 +10,13 @@ local function canvas_showing(state)
     and vim.api.nvim_win_get_buf(state.win) == state.buf
 end
 
---- Jump `count` sections forward (dir=1) or backward (dir=-1) from the
---- section under the cursor, clamping at the ends. `count` defaults to
---- `vim.v.count1` (so a real `]f`/`[f` mapping honors a leading count).
+--- Jump `count` sections forward (dir=1) or backward (dir=-1) from the section
+--- under the cursor, clamping at the ends and stepping over anything the user
+--- set aside. `count` defaults to `vim.v.count1` (so a real `]f`/`[f` mapping
+--- honors a leading count).
+---
+--- The count applies to navigable sections only, so `3]f` means "three files
+--- forward that I haven't put away" rather than three indices.
 function M.goto_file(state, dir, count)
   count = count or vim.v.count1
   local n = #state.sections
@@ -19,7 +25,18 @@ function M.goto_file(state, dir, count)
   end
   local cursor = vim.api.nvim_win_get_cursor(state.win)
   local i = (canvas.locate(state, cursor[1] - 1)) or 1
-  local target = math.min(math.max(i + dir * count, 1), n)
+
+  local target
+  if config.options.navigate.skip_set_aside then
+    local nav = fold.navigable(state.sections, state, virt.auto_set())
+    target = fold.step_clamped(nav, i, dir, count)
+  else
+    target = math.min(math.max(i + dir * count, 1), n)
+  end
+  if not target then
+    return -- nothing to travel to in that direction; stay put
+  end
+
   local start0 = (canvas.section_rows(state, target))
   vim.api.nvim_win_set_cursor(state.win, { start0 + 1, 0 })
 end

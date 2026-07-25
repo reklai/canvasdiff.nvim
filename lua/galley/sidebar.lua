@@ -239,10 +239,17 @@ function S.select(state)
   end
 end
 
---- Cycle the canvas view to the next/previous section (wrapping), keeping
---- the sidebar selection in step. Usable with or without the sidebar open;
---- focus never moves.
-function S.cycle(state, delta)
+--- Cycle the canvas view to the next/previous section (wrapping), stepping over
+--- anything the user set aside and keeping the sidebar selection in step.
+--- Usable with or without the sidebar open; focus never moves.
+---
+--- Despite living here, this is a CANVAS action (keys.specs registers it under
+--- ctx = "canvas", in the same Navigate group as ]f) -- it moves the canvas
+--- viewport and is bound on the canvas buffer. It only sits in this module
+--- because the sidebar-selection sync does. So it has to honour set-aside
+--- sections exactly as goto_file does; behaving differently would be arbitrary.
+function S.cycle(state, delta, count)
+  count = count or vim.v.count1
   local n = #state.sections
   if n == 0 then
     return
@@ -255,7 +262,18 @@ function S.cycle(state, delta)
     return vim.fn.line("w0") - 1
   end)
   local i = (canvas.locate(state, top0)) or 1
-  local target = ((i - 1 + delta) % n) + 1
+
+  local target
+  if config.options.navigate.skip_set_aside then
+    local nav = fold.navigable(state.sections, state, virt.auto_set())
+    target = fold.step_wrapped(nav, i, delta, count)
+  else
+    target = ((i - 1 + delta * count) % n) + 1
+  end
+  if not target then
+    return -- everything is set aside; nowhere to cycle to
+  end
+
   local start0 = (canvas.section_rows(state, target))
   vim.api.nvim_win_call(state.win, function()
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })

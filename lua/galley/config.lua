@@ -39,6 +39,12 @@ M.defaults = {
   },
   context = 3,
   base = "HEAD",
+  navigate = {
+    -- Whether ]f [f <C-n> <C-p> step over sections you set aside -- collapsed
+    -- by hand, or hidden by a folded directory. Never applies to the
+    -- virtualizer's own auto-collapses: those are bookkeeping, not intent.
+    skip_set_aside = true,
+  },
   sidebar = {
     enabled = true,
     width = 32,

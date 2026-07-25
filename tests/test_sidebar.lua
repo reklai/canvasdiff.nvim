@@ -593,6 +593,57 @@ T["sidebar_fold folding the section you are reading lands on its placeholder"] =
   done(st)
 end
 
+T["sidebar_fold cycle steps over set-aside sections and still wraps"] = function()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("a/two.txt", "b"),
+    big_section("b/three.txt", "c"),
+    big_section("c/four.txt", "d"),
+  }, {})
+  sidebar.close()
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  st.folded = { ["a/"] = true }
+  canvas.resync_visibility(st)
+
+  local function top_section()
+    return (canvas.locate(st, canvas_top0(st)))
+  end
+  -- Park on b/three.txt (3), the first navigable one.
+  local s3 = (canvas.section_rows(st, 3))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = s3 + 1, lnum = s3 + 1 })
+  end)
+
+  sidebar.cycle(st, 1)
+  H.eq(top_section(), 4, "forward to the next navigable section")
+  sidebar.cycle(st, 1)
+  H.eq(top_section(), 3, "wraps past the two set-aside sections back to 3")
+  sidebar.cycle(st, -1)
+  H.eq(top_section(), 4, "and wraps backwards over them too")
+
+  st.folded = {}
+  canvas.resync_visibility(st)
+  done(st)
+end
+
+T["sidebar_fold cycle honors a count"] = function()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("b/two.txt", "b"),
+    big_section("c/three.txt", "c"),
+    big_section("d/four.txt", "d"),
+  }, {})
+  sidebar.close()
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.cycle(st, 1, 2)
+  H.eq((canvas.locate(st, canvas_top0(st))), 3, "2<C-n> moves two sections")
+  done(st)
+end
+
 T["sidebar_fold a nested fold hides only its own subtree"] = function()
   local st = canvas.open({
     big_section("lua/mod/a.lua", "a"),
