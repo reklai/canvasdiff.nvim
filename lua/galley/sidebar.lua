@@ -1,8 +1,18 @@
 local canvas = require("galley.canvas")
 local config = require("galley.config")
 local keys = require("galley.keys")
+local fold = require("galley.fold")
+local virt = require("galley.virt")
 
 local S = {}
+
+--- Assignable "the canvas changed shape" callback, mirroring virt.on_change.
+--- init wires it to its own sync_after_collapse; this module cannot require
+--- init (init requires it), and a fold that only redrew the tree would leave
+--- the treesitter tier holding marks on rows that no longer exist and the
+--- minimap depicting a canvas that isn't there. Falls back to a plain redraw
+--- so the sidebar still works standalone.
+S.on_change = nil
 
 --- Flatten alphabetical sections into display-ordered dir/file entries.
 --- `folded` is a set of dir paths ("lua/mod/" -- cumulative, trailing
@@ -95,12 +105,20 @@ local function set_modifiable(buf, val)
   vim.api.nvim_set_option_value("modifiable", val, { buf = buf })
 end
 
+local function notify_change(state)
+  if S.on_change then
+    S.on_change(state)
+  else
+    S.refresh(state)
+  end
+end
+
 --- Rebuild entries from the live sections + fold state and redraw.
 function S.refresh(state)
   if not S.is_open() then
     return
   end
-  side.entries = S.build_entries(state.sections, side.folded)
+  side.entries = S.build_entries(state.sections, state.folded)
   local lines = S.render_lines(side.entries)
   if #lines == 0 then
     lines = { "" }
@@ -166,9 +184,10 @@ function S.sync(state)
   end
 end
 
---- Act on the entry under the sidebar cursor: dir toggles its fold; file
---- scrolls the canvas to its section. Never changes any window's buffer or
---- the focused window.
+--- Act on the entry under the sidebar cursor: a dir toggles its fold, which
+--- sets its files aside on the canvas too; a file scrolls the canvas to its
+--- section, expanding it first if it was set aside. Never changes any window's
+--- buffer or the focused window.
 function S.select(state)
   if not S.is_open() then
     return
@@ -178,18 +197,44 @@ function S.select(state)
   if not e then
     return
   end
+
   if e.kind == "dir" then
-    side.folded[e.path] = not side.folded[e.path] or nil
-    S.refresh(state)
+    state.folded[e.path] = not state.folded[e.path] or nil
+    -- Ascending order (resync_visibility's contract): each correction after
+    -- the first is a no-op, and folding the directory you happen to be
+    -- reading lands you on that file's placeholder rather than somewhere
+    -- arbitrary.
+    canvas.resync_visibility(state, fold.indices_under(state.sections, e.path))
+    notify_change(state)
+    return
+  end
+
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)
+      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
+    return -- canvas window closed out from under the sidebar
+  end
+
+  -- "Take me to this file" has to mean you can read it when you get there, so
+  -- a section that was set aside expands first -- the same interception canvas
+  -- <CR> makes via init's jump_or_expand. A visible file row is never hidden
+  -- by a fold (a folded dir emits no rows for its children), so its own
+  -- collapse flag is the whole question. unauto + set_collapsed mirrors
+  -- init.user_set_collapsed: an explicit selection is user intent, so virt
+  -- must not expand or discard it later.
+  local expanded = false
+  if state.collapsed and state.collapsed[e.path] then
+    virt.unauto(e.path)
+    canvas.set_collapsed(state, e.section_i, false)
+    expanded = true
+  end
+
+  local start0 = (canvas.section_rows(state, e.section_i))
+  vim.api.nvim_win_call(state.win, function()
+    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+  end)
+  if expanded then
+    notify_change(state) -- the canvas changed shape, not just its viewport
   else
-    if not (state.win and vim.api.nvim_win_is_valid(state.win)
-        and vim.api.nvim_win_get_buf(state.win) == state.buf) then
-      return -- canvas window closed out from under the sidebar
-    end
-    local start0 = (canvas.section_rows(state, e.section_i))
-    vim.api.nvim_win_call(state.win, function()
-      vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
-    end)
     S.sync(state)
   end
 end
@@ -216,34 +261,6 @@ function S.cycle(state, delta)
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
   end)
   S.sync(state)
-end
-
---- Sorted array of currently-folded directory paths, or `{}` when the
---- sidebar is closed (nothing to persist).
-function S.get_folds()
-  if not S.is_open() then
-    return {}
-  end
-  local folds = {}
-  for path in pairs(side.folded) do
-    folds[#folds + 1] = path
-  end
-  table.sort(folds)
-  return folds
-end
-
---- Replace the sidebar's fold set from a saved array of dir paths and
---- redraw. No-op when the sidebar is closed.
-function S.set_folds(folds, state)
-  if not S.is_open() then
-    return
-  end
-  local set = {}
-  for _, path in ipairs(folds or {}) do
-    set[path] = true
-  end
-  side.folded = set
-  S.refresh(state)
 end
 
 function S.close()
@@ -341,7 +358,10 @@ function S.open(state, opts)
     vim.api.nvim_set_option_value(name, val, { win = win, scope = "local" })
   end
 
-  side = { buf = buf, win = win, entries = {}, folded = {}, active_mark = nil, state = state }
+  -- No fold set here: folds live on `state` (canvas.open initializes it), so
+  -- they survive close/reopen, are readable by rendering and navigation, and
+  -- follow the state they belong to rather than this singleton.
+  side = { buf = buf, win = win, entries = {}, active_mark = nil, state = state }
 
   local actions = {
     select = function()

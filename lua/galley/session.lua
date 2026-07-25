@@ -1,6 +1,5 @@
 local canvas = require("galley.canvas")
 local viewport = require("galley.viewport")
-local sidebar = require("galley.sidebar")
 local virt = require("galley.virt")
 local fold = require("galley.fold")
 
@@ -49,7 +48,14 @@ function M.save(state)
     table.sort(collapsed)
     data.collapsed = collapsed
 
-    data.folds = sidebar.get_folds()
+    -- Read straight off `state`, so folds persist whether or not the sidebar
+    -- happens to be open at quit time.
+    local folds = {}
+    for dir in pairs(state.folded or {}) do
+      folds[#folds + 1] = dir
+    end
+    table.sort(folds)
+    data.folds = folds
 
     if win_showing_canvas(state) then
       local top0 = vim.api.nvim_win_call(state.win, function()
@@ -112,6 +118,16 @@ function M.restore(state, data)
     return
   end
 
+  -- Folds FIRST: everything below derives visibility from state.folded, and
+  -- the collapse loop's own splices resolve their rendered form through it.
+  pcall(function()
+    local set = {}
+    for _, dir in ipairs(data.folds or {}) do
+      set[dir] = true
+    end
+    state.folded = set
+  end)
+
   pcall(function()
     for _, path in ipairs(data.collapsed or {}) do
       local idx = index_of_path(state, path)
@@ -122,8 +138,11 @@ function M.restore(state, data)
     end
   end)
 
+  -- One pass over every section, because assigning state.folded above changed
+  -- what they should render as without splicing anything. The caller
+  -- (init.M.open) owns the single follow-up sync of the other UI pieces.
   pcall(function()
-    sidebar.set_folds(data.folds or {}, state)
+    canvas.resync_visibility(state)
   end)
 
   pcall(function()

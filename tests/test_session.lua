@@ -89,6 +89,90 @@ local function in_repo(root, opts, fn)
   assert(ok, err)
 end
 
+-- --- folds ---------------------------------------------------------------
+
+local function open_ab(root)
+  virt.detach()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("a/two.txt", "b"),
+    big_section("b/three.txt", "c"),
+  }, {})
+  st.root = root
+  st.base = "HEAD"
+  return st
+end
+
+local function span(st, i)
+  local s, e = canvas.section_rows(st, i)
+  return e - s
+end
+
+T["session_folds persist with the sidebar closed"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  require("galley.sidebar").close() -- folds are state's, not the sidebar's
+  st.folded = { ["a/"] = true }
+
+  session.save(st)
+  H.eq(session.load(root).folds, { "a/" },
+    "quitting with the sidebar shut must not erase the fold set")
+  cleanup(root)
+end
+
+T["session_folds restore onto the canvas, not just the tree"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  st.folded = { ["a/"] = true }
+  session.save(st)
+
+  -- A fresh state, as a reopen produces: nothing folded, nothing collapsed.
+  local fresh = open_ab(root)
+  H.eq(span(fresh, 1) > 1, true, "starts expanded")
+  session.restore(fresh, session.load(root))
+
+  H.eq(fresh.folded, { ["a/"] = true }, "fold set came back")
+  H.eq(span(fresh, 1), 1, "and a/one.txt is a placeholder again")
+  H.eq(span(fresh, 2), 1, "and so is a/two.txt")
+  assert(span(fresh, 3) > 1, "b/three.txt untouched")
+  cleanup(root)
+end
+
+-- Guard. Passes before and after; exists to fail loudly if folding ever
+-- starts writing into state.collapsed. If it did, unfolding after a restore
+-- would leave the files collapsed forever with nothing to explain why.
+T["session_folds a fold is never persisted as a collapse"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  st.folded = { ["a/"] = true }
+  canvas.resync_visibility(st)
+  H.eq(span(st, 1), 1, "the fold really did take effect")
+
+  session.save(st)
+  local data = session.load(root)
+  H.eq(data.collapsed, {}, "collapsed records user intent only")
+  H.eq(data.folds, { "a/" }, "the fold is recorded as a fold")
+  cleanup(root)
+end
+
+T["session_folds restore skips a view anchored on a folded-away file"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  -- Hand-written payload: a saved view pointing into a file that the saved
+  -- fold set hides. save() never produces this, but a stale file can.
+  session.restore(st, {
+    version = 1,
+    base = "HEAD",
+    collapsed = {},
+    folds = { "a/" },
+    view = { path = "a/one.txt", new_lnum = 30, content = "a line 30" },
+  })
+  H.eq(span(st, 1), 1, "the fold applied")
+  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
+  H.eq(top, 1, "and the unresolvable view was skipped rather than guessed at")
+  cleanup(root)
+end
+
 T["session_ save and load round-trip the payload"] = function()
   local root = H.tmpdir()
   virt.detach() -- reset module-level auto-set/tick bookkeeping across tests

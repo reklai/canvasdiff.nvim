@@ -14,6 +14,7 @@ local statuscol = require("galley.statuscol")
 local session = require("galley.session")
 local util = require("galley.util")
 local keys = require("galley.keys")
+local fold = require("galley.fold")
 
 local M = {}
 
@@ -73,28 +74,48 @@ local function user_set_collapsed(st, i, collapsed)
   sync_after_collapse(st)
 end
 
+--- Index of the section under the canvas cursor, or nil.
+local function section_under_cursor(st)
+  return canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1)
+end
+
 --- Jump into the section/entry under the cursor, expanding it instead when
 --- it's a collapsed placeholder. Shared by the jump keymap and the
 --- double-click mapping so both intercept a jump into a placeholder the
 --- same way.
 local function jump_or_expand(st, cfg)
-  local cursor = vim.api.nvim_win_get_cursor(st.win)
-  local i = canvas.locate(st, cursor[1] - 1)
-  if i and st.collapsed[st.sections[i].path] then
-    user_set_collapsed(st, i, false)
-    return
+  local i = section_under_cursor(st)
+  if i then
+    local path = st.sections[i].path
+    if st.collapsed[path] then
+      user_set_collapsed(st, i, false)
+      return
+    end
+    if fold.hides(st.folded, path) then
+      -- Folded away: expanding it would change nothing visible, and jumping
+      -- in would leave jump.back resolving a view against a section that
+      -- still renders as one row.
+      return
+    end
   end
   jump.enter(st, { back_keys = keys.list(cfg.keymaps.file.back) })
 end
 
---- Toggle collapse of the section under the cursor.
+--- Toggle whether the section under the cursor is set aside.
 local function toggle_collapse_under_cursor(st)
-  local cursor = vim.api.nvim_win_get_cursor(st.win)
-  local i = canvas.locate(st, cursor[1] - 1)
+  local i = section_under_cursor(st)
   if not i then
     return
   end
-  user_set_collapsed(st, i, not st.collapsed[st.sections[i].path])
+  local path = st.sections[i].path
+  if fold.hides(st.folded, path) then
+    -- A folded ancestor is what's hiding it, so its own collapse flag is
+    -- irrelevant. Writing one here would change nothing visible and would
+    -- still be persisted as user intent, surfacing weeks later as a
+    -- mysteriously-collapsed file once the directory is unfolded.
+    return
+  end
+  user_set_collapsed(st, i, not st.collapsed[path])
 end
 
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
@@ -219,6 +240,9 @@ function M.open(opts)
   end
 
   if config.options.sidebar.enabled then
+    -- Must precede open: folding a directory splices the canvas, and without
+    -- this the highlight tier and the minimap would never hear about it.
+    sidebar.on_change = sync_after_collapse
     sidebar.open(st, config.options.sidebar)
   end
 
@@ -252,8 +276,8 @@ function M.open(opts)
     -- were built from the fully-expanded one, and restoring the view doesn't
     -- necessarily scroll (it may already be at the top, or not be saved at
     -- all when the top section is the collapsed one) -- so nothing else
-    -- brings them back in sync. Also fixes up the sidebar's active row,
-    -- which set_folds drew before the view step moved the viewport.
+    -- brings them back in sync. Also fixes up the sidebar's active row, drawn
+    -- from the pre-restore shape before the view step moved the viewport.
     sync_after_collapse(st)
   end
 

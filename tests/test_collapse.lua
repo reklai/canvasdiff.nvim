@@ -4,6 +4,7 @@ local model = require("galley.model")
 local render = require("galley.render")
 local scrollbar = require("galley.scrollbar")
 local hl = require("galley.hl")
+local fold = require("galley.fold")
 
 local T = {}
 
@@ -151,6 +152,79 @@ T["collapse_ hl never marks a collapsed section"] = function()
     assert(not (m[2] >= s1 and m[2] < e1), "no TS-namespace mark within the collapsed section's rows")
   end
   hl.detach(st)
+end
+
+-- --- folds and collapse are one predicate --------------------------------
+
+T["collapse_ set_collapsed on a folded-away section splices nothing"] = function()
+  local st = open_three()
+  reset_view(st)
+  st.folded = { ["b/"] = true }
+  canvas.resync_visibility(st, fold.indices_under(st.sections, "b/"))
+  H.eq(select(2, canvas.section_rows(st, 2)) - (canvas.section_rows(st, 2)), 1,
+    "the fold reduced it to one row")
+
+  local fired = 0
+  st.hooks = st.hooks or {}
+  local prev = st.hooks.on_section_replaced
+  st.hooks.on_section_replaced = function() fired = fired + 1 end
+
+  canvas.set_collapsed(st, 2, true)
+  H.eq(fired, 0, "already one row, so there is nothing to re-splice")
+  H.eq(st.collapsed["b/two.txt"], true, "but the flag is recorded")
+  local s, e = canvas.section_rows(st, 2)
+  H.eq(e - s, 1, "still exactly one row")
+
+  -- And the OR still holds after unfolding, so it stays a placeholder.
+  st.folded = {}
+  canvas.resync_visibility(st)
+  s, e = canvas.section_rows(st, 2)
+  H.eq(e - s, 1, "unfolding does not expand what was also collapsed outright")
+
+  st.hooks.on_section_replaced = prev
+  st.collapsed = {}
+  canvas.resync_visibility(st)
+end
+
+T["collapse_ the minimap depicts the folded canvas, not the model"] = function()
+  local st = open_three()
+  reset_view(st)
+  st.folded = { ["b/"] = true }
+  canvas.resync_visibility(st, fold.indices_under(st.sections, "b/"))
+
+  local hidden = fold.hidden_set(st.sections, st.collapsed, st.folded)
+  H.eq(#scrollbar.line_kinds(st.sections, hidden),
+    vim.api.nvim_buf_line_count(st.buf),
+    "one kind per real buffer line -- a stale minimap misplaces every cell")
+
+  st.folded = {}
+  canvas.resync_visibility(st)
+end
+
+T["collapse_ hl never marks a folded-away section"] = function()
+  local st = open_three()
+  reset_view(st)
+  hl.attach(st, { margin = 1000 })
+  assert(st.ts.ids_by_path["b/two.txt"] and #st.ts.ids_by_path["b/two.txt"] > 0,
+    "sanity: attach marked section 2 before folding")
+
+  st.folded = { ["b/"] = true }
+  canvas.resync_visibility(st, fold.indices_under(st.sections, "b/"))
+  hl.apply_now(st)
+  H.eq(st.ts.ids_by_path["b/two.txt"], nil, "no ids tracked for a folded-away section")
+
+  -- The real failure mode: a section that renders as one row still carries all
+  -- its entries, so a reader that thinks it expanded writes marks at
+  -- srow + m.row -- inside the FOLLOWING file.
+  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local s2, e2 = canvas.section_rows(st, 2)
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
+    assert(not (m[2] >= s2 and m[2] < e2),
+      "no TS-namespace mark within the folded-away section's rows")
+  end
+  hl.detach(st)
+  st.folded = {}
+  canvas.resync_visibility(st)
 end
 
 T["collapse_ replace_section keeps a collapsed section collapsed"] = function()

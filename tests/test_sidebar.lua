@@ -2,6 +2,7 @@ local H = require("helpers")
 local sidebar = require("galley.sidebar")
 local canvas = require("galley.canvas")
 local model = require("galley.model")
+local render = require("galley.render")
 
 local T = {}
 
@@ -452,6 +453,158 @@ T["sidebar_win double-click selects, same as <CR>"] = function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
   sidebar.close()
+end
+
+-- --- folds drive the canvas ---------------------------------------------
+--
+-- Two files under one directory, so folding it affects more than one section.
+-- Rows: 1 "a/", 2 one.txt, 3 two.txt, 4 "b/", 5 three.txt.
+local A_DIR_ROW, B_THREE_ROW = 1, 5
+
+local function open_ab()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("a/two.txt", "b"),
+    big_section("b/three.txt", "c"),
+  }, {})
+  sidebar.close()
+  sidebar.open(st, { width = 30 })
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  return st
+end
+
+--- Click sidebar row `row` (1-based) the way <CR> does.
+local function select_row(st, row)
+  vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sidebar_buf()), { row, 0 })
+  sidebar.select(st)
+end
+
+local function span(st, i)
+  local s, e = canvas.section_rows(st, i)
+  return e - s
+end
+
+local function canvas_top0(st)
+  return vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+end
+
+--- Leave the canvas singleton where the next test expects it, then drop the
+--- sidebar. Its cursor survives close/open, so a scrolled test leaks.
+local function done(st)
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  sidebar.close()
+end
+
+T["sidebar_fold folding a dir sets its canvas sections aside"] = function()
+  local st = open_ab()
+  select_row(st, A_DIR_ROW)
+
+  H.eq(span(st, 1), 1, "a/one.txt renders as its placeholder")
+  H.eq(span(st, 2), 1, "a/two.txt renders as its placeholder")
+  assert(span(st, 3) > 1, "b/three.txt is untouched")
+
+  local s1 = (canvas.section_rows(st, 1))
+  H.eq(vim.api.nvim_buf_get_lines(st.buf, s1, s1 + 1, false)[1],
+    render.placeholder(st.sections[1]), "the buffer really holds the placeholder")
+
+  -- The whole point of deriving visibility instead of storing it.
+  H.eq(st.collapsed, {}, "folding must never write into state.collapsed")
+  H.eq(st.folded, { ["a/"] = true }, "the fold lives on the shared state")
+  done(st)
+end
+
+T["sidebar_fold unfolding restores the exact pre-fold collapse state"] = function()
+  local st = open_ab()
+  -- Collapse one of the two by hand FIRST, then fold their parent over it.
+  canvas.set_collapsed(st, 1, true)
+  select_row(st, A_DIR_ROW)
+  H.eq(span(st, 1), 1, "both are placeholders while folded")
+  H.eq(span(st, 2), 1, "both are placeholders while folded")
+
+  select_row(st, A_DIR_ROW) -- unfold
+  H.eq(span(st, 1), 1, "the hand-collapsed one stays collapsed")
+  assert(span(st, 2) > 1, "the merely-folded one comes back expanded")
+  H.eq(st.collapsed, { ["a/one.txt"] = true }, "only the hand collapse survives")
+  done(st)
+end
+
+T["sidebar_fold folds survive closing and reopening the sidebar"] = function()
+  local st = open_ab()
+  select_row(st, A_DIR_ROW)
+  sidebar.close()
+
+  sidebar.open(st, { width = 30 })
+  local lines = vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)
+  H.eq(lines[1], "▸ a/", "the tree reopens folded")
+  H.eq(#lines, 3, "a/'s two files are still hidden")
+  H.eq(span(st, 1), 1, "and the canvas still shows them set aside")
+  done(st)
+end
+
+T["sidebar_fold select on a collapsed file expands it before scrolling"] = function()
+  local st = open_ab()
+  canvas.set_collapsed(st, 3, true)
+  H.eq(span(st, 3), 1, "collapsed to start with")
+
+  select_row(st, B_THREE_ROW)
+  assert(span(st, 3) > 1, "selecting a file you set aside brings it back")
+  H.eq(st.collapsed, {}, "and clears its collapse flag")
+  H.eq((canvas.locate(st, canvas_top0(st))), 3, "canvas scrolled to that section")
+  done(st)
+end
+
+T["sidebar_fold folding above the viewport keeps the visible top pinned"] = function()
+  local st = open_ab()
+  local b_start = (canvas.section_rows(st, 3))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = b_start + 3, lnum = b_start + 3 })
+  end)
+  local before = vim.api.nvim_buf_get_lines(st.buf, canvas_top0(st), canvas_top0(st) + 1, false)[1]
+
+  select_row(st, A_DIR_ROW)
+
+  -- Both halves matter. The span assertions prove the fold actually reached
+  -- the canvas; the text assertion proves it did so without moving what the
+  -- user was reading (niri). Either one alone passes for the wrong reason.
+  H.eq(span(st, 1), 1, "the folded sections did collapse")
+  H.eq(span(st, 2), 1, "the folded sections did collapse")
+  H.eq(vim.api.nvim_buf_get_lines(st.buf, canvas_top0(st), canvas_top0(st) + 1, false)[1],
+    before, "the line at the viewport top is unchanged")
+  done(st)
+end
+
+T["sidebar_fold folding the section you are reading lands on its placeholder"] = function()
+  local st = open_ab()
+  local two_start = (canvas.section_rows(st, 2))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = two_start + 1, lnum = two_start + 1 })
+  end)
+
+  select_row(st, A_DIR_ROW)
+
+  local s2 = (canvas.section_rows(st, 2))
+  H.eq(canvas_top0(st), s2, "viewport top sits on a/two.txt's placeholder row")
+  H.eq(vim.api.nvim_buf_get_lines(st.buf, s2, s2 + 1, false)[1],
+    render.placeholder(st.sections[2]), "and that row is the placeholder")
+  done(st)
+end
+
+T["sidebar_fold a nested fold hides only its own subtree"] = function()
+  local st = canvas.open({
+    big_section("lua/mod/a.lua", "a"),
+    big_section("lua/modules/b.lua", "b"),
+  }, {})
+  sidebar.close()
+  sidebar.open(st, { width = 30 })
+  -- rows: 1 "lua/", 2 "mod/", 3 a.lua, 4 "modules/", 5 b.lua
+  select_row(st, 2)
+  H.eq(span(st, 1), 1, "lua/mod/a.lua is set aside")
+  assert(span(st, 2) > 1, "lua/modules/b.lua is NOT -- modules/ is not mod/")
+  done(st)
 end
 
 return T

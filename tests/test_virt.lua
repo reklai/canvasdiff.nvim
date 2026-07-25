@@ -59,6 +59,62 @@ local function count_collapsed(st)
   return n
 end
 
+T["virt_ folded-away sections do not count as expanded"] = function()
+  local st = open_six()
+  reset_view(st)
+  -- Fold two of the six away. They already occupy one row each, so virt must
+  -- see four expanded sections, not six -- and must never pick one of them as
+  -- an eviction candidate (that would claim it in `auto` while splicing
+  -- nothing, freeing zero rows and leaving the user a collapse to inherit on
+  -- unfold).
+  st.folded = { ["e/"] = true, ["f/"] = true }
+  canvas.resync_visibility(st)
+
+  local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
+  virt.apply(st, opts)
+
+  local n_rendered_expanded = 0
+  for i = 1, 6 do
+    local s, e = canvas.section_rows(st, i)
+    if e - s > 1 then n_rendered_expanded = n_rendered_expanded + 1 end
+  end
+  H.eq(n_rendered_expanded, opts.max_expanded,
+    "virt collapses down to max_expanded RENDERED-expanded sections")
+
+  local auto = virt.auto_set()
+  H.eq(auto["e/five.txt"], nil, "never claims a folded-away path")
+  H.eq(auto["f/six.txt"], nil, "never claims a folded-away path")
+
+  st.folded = {}
+  virt.detach()
+end
+
+T["virt_ unfolding leaves an auto-collapsed section as a placeholder"] = function()
+  local st = open_six()
+  reset_view(st)
+  local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
+  virt.apply(st, opts)
+
+  -- Find something virt collapsed on its own, then fold its parent over it.
+  local auto = virt.auto_set()
+  local path, idx
+  for i, s in ipairs(st.sections) do
+    if auto[s.path] then path, idx = s.path, i break end
+  end
+  assert(path, "virt auto-collapsed at least one section")
+  local dir = path:match("^(.-/)")
+
+  st.folded = { [dir] = true }
+  canvas.resync_visibility(st)
+  st.folded = {}
+  canvas.resync_visibility(st)
+
+  local s, e = canvas.section_rows(st, idx)
+  H.eq(e - s, 1, "still virt's placeholder -- unfolding only undoes the fold")
+  H.eq(st.collapsed[path], true, "and its collapse flag is untouched")
+  virt.detach()
+end
+
 T["virt_ inactive under thresholds leaves everything expanded"] = function()
   local st = open_six()
   reset_view(st)
