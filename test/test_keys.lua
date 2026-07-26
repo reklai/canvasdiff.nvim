@@ -20,7 +20,7 @@ end
 T["input_ facade exports exactly the supported key and motion operations"] = function()
   local names = vim.tbl_keys(input)
   table.sort(names)
-  H.eq(names, { "command", "keys", "motions" })
+  H.eq(names, { "command", "jump", "keys", "motions" })
 
   local key_names = vim.tbl_keys(input.keys)
   table.sort(key_names)

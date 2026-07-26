@@ -3,47 +3,43 @@ local model = require("canvasdiff.diff")
 local viewport = model.anchor
 local source = require("canvasdiff.source")
 local config = require("canvasdiff.config")
-local util = require("canvasdiff.util")
-local ui = require("canvasdiff.ui")
 local fold = model.fold
 local lens = model.lens
 
 local M = {}
 
--- Module-level excursion: at most one live at a time. A second `enter`
--- overwrites it wholesale (its stale buffer-local keymap, if any, is simply
--- left behind in the abandoned file buffer -- harmless, since `back()` only
--- ever acts on the current excursion).
-local excursion = nil
+--- @class CanvasDiffExcursions
+--- @field excursion table|nil
+--- @field last_buf integer|nil
 
--- The last real file buffer an excursion landed in, remembered past the
--- excursion itself so close() can fall back to it when the buffer the canvas
--- was opened over has since been deleted.
-local last_buf = nil
+--- One review's excursion store.
+---
+--- The owning Surface holds exactly one, so two concurrent reviews keep
+--- independent excursions and independent "last file" memory. A module-global
+--- pair could not express that: a second review's `enter` would silently
+--- overwrite the first review's way back.
+--- @return CanvasDiffExcursions
+function M.store()
+  return { excursion = nil, last_buf = nil }
+end
 
---- Most recent excursion target that is still a live buffer, or nil.
-function M.last_buf()
-  if last_buf and vim.api.nvim_buf_is_valid(last_buf) then
-    return last_buf
+--- Most recent excursion target of this store that is still a live buffer.
+function M.last_buf(store)
+  local buf = store and store.last_buf
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    return buf
   end
   return nil
 end
 
---- Read the "current" content of an excursed file: unsaved buffer content
---- when the buffer is still loaded (edits count even if not written), else
---- a fresh disk read, else "" when the file is gone entirely.
-local function read_current_content(buf, abs_path)
-  if buf and vim.api.nvim_buf_is_valid(buf) then
-    return util.buf_text(buf)
-  end
+--- @class CanvasDiffJump
+--- @field ok boolean
+--- @field diagnostic { level: "warn"|"info", message: string }|nil
 
-  local f = io.open(abs_path, "r")
-  if not f then
-    return ""
-  end
-  local content = f:read("*a") or ""
-  f:close()
-  return content
+--- Navigation refuses in the user's terms, but presenting is the owner's job:
+--- input reaching for the UI facade would make the domain graph cyclic.
+local function declined(level, message)
+  return { ok = false, diagnostic = { level = level, message = message } }
 end
 
 --- From the section/entry the cursor is on, find the file line number to
@@ -77,20 +73,20 @@ end
 --- attach normally). Saves an excursion so `back()` can regenerate the
 --- section from whatever the file looks like now (including unsaved edits)
 --- and restore the canvas viewport semantically.
-function M.enter(state, opts)
+function M.enter(store, state, opts)
   opts = opts or {}
   local back_keys = opts.back_keys or { "<M-CR>" }
   local win = opts.win or state.win
   if not (win and vim.api.nvim_win_is_valid(win))
       or vim.api.nvim_win_get_buf(win) ~= state.buf then
-    return
+    return { ok = false }
   end
 
   local cursor = vim.api.nvim_win_get_cursor(win)
   local row0 = cursor[1] - 1
   local i, entry_idx = canvas.locate(state, row0)
   if not i then
-    return
+    return { ok = false }
   end
 
   -- The staged lens's new side is the index, which is not a file you can open --
@@ -99,8 +95,8 @@ function M.enter(state, opts)
   -- refusing: unstaging moves that content back into the worktree, where it is
   -- editable again.
   if not lens.editable(lens.of(state)) then
-    ui.warn("staged view is not editable — unstage it to edit, or press B for the worktree")
-    return
+    return declined("warn",
+      "staged view is not editable — unstage it to edit, or press B for the worktree")
   end
 
   local section = state.sections[i]
@@ -108,8 +104,8 @@ function M.enter(state, opts)
   -- of raw zip bytes would be a worse answer than declining. `:edit` it by
   -- hand if that really is what you want.
   if section.binary then
-    ui.warn("binary file — nothing to jump into (" .. section.path .. ")")
-    return
+    return declined("warn",
+      "binary file — nothing to jump into (" .. section.path .. ")")
   end
   local entries = section.entries
   local entry = entries[entry_idx]
@@ -118,7 +114,7 @@ function M.enter(state, opts)
   local top_offset = top_offset_for_view(state, win, i)
   local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
 
-  excursion = {
+  local excursion = {
     state = state,
     win = win,
     -- Destination identity stays the key for editing, sidebar selection and
@@ -148,12 +144,18 @@ function M.enter(state, opts)
   vim.api.nvim_win_set_cursor(win, { clamped, 0 })
 
   excursion.buf = buf
-  last_buf = buf
+  store.excursion = excursion
+  store.last_buf = buf
 
-  -- Never map `q` in the real file buffer.
+  -- Never map `q` in the real file buffer. The owner supplies the return
+  -- action, so this mapping captures neither a module-global lookup nor the
+  -- whole option table.
+  local on_return = opts.on_return
   for _, lhs in ipairs(back_keys) do
     vim.keymap.set("n", lhs, function()
-      require("canvasdiff.jump").back()
+      if on_return then
+        on_return()
+      end
     end, {
       buffer = buf, silent = true, noremap = true,
       desc = "Return to the CanvasDiff canvas at the same spot",
@@ -166,6 +168,7 @@ function M.enter(state, opts)
   if opts.on_path then
     opts.on_path(section.path, win)
   end
+  return { ok = true }
 end
 
 --- Regenerate the excursed file's diff section from the CURRENT buffer
@@ -211,15 +214,15 @@ local function target_win(state, requested, source)
   return nil
 end
 
-function M.back(opts)
+function M.back(store, opts)
   if type(opts) == "number" then
     opts = { win = opts }
   else
     opts = opts or {}
   end
+  local excursion = store and store.excursion
   if not excursion then
-    ui.notify("no active review excursion")
-    return
+    return declined("info", "no active review excursion")
   end
 
   -- Resolved BEFORE anything is consumed. This used to run against state.win
@@ -228,8 +231,8 @@ function M.back(opts)
   -- edits never reached the canvas and there was no second try.
   local win = target_win(excursion.state, opts.win, excursion.win)
   if not win then
-    ui.warn("no window to bring the canvas back into — try again from a normal window")
-    return
+    return declined("warn",
+      "no window to bring the canvas back into — try again from a normal window")
   end
 
   local ex = excursion
@@ -246,10 +249,8 @@ function M.back(opts)
     end
   end
   if not idx then
-    ui.warn(
-      "excursion section for '" .. ex.path .. "' not found in canvas; return not applied"
-    )
-    return
+    return declined("warn",
+      "excursion section for '" .. ex.path .. "' not found in canvas; return not applied")
   end
 
   -- A rename has two independent addresses. Read the old bytes from the source
@@ -261,19 +262,20 @@ function M.back(opts)
   local old_path = metadata.old_path or ex.path
   local old, old_err = source.show(state.root, old_rev, old_path)
   if old == nil and ex.status ~= "A" and ex.status ~= "?" then
-    ui.warn(("cannot rebuild excursion old side %s:%s: %s")
+    return declined("warn", ("cannot rebuild excursion old side %s:%s: %s")
       :format(old_rev, old_path, old_err or "unknown git error"))
-    return
   end
 
-  local abs_path = vim.fs.joinpath(state.root, ex.path)
-  local content = read_current_content(ex.buf, abs_path)
+  -- Unsaved edits count, so this is deliberately the same worktree read the
+  -- collector uses rather than a private io.open: one boundary owns "what does
+  -- this file look like right now", buffer or disk.
+  local content = source.worktree_text(state.root, ex.path)
   local new_section = model.build_section(
     ex.path, old or "", content, ex.status, config.options.context, metadata)
 
   -- All fallible preflight work succeeded. Only now consume the excursion and
   -- remove its return mappings.
-  excursion = nil
+  store.excursion = nil
   if ex.back_keys and ex.buf then
     for _, lhs in ipairs(ex.back_keys) do
       pcall(vim.keymap.del, "n", lhs, { buffer = ex.buf })
@@ -323,7 +325,7 @@ function M.back(opts)
   if on_shape_change then
     on_shape_change(state, win)
   end
-  return true
+  return { ok = true }
 end
 
 return M

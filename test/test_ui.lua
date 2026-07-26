@@ -102,13 +102,10 @@ end
 -- Regression: this site was the one inconsistency in the codebase -- it
 -- notified without the plugin prefix, so the message read as if it came from
 -- Neovim itself rather than from us.
-T["ui_notify jump.back with no excursion is prefixed"] = function()
-  local jump = require("canvasdiff.jump")
-  -- jump.lua holds a module-level excursion singleton and the whole suite
-  -- shares one Neovim process, so an earlier test can leave one live. back()
-  -- nils it before doing any window work, so one guarded call always drains.
-  pcall(jump.back)
-  local msgs = capture(function() jump.back() end)
+T["ui_notify jump_back with no excursion is prefixed"] = function()
+  -- Excursions belong to a Surface, so with no live review there is no store
+  -- at all -- and the owner must still say so in the plugin's own voice.
+  local msgs = capture(function() require("canvasdiff").jump_back() end)
   H.eq(#msgs, 1, "exactly one notification")
   assert(msgs[1].msg:sub(1, #PREFIX) == PREFIX,
     "expected the CanvasDiff prefix, got: " .. msgs[1].msg)

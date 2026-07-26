@@ -1,3 +1,4 @@
+local buffer = require("canvasdiff.source.buffer")
 local collect = require("canvasdiff.source.collect")
 local repository = require("canvasdiff.source.repository")
 
@@ -13,4 +14,5 @@ return {
   sections = collect.sections,
   show = repository.show,
   show_head = repository.show_head,
+  worktree_text = buffer.read_worktree,
 }

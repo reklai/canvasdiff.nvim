@@ -1,11 +1,11 @@
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
 local source = require("canvasdiff.source")
-local jump = require("canvasdiff.jump")
 local config = require("canvasdiff.config")
 local runtime = require("canvasdiff.runtime")
 local input = require("canvasdiff.input")
 local command = input.command
+local jump = input.jump
 local motions = input.motions
 local virt = runtime.virtualizer
 local watch = runtime.watch
@@ -40,6 +40,22 @@ local function canvas_showing(st, win)
   win = win or st.win
   return win and vim.api.nvim_win_is_valid(win)
     and vim.api.nvim_win_get_buf(win) == st.buf
+end
+
+--- Show a navigation outcome's diagnostic, and hand its result back.
+---
+--- Input reports what happened and in whose words; turning that into a message
+--- is the owner's job, which is the whole reason input never imports UI.
+local function present(outcome)
+  local diagnostic = outcome and outcome.diagnostic
+  if diagnostic then
+    if diagnostic.level == "warn" then
+      ui.warn(diagnostic.message)
+    else
+      ui.notify(diagnostic.message)
+    end
+  end
+  return (outcome and outcome.ok) or false
 end
 
 --- Public setup: merge user options into the config module. Entirely
@@ -84,6 +100,21 @@ end
 --- so the plugin file imports only the root facade.
 function App:command_complete(arglead)
   return command.complete(arglead)
+end
+
+--- Return from a jump excursion into the owning review's canvas.
+---
+--- The excursion belongs to its Surface, so "which way back" is answered by
+--- the review you left, not by a process-wide slot that a second review would
+--- have overwritten. With no live review at all, the store is absent and the
+--- outcome says so in the user's terms.
+--- @return boolean returned
+function App:jump_back(surface, generation, win)
+  surface = surface or active_surface(self)
+  if surface and generation and not surface:guard(generation) then
+    return false
+  end
+  return present(jump.back(surface and surface.excursion or nil, { win = win }))
 end
 
 --- Show which lens the canvas is looking through, in a winbar on its own window.
@@ -297,8 +328,8 @@ end
 --- Safe only because jump.back guards on fold.hidden: returning into a folded
 --- section lands on its placeholder instead of resolving a view against entries
 --- that no longer map to rows.
-local function open_under_cursor(surface, generation, st, cfg, win)
-  jump.enter(st, {
+local function open_under_cursor(app, surface, generation, st, cfg, win)
+  return present(jump.enter(surface.excursion, st, {
     win = win,
     back_keys = keys.list(cfg.keymaps.file.back),
     on_path = function(path, source_win)
@@ -309,7 +340,10 @@ local function open_under_cursor(surface, generation, st, cfg, win)
         end
       end)
     end,
-  })
+    on_return = function()
+      app:jump_back(surface, generation)
+    end,
+  }))
 end
 
 --- Fold or unfold the section under the cursor: reveal it when a
@@ -349,7 +383,7 @@ local function canvas_actions(app, surface, st, cfg)
   end
   return {
     jump       = owned_action(surface, generation,
-      function(_, win) open_under_cursor(surface, generation, st, cfg, win) end),
+      function(_, win) open_under_cursor(app, surface, generation, st, cfg, win) end),
     collapse   = owned_action(surface, generation,
       function(_, win) toggle_collapse_under_cursor(surface, st, win) end),
     close      = owned_action(surface, generation, function() app:close() end),
@@ -641,7 +675,7 @@ function App:open(opts)
         end
         local returned = false
         surface:guard(generation, function()
-          returned = jump.back({ win = host_win }) and true or false
+          returned = self:jump_back(surface, generation, host_win)
         end)
         return returned
       end,
@@ -884,10 +918,10 @@ end
 --- alternate file; and only then a blank buffer. The chain exists because
 --- landing on [No Name] reads as something having gone wrong, when in fact
 --- nothing did -- the buffer we came from was simply deleted meanwhile.
-local function restore_window(win, st, landing)
+local function restore_window(win, st, landing, visited)
   local candidates = {
     landing,
-    jump.last_buf(),
+    visited,
     vim.api.nvim_win_call(win, function() return vim.fn.bufnr("#") end),
   }
   for _, buf in ipairs(candidates) do
@@ -945,6 +979,8 @@ function App:close()
     landings[win] = surface:landing_buffer(win)
     surface:capture_view(win)
   end
+  -- Resolved before disposal, which releases this review's excursion store.
+  local visited = jump.last_buf(surface.excursion)
   for _, win in ipairs(hosts) do
     clear_winbar(st, win)
   end
@@ -963,7 +999,7 @@ function App:close()
   for _, win in ipairs(wins) do
     if vim.api.nvim_win_is_valid(win)
         and vim.api.nvim_win_get_buf(win) == st.buf then
-      restore_window(win, st, landings[win])
+      restore_window(win, st, landings[win], visited)
     end
   end
 

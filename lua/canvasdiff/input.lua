@@ -1,4 +1,5 @@
 local command = require("canvasdiff.input.command")
+local jump = require("canvasdiff.input.jump")
 local keys = require("canvasdiff.input.keys")
 local motions = require("canvasdiff.input.motions")
 
@@ -11,6 +12,12 @@ return {
     parse = command.parse,
     plan = command.plan,
     words = command.words,
+  },
+  jump = {
+    back = jump.back,
+    enter = jump.enter,
+    last_buf = jump.last_buf,
+    store = jump.store,
   },
   keys = {
     collisions = keys.collisions,

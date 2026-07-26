@@ -1,7 +1,7 @@
 local H = require("helpers")
 local source = require("canvasdiff.source")
 local model = require("canvasdiff.diff")
-local util = require("canvasdiff.util")
+local source = require("canvasdiff.source")
 
 local T = {}
 
@@ -103,7 +103,9 @@ T["eol_ plain LF file is unaffected"] = function()
   H.eq({ canvasdiff_counts(root, "plain.txt") }, { ga, gd })
 end
 
-T["eol_ buf_text reconstructs fileformat and endofline"] = function()
+-- Reading a loaded buffer is the source domain's job now, so this exercises
+-- the one surviving reconstruction rather than a second copy of it.
+T["eol_ a loaded buffer reconstructs fileformat and endofline"] = function()
   local root = fixture()
   for _, case in ipairs({
     { "dos.txt", "alpha\r\nbeta\r\ngammaX\r\n" },
@@ -111,16 +113,19 @@ T["eol_ buf_text reconstructs fileformat and endofline"] = function()
     { "plain.txt", "x\nyY\n" },
   }) do
     local b = load_buf(vim.fs.joinpath(root, case[1]))
-    local got = util.buf_text(b)
+    local got = source.worktree_text(root, case[1])
     wipe(b)
     H.eq(got, case[2], case[1] .. " must round-trip byte-exactly through the buffer")
   end
 end
 
-T["eol_ buf_text treats an empty buffer as empty"] = function()
-  local b = vim.api.nvim_create_buf(false, true)
-  H.eq(util.buf_text(b), "")
-  vim.api.nvim_buf_delete(b, { force = true })
+T["eol_ an empty loaded buffer reads as empty"] = function()
+  local root = fixture()
+  local abs = vim.fs.joinpath(root, "empty.txt")
+  vim.fn.writefile({}, abs)
+  local b = load_buf(abs)
+  H.eq(source.worktree_text(root, "empty.txt"), "")
+  wipe(b)
 end
 
 return T

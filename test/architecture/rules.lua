@@ -16,18 +16,10 @@ R.domains = {
   ui = true,
 }
 
--- Transitional debt ledger. Entries may only be removed. A module leaves this
--- list in the same commit that moves behind a domain facade; new flat modules
--- are never added here.
---
--- jump temporarily calls the UI facade to preserve its existing notification
--- behavior. It may leave this ledger only when those calls become returned
--- outcomes presented by App: input -> ui is forbidden once the path acquires
--- its final domain classification.
-R.legacy_paths = {
-  "lua/canvasdiff/jump.lua",
-  "lua/canvasdiff/util.lua",
-}
+-- Transitional debt ledger, now empty. Every module reached its owning domain,
+-- and nothing may ever be added back: the ceiling below is what makes that
+-- executable rather than a promise.
+R.legacy_paths = {}
 
 -- Immutable upper bound for the transition. Keeping this separate from the
 -- active list makes "the ledger may only shrink" executable: migration

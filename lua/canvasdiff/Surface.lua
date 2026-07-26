@@ -1,5 +1,7 @@
 local config = require("canvasdiff.config")
 local session = require("canvasdiff.session")
+local input = require("canvasdiff.input")
+local jump = input.jump
 local ui = require("canvasdiff.ui")
 local hl = ui.highlight
 local scrollbar = ui.scrollbar
@@ -38,6 +40,9 @@ function Surface.new(state, callbacks, ownership)
     state = state,
     callbacks = callbacks or {},
     controllers = {},
+    -- One review, one way back. Two concurrent reviews keep independent
+    -- excursions rather than overwriting a shared module-global one.
+    excursion = jump.store(),
     windows = {},
     landings = {},
     baseline_windows = baseline_windows,
@@ -316,6 +321,10 @@ function Surface:dispose(reason)
   if clear_winbar then
     attempt("clear_winbar", function() clear_winbar(self) end)
   end
+
+  -- The way back belonged to this review. Releasing it here keeps a disposed
+  -- Surface from retaining a file buffer and a whole canvas state graph.
+  self.excursion = nil
 
   if self.state then
     self.state.hooks = nil

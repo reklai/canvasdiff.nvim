@@ -2,9 +2,24 @@ local H = require("helpers")
 local source = require("canvasdiff.source")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
-local jump = require("canvasdiff.jump")
+local jump = require("canvasdiff.input").jump
 local fold = model.fold
 local lens = model.lens
+
+-- One fixture is one review, so it gets one excursion store -- exactly what a
+-- Surface owns in production. Navigation returns outcomes rather than showing
+-- notifications, so these helpers assert the message the owner would present
+-- instead of shimming vim.notify.
+local store
+
+local function enter(st, opts)
+  return jump.enter(store, st, opts)
+end
+
+local function back(opts)
+  local outcome = jump.back(store, opts)
+  return outcome.ok, outcome.diagnostic and outcome.diagnostic.message or nil
+end
 
 local function sh(root, cmd)
   local res = vim.system(cmd, { cwd = root, text = true }):wait()
@@ -24,6 +39,7 @@ local function open_fixture(spec)
   end
   local st = canvas.open(model.build(files), {})
   st.root = root
+  store = jump.store()
   return root, st
 end
 
@@ -52,7 +68,7 @@ return {
     for i, l in ipairs(rows) do if l == "+A2" then target = i end end
     assert(target, "canvas should contain +A2")
     vim.api.nvim_win_set_cursor(st.win, { target, 0 })
-    jump.enter(st)
+    enter(st)
     H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "a.txt")
     H.eq(vim.api.nvim_win_get_cursor(st.win)[1], 2) -- A2 is line 2
   end,
@@ -70,10 +86,10 @@ return {
     local target
     for i, l in ipairs(rows) do if l == "+A2" then target = i end end
     vim.api.nvim_win_set_cursor(st.win, { target, 0 })
-    jump.enter(st)
+    enter(st)
     -- edit the real buffer: add a line after A2 (unsaved)
     vim.api.nvim_buf_set_lines(0, 2, 2, false, { "A2b inserted" })
-    jump.back()
+    back()
     assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()), "should be back on canvas")
     local newrows = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local found = false
@@ -115,7 +131,7 @@ return {
     st.root = root
     st.lens = l
     local before_view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
-    jump.enter(st)
+    enter(st)
 
     local file_buf = vim.api.nvim_get_current_buf()
     H.eq(vim.api.nvim_buf_get_name(file_buf), vim.fs.joinpath(root, new_path),
@@ -126,7 +142,7 @@ return {
     H.eq(source.resolve_commit(root, "comparison-base"), nil,
       "sanity: the symbolic lens ref no longer resolves")
 
-    local ok, back_err = pcall(jump.back)
+    local ok, back_err = back()
     assert(ok, "Back must use the captured canonical source: " .. tostring(back_err))
     assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()), "Back restores the canvas")
 
@@ -186,40 +202,35 @@ return {
       end,
     }
     vim.api.nvim_win_set_cursor(st.win, { 1, 0 })
-    jump.enter(st)
+    enter(st)
     local file_buf = vim.api.nvim_get_current_buf()
-
-    local messages = {}
-    local real_notify = vim.notify
-    vim.notify = function(message) messages[#messages + 1] = message end
 
     -- Simulate a hidden-canvas refresh removing the destination identity while
     -- the real file is open. The first Back must decline before consuming.
     canvas.render_all(st, {})
-    local section_ok, section_err = pcall(jump.back)
-    assert(section_ok, "a missing destination must report, not throw: " .. tostring(section_err))
+    local section_ok, section_message = back()
+    H.eq(section_ok, false, "a missing destination must decline, not return")
     H.eq(vim.api.nvim_get_current_buf(), file_buf,
       "a failed destination lookup leaves the file on screen")
-    assert(#messages == 1 and messages[1]:find("not found in canvas", 1, true),
-      "the missing destination identity is explicit: " .. vim.inspect(messages))
+    assert(section_message and section_message:find("not found in canvas", 1, true),
+      "the missing destination identity is explicit: " .. tostring(section_message))
     H.eq(shape_changes, 0,
       "a declined return cannot publish a shape change")
 
     canvas.render_all(st, { section })
-    messages = {}
-    local source_ok, source_err = pcall(jump.back)
-    vim.notify = real_notify
+    local source_ok, source_message = back()
 
-    assert(source_ok, "a missing captured source must report, not throw: " .. tostring(source_err))
+    H.eq(source_ok, false, "a missing captured source must decline, not return")
     H.eq(vim.api.nvim_get_current_buf(), file_buf,
       "a failed source lookup also leaves the destination file on screen")
-    assert(#messages == 1 and messages[1]:find("cannot rebuild excursion old side", 1, true),
-      "the source lookup failure is explicit: " .. vim.inspect(messages))
+    assert(source_message
+      and source_message:find("cannot rebuild excursion old side", 1, true),
+      "the source lookup failure is explicit: " .. tostring(source_message))
     H.eq(shape_changes, 0,
       "a failed source preflight cannot publish a shape change")
 
     sh(root, { "git", "branch", "recoverable-base", "HEAD" })
-    assert(pcall(jump.back), "the same excursion remains retryable after its source appears")
+    assert((back()), "the same excursion remains retryable after its source appears")
     assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()),
       "the successful retry restores the canvas")
     H.eq(shape_changes, 1,
@@ -245,13 +256,13 @@ return {
     local deep = 40
     assert(#st.sections[1].entries > deep, "fixture must be taller than the bad offset")
     vim.api.nvim_win_set_cursor(st.win, { deep, 0 })
-    jump.enter(st)
+    enter(st)
 
     -- Exactly what sidebar.select's dir branch does, with the canvas off screen.
     st.folded["sub/"] = true
     canvas.resync_visibility(st, fold.indices_under(st.sections, "sub/"))
 
-    jump.back()
+    back()
 
     local start0, end0 = canvas.section_rows(st, 1)
     H.eq(end0 - start0, 1, "the folded section must render as one placeholder row")
@@ -276,7 +287,7 @@ return {
     vim.api.nvim_set_current_win(st.win)
 
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 })
-    jump.enter(st)
+    enter(st)
     -- An unsaved edit, so we can prove the splice still ran.
     vim.api.nvim_buf_set_lines(0, 0, 0, false, { "inserted before the quit" })
 
@@ -285,8 +296,8 @@ return {
     assert(not vim.api.nvim_win_is_valid(gone), "sanity: the window really is gone")
 
     vim.api.nvim_set_current_win(spare)
-    local ok, err = pcall(jump.back)
-    assert(ok, "back() must not throw when its window is gone: " .. tostring(err))
+    local ok, message = back()
+    assert(ok, "back() must succeed when its window is gone: " .. tostring(message))
 
     H.eq(vim.api.nvim_win_get_buf(spare), st.buf, "the canvas came back in the window we were in")
     H.eq(st.win, spare, "and the state follows it")
@@ -307,7 +318,7 @@ return {
     local lease = assert(sidebar.open(st, { width = 30 }))
 
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 })
-    jump.enter(st)
+    enter(st)
 
     local gone = st.win
     vim.api.nvim_win_close(gone, true)
@@ -321,14 +332,10 @@ return {
 
     -- Guarded, because a failure here would otherwise leave the winfixbuf sidebar
     -- focused and every later canvas.open would die on E1513.
-    local notified = {}
     local ok, err = pcall(function()
-      local real = vim.notify
-      vim.notify = function(m) notified[#notified + 1] = m end
-      local declined = pcall(jump.back)
-      vim.notify = real
-      assert(declined, "declining must not throw")
-      assert(#notified > 0, "and must say why")
+      local returned, message = back()
+      H.eq(returned, false, "declining must not return")
+      assert(message, "and must say why")
       H.eq(vim.api.nvim_win_get_buf(side_win) == st.buf, false,
         "the sidebar keeps its own buffer")
 
@@ -336,7 +343,7 @@ return {
       vim.cmd("split")
       vim.cmd("enew")
       local usable = vim.api.nvim_get_current_win()
-      assert(pcall(jump.back), "the excursion must have survived the decline")
+      assert((back()), "the excursion must have survived the decline")
       H.eq(vim.api.nvim_win_get_buf(usable), st.buf, "second press lands the canvas")
     end)
     sidebar.close(lease)
@@ -355,10 +362,10 @@ return {
   ["jump: back with all changes reverted deletes section"] = function()
     local root, st = setup_repo()
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 }) -- somewhere in a.txt section
-    jump.enter(st)
+    enter(st)
     -- revert buffer content to HEAD content
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a1", "a2", "a3", "a4", "a5" })
-    jump.back()
+    back()
     H.eq(#st.sections, 1)
     H.eq(st.sections[1].path, "b.txt")
   end,

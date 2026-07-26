@@ -93,14 +93,12 @@ T.architecture_layout_names_have_one_meaning = function()
         or file.rel:match("^plugin/")
         or file.rel:match("^benchmark/") then
       local basename = file.rel:match("([^/]+)%.lua$")
-      local legacy_util = file.rel == "lua/canvasdiff/util.lua" and rules.legacy[file.rel]
-
       if not basename then
         errors[#errors + 1] = "invalid Lua filename: " .. file.rel
       elseif basename == "main" then
         errors[#errors + 1] = "main.lua is a forbidden catch-all: " .. file.rel
       end
-      if basename and not legacy_util and (
+      if basename and (
         basename == "util"
         or basename == "utils"
         or file.rel:find("/util/", 1, true)

@@ -14,6 +14,9 @@ local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
 local HIGHLIGHT_OWNER = "canvasdiff.ui.highlight"
 local SIDEBAR_OWNER = "canvasdiff.ui.sidebar"
 local STATUS_COLUMN_OWNER = "canvasdiff.ui.status_column"
+local INPUT_FACADE = "canvasdiff.input"
+local JUMP_OWNER = "canvasdiff.input.jump"
+local COMMAND_OWNER = "canvasdiff.input.command"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -223,6 +226,58 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
     "UI production and test consumers must enter through canvasdiff.ui")
 end
 
+T.architecture_input_internals_are_reached_only_through_the_input_facade = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+  assert_inspected_module(inspection, INPUT_FACADE)
+  assert_inspected_module(inspection, COMMAND_OWNER)
+  assert_inspected_module(inspection, JUMP_OWNER)
+
+  local facade_edges = {}
+  local violations = {}
+  for _, file in ipairs(inspection.files) do
+    for _, dependency in ipairs(literal_requires_in(file)) do
+      if dependency.module:match("^canvasdiff%.input%.") then
+        if file.rel == "lua/canvasdiff/input.lua" then
+          facade_edges[dependency.module] = (facade_edges[dependency.module] or 0) + 1
+        elseif file.rel:match("^lua/canvasdiff/input/") then
+          -- Owners inside the domain compose directly; routing them through
+          -- the facade they belong to would be a cycle, not a boundary.
+          _ = dependency
+        else
+          violations[#violations + 1] = (
+            "%s:%d -> %s"
+          ):format(file.rel, dependency.line, dependency.module)
+        end
+      end
+    end
+  end
+
+  H.eq(facade_edges[COMMAND_OWNER], 1, "the input facade owns the one command edge")
+  H.eq(facade_edges[JUMP_OWNER], 1, "the input facade owns the one jump edge")
+  assert_no_errors(violations,
+    "input production and test consumers must enter through canvasdiff.input")
+end
+
+-- Input plans and navigates; it never presents, and it never calls back into
+-- the application. Either edge would put a cycle in the domain graph and make
+-- the whole domain untestable without a window.
+T.architecture_input_never_reaches_ui_or_the_root_facade = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = { [UI_FACADE] = true, ["canvasdiff"] = true }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from:match("^canvasdiff%.input") and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations,
+    "input must return outcomes for its owner to execute and present")
+end
+
 T.architecture_status_column_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
@@ -276,7 +331,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
 
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
-    ["canvasdiff.jump"] = true,
+    [JUMP_OWNER] = true,
     ["canvasdiff.input.motions"] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
@@ -297,7 +352,7 @@ end
 T.architecture_jump_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.jump")
+  assert_inspected_module(inspection, JUMP_OWNER)
 
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
@@ -310,7 +365,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.jump" and forbidden[edge.to] then
+    if edge.from == JUMP_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
@@ -338,7 +393,9 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
     },
     ["canvasdiff.ui"] = { rel = "lua/canvasdiff/ui.lua" },
     ["canvasdiff.ui.sidebar"] = { rel = "lua/canvasdiff/ui/sidebar.lua" },
-    ["canvasdiff.util"] = { rel = "lua/canvasdiff/util.lua" },
+    ["canvasdiff.ui.notifications"] = {
+      rel = "lua/canvasdiff/ui/notifications.lua",
+    },
   }
 
   local allowed = policy.edge_violations({
@@ -359,11 +416,11 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
         to_path = nodes["canvasdiff.input"].rel,
       },
       {
-        from = "canvasdiff.util",
-        from_path = nodes["canvasdiff.util"].rel,
+        from = "canvasdiff.ui.sidebar",
+        from_path = nodes["canvasdiff.ui.sidebar"].rel,
         line = 3,
-        to = "canvasdiff.ui.sidebar",
-        to_path = nodes["canvasdiff.ui.sidebar"].rel,
+        to = "canvasdiff.ui.notifications",
+        to_path = nodes["canvasdiff.ui.notifications"].rel,
       },
       {
         from = "canvasdiff.source",
@@ -548,19 +605,22 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
   assert(reverse[1]:find("forbidden dependency", 1, true), reverse[1])
 end
 
-T.architecture_dependencies_policy_finds_cycles_but_excludes_legacy = function()
+-- The ledger is empty, so nothing classifies as legacy any more and every
+-- cycle between owned domains is reportable. An unowned path is not exempt
+-- either: it is already an error in its own right.
+T.architecture_dependencies_policy_finds_cycles_between_owned_domains = function()
   local nodes = {
     ["canvasdiff.input"] = { rel = "lua/canvasdiff/input.lua" },
     ["canvasdiff.ui"] = { rel = "lua/canvasdiff/ui.lua" },
-    ["canvasdiff.util"] = { rel = "lua/canvasdiff/util.lua" },
+    ["canvasdiff.stray"] = { rel = "lua/canvasdiff/stray.lua" },
   }
   local inspection = {
     nodes = nodes,
     edges = {
       { from = "canvasdiff.input", to = "canvasdiff.ui" },
       { from = "canvasdiff.ui", to = "canvasdiff.input" },
-      { from = "canvasdiff.util", to = "canvasdiff.ui" },
-      { from = "canvasdiff.ui", to = "canvasdiff.util" },
+      { from = "canvasdiff.stray", to = "canvasdiff.ui" },
+      { from = "canvasdiff.ui", to = "canvasdiff.stray" },
     },
   }
 
@@ -570,9 +630,11 @@ T.architecture_dependencies_policy_finds_cycles_but_excludes_legacy = function()
     "canvasdiff.input",
   })
 
+  -- A path with no architectural owner cannot participate in a reported
+  -- cycle, because the scan already refuses it by name.
   inspection.edges = {
-    { from = "canvasdiff.util", to = "canvasdiff.ui" },
-    { from = "canvasdiff.ui", to = "canvasdiff.util" },
+    { from = "canvasdiff.stray", to = "canvasdiff.ui" },
+    { from = "canvasdiff.ui", to = "canvasdiff.stray" },
   }
   H.eq(policy.find_cycle(inspection), nil)
 end

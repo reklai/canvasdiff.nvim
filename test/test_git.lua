@@ -29,6 +29,7 @@ return {
       "sections",
       "show",
       "show_head",
+      "worktree_text",
     })
     for _, name in ipairs(names) do
       H.eq(type(source[name]), "function", name .. " is callable")

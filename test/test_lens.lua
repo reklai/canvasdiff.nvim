@@ -364,7 +364,7 @@ end
 
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local jump = require("canvasdiff.jump")
+local jump = require("canvasdiff.input").jump
 local session = require("canvasdiff.session")
 
 local function open_lens(root, l)
@@ -441,16 +441,13 @@ T["lens_staged jump declines and names the way out"] = function()
   assert(target, "found the staged add row")
   vim.api.nvim_win_set_cursor(st.win, { target, 0 })
 
-  local msgs = {}
-  local real = vim.notify
-  vim.notify = function(m) msgs[#msgs + 1] = m end
-  local ok = pcall(jump.enter, st)
-  vim.notify = real
+  local outcome = jump.enter(jump.store(), st)
 
-  assert(ok, "declining must not throw")
+  H.eq(outcome.ok, false, "an uneditable lens declines")
   H.eq(vim.api.nvim_win_get_buf(st.win), before, "and must not open anything")
-  assert(#msgs > 0 and msgs[1]:match("unstage"),
-    "the message has to name the way out, got: " .. vim.inspect(msgs))
+  assert(outcome.diagnostic and outcome.diagnostic.message:match("unstage"),
+    "the message has to name the way out, got: "
+    .. vim.inspect(outcome.diagnostic))
   vim.fn.delete(root, "rf")
 end
 

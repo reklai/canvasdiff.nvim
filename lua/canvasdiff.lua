@@ -33,6 +33,10 @@ return {
   toggle_base = function()
     return app:toggle_base()
   end,
+  --- Return from a jump excursion into the live review's canvas.
+  jump_back = function(opts)
+    return app:jump_back(nil, nil, type(opts) == "table" and opts.win or opts)
+  end,
   --- Run one `:CanvasDiff` invocation from its raw arguments.
   command = function(fargs)
     return app:command(fargs)
