@@ -2,7 +2,7 @@
 
 Date: 2026-07-27
 
-Implementation checkpoint: `55e7be9`
+Implementation checkpoint: `64d8504`
 
 This is a stopping-point handoff, not a completion claim. The original goal
 remains the full [CanvasDiff migration and million-line journey](2026-07-26-canvasdiff-migration.md),
@@ -34,9 +34,10 @@ Keep these decisions fixed unless the product direction is explicitly changed:
 
 ## Exact checkpoint state
 
-At `55e7be9`, the implementation tree was clean and the full suite passed
-`668/668`. Sections 1 and 2 below are **done**, and the ingestion half of
-section 3 is done. Sections 4 to 7 have not been started.
+At `64d8504`, the implementation tree was clean and the full suite passed
+`672/672`. Sections 1 and 2 below are **done**. Section 3's ingestion half is
+done and its logical-text seam is in place; its page-backed display is not.
+Sections 5 to 7 have not been started.
 
 Commits since the previous checkpoint:
 
@@ -55,6 +56,8 @@ Commits since the previous checkpoint:
 - `851d2c0` -- collection streams one file at a time.
 - `55e7be9` -- a section can release both file sides and still fingerprint
   and render.
+- `64d8504` -- `canvas.logical` states the logical-text contract, and the
+  eager/paged oracle is pinned against it.
 
 The architecture ledger is empty and that is a gate, not a milestone:
 nothing classifies as legacy any more, so a new flat module under
@@ -66,6 +69,9 @@ Interim constraints that REMAIN:
   `diff.release_text` yet, and Surface owns no Projection or Scheduler.
 - Projection and Scheduler are exposed by the canvas facade and heavily
   tested, but no production code creates one.
+- `canvas.logical` exists and is proven equivalent to a Projection, but no
+  production caller reads through it yet -- App, the sidebar, the status
+  column and the scrollbar still read buffer lines directly.
 - The root facade owns one App; App now indexes many Surfaces, one per
   canvas buffer.
 
@@ -141,12 +147,13 @@ What REMAINS, and what makes it large:
    real buffer rows. A page-backed canvas needs a counterpart for each of
    those against LOGICAL rows.
 
-   This is why the journey says "behind the same logical-text contract": the
-   seam to build first is one interface (`row_count`, `row`, `rows`,
-   `export`) that both the eager `Canvas` and a paged canvas satisfy, with
-   App/Surface talking only to it. Introducing that seam while only the eager
-   implementation exists is the next tractable commit; the paged
-   implementation follows it.
+   The seam itself now exists: `canvas.logical(state)` answers `row_count`,
+   `row`, `rows` and `export` with the same shape and the same validation
+   `Projection` does, and `test/integration/test_logical_text.lua` proves a
+   paged view of the same rows agrees byte for byte across folds, splices,
+   re-renders and every range boundary. What remains is to route the
+   production readers through it, and then to build the paged canvas behind
+   it.
 
 4. `PageList.from_iterator` is the ingestion entry point for step 3 -- it
    takes exactly the `next_row` shape `section_stream` can be adapted into.
@@ -273,13 +280,13 @@ fact here disagrees with executable tests or `test/architecture/rules.lua`,
 the executable contract wins and this handoff should be corrected in the same
 commit as the discovery.
 
-The next slice is the logical-text seam described under section 3: one
-interface both the eager `Canvas` and a page-backed canvas satisfy, with
-App and Surface talking only to it. Build it with the eager implementation
-alone first, so the tree stays green, then add the paged implementation and
-Surface's ownership of the Projection and Scheduler behind it.
+The next slice is to route production readers through `canvas.logical`, so
+that swapping in a paged canvas is a change of implementation rather than a
+change of every caller. Then Surface's ownership of an exact Projection and
+Scheduler, with activity calling `Scheduler:touch()`, and only then the
+paged canvas itself.
 
-Sections 4 to 7 are untouched and each is substantial: the logical-text and
+Sections 4 to 7 remain, and each is substantial: the logical-text and
 compaction oracles, a million-row performance lane with measured RSS and
 latency budgets, 10,000 deterministic chaos actions across at least three
 seeds, and live acceptance evidence checked into `docs/verification/`.
