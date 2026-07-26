@@ -43,7 +43,7 @@ local function jump_round_trip()
     if l == "+A1" then vim.api.nvim_win_set_cursor(0, { i, 0 }) end
   end
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
-  vim.api.nvim_feedkeys(vim.keycode("<M-CR>"), "x", false)
+  vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
 end
 
 -- The contract: closing is non-destructive. Reviewing interrupts whatever you

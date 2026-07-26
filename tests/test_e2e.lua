@@ -29,13 +29,18 @@ return {
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     assert(vim.api.nvim_buf_get_name(0):find("src/a.lua", 1, true), "should be in a.lua")
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "return 99" })
-    vim.api.nvim_feedkeys(vim.keycode("<M-CR>"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
     local after = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local found = false
     for _, l in ipairs(after) do if l == "+return 99" then found = true end end
     assert(found, "canvas must show the edited content")
   end,
-  ["e2e: double-click on a collapsed placeholder expands instead of jumping"] = function()
+  -- Enter (and double-click, which shares the handler) is fold-BLIND: on a folded
+  -- file's placeholder it opens the file and leaves the fold alone. Two verbs with
+  -- no exceptions -- this one goes to a file, Tab folds one. It used to expand the
+  -- placeholder instead, which both duplicated Tab and made Enter's meaning depend
+  -- on state you cannot see from the keypress.
+  ["e2e: Enter on a folded placeholder opens the file, fold untouched"] = function()
     local root = H.git_fixture({
       committed = { ["a.txt"] = "a1\na2\na3\n" },
       worktree = { ["a.txt"] = "A1\na2\na3\n" },
@@ -45,28 +50,36 @@ return {
     local fm = require("galley")
     fm.open()
 
+    local canvas_mod = require("galley.canvas")
     local canvas_buf = vim.api.nvim_get_current_buf()
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
-
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-    assert(lines[1]:match("^▸ a%.txt"), "sanity: a.txt collapsed to its placeholder: " .. lines[1])
+    assert(lines[1]:match("^▸ a%.txt"), "sanity: folded to its placeholder: " .. lines[1])
 
+    -- Enter on that placeholder opens the real file.
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    assert(vim.api.nvim_buf_get_name(0):find("a.txt", 1, true),
+      "Enter must open the file, not unfold: in " .. vim.api.nvim_buf_get_name(0))
+
+    -- And coming back lands on the placeholder, still folded.
+    vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
+    H.eq(vim.api.nvim_get_current_buf(), canvas_buf, "back on the canvas")
+    local after = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    assert(after[1]:match("^▸ a%.txt"), "the fold survived the round trip: " .. after[1])
+    H.eq(vim.api.nvim_win_get_cursor(0)[1], 1, "and we landed on it")
+
+    -- Double-click shares the handler, so it behaves the same.
     local dblclick
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(canvas_buf, "n")) do
-      if m.lhs == "<2-LeftMouse>" then
-        dblclick = m.callback
-      end
+      if m.lhs == "<2-LeftMouse>" then dblclick = m.callback end
     end
-    assert(dblclick, "sanity: <2-LeftMouse> mapping exists on the canvas buffer")
-
-    vim.api.nvim_win_set_cursor(0, { 1, 0 }) -- on the collapsed placeholder row
+    assert(dblclick, "sanity: <2-LeftMouse> is mapped")
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
     dblclick()
-
-    local lines2 = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-    assert(not lines2[1]:match("^▸"),
-      "double-click on the placeholder must expand it instead of jumping: " .. lines2[1])
-    H.eq(vim.api.nvim_get_current_buf(), canvas_buf, "double-click must not jump out of the canvas")
+    assert(vim.api.nvim_buf_get_name(0):find("a.txt", 1, true),
+      "double-click opens it too")
 
     fm.close()
   end,
@@ -115,7 +128,7 @@ return {
     local ok, err = pcall(function()
       vim.api.nvim_set_current_win(canvas_win)
       vim.api.nvim_win_set_cursor(canvas_win, { 1, 0 })
-      vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+      vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
     end)
     vim.notify = real_notify
     assert(ok, err)
@@ -143,6 +156,69 @@ return {
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     H.eq(vim.api.nvim_get_current_win(), canvas_win, "<CR> must not jump out of the canvas")
     assert(not canvas_lines()[1]:match("^▸"), "<CR> reveals it too")
+
+    fm.close()
+  end,
+  -- The test above presses <Tab> on the TOP placeholder, where the viewport
+  -- top and the cursor are the same row and resplice's "above" branch happens
+  -- to carry lnum along. One row down, resplice's viewport-anchored branch
+  -- forced lnum to the first expanding section's start and the cursor came to
+  -- rest on a file the user never pressed on -- after which <CR>, ]f and ]h all
+  -- operated from the wrong section.
+  ["e2e: <Tab> on the lower placeholder of a fold reveals under the cursor"] = function()
+    local root = H.git_fixture({
+      committed = { ["a/one.txt"] = "1\n", ["a/two.txt"] = "2\n" },
+      worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local canvas_win = vim.api.nvim_get_current_win()
+
+    local sbuf
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
+        sbuf = b
+      end
+    end
+    assert(sbuf, "sanity: the sidebar is open")
+    local select_cr
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
+      if m.lhs == "<CR>" then select_cr = m.callback end
+    end
+    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 }) -- the a/ dir row
+    select_cr()
+
+    local function canvas_lines()
+      return vim.api.nvim_win_call(canvas_win, function()
+        return vim.api.nvim_buf_get_lines(0, 0, -1, false)
+      end)
+    end
+    local folded = canvas_lines()
+    assert(folded[1]:match("^▸ a/one%.txt"), "sanity: row 1 is one.txt: " .. folded[1])
+    assert(folded[2]:match("^▸ a/two%.txt"), "sanity: row 2 is two.txt: " .. folded[2])
+
+    -- Row 2 -- a/two.txt -- with the viewport top still on row 1.
+    vim.api.nvim_set_current_win(canvas_win)
+    vim.api.nvim_win_call(canvas_win, function()
+      vim.fn.winrestview({ topline = 1, lnum = 2 })
+    end)
+    local real_notify = vim.notify
+    vim.notify = function() end
+    local ok, err = pcall(function()
+      vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
+    end)
+    vim.notify = real_notify
+    assert(ok, err)
+
+    local revealed = canvas_lines()
+    assert(not revealed[1]:match("^▸"), "sanity: the directory did unfold")
+    local cur = vim.api.nvim_win_get_cursor(canvas_win)[1]
+    assert(revealed[cur]:match("^▎ a/two%.txt"),
+      ("cursor must stay on the file that was pressed; landed on row %d: %s")
+        :format(cur, revealed[cur]))
 
     fm.close()
   end,
@@ -178,7 +254,7 @@ return {
     H.eq(vim.api.nvim_get_current_buf(), edited_buf, "close() must not swap away the window's current buffer")
     H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "other.txt")
   end,
-  -- `R` (refresh) is the manual version of watch's pass, and it must hold the niri
+  -- `r` (refresh) is the manual version of watch's pass, and it must hold the niri
   -- invariant: content changing OUTSIDE the viewport never moves what you are
   -- reading. It used to call render_all, which recreated every anchor and restored
   -- no view -- so the key you pressed to make the canvas trustworthy was the key
@@ -189,8 +265,8 @@ return {
   -- the same content under the cursor requires topline to advance by exactly three.
   -- A line-number assertion would fail on correct behaviour and pass on render_all,
   -- which leaves the number alone and slides different text underneath it. Verified:
-  -- an earlier version of this check called `R` broken and `R` fine, exactly backwards.
-  ["e2e: R refreshes without moving what you are reading"] = function()
+  -- an earlier version of this check called `r` broken and `R` fine, exactly backwards.
+  ["e2e: r refreshes without moving what you are reading"] = function()
     local function body(tag, marks)
       local o = {}
       for i = 1, 90 do
@@ -234,14 +310,14 @@ return {
     f:close()
 
     vim.api.nvim_set_current_win(win)
-    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("r"), "x", false)
 
     local after = snap()
     local all = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
-    assert(all:find("tail3", 1, true), "`R` must actually pick the new content up")
+    assert(all:find("tail3", 1, true), "`r` must actually pick the new content up")
     H.eq(after.cur_text, before.cur_text, "the same TEXT is still under the cursor")
     H.eq(after.top_text, before.top_text, "and the same text is still at the window top")
-    -- Proves the test cannot pass by `R` having done nothing at all: three lines
+    -- Proves the test cannot pass by `r` having done nothing at all: three lines
     -- landed above us, so the row numbers must have advanced by three.
     H.eq(after.top - before.top, 3, "topline advanced by exactly the lines inserted above")
     H.eq(after.lnum - before.lnum, 3, "and so did the cursor row")
@@ -249,7 +325,7 @@ return {
     fm.close()
     vim.fn.delete(root, "rf")
   end,
-  -- The honest limit of `R`, and the reason there is no hard-rebuild key.
+  -- The honest limit of `r`, and the reason there is no hard-rebuild key.
   --
   -- A reconcile compares state.sections against freshly-collected truth and skips
   -- what matches, so it assumes state.sections describes the BUFFER. If those ever
@@ -260,7 +336,7 @@ return {
   -- position through the session file, which a bare render_all does not. Measured
   -- three ways on a corrupted buffer -- refresh: not repaired; rebuild: repaired,
   -- position lost; close+open: repaired, position kept. So this test pins both
-  -- halves: that `R` does NOT claim to repair this, and that the documented
+  -- halves: that `r` does NOT claim to repair this, and that the documented
   -- recovery genuinely does.
   --
   -- Note the corruption has to unset 'modifiable' first: nomodifiable blocks
@@ -289,8 +365,8 @@ return {
 
     -- Refresh cannot see it: state.sections still matches what git reports, so the
     -- merge-walk finds nothing to splice. Pressing it twice makes the point.
-    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
-    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("r"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("r"), "x", false)
     assert(diverged(buf),
       "refresh must NOT be expected to repair this -- it compares model to git, "
       .. "not model to buffer. If this ever starts passing, the reconcile learned "

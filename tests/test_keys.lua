@@ -39,16 +39,16 @@ end
 T["keys_resolved expands a multi-key action to one entry per key"] = function()
   local got = keys.resolved("canvas", defaults())
   H.eq(find(got, "jump"), { "<CR>", "<2-LeftMouse>" })
-  H.eq(find(got, "collapse"), { "<Tab>", "za" })
+  H.eq(find(got, "collapse"), { "za", "c" })
   H.eq(find(got, "close"), { "q" })
 end
 
 T["keys_resolved honors a user override and replaces the whole list"] = function()
   local km = defaults()
-  km.canvas.collapse = "<Tab>" -- list -> string: za must be gone
+  km.canvas.collapse = "za" -- list -> string: `c` must be gone
   km.canvas.jump = { "<CR>", "o" }
   local got = keys.resolved("canvas", km)
-  H.eq(find(got, "collapse"), { "<Tab>" }, "overriding with a string drops the alternate key")
+  H.eq(find(got, "collapse"), { "za" }, "overriding with a string drops the alternate key")
   H.eq(find(got, "jump"), { "<CR>", "o" })
 end
 
@@ -90,16 +90,19 @@ T["keys_grouped collapses a multi-key action into one row"] = function()
     end
   end
   assert(collapse, "collapse must appear in the grouped view")
-  H.eq(collapse.keys, { "<Tab>", "za" },
+  H.eq(collapse.keys, { "za", "c" },
     "grouped shows one row carrying both keys, unlike resolved's two entries")
 end
 
 T["keys_grouped omits disabled actions and empty groups"] = function()
   local km = defaults()
   km.canvas.collapse = false
+  km.canvas.lens_next = false
+  km.canvas.lens_prev = false
   local groups = keys.grouped({ "canvas" }, km)
   for _, g in ipairs(groups) do
-    assert(g.name ~= "View", "the View group holds only collapse; disabling it drops the group")
+    assert(g.name ~= "View",
+      "View holds collapse plus the two lens keys; disabling all three drops the group")
     for _, item in ipairs(g.items) do
       assert(item.action ~= "collapse", "a disabled action must not be listed")
     end

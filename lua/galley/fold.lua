@@ -136,86 +136,20 @@ function F.user_folded_set(sections, state)
   return set
 end
 
---- Ascending section indices a file motion may land on.
-function F.navigable(sections, state, auto)
+--- Indices of the sections under directory `dir` (a fold key, trailing
+--- slash). Ascending, and contiguous in practice because sections are
+--- path-sorted (model.build) and a fold key is a path prefix.
+function F.indices_under(sections, dir)
   local out = {}
-  for i, sec in ipairs(sections or {}) do
-    if not F.user_folded(state, sec.path) then
+  if not sections or not dir or dir == "" then
+    return out
+  end
+  for i, sec in ipairs(sections) do
+    if string.sub(sec.path, 1, #dir) == dir then
       out[#out + 1] = i
     end
   end
   return out
-end
-
---- Position of `i` in the ascending list `nav`, plus the insertion point.
---- Returns (pos, nil) when `i` is in `nav`, else (nil, the first index whose
---- value exceeds `i`) -- which is #nav + 1 when `i` is past the end.
-local function locate_in(nav, i)
-  for p, k in ipairs(nav) do
-    if k == i then
-      return p, nil
-    end
-    if k > i then
-      return nil, p
-    end
-  end
-  return nil, #nav + 1
-end
-
---- Step `count` navigable sections from section `i`, clamping at both ends --
---- the ]f / [f semantics. Returns a section index, or nil when there is
---- nowhere to go.
----
---- Clamping at the far end returns `i` itself rather than nil, deliberately, so
---- ]f on the last section still snaps the cursor to that section's start.
-function F.step_clamped(nav, i, dir, count)
-  local n = #nav
-  if n == 0 then
-    return nil -- nothing navigable: stay put rather than jumping to section one
-  end
-  count = math.max(1, count or 1)
-  local p, after = locate_in(nav, i)
-  if not p then
-    -- The cursor sits on a set-aside section, so the first step is "reach the
-    -- nearest navigable one in the direction of travel". Never reverse: with
-    -- nothing that way, don't move at all -- the rule goto_hunk already
-    -- follows when no qualifying row lies ahead.
-    p = dir > 0 and after or (after - 1)
-    if p < 1 or p > n then
-      return nil
-    end
-    count = count - 1
-  end
-  local q = p + dir * count
-  if q < 1 then
-    q = 1
-  elseif q > n then
-    q = n
-  end
-  return nav[q]
-end
-
---- Step `count` navigable sections from section `i`, wrapping -- the
---- <C-n> / <C-p> semantics. Returns a section index, or nil when nothing is
---- navigable.
-function F.step_wrapped(nav, i, delta, count)
-  local n = #nav
-  if n == 0 then
-    return nil
-  end
-  count = math.max(1, count or 1)
-  local p, after = locate_in(nav, i)
-  if not p then
-    if delta > 0 then
-      p = after > n and 1 or after
-    else
-      p = (after - 1 < 1) and n or (after - 1)
-    end
-    count = count - 1
-  end
-  -- Lua's % is non-negative for a positive modulus, so wrapping backwards
-  -- needs no special case.
-  return nav[((p - 1 + delta * count) % n) + 1]
 end
 
 --- `folded` minus every key with no section under it any more.
@@ -239,22 +173,6 @@ function F.prune(sections, folded)
         out[dir] = true
         break
       end
-    end
-  end
-  return out
-end
-
---- Indices of the sections under directory `dir` (a fold key, trailing
---- slash). Ascending, and contiguous in practice because sections are
---- path-sorted (model.build) and a fold key is a path prefix.
-function F.indices_under(sections, dir)
-  local out = {}
-  if not sections or not dir or dir == "" then
-    return out
-  end
-  for i, sec in ipairs(sections) do
-    if string.sub(sec.path, 1, #dir) == dir then
-      out[#out + 1] = i
     end
   end
   return out

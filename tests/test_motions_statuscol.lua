@@ -73,7 +73,7 @@ T["motions_ ]f [f move between section starts and clamp"] = function()
   H.eq(vim.api.nvim_win_get_cursor(st.win), { a_start + 1, 0 }, "clamped at first section")
 end
 
--- --- navigation steps over what you set aside -----------------------------
+-- --- navigation steps over what you folded -----------------------------
 
 local function cursor_section(st)
   return (canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1))
@@ -89,17 +89,26 @@ local function set_folds(st, dirs)
   canvas.resync_visibility(st)
 end
 
-T["motions_ ]f [f step over a folded-away section"] = function()
+-- Folded is folded: a folded file is one row, and navigation LANDS on it. That is
+-- the whole point -- you arrive at the placeholder, press Tab to unfold, and carry
+-- on. Navigation used to step over folded files, which quietly made folding mean
+-- "I am done with this" rather than just "collapsed".
+T["motions_ ]f [f land ON a folded-away section"] = function()
   virt.detach()
   local st = canvas.open(three_sections(), {})
   set_folds(st, { ["b/"] = true })
 
   put_cursor_in(st, 1, 3)
   motions.goto_file(st, 1, 1)
-  H.eq(cursor_section(st), 3, "]f skipped the folded-away middle section")
+  H.eq(cursor_section(st), 2, "]f stops at the folded middle section, it does not skip it")
+  local s2 = (canvas.section_rows(st, 2))
+  H.eq(vim.api.nvim_win_get_cursor(st.win)[1], s2 + 1,
+    "and lands exactly on its placeholder row, where Tab will unfold it")
 
+  motions.goto_file(st, 1, 1)
+  H.eq(cursor_section(st), 3, "carrying on from there works normally")
   motions.goto_file(st, -1, 1)
-  H.eq(cursor_section(st), 1, "[f skipped it going back too")
+  H.eq(cursor_section(st), 2, "[f stops there too")
   set_folds(st, {})
 end
 
@@ -121,41 +130,20 @@ T["motions_ ]f stops at an auto-collapsed section"] = function()
   virt.detach()
 end
 
-T["motions_ ]f [f from a set-aside placeholder move only in the direction of travel"] = function()
-  virt.detach()
-  -- TWO sections under a/, so the nearest navigable section forwards is 3 --
-  -- not merely the next index, which would pass without any skipping.
-  local st = canvas.open({
-    big_section("a/one.txt", "a"),
-    big_section("a/two.txt", "b"),
-    big_section("b/three.txt", "c"),
-  }, {})
-  set_folds(st, { ["a/"] = true })
-
-  put_cursor_in(st, 1, 0) -- on a/one.txt's placeholder row
-  motions.goto_file(st, -1, 1)
-  H.eq(cursor_section(st), 1, "nothing navigable backwards: never reverse, never move")
-
-  motions.goto_file(st, 1, 1)
-  H.eq(cursor_section(st), 3, "forwards it reaches the nearest navigable section")
-  set_folds(st, {})
-end
-
-T["motions_ ]f [f do not move when nothing is navigable"] = function()
+T["motions_ ]f [f still move with every section folded"] = function()
   virt.detach()
   local st = canvas.open(three_sections(), {})
   set_folds(st, { ["a/"] = true, ["b/"] = true, ["c/"] = true })
 
   put_cursor_in(st, 2, 0)
-  local before = vim.api.nvim_win_get_cursor(st.win)
   motions.goto_file(st, 1, 1)
-  H.eq(vim.api.nvim_win_get_cursor(st.win), before, "]f is a no-op with everything set aside")
+  H.eq(cursor_section(st), 3, "every section is a stop, so there is always somewhere to go")
   motions.goto_file(st, -1, 1)
-  H.eq(vim.api.nvim_win_get_cursor(st.win), before, "[f too")
+  H.eq(cursor_section(st), 2, "and back")
   set_folds(st, {})
 end
 
-T["motions_ ]f counts only navigable sections"] = function()
+T["motions_ ]f counts every section, folded or not"] = function()
   virt.detach()
   local st = canvas.open({
     big_section("a/one.txt", "a"),
@@ -167,64 +155,70 @@ T["motions_ ]f counts only navigable sections"] = function()
 
   put_cursor_in(st, 1, 0)
   motions.goto_file(st, 1, 2)
-  H.eq(cursor_section(st), 4, "2]f counted c/ and d/, not the folded-away b/")
+  H.eq(cursor_section(st), 3, "2]f counts the folded b/ as one of the two")
   set_folds(st, {})
 end
 
-T["motions_ navigate.skip_set_aside = false restores plain index stepping"] = function()
+-- goto_file and cycle are public functions with an explicit count parameter, and
+-- there is no zero-count motion in Vim -- so 0 clamps to 1 rather than meaning
+-- "stay put", and it must mean the same in both of them. It briefly did not: the
+-- old stepping helpers clamped while the plain-index path used the count raw.
+T["motions_ count = 0 clamps to 1 in both goto_file and cycle"] = function()
   virt.detach()
   local st = canvas.open(three_sections(), {})
-  set_folds(st, { ["b/"] = true })
+  vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
 
-  config.setup({ navigate = { skip_set_aside = false } })
-  local ok, err = pcall(function()
-    put_cursor_in(st, 1, 3)
-    motions.goto_file(st, 1, 1)
-    H.eq(cursor_section(st), 2, "with the gate off, ]f lands on the placeholder")
+  put_cursor_in(st, 1, 3)
+  motions.goto_file(st, 1, 0)
+  H.eq(cursor_section(st), 2, "count 0 moves one section, like count1")
 
-    -- cycle reads the TOPLINE, not the cursor, so park it deliberately.
-    local s1 = (canvas.section_rows(st, 1))
-    vim.api.nvim_win_call(st.win, function()
-      vim.fn.winrestview({ topline = s1 + 1, lnum = s1 + 1 })
-    end)
-    sidebar.cycle(st, 1)
-    local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
-    H.eq((canvas.locate(st, top0)), 2, "and cycle steps by index too")
+  local s1 = (canvas.section_rows(st, 1))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = s1 + 1, lnum = s1 + 1 })
   end)
-  config.setup({})
-  set_folds(st, {})
-  assert(ok, err)
+  sidebar.cycle(st, 1, 0)
+  local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+  H.eq((canvas.locate(st, top0)), 2, "and cycle agrees")
 end
 
-T["motions_ ]h steps hunk headers across sections and skips collapsed"] = function()
+-- A folded file gets exactly ONE ]h stop: its placeholder row. So ]h walks INTO it
+-- rather than over it -- arrive, press Tab, carry on. The old behaviour skipped
+-- folded sections entirely, which meant a folded file was unreachable by ]h.
+--
+-- What it must never do is land on a row computed from a folded section's ENTRIES.
+-- That part is arithmetic, not policy: the section still carries every entry while
+-- rendering as one row, so `start0 + idx - 1` would point into the FOLLOWING file.
+T["motions_ ]h treats a folded section as exactly one stop"] = function()
   local st = canvas.open(three_sections(), {})
   canvas.set_collapsed(st, 2, true)
 
+  local b_start, b_end = canvas.section_rows(st, 2)
+  H.eq(b_end - b_start, 1, "sanity: section 2 is a one-row placeholder")
+  local c_start = (canvas.section_rows(st, 3))
+
   local a_start = (canvas.section_rows(st, 1))
-  -- Section 1's first hunk header is right after the file_hdr row.
   vim.api.nvim_win_set_cursor(st.win, { a_start + 1, 0 })
 
-  local c_start
-  local prev_row = a_start
-  for _ = 1, 20 do
+  -- Walk forward, collecting every row ]h stops on until we reach section 3.
+  local visited, prev = {}, a_start
+  for _ = 1, 30 do
     motions.goto_hunk(st, 1, 1)
     local row = vim.api.nvim_win_get_cursor(st.win)[1] - 1
-    if not c_start then
-      c_start = (canvas.section_rows(st, 3))
-    end
-    if row >= c_start then
-      break
-    end
-    -- Must never land inside collapsed section 2's row range. (The parens
-    -- around this call used to truncate it to one value, leaving b_end nil and
-    -- the assertion below unable to fire at all.)
-    local b_start, b_end = canvas.section_rows(st, 2)
-    assert(not (row >= b_start and row < b_end), "landed inside collapsed section 2")
-    assert(row > prev_row, "hunk motion must move forward")
-    prev_row = row
+    if row == prev then break end
+    assert(row > prev, "hunk motion must move forward")
+    visited[#visited + 1] = row
+    prev = row
+    if row >= c_start then break end
   end
-  local final_row = vim.api.nvim_win_get_cursor(st.win)[1] - 1
-  H.eq(final_row >= c_start, true, "eventually reached section 3's first hunk")
+
+  -- Exactly one of those stops is inside section 2, and it is its placeholder row.
+  local in_b = {}
+  for _, row in ipairs(visited) do
+    if row >= b_start and row < b_end then in_b[#in_b + 1] = row end
+  end
+  H.eq(in_b, { b_start },
+    "the folded section contributes one stop, its placeholder -- not zero, not many")
+  assert(visited[#visited] >= c_start, "and ]h carries on into section 3 afterwards")
 end
 
 T["motions_ ]h inside the last hunk's body does not reverse direction"] = function()

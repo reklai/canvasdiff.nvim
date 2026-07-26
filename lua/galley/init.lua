@@ -77,8 +77,8 @@ local function section_under_cursor(st)
   return canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1)
 end
 
---- Clear every folded directory hiding `path`. Returns the directories that
---- were cleared, or nil when nothing was hiding it.
+--- Clear every folded directory hiding section `i` (at `path`). Returns the
+--- directories that were cleared, or nil when nothing was hiding it.
 ---
 --- The whole chain has to go: with both "lua/" and "lua/mod/" folded, dropping
 --- either alone leaves the file hidden and the keypress looks broken. That
@@ -88,7 +88,7 @@ end
 --- This is also the only way out of a fold when the sidebar is disabled: folds
 --- restore onto state.folded regardless of the sidebar, so without it those
 --- files would be permanently invisible.
-local function reveal(st, path)
+local function reveal(st, i, path)
   local dirs = fold.folds_hiding(st.folded, path)
   if #dirs == 0 then
     return nil
@@ -96,37 +96,44 @@ local function reveal(st, path)
   for _, dir in ipairs(dirs) do
     st.folded[dir] = nil
   end
-  -- Every section, not just this one -- unfolding an ancestor un-hides the
-  -- whole subtree, not the row under the cursor.
-  canvas.resync_visibility(st)
+  -- Not just this row -- unfolding an ancestor un-hides the whole subtree. The
+  -- OUTERMOST cleared fold spans every section any of them was hiding (they
+  -- are all ancestors of one path, outermost first), so its subtree is exactly
+  -- the affected set; a section some unrelated inner fold still hides stays
+  -- hidden and its resplice no-ops.
+  canvas.resync_visibility(st, fold.indices_under(st.sections, dirs[1]))
+  -- Every resplice corrects the viewport, and the one whose section starts at
+  -- the viewport top rewrites lnum too -- so the cursor must be put back on the
+  -- file that was actually pressed. Without this, a <Tab> even one row below
+  -- the viewport top lands the cursor on a different file, and the following
+  -- <CR> / ]f / ]h all work from there.
+  if canvas_showing(st) then
+    local start0 = (canvas.section_rows(st, i))
+    pcall(vim.api.nvim_win_set_cursor, st.win, { start0 + 1, 0 })
+  end
   sync_after_collapse(st)
   util.notify("unfolded " .. table.concat(dirs, ", "))
   return dirs
 end
 
---- Jump into the section/entry under the cursor, expanding it instead when
---- it's a collapsed placeholder. Shared by the jump keymap and the
---- double-click mapping so both intercept a jump into a placeholder the
---- same way.
-local function jump_or_expand(st, cfg)
-  local i = section_under_cursor(st)
-  if i then
-    local path = st.sections[i].path
-    -- Reveal takes priority: while a folded ancestor hides the section, its
-    -- own collapse flag is moot, and jumping in would leave jump.back
-    -- resolving a view against a section that still renders as one row.
-    if reveal(st, path) then
-      return
-    end
-    if st.collapsed[path] then
-      user_set_collapsed(st, i, false)
-      return
-    end
-  end
+--- Open the file under the cursor as a real buffer. Shared by the jump keymap and
+--- the double-click mapping.
+---
+--- Deliberately fold-BLIND: pressing this on a folded file's placeholder opens the
+--- file and leaves the fold exactly as it was, so coming back lands you on the
+--- placeholder again. Two verbs with no exceptions -- this one goes to a file,
+--- Tab/za folds one -- rather than one key whose meaning depends on state you
+--- cannot see. (It used to expand a placeholder instead of opening it, which both
+--- duplicated Tab and made Enter context-dependent.)
+---
+--- Safe only because jump.back guards on fold.hidden: returning into a folded
+--- section lands on its placeholder instead of resolving a view against entries
+--- that no longer map to rows.
+local function open_under_cursor(st, cfg)
   jump.enter(st, { back_keys = keys.list(cfg.keymaps.file.back) })
 end
 
---- Toggle whether the section under the cursor is set aside: reveal it when a
+--- Fold or unfold the section under the cursor: reveal it when a
 --- folded directory is what's hiding it, otherwise flip its own collapse flag.
 local function toggle_collapse_under_cursor(st)
   local i = section_under_cursor(st)
@@ -134,7 +141,7 @@ local function toggle_collapse_under_cursor(st)
     return
   end
   local path = st.sections[i].path
-  if reveal(st, path) then
+  if reveal(st, i, path) then
     return
   end
   user_set_collapsed(st, i, not st.collapsed[path])
@@ -145,11 +152,12 @@ end
 --- before the feature behind it does.
 local function canvas_actions(st, cfg)
   return {
-    jump       = function() jump_or_expand(st, cfg) end,
+    jump       = function() open_under_cursor(st, cfg) end,
     collapse   = function() toggle_collapse_under_cursor(st) end,
     close      = function() M.close() end,
     refresh    = function() M.refresh() end,
-    base       = function() M.toggle_base() end,
+    lens_next  = function() M.cycle_lens(1) end,
+    lens_prev  = function() M.cycle_lens(-1) end,
     cycle_next = function() sidebar.cycle(st, 1) end,
     cycle_prev = function() sidebar.cycle(st, -1) end,
     next_file  = function() motions.goto_file(st, 1) end,

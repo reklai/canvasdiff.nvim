@@ -16,17 +16,17 @@ end
 
 T["config_ setup is optional and defaults are live without it"] = function()
   H.eq(config.options.keymaps.canvas.close, "q")
-  H.eq(config.options.keymaps.sidebar.select, { "<CR>", "<Tab>", "za", "<2-LeftMouse>" })
-  H.eq(config.options.keymaps.file.back, "<M-CR>")
+  H.eq(config.options.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
+  H.eq(config.options.keymaps.file.back, "<C-Space>")
 end
 
 -- The whole nested+list design rests on this: tbl_deep_extend REPLACES
 -- list-like values rather than merging them index-wise. If it ever merged,
--- `collapse = "<Tab>"` would silently keep `za` and the override would be a
+-- `collapse = "za"` would silently keep `c` and the override would be a
 -- lie. Pin the behaviour we depend on.
 T["config_ a list override replaces rather than merges"] = function()
-  with_setup({ keymaps = { canvas = { collapse = "<Tab>" } } }, function(opts)
-    H.eq(opts.keymaps.canvas.collapse, "<Tab>", "the alternate key must be gone")
+  with_setup({ keymaps = { canvas = { collapse = "za" } } }, function(opts)
+    H.eq(opts.keymaps.canvas.collapse, "za", "the alternate key must be gone")
     H.eq(opts.keymaps.canvas.close, "q", "untouched actions keep their defaults")
   end)
   with_setup({ keymaps = { sidebar = { select = { "<CR>" } } } }, function(opts)
@@ -43,8 +43,8 @@ end
 
 T["config_ unrelated contexts are untouched by a partial override"] = function()
   with_setup({ keymaps = { canvas = { help = "g?" } } }, function(opts)
-    H.eq(opts.keymaps.sidebar.select, { "<CR>", "<Tab>", "za", "<2-LeftMouse>" })
-    H.eq(opts.keymaps.file.back, "<M-CR>")
+    H.eq(opts.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
+    H.eq(opts.keymaps.file.back, "<C-Space>")
   end)
 end
 

@@ -7,6 +7,7 @@ local hl = require("galley.hl")
 local sidebar = require("galley.sidebar")
 local scrollbar = require("galley.scrollbar")
 local util = require("galley.util")
+local fold = require("galley.fold")
 local lens = require("galley.lens")
 
 local M = {}
@@ -196,10 +197,21 @@ function M.back()
   local view = ex.view
   if new_section ~= nil then
     local start_row = (canvas.section_rows(state, idx))
-    local resolved_top = viewport.resolve(ex.anchor, new_section.entries) or 1
-    local resolved_cursor = viewport.resolve(ex.cursor, new_section.entries) or 1
-    view.topline = math.max(1, start_row + resolved_top - ex.anchor.screen_offset)
-    view.lnum = math.max(1, start_row + resolved_cursor)
+    if fold.hidden(state, ex.path) then
+      -- Something set this section aside while we were away (folding a parent
+      -- directory from the sidebar is the reachable route), so it now renders
+      -- as its single placeholder row and its entries no longer map to buffer
+      -- rows -- resolving against them would land us deep inside the FOLLOWING
+      -- files. The placeholder itself is the only honest answer, and it's the
+      -- same one replace_section's own collapsed_topline branch just gave.
+      view.topline = start_row + 1
+      view.lnum = start_row + 1
+    else
+      local resolved_top = viewport.resolve(ex.anchor, new_section.entries) or 1
+      local resolved_cursor = viewport.resolve(ex.cursor, new_section.entries) or 1
+      view.topline = math.max(1, start_row + resolved_top - ex.anchor.screen_offset)
+      view.lnum = math.max(1, start_row + resolved_cursor)
+    end
   else
     local n = #state.sections
     if n > 0 then

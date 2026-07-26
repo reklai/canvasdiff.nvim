@@ -15,36 +15,77 @@ M.defaults = {
   keymaps = {
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" },
-      collapse   = { "<Tab>", "za" },
+      -- Vim's own fold key first, plus `c` for collapse -- the action you press
+      -- most in a sweep, so it gets a single unshifted key.
+      --
+      -- `c` is free rather than merely convenient: it is a change operator, and
+      -- the canvas is nofile + nomodifiable + undolevels=-1, so `cw` there fails
+      -- with E21 and does nothing at all. Measured on the real buffer, not
+      -- assumed. The same holds for the whole editing family (d s x p i a o r ~ J
+      -- and their capitals), which is where to look if you want a different one.
+      --
+      -- Was Shift+Space, which needed a terminal speaking the kitty keyboard
+      -- protocol: Space is the one key that cannot carry a modifier in classic
+      -- terminal encoding, so elsewhere it arrived as a bare Space and merely
+      -- moved the cursor right. That is NOT true of Shift+Tab or `R` below --
+      -- those are an ordinary CSI Z and byte 0x52.
+      collapse   = { "za", "c" },
       next_file  = "]f",
       prev_file  = "[f",
       next_hunk  = "]h",
       prev_hunk  = "[h",
       cycle_next = "<C-n>",
       cycle_prev = "<C-p>",
-      refresh    = "R",
-      base       = "B",
+      -- Re-collects and splices in what changed, so the same TEXT stays under your
+      -- cursor. Inert to take: `ra` is replace-char, which nomodifiable makes E21.
+      --
+      -- `R` is deliberately left FREE. It briefly held a hard-rebuild action, on the
+      -- theory that a reconcile can only splice what it believes differs and so
+      -- cannot repair a state/buffer divergence. True, but close() + open() repairs
+      -- exactly that AND restores your position from the session file, which a bare
+      -- render_all does not -- measured, both ways. A second verb that is strictly
+      -- worse than two keys you already press is not an escape hatch, it is surface.
+      refresh    = "r",
+      -- Tab forward through the lenses, Shift+Tab back. One physical key for the
+      -- whole "what am I looking at" axis, and a slip between the two lands on the
+      -- other direction of the same action rather than on something unrelated.
+      --
+      -- Costs jumplist-forward on the canvas: in a terminal <Tab> and <C-i> are the
+      -- same byte. Worth it -- you navigate the canvas by file and hunk, not by
+      -- jumplist.
+      lens_next  = "<Tab>",
+      lens_prev  = "<S-Tab>",
+      -- The convention in every scratch buffer, so it costs nothing to learn.
+      -- It DOES cost macro recording on the canvas -- `q` is inert by the
+      -- "does anything visible happen" test, but qa..q records fine on a
+      -- read-only buffer. Accepted: macros are an editing tool, and this buffer
+      -- cannot be edited.
       close      = "q",
     },
     sidebar = {
       -- Double-click, not single: <LeftMouse> is how you position the cursor,
       -- and stealing it would make the tree impossible to browse.
-      select = { "<CR>", "<Tab>", "za", "<2-LeftMouse>" },
+      -- No <Tab> here: on the canvas Tab cycles the lens, and the same key must
+      -- not fold in one window and change the comparison in the other.
+      select = { "<CR>", "za", "c", "<2-LeftMouse>" },
       close  = "q",
     },
     -- Set on the real file's buffer for the duration of a jump, then removed.
+    --
+    -- ONE key, and deliberately no second: if your terminal does not transmit it
+    -- the jump loop has no exit, which is a loud failure rather than a subtly
+    -- half-working one. Ctrl+Space sends byte 0x00, which most terminals do send.
+    --
+    -- Not Alt+Enter: tiling compositors commonly grab it. Not `q`, even though
+    -- that closes the canvas -- this is a buffer you are actually editing, so
+    -- macros and every other normal-mode key have to keep working. That
+    -- asymmetry is the point of grouping keymaps by buffer.
     file = {
-      back = "<M-CR>",
+      back = "<C-Space>",
     },
   },
   context = 3,
   base = "HEAD",
-  navigate = {
-    -- Whether ]f [f <C-n> <C-p> step over sections you set aside -- collapsed
-    -- by hand, or hidden by a folded directory. Never applies to the
-    -- virtualizer's own auto-collapses: those are bookkeeping, not intent.
-    skip_set_aside = true,
-  },
   sidebar = {
     enabled = true,
     width = 32,

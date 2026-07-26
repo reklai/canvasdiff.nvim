@@ -207,9 +207,9 @@ function S.sync(state)
 end
 
 --- Act on the entry under the sidebar cursor: a dir toggles its fold, which
---- sets its files aside on the canvas too; a file scrolls the canvas to its
---- section, expanding it first if it was set aside. Never changes any window's
---- buffer or the focused window.
+--- folds its files on the canvas too; a file scrolls the canvas to its section
+--- without changing its fold. Never changes any window's buffer or the focused
+--- window.
 function S.select(state)
   if not S.is_open() then
     return
@@ -236,39 +236,26 @@ function S.select(state)
     return -- canvas window closed out from under the sidebar
   end
 
-  -- "Take me to this file" means you can read it, so expand its own collapse
-  -- first. A visible file row is never hidden by a directory fold, and
-  -- set_collapsed clears the old auto intent as part of the same state update.
-  -- This remains a user action without a cross-module ownership handshake.
-  --
-  local expanded = false
-  if state.collapsed and state.collapsed[e.path] then
-    canvas.set_collapsed(state, e.section_i, false)
-    expanded = true
-  end
-
+  -- Scroll there and nothing more. Selecting a folded file does not unfold it:
+  -- navigation and folding are separate verbs, so moving around never rewrites
+  -- the review state the user deliberately set.
   local start0 = (canvas.section_rows(state, e.section_i))
   vim.api.nvim_win_call(state.win, function()
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
   end)
-  if expanded then
-    notify_change(state) -- the canvas changed shape, not just its viewport
-  else
-    S.sync(state)
-  end
+  S.sync(state)
 end
 
---- Cycle the canvas view to the next/previous section (wrapping), stepping over
---- anything the user set aside and keeping the sidebar selection in step.
+--- Cycle the canvas view to the next/previous section (wrapping), including
+--- folded placeholders as first-class stops and keeping the sidebar in step.
 --- Usable with or without the sidebar open; focus never moves.
 ---
 --- Despite living here, this is a CANVAS action (keys.specs registers it under
 --- ctx = "canvas", in the same Navigate group as ]f) -- it moves the canvas
 --- viewport and is bound on the canvas buffer. It only sits in this module
---- because the sidebar-selection sync does. So it has to honour set-aside
---- sections exactly as goto_file does; behaving differently would be arbitrary.
+--- because the sidebar-selection sync does.
 function S.cycle(state, delta, count)
-  count = count or vim.v.count1
+  count = math.max(1, count or vim.v.count1)
   local n = #state.sections
   if n == 0 then
     return
@@ -282,16 +269,7 @@ function S.cycle(state, delta, count)
   end)
   local i = (canvas.locate(state, top0)) or 1
 
-  local target
-  if config.options.navigate.skip_set_aside then
-    local nav = fold.navigable(state.sections, state)
-    target = fold.step_wrapped(nav, i, delta, count)
-  else
-    target = ((i - 1 + delta * count) % n) + 1
-  end
-  if not target then
-    return -- everything is set aside; nowhere to cycle to
-  end
+  local target = ((i - 1 + delta * count) % n) + 1
 
   local start0 = (canvas.section_rows(state, target))
   vim.api.nvim_win_call(state.win, function()

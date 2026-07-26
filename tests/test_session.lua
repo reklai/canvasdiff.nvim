@@ -422,10 +422,10 @@ T["session_ explicit collapse of an auto-collapsed section is persisted"] = func
     vim.cmd("normal! G")
     assert(collapsed_c(), "sanity: still a placeholder after scrolling onto it")
 
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user expands
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false) -- user expands
     assert(not collapsed_c(), "<Tab> brings it back")
 
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user re-collapses
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false) -- user re-collapses
     assert(collapsed_c(), "c.txt is collapsed back to its placeholder")
 
     fm.close()
@@ -453,7 +453,7 @@ T["session_ saved view survives virt's immediate auto-collapse"] = function()
     -- second G parks the viewport deep inside it so the saved view names
     -- c.txt rather than whatever is above it.
     vim.cmd("normal! G")
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
     vim.cmd("normal! G")
     assert(vim.fn.getline(vim.fn.line("w0")):match("c line"),
       "sanity: parked inside c.txt before saving, got: " .. vim.fn.getline(vim.fn.line("w0")))
@@ -491,7 +491,7 @@ T["session_ restored collapses reach the scrollbar"] = function()
   in_repo(root, { virt = { enabled = false } }, function(fm)
     fm.open()
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user collapses a.txt
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false) -- user collapses a.txt
     fm.close()
     H.eq(session.load(root).collapsed, { "a.txt" }, "sanity: the collapse was persisted")
     H.eq(session.load(root).view, nil, "sanity: no saved view, so the restore won't scroll")
@@ -568,7 +568,7 @@ T["session_folds reveal works after reopening with the sidebar disabled"] = func
       "sanity: the fold restored with no tree to undo it: " .. lines[1])
 
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
     local after = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     assert(not after[1]:match("^▸"),
       "<Tab> is the only escape when the sidebar is off: " .. after[1])
@@ -594,7 +594,7 @@ T["session_ init round trip"] = function()
     -- alphabetical order: a.txt's file_hdr is row 1; collapse it the same
     -- way the <Tab> keymap would.
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
 
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     assert(lines[1]:match("^▸ a%.txt"), "a.txt collapsed to its placeholder: " .. lines[1])

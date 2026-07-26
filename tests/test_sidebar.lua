@@ -561,19 +561,22 @@ T["sidebar_fold folds survive closing and reopening the sidebar"] = function()
   local lines = vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)
   H.eq(lines[1], "▸ a/", "the tree reopens folded")
   H.eq(#lines, 3, "a/'s two files are still hidden")
-  H.eq(span(st, 1), 1, "and the canvas still shows them set aside")
+  H.eq(span(st, 1), 1, "and the canvas still shows them folded")
   done(st)
 end
 
-T["sidebar_fold select on a collapsed file expands it before scrolling"] = function()
+-- Selecting is navigation, and navigation never changes fold state. It used to
+-- expand first, on the theory that "take me there" implies "let me read it" -- but
+-- that made Enter in the tree silently unfold, which is Tab's job on the canvas.
+T["sidebar_fold select on a folded file scrolls there without unfolding"] = function()
   local st = open_ab()
   canvas.set_collapsed(st, 3, true)
-  H.eq(span(st, 3), 1, "collapsed to start with")
+  H.eq(span(st, 3), 1, "folded to start with")
 
   select_row(st, B_THREE_ROW)
-  assert(span(st, 3) > 1, "selecting a file you set aside brings it back")
-  H.eq(st.collapsed, {}, "and clears its collapse flag")
-  H.eq((canvas.locate(st, canvas_top0(st))), 3, "canvas scrolled to that section")
+  H.eq(span(st, 3), 1, "still folded -- selecting it does not unfold it")
+  H.eq(st.collapsed, { ["b/three.txt"] = "user" }, "and the fold is untouched")
+  H.eq((canvas.locate(st, canvas_top0(st))), 3, "but the canvas did scroll to it")
   done(st)
 end
 
@@ -642,7 +645,7 @@ T["sidebar_fold the tree marks what you set aside, but not virt's own work"] = f
   done(st)
 end
 
-T["sidebar_fold cycle steps over set-aside sections and still wraps"] = function()
+T["sidebar_fold cycle stops on folded sections too, and still wraps"] = function()
   local st = canvas.open({
     big_section("a/one.txt", "a"),
     big_section("a/two.txt", "b"),
@@ -659,18 +662,18 @@ T["sidebar_fold cycle steps over set-aside sections and still wraps"] = function
   local function top_section()
     return (canvas.locate(st, canvas_top0(st)))
   end
-  -- Park on b/three.txt (3), the first navigable one.
-  local s3 = (canvas.section_rows(st, 3))
+  -- Park on the last section, so one step forward has to wrap onto a FOLDED one.
+  local s4 = (canvas.section_rows(st, 4))
   vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = s3 + 1, lnum = s3 + 1 })
+    vim.fn.winrestview({ topline = s4 + 1, lnum = s4 + 1 })
   end)
 
   sidebar.cycle(st, 1)
-  H.eq(top_section(), 4, "forward to the next navigable section")
+  H.eq(top_section(), 1, "wraps onto the folded a/one.txt rather than past it")
   sidebar.cycle(st, 1)
-  H.eq(top_section(), 3, "wraps past the two set-aside sections back to 3")
+  H.eq(top_section(), 2, "and onto the second folded one")
   sidebar.cycle(st, -1)
-  H.eq(top_section(), 4, "and wraps backwards over them too")
+  H.eq(top_section(), 1, "backwards lands on folded sections too")
 
   st.folded = {}
   canvas.resync_visibility(st)
