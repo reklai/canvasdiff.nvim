@@ -11,6 +11,16 @@ local sidebar = require("canvasdiff.sidebar")
 
 local T = {}
 
+T["session_ facade exports exactly the supported persistence operations"] = function()
+  local names = vim.tbl_keys(session)
+  table.sort(names)
+  H.eq(names, { "capture", "load", "path_for", "restore", "save" })
+  H.eq(getmetatable(session), nil, "the session facade is a plain table")
+  for _, name in ipairs(names) do
+    H.eq(type(session[name]), "function", "session." .. name .. " is callable")
+  end
+end
+
 local function bigtext(n, tag)
   local t = {}
   for i = 1, n do t[i] = ("%s line %d"):format(tag, i) end

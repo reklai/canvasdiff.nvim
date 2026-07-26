@@ -7,6 +7,8 @@ local T = {}
 local RUNTIME_FACADE = "canvasdiff.runtime"
 local VIRTUALIZER_OWNER = "canvasdiff.runtime.virtualizer"
 local WATCH_OWNER = "canvasdiff.runtime.watch"
+local SESSION_FACADE = "canvasdiff.session"
+local SESSION_CODEC_OWNER = "canvasdiff.session.codec"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -22,6 +24,49 @@ local function assert_inspected_module(inspection, module)
     inspection.nodes[module],
     ("architecture contract source %s is missing; update the contract with its move"):format(module)
   )
+end
+
+local function literal_requires_in(file)
+  local handle, err = io.open(file.abs, "rb")
+  assert(handle, ("%s: could not read source: %s"):format(file.rel, err or ""))
+  local source = handle:read("*a")
+  handle:close()
+
+  -- Tests intentionally contain a few computed require calls that exercise the
+  -- graph parser's rejection path. For this cross-tree consumer audit, retain
+  -- only statically spelled require targets and leave those negative fixtures
+  -- alone.
+  local tokens = graph.lex(source, file.rel)
+  local dependencies = {}
+  for index, token in ipairs(tokens) do
+    if token.kind == "identifier" and token.value == "require" then
+      local previous = tokens[index - 1]
+      local is_member = previous
+        and previous.kind == "symbol"
+        and (previous.value == "." or previous.value == ":")
+      if not is_member then
+        local following = tokens[index + 1]
+        local argument
+        if following and following.kind == "symbol" and following.value == "(" then
+          local candidate = tokens[index + 2]
+          local closing = tokens[index + 3]
+          if candidate and candidate.kind == "string"
+              and closing and closing.kind == "symbol" and closing.value == ")" then
+            argument = candidate
+          end
+        elseif following and following.kind == "string" then
+          argument = following
+        end
+        if argument then
+          dependencies[#dependencies + 1] = {
+            line = token.line,
+            module = argument.value,
+          }
+        end
+      end
+    end
+  end
+  return dependencies
 end
 
 T.architecture_dependencies_are_static_resolved_and_unambiguous = function()
@@ -105,6 +150,33 @@ T.architecture_runtime_internals_are_reached_only_through_the_facade = function(
   end
 
   assert_no_errors(violations, "runtime consumers must enter through canvasdiff.runtime")
+end
+
+T.architecture_session_internal_is_reached_only_through_the_facade = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+  assert_inspected_module(inspection, SESSION_FACADE)
+  assert_inspected_module(inspection, SESSION_CODEC_OWNER)
+
+  local facade_edges = 0
+  local violations = {}
+  for _, file in ipairs(inspection.files) do
+    for _, dependency in ipairs(literal_requires_in(file)) do
+      if dependency.module:match("^canvasdiff%.session%.") then
+        if file.rel == "lua/canvasdiff/session.lua" then
+          facade_edges = facade_edges + 1
+        else
+          violations[#violations + 1] = (
+            "%s:%d -> %s"
+          ):format(file.rel, dependency.line, dependency.module)
+        end
+      end
+    end
+  end
+
+  H.eq(facade_edges, 1, "the session facade must own the one internal codec edge")
+  assert_no_errors(violations,
+    "session production and test consumers must enter through canvasdiff.session")
 end
 
 T.architecture_status_column_has_no_peer_controller_edges = function()

@@ -29,7 +29,6 @@ R.legacy_paths = {
   "lua/canvasdiff/hl.lua",
   "lua/canvasdiff/jump.lua",
   "lua/canvasdiff/scrollbar.lua",
-  "lua/canvasdiff/session.lua",
   "lua/canvasdiff/sidebar.lua",
   "lua/canvasdiff/statuscol.lua",
   "lua/canvasdiff/util.lua",
@@ -136,7 +135,7 @@ R.allowed_edges = {
     os = true,
     source = true,
   },
-  session = { config = true, diff = true, os = true },
+  session = { canvas = true, config = true, diff = true, os = true },
   benchmark = {
     canvas = true,
     config = true,
