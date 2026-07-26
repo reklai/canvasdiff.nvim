@@ -75,6 +75,8 @@ T["sidebar_entries a stale file is flagged, and so is the folded dir above it"] 
   H.eq(entries[2].stale, true, "src/a.txt changed since it was folded")
   H.eq(entries[3].stale, false, "src/b.txt did not")
 
+  -- Folded: the children emit no rows at all, so the dir row is the only place the
+  -- signal can appear.
   local folded = sidebar.build_entries(secs, { ["src/"] = true }, {}, { ["src/a.txt"] = true })
   H.eq(folded[1].kind, "dir")
   H.eq(folded[1].stale, true, "something under the folded dir changed")
@@ -110,14 +112,24 @@ T["sidebar_render marks user-folded files with the placeholder glyph"] = functio
   }, "the same ▸ that marks a folded dir and a collapsed section in the canvas")
 end
 
+-- STALE and STAGED are the SAME character (`●`), so a staged file that has since
+-- changed behind a fold renders `● ●` and the highlight is the only thing telling
+-- the two apart. That makes the span arithmetic load-bearing rather than cosmetic:
+-- a span one glyph out of place does not look broken, it silently reports the wrong
+-- fact about the file. These assert each span lands on the right OCCURRENCE, not
+-- merely on a character that happens to match.
 T["sidebar_render marker spans colour the right ● in a staged-and-stale row"] = function()
   local s = sec("a.txt", 2, 2)
-  s.staged = "M"
+  s.staged = "M" -- staged only: worktree matches the index, so no `○`
   local entries = sidebar.build_entries({ s }, {}, { ["a.txt"] = true }, { ["a.txt"] = true })
   local line = sidebar.render_lines(entries)[1]
   H.eq(line, "▸ a.txt  +2 −2 ● ●", "sanity: two identical glyphs, staged then stale")
 
   local spans = render.marker_spans(line, s.staged, s.unstaged, true)
+  -- 3, not 2: the stale marker gets a colour span AND a bold span over the same range,
+  -- so it stays distinguishable from the identically-shaped staged marker whatever the
+  -- colourscheme does. Measured: those two groups are 138 luminance apart under
+  -- tokyonight and 23 under Neovim's builtin, where DiagnosticError is a pale salmon.
   H.eq(#spans, 3, "staged, stale colour, stale emphasis -- and none for the absent ○")
 
   local at = {}
@@ -128,12 +140,15 @@ T["sidebar_render marker spans colour the right ● in a staged-and-stale row"] 
   H.eq(at.GalleyStale.text, render.glyphs.stale, "the stale span covers the space and its ●")
   H.eq(at.GalleyStaleEmphasis.text, render.glyphs.stale,
     "and the bold layer covers exactly the same range as the colour")
-  H.eq(at.GalleyStaleEmphasis.col, at.GalleyStale.col)
+  H.eq(at.GalleyStaleEmphasis.col, at.GalleyStale.col,
+    "same start too -- a bold layer offset from its colour would be worse than none")
   assert(at.GalleyStaged.col ~= at.GalleyStale.col,
-    "the two spans must not point at the same ●")
+    "the two spans must not point at the SAME ● -- that is the whole failure mode")
   assert(at.GalleyStaged.col < at.GalleyStale.col,
-    "staged is appended before stale")
-  H.eq(spans[1][2], #line, "the stale span reaches end-of-line")
+    "staged is appended before stale, so its span sits to the left")
+  -- The stale span must reach the end of the line; anything shorter means the
+  -- trailing ● is uncoloured and reads as a second staged marker.
+  H.eq(spans[1][2], #line, "the last span ends at end-of-line")
 end
 
 T["sidebar_render marker spans handle every combination of the three facts"] = function()
@@ -161,25 +176,30 @@ T["sidebar_render marker spans handle every combination of the three facts"] = f
 
   line, got = row(nil, "M", true)
   H.eq(line, "  a.txt  +2 −2 ○ ●")
-  H.eq(got, "Stale= ● StaleEmphasis= ● Unstaged=○")
+  H.eq(got, "Stale= ● StaleEmphasis= ● Unstaged=○",
+    "no staged span when the index column is empty")
 
   line, got = row(nil, nil, false)
   H.eq(line, "  a.txt  +2 −2")
-  H.eq(got, "")
+  H.eq(got, "", "a file with no status information gets no spans at all")
 end
 
-T["sidebar_render a stale dir row gets exactly one marker range"] = function()
+-- Dir rows carry only staleness; their stage columns are passed as nil regardless of
+-- what the entry holds, so a span can never land on the directory name.
+T["sidebar_render a stale dir row gets exactly one span, over its marker"] = function()
   local s = sec("src/a.txt", 2, 2)
   s.staged, s.unstaged = "M", "M"
   local entries = sidebar.build_entries(
     { s }, { ["src/"] = true }, {}, { ["src/a.txt"] = true })
   local line = sidebar.render_lines(entries)[1]
-  H.eq(line, "▸ src/ ●")
+  H.eq(line, "▸ src/ ●", "the dir reports that something under it moved on")
   local spans = render.marker_spans(line, nil, nil, true)
-  H.eq(#spans, 2, "stale colour plus emphasis")
+  H.eq(#spans, 2, "the colour span and its bold layer")
   for _, sp in ipairs(spans) do
-    H.eq(line:sub(sp[1] + 1, sp[2]), render.glyphs.stale)
+    H.eq(line:sub(sp[1] + 1, sp[2]), render.glyphs.stale, "both cover exactly the marker")
   end
+  H.eq(spans[1][3], "GalleyStale")
+  H.eq(spans[2][3], "GalleyStaleEmphasis")
 end
 
 T["sidebar_render formats dirs, files, indent, and counts"] = function()
@@ -722,7 +742,7 @@ T["sidebar_fold folding the section you are reading lands on its placeholder"] =
   done(st)
 end
 
-T["sidebar_fold the tree marks what you set aside, but not virt's own work"] = function()
+T["sidebar_fold the tree marks what you folded, but not virt's own work"] = function()
   virt.detach()
   local st = open_ab()
 
@@ -828,7 +848,7 @@ T["sidebar_fold a nested fold hides only its own subtree"] = function()
   sidebar.open(st, { width = 30 })
   -- rows: 1 "lua/", 2 "mod/", 3 a.lua, 4 "modules/", 5 b.lua
   select_row(st, 2)
-  H.eq(span(st, 1), 1, "lua/mod/a.lua is set aside")
+  H.eq(span(st, 1), 1, "lua/mod/a.lua is folded")
   assert(span(st, 2) > 1, "lua/modules/b.lua is NOT -- modules/ is not mod/")
   done(st)
 end

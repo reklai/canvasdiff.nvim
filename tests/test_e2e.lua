@@ -619,6 +619,14 @@ return {
   -- The file-boundary bar: a full-width tint on each expanded file's header row, so
   -- crossing out of one file and into the next is visible while scrolling rather than
   -- being one more line among diff lines.
+  --
+  -- Two properties that are easy to break and would not look broken:
+  --   * It must NOT land on folded placeholders. Each is already one visually distinct
+  --     row and has no body to delimit; barring all of them turns an auto-virtualized
+  --     canvas of 200 collapsed files into a solid block of colour.
+  --   * It must survive a splice. Highlights are re-applied per section by
+  --     apply_section_hl, so a bar added anywhere else would silently vanish on the
+  --     first `r` or watch pass.
   ["e2e: a boundary bar marks each expanded file, and only those"] = function()
     local function body(tag, marks)
       local o = {}
@@ -643,9 +651,7 @@ return {
     local function bars()
       local rows = {}
       for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
-        if m[4] and m[4].line_hl_group == "GalleyFileBar" then
-          rows[#rows + 1] = m[2] + 1
-        end
+        if m[4] and m[4].line_hl_group == "GalleyFileBar" then rows[#rows + 1] = m[2] + 1 end
       end
       table.sort(rows)
       return rows
@@ -661,6 +667,10 @@ return {
     H.eq(bars(), rows_matching("^▎"), "exactly one bar per expanded file header")
     H.eq(#bars(), 3, "sanity: three files")
 
+    -- The composition claim the priorities rest on: the bar supplies a background and
+    -- GalleyFileHeader supplies only a foreground, so the filename keeps Title's colour
+    -- ON the tinted row. If the header group ever gains a bg, it would paint over the
+    -- bar for the width of the text and the row would look striped.
     local bar = vim.api.nvim_get_hl(0, { name = "GalleyFileBar", link = false })
     local hdr = vim.api.nvim_get_hl(0, { name = "GalleyFileHeader", link = false })
     assert(bar.bg, "the bar group must resolve to a real background to be visible")
