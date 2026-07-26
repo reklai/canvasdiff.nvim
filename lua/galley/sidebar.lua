@@ -20,14 +20,17 @@ local S = {}
 ---
 --- `aside` is an optional set of file paths the user folded themselves, used only
 --- to flag their rows. `stale` is an optional set of paths that have changed since
---- they were folded; a folded directory carries the signal when anything beneath it
---- has changed, because its child rows are hidden. All inputs are plain tables.
+--- they were folded; a DIR row carries it when anything beneath it has, which is
+--- the only way the signal is visible for a folded directory -- a folded dir emits
+--- no rows for its children at all. All plain tables, so this stays pure.
 function S.build_entries(sections, folded, aside, stale)
   folded = folded or {}
   aside = aside or {}
   stale = stale or {}
   local entries = {}
   local prev_dirs = {}
+  -- Which dir prefixes have something stale under them. Built up front because a
+  -- dir row is emitted before the descendants that would justify its marker.
   local stale_dirs = {}
   for path in pairs(stale) do
     local from = 1
@@ -61,6 +64,8 @@ function S.build_entries(sections, folded, aside, stale)
           entries[#entries + 1] = {
             kind = "dir", path = prefix, name = parts[d] .. "/",
             depth = d - 1, folded = folded[prefix] or false,
+            -- Only worth saying on a FOLDED dir: if it is open, its own rows carry
+            -- the marker and repeating it on the parent is noise.
             stale = (folded[prefix] and stale_dirs[prefix]) or false,
           }
         end
@@ -76,6 +81,8 @@ function S.build_entries(sections, folded, aside, stale)
         section_i = i, adds = section.adds, dels = section.dels,
         aside = aside[section.path] or false,
         stale = stale[section.path] or false,
+        -- Straight off git's XY pair, so it says which KIND of change this is
+        -- regardless of which lens you happen to be looking through.
         staged = section.staged,
         unstaged = section.unstaged,
       }
@@ -89,7 +96,7 @@ end
 --- Render entries to display lines (pure).
 ---
 --- File rows carry the same two-column gutter as dir rows, holding "▸ " when
---- the file is set aside -- the same glyph render.placeholder uses in the
+--- the file is folded -- the same glyph render.placeholder uses in the
 --- canvas and a folded dir uses here, so one symbol means one thing
 --- everywhere. Without it the tree and the navigation disagree: ]f skips a
 --- file and nothing on screen explains why.
@@ -97,18 +104,23 @@ function S.render_lines(entries)
   local lines = {}
   for i, e in ipairs(entries) do
     local indent = ("  "):rep(e.depth)
-    local stale = e.stale and render.glyphs.stale or ""
+    -- Same glyph and same trailing position as the canvas placeholder's, so one
+    -- symbol keeps meaning one thing in both windows.
+    local mark = e.stale and render.glyphs.stale or ""
     if e.kind == "dir" then
-      lines[i] = indent
-        .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
-        .. e.name .. stale
+      lines[i] = indent .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " ")) .. e.name .. mark
     else
+      -- Stage state goes BEFORE the stale marker. That ordering does NOT disambiguate
+      -- them -- STALE and STAGED are the same `●`, so a trailing ● means "staged" on
+      -- a row with no stale marker and "stale" on a row with one, and a staged-and-
+      -- stale row is `● ●`. Only the highlight separates those; render.marker_spans
+      -- owns that arithmetic and depends on this exact append order.
       local stage = render.stage_mark(e.staged, e.unstaged)
-      if stage ~= "" then stage = " " .. stage end
+      if stage ~= "" then
+        stage = " " .. stage
+      end
       lines[i] = indent .. (e.aside and (render.glyphs.folded .. " ") or "  ")
-        .. e.name
-        .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
-        .. stage .. stale
+        .. e.name .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels) .. stage .. mark
     end
   end
   return lines
@@ -124,6 +136,9 @@ local side = nil
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleySidebarDir", { link = "Directory", default = true })
   vim.api.nvim_set_hl(0, "GalleySidebarActive", { link = "Visual", default = true })
+  -- The three marker groups (stale / staged / unstaged) live in render, next to the
+  -- glyphs they colour, and are shared with the canvas -- one `●` means one thing in
+  -- both windows. See render.ensure_marker_hl for why these particular links.
   render.ensure_marker_hl()
 end
 
@@ -189,15 +204,21 @@ function S.refresh(state)
         priority = 90,
       })
     end
+    -- Col-ranged, so only the markers are coloured, and above the active-row
+    -- highlight so they stay legible on the selected line.
+    --
+    -- Dir rows never carry stage state (only the files under them do), so their
+    -- stage columns are passed as nil rather than read off the entry -- a dir that
+    -- somehow had them set would otherwise get a span pointing at its name.
     local line = lines[row0] or ""
     local is_file = e.kind ~= "dir"
     local spans = render.marker_spans(
       line, is_file and e.staged or nil, is_file and e.unstaged or nil, e.stale)
-    for _, span in ipairs(spans) do
-      vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, span[1], {
+    for _, s in ipairs(spans) do
+      vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, s[1], {
         end_row = row0 - 1,
-        end_col = span[2],
-        hl_group = span[3],
+        end_col = s[2],
+        hl_group = s[3],
         priority = 101,
       })
     end
@@ -263,7 +284,7 @@ function S.sync(state)
     return
   end
   if not canvas_showing(state) then
-    return -- excursion in progress or canvas hidden
+    return -- excursion in progress or canvas hidden; see S.mark_path
   end
   local top0 = vim.api.nvim_win_call(state.win, function()
     return vim.fn.line("w0") - 1
@@ -301,9 +322,9 @@ function S.mark_path(state, path)
 end
 
 --- Act on the entry under the sidebar cursor: a dir toggles its fold, which
---- folds its files on the canvas too; a file scrolls the canvas to its section
---- without changing its fold. Never changes any window's buffer or the focused
---- window.
+--- sets its files aside on the canvas too; a file scrolls the canvas to its
+--- section, expanding it first if it was folded. Never changes any window's
+--- buffer or the focused window.
 function S.select(state)
   if not S.is_open() then
     return
@@ -380,14 +401,15 @@ function S.select(state)
   S.sync(state)
 end
 
---- Cycle the canvas view to the next/previous section (wrapping), including
---- folded placeholders as first-class stops and keeping the sidebar in step.
+--- Cycle the canvas view to the next/previous section (wrapping), stepping over
+--- anything the user folded and keeping the sidebar selection in step.
 --- Usable with or without the sidebar open; focus never moves.
 ---
 --- Despite living here, this is a CANVAS action (keys.specs registers it under
 --- ctx = "canvas", in the same Navigate group as ]f) -- it moves the canvas
 --- viewport and is bound on the canvas buffer. It only sits in this module
---- because the sidebar-selection sync does.
+--- because the sidebar-selection sync does. So it has to honour folded
+--- sections exactly as goto_file does; behaving differently would be arbitrary.
 function S.cycle(state, delta, count)
   if #state.sections == 0 then
     return

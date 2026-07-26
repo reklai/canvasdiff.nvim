@@ -40,11 +40,22 @@ local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyFileBar", { link = "Folded", default = true })
   -- The diff row tints. Aliases so they are tunable without redefining the groups
   -- your ordinary vimdiff uses -- see the note in render.HL_GROUP.
+  --
+  -- To quieten them, which is the usual want once you notice how much of the screen
+  -- they cover, point them at something with less contrast against Normal:
+  --   vim.api.nvim_set_hl(0, "GalleyAdd", { link = "CursorLine" })
+  -- Measured under tokyonight-moon: DiffAdd is +27 luminance over Normal and
+  -- DiffDelete +13, where CursorLine is +15 and ColorColumn is -7.
   vim.api.nvim_set_hl(0, "GalleyAdd", { link = "DiffAdd", default = true })
   vim.api.nvim_set_hl(0, "GalleyDel", { link = "DiffDelete", default = true })
+  -- Deleted lines, which are virtual rather than buffer rows. Its own group rather
+  -- than reusing GalleyDel so you can dim the ghosts without touching anything else --
+  -- the usual want, since the point of ghosting a deletion is that it is context for
+  -- the line that replaced it rather than a thing to read on its own.
   vim.api.nvim_set_hl(0, "GalleyGhost", { link = "GalleyDel", default = true })
   vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
   vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
+  -- GalleyStale and the sidebar's stage markers live in render, next to the glyphs.
   render.ensure_marker_hl()
 end
 
@@ -111,20 +122,22 @@ local function apply_section_hl(buf, start_row, section, collapsed)
       hl_eol = true,
       priority = 100,
     }) }
-    -- A stale marker is appended to the placeholder text. Give it a colour and a
-    -- shape cue above the full-line header mark so it remains distinguishable from
-    -- the identically-shaped staged marker under any colourscheme.
+    -- Pick the stale marker out of the line that was just written, rather than
+    -- taking it as a parameter: every caller here runs after the splice, so reading
+    -- it back means the highlight cannot disagree with the text. Priority above the
+    -- header mark, whose hl_eol fill covers this range too.
     local line = vim.api.nvim_buf_get_lines(buf, start_row, start_row + 1, false)[1] or ""
-    if #line >= #render.glyphs.stale
-      and line:sub(-#render.glyphs.stale) == render.glyphs.stale then
+    if #line >= #render.glyphs.stale and line:sub(-#render.glyphs.stale) == render.glyphs.stale then
+      -- Colour, then a bold layer over the same range. The bold is the part that does
+      -- not depend on the colourscheme -- see R.marker_spans for why that matters on
+      -- the sidebar, and this keeps the canvas placeholder's marker consistent with it.
       for group, prio in pairs({ GalleyStale = 101, GalleyStaleEmphasis = 102 }) do
-        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(
-          buf, HL_NS, start_row, #line - #render.glyphs.stale, {
-            end_row = start_row,
-            end_col = #line,
-            hl_group = group,
-            priority = prio,
-          })
+        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, #line - #render.glyphs.stale, {
+          end_row = start_row,
+          end_col = #line,
+          hl_group = group,
+          priority = prio,
+        })
       end
     end
     return ids
@@ -134,17 +147,45 @@ local function apply_section_hl(buf, start_row, section, collapsed)
 
   -- A full-width tint across the file header row, so crossing from one file into the
   -- next is visible while you scroll instead of being one more line among diff lines.
-  -- `line_hl_group` fills the entire screen line and survives resize untouched.
-  -- Priority below the header mark lets the filename's Title foreground compose with
-  -- this background. Folded placeholders are already visually distinct and get no bar.
+  --
+  -- `line_hl_group` fills the entire screen line, past the end of the text, so this
+  -- needs no window width and survives a resize untouched. A `virt_lines` rule between
+  -- sections was the other candidate and is equally safe for the row arithmetic
+  -- (verified: buffer line count, header rows, line("w0"), winrestview and ]f are all
+  -- unaffected by virtual lines) -- but it would need width management and re-application
+  -- on resize to earn the same result.
+  --
+  -- Priority BELOW the header's own mark, deliberately: GalleyFileHeader links to
+  -- Title, which is foreground-only, so the two COMPOSE rather than fight -- Title's
+  -- colour and boldness on the text, this group's background across the whole row.
+  --
+  -- Expanded sections only. A folded placeholder is already one visually distinct row
+  -- (it opens with the ▸ glyph) and has no body below it to delimit; barring every one
+  -- would turn an auto-virtualized canvas of 200 collapsed files into a solid block.
   ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
     line_hl_group = "GalleyFileBar",
     priority = 99,
   })
 
-  -- Diff tints stop at end-of-text. Filling to the screen edge makes the coloured area
-  -- scale with window width rather than with the change and competes with the more
-  -- precise word-diff marks.
+  -- NO `hl_eol`, and this is the single biggest visual change in the canvas.
+  --
+  -- With it, an add/del tint filled the rest of the SCREEN LINE, so the coloured area
+  -- was proportional to your window width rather than to the size of the change: a
+  -- three-character edit painted green to the right edge of a 200-column window. That
+  -- is a lot of the strongest visual channel spent on "this line is involved", which
+  -- is the least interesting thing on screen once you have word-diff marks saying
+  -- which TOKENS changed. Measured budget before this: the row tint stood 27 luminance
+  -- clear of Normal while the word-diff mark stood only 9 clear of the row it sat on.
+  --
+  -- Dropping it costs nothing for the other kinds -- file_hdr, hunk_hdr and binary all
+  -- resolve to foreground-only groups (Title, Comment), where hl_eol has nothing to
+  -- fill with. The expanded header's full-width bar comes from the GalleyFileBar
+  -- line_hl_group above, which is unaffected.
+  --
+  -- Side effect worth having: syntax highlighting reads at full contrast again. On a
+  -- tinted row, @comment sat at only 47 luminance delta against the fill where every
+  -- other syntax group had 103-153, so comments inside a diff were measurably muddier
+  -- than the code around them.
   for _, m in ipairs(marks) do
     local row = start_row + m.row
     ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
@@ -185,8 +226,13 @@ local function apply_section_hl(buf, start_row, section, collapsed)
 end
 
 --- The lines a section renders as right now: its single placeholder line when
---- it is set aside -- collapsed outright, or hidden by a folded ancestor
+--- it is folded -- the file itself, or an ancestor
 --- directory -- else its full body.
+---
+--- The placeholder carries the stale marker when the file has moved on since the
+--- user put it away. Asked here rather than passed in, for the same reason the
+--- collapsed/expanded form is derived here: this is the one place a placeholder is
+--- ever written to the buffer, so it is the one place that cannot disagree.
 local function section_lines_for(state, sec)
   if fold.hidden(state, sec.path) then
     local l = lens.of(state)
@@ -225,8 +271,9 @@ end
 --- line-tier highlights. Populates state.sections/anchor_ids/hl_ids.
 function M.render_all(state, sections)
   local buf = state.buf
-  -- A fold key whose directory no longer has changes must not hide a file that
-  -- appears there later.
+  -- Before the line build, which reads fold.hidden: a fold key whose directory
+  -- no longer has any changes must not fold a file that appears there
+  -- later. Covers open, refresh and watch's full-render paths at once.
   state.folded = fold.prune(sections, state.folded)
   set_modifiable(buf, true)
   vim.api.nvim_buf_clear_namespace(buf, ANCHOR_NS, 0, -1)
@@ -273,15 +320,27 @@ function M.open(sections, opts)
   vim.api.nvim_win_set_buf(win, buf)
   apply_win_opts(win)
 
-  local state = { buf = buf, win = win, sections = {}, anchor_ids = {}, hl_ids = {} }
-  -- Never reset on a later render_all -- only initialized here, once, so a
-  -- refresh() on an already-open state (which calls render_all directly)
-  -- keeps whatever the user has collapsed or folded away. `folded` is a set of
-  -- directory paths with a trailing slash, owned by the sidebar but living
-  -- here because rendering, navigation and session all derive from it.
-  state.collapsed = state.collapsed or {}
-  state.folded = state.folded or {}
-  state.folded_seen = state.folded_seen or {}
+  -- `collapsed` maps a path to "user" or "auto" (see M.set_collapsed); `folded`
+  -- is a set of directory paths with a trailing slash, owned by the sidebar but
+  -- living here because rendering, navigation and session all derive from it.
+  --
+  -- render_all never writes either field, so a refresh() on an already-open
+  -- state keeps whatever the user has collapsed or folded away. It does NOT
+  -- follow that a reopen keeps them: this hands back a fresh state every time,
+  -- so surviving close/open is entirely session.restore putting them back.
+  local state = {
+    buf = buf,
+    win = win,
+    sections = {},
+    anchor_ids = {},
+    hl_ids = {},
+    collapsed = {},
+    folded = {},
+    -- `folded_seen[path]` is what a section's content looked like when the user put
+    -- it away (model.fingerprint), or `false` for one that arrived already hidden.
+    -- fold.stale compares it against the section's content now.
+    folded_seen = {},
+  }
   M.render_all(state, sections)
   return state
 end
@@ -407,8 +466,9 @@ function M.replace_section(state, i, new_section)
     table.remove(state.anchor_ids, i)
     table.remove(state.sections, i)
     table.remove(state.hl_ids, i)
-    -- The path is gone from the canvas; drop its collapsed flag too, so a
-    -- different file that later reuses this path doesn't inherit it.
+    -- The path is gone from the canvas; drop its collapsed flag and its
+    -- fold fingerprint too, so a different file that later reuses this path
+    -- doesn't inherit either.
     if replaced_path and state.collapsed then
       state.collapsed[replaced_path] = nil
     end
@@ -478,8 +538,10 @@ end
 --- (#state.sections >= 1) -- the 0 -> N transition goes through render_all.
 function M.insert_section(state, i, section)
   local row = get_row(state, state.anchor_ids[i])
-  -- A file born under a live user fold was never seen; the false fingerprint is a
-  -- durable sight-unseen sentinel that compares unequal to real content.
+  -- Born under a live fold: the user has never seen this file, so it cannot be
+  -- what they reviewed. `false` compares unequal to every real fingerprint, so
+  -- fold.stale reports it without needing a case of its own. Recorded BEFORE the
+  -- line build, which is what puts the marker on the very first render.
   if fold.user_folded(state, section.path) then
     state.folded_seen[section.path] = { lens = lens.of(state).id, fp = false }
   end
@@ -534,7 +596,7 @@ function M.insert_section(state, i, section)
 end
 
 --- Re-splice section i so the buffer shows what it should render as right now,
---- with the same same-tick view correction as replace_section (a set-aside
+--- with the same same-tick view correction as replace_section (a folded
 --- section is just a 1-row section for viewport-classification purposes).
 ---
 --- The target form is DERIVED here rather than passed in: a caller handing
@@ -555,19 +617,35 @@ local function resplice(state, i)
 
   local collapsed = fold.hidden(state, sec.path)
 
-  -- Record what a user-folded section looked like as it went away. The nil guard keeps
-  -- later visibility resyncs from adopting changed content as newly "seen"; bringing
-  -- the section back clears the fingerprint.
+  -- Remember what this looked like as it went away, so fold.stale can tell later
+  -- that it moved on. BEFORE the early-out below, deliberately: a section the
+  -- virtualizer had already reduced to one row flips no form when the user then
+  -- folds its parent, but it has still just become something they put away and
+  -- needs a fingerprint. Only for what the USER folded -- virt's own collapses
+  -- were never a decision, so they cannot go stale.
+  --
+  -- The `== nil` guard is load-bearing. resync_visibility resplices every section
+  -- on any fold change, so without it a still-folded file would be re-recorded
+  -- at its current content and quietly count as seen again.
   if fold.user_folded(state, sec.path) then
     if state.folded_seen[sec.path] == nil then
       state.folded_seen[sec.path] = { lens = lens.of(state).id, fp = model.fingerprint(sec) }
     end
   else
-    state.folded_seen[sec.path] = nil
+    state.folded_seen[sec.path] = nil -- back on screen: you have seen it now
   end
 
-  -- render.section_lines emits one row per entry, so the desired row count can be
-  -- checked before building strings.
+  -- Already in the desired form -- answered WITHOUT building the lines, because
+  -- the no-indices resync_visibility asks this of every section on every <Tab>
+  -- over a placeholder and on every session.restore. Rendering a whole
+  -- changeset's worth of strings just to compare a count would make a keypress
+  -- that splices nothing cost a full re-render.
+  --
+  -- render.section_lines emits exactly one line per entry, so #entries is the
+  -- expanded height (virt.natural_line_count relies on the same identity).
+  -- Comparing row spans is exact: build_section always emits a file_hdr plus at
+  -- least one hunk_hdr/binary entry, so an expanded section is never one row and
+  -- can never be mistaken for a placeholder.
   local want_rows = collapsed and 1 or #sec.entries
   if end_row_exclusive - start_row == want_rows then return end
 

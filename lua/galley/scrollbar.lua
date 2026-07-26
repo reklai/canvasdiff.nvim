@@ -6,13 +6,24 @@ local S = {}
 --- The minimap's two glyphs: a file boundary and a stretch of changed lines.
 ---
 --- ‒ (U+2012 FIGURE DASH) and ❘ (U+2758 LIGHT VERTICAL BAR) rather than the
---- box-drawing ─ and │ they replace, and the reason is width, not looks. This float is
---- one column wide, while box-drawing characters become two cells under the legitimate
---- `ambiwidth=double` setting. Keep replacements width-stable under both settings.
+--- box-drawing ─ and │ they replace, and the reason is WIDTH, not looks.
+---
+--- This float is ONE column wide. Every box-drawing and block-element glyph is East
+--- Asian Ambiguous, so under `ambiwidth=double` -- which CJK users set, and which is a
+--- legitimate setting rather than a misconfiguration -- ─ and │ become two cells and
+--- cannot fit the window they are drawn in. Measured: 13 of 21 rows held a two-cell
+--- glyph in a width-1 float. These two are the most solid-looking glyphs that stay one
+--- cell in BOTH modes, so the minimap is correct either way with no detection needed.
+---
+--- Named rather than inlined so the tests assert against these instead of their own
+--- copies of the literals -- they did, and both drifted the moment these changed.
+---
+--- Keep any replacement width-stable: check `vim.fn.strwidth` under both `ambiwidth`
+--- values before swapping one in. ─ ━ │ ┃ ▏ ▎ ▕ ┆ – — ‾ all fail that test.
 
 --- One kind per canvas line, sections in render order. hunk_hdr counts as
 --- "ctx" (structural, uncolored); file_hdr becomes "hdr" (boundary rows). A
---- set-aside section (`hidden[section.path]` truthy) renders as its single
+--- folded section (`hidden[section.path]` truthy) renders as its single
 --- placeholder row -- exactly one "hdr" entry. Callers build the set with
 --- fold.hidden_set, which keeps this function pure over plain tables;
 --- `hidden` is optional so pre-Tier-2 callers keep working unchanged.
