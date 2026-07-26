@@ -23,7 +23,6 @@ local GET_OPTION = API.nvim_get_option_value
 local WIN_IS_VALID = API.nvim_win_is_valid
 local WIN_GET_BUF = API.nvim_win_get_buf
 local REDRAW = API.nvim__redraw
-local SCHEDULE = vim.schedule
 local WINDOW_LAST_LINE = vim.fn.line
 
 local PAGE_LIST_VALIDATE = PageList.validate
@@ -339,47 +338,6 @@ local function projection_redraw(state)
   return true
 end
 
-local function run_scheduled_sync(state)
-  RAWSET(state, "sync_scheduled", false)
-  if RAWGET(state, "disposed") then
-    return
-  end
-  local called, synced, sync_err =
-    PCALL(sync_projection, state)
-  if not called then
-    record_error(
-      state,
-      "projection refresh threw: " .. safe_diagnostic(synced)
-    )
-    return
-  end
-  if not synced then
-    record_error(state, sync_err)
-    return
-  end
-  local redrawn, redraw_err = projection_redraw(state)
-  if not redrawn then
-    record_error(state, redraw_err)
-  end
-end
-
-local function schedule_sync(state)
-  if RAWGET(state, "disposed")
-      or RAWGET(state, "sync_scheduled") then
-    return true
-  end
-  RAWSET(state, "sync_scheduled", true)
-  local scheduled, schedule_err = PCALL(SCHEDULE, function()
-    run_scheduled_sync(state)
-  end)
-  if not scheduled then
-    RAWSET(state, "sync_scheduled", false)
-    return nil, "could not schedule projection refresh: "
-      .. safe_diagnostic(schedule_err)
-  end
-  return true
-end
-
 local function detect_shape_change(state)
   local generation, logical_rows, shape_err = source_shape(state)
   if generation == nil then
@@ -406,10 +364,6 @@ local function detect_shape_change(state)
     )
   if changed then
     RAWSET(state, "needs_sync", true)
-    local scheduled, schedule_err = schedule_sync(state)
-    if not scheduled then
-      return nil, schedule_err
-    end
   else
     RAWSET(state, "needs_sync", false)
   end
@@ -468,16 +422,6 @@ local function request_disposal(state, delete_buffer)
   return finish_disposal(state)
 end
 
-local function retry_pending_disposals()
-  local pending = {}
-  for state in PAIRS(PENDING_DISPOSALS) do
-    pending[#pending + 1] = state
-  end
-  for _, state in ipairs(pending) do
-    finish_disposal(state)
-  end
-end
-
 local function provider_fault(state, prefix, fault)
   record_error(
     state,
@@ -487,7 +431,6 @@ local function provider_fault(state, prefix, fault)
 end
 
 local function on_start()
-  retry_pending_disposals()
   for _, state in PAIRS(BY_BUFFER) do
     RAWSET(state, "cycle_seen", false)
     RAWSET(state, "cycle_failed", false)
@@ -726,7 +669,6 @@ local function on_end()
       RAWSET(state, "last_error", nil)
     end
   end
-  retry_pending_disposals()
 end
 
 local function install_provider()
@@ -822,7 +764,6 @@ function Projection.create(text, opts)
     projected_rows = logical_rows,
     skeleton_tick = BUF_CHANGEDTICK(buffer),
     needs_sync = false,
-    sync_scheduled = false,
     disposed = false,
     finalized = false,
     delete_buffer = false,
@@ -955,11 +896,7 @@ function Projection:refresh()
   end
   if provider_depth > 0 then
     RAWSET(state, "needs_sync", true)
-    local scheduled, schedule_err = schedule_sync(state)
-    if not scheduled then
-      return nil, schedule_err
-    end
-    return true
+    return nil, "projection cannot refresh during a provider callback"
   end
   local called, refreshed, refresh_err =
     PCALL(sync_projection, state)
@@ -980,11 +917,7 @@ function Projection:redraw()
   end
   if provider_depth > 0 then
     RAWSET(state, "needs_sync", true)
-    local scheduled, schedule_err = schedule_sync(state)
-    if not scheduled then
-      return nil, schedule_err
-    end
-    return true
+    return nil, "projection cannot redraw during a provider callback"
   end
   local called, refreshed, refresh_err =
     PCALL(sync_projection, state)
@@ -1039,7 +972,6 @@ function Projection:stats()
     projected_generation = RAWGET(state, "projected_generation"),
     source_generation = source_generation,
     needs_sync = RAWGET(state, "needs_sync"),
-    sync_scheduled = RAWGET(state, "sync_scheduled"),
     disposed = RAWGET(state, "disposed"),
     finalized = RAWGET(state, "finalized"),
     last_error = RAWGET(state, "last_error"),
@@ -1086,8 +1018,7 @@ function Projection:validate()
         RAWGET(state, "projected_generation")
       )
       or not RAW_EQUAL(logical_rows, RAWGET(state, "projected_rows"))
-      or RAWGET(state, "needs_sync")
-      or RAWGET(state, "sync_scheduled") then
+      or RAWGET(state, "needs_sync") then
     return nil, "projection source shape is not synchronized"
   end
   local expected_rows = MAX(1, logical_rows)
@@ -1121,6 +1052,10 @@ function Projection:dispose(delete_buffer)
     delete_buffer = true
   elseif TYPE(delete_buffer) ~= "boolean" then
     return nil, "delete_buffer must be a boolean"
+  end
+  if provider_depth > 0 and delete_buffer then
+    return nil,
+      "projection cannot delete its buffer during a provider callback"
   end
   return request_disposal(state, delete_buffer)
 end

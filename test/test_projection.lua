@@ -694,13 +694,41 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
     local page_list_name = "canvasdiff.canvas.PageList"
     local canonical_page_list = package.loaded[page_list_name]
     local original_set_extmark = API.nvim_buf_set_extmark
+    local original_set_lines = API.nvim_buf_set_lines
+    local original_delete_buffer = API.nvim_buf_delete
+    local original_schedule = vim.schedule
     local fault_mode
     local fault_list
     local fault_projection
     local refresh_from_provider
+    local delete_from_provider
     local dispose_from_provider
     local spliced = false
     local seen_options = {}
+    local observing_provider = false
+    local forbidden_provider_calls = {}
+
+    API.nvim_buf_set_lines = function(...)
+      if observing_provider then
+        forbidden_provider_calls[#forbidden_provider_calls + 1] =
+          "nvim_buf_set_lines"
+      end
+      return original_set_lines(...)
+    end
+    API.nvim_buf_delete = function(...)
+      if observing_provider then
+        forbidden_provider_calls[#forbidden_provider_calls + 1] =
+          "nvim_buf_delete"
+      end
+      return original_delete_buffer(...)
+    end
+    vim.schedule = function(...)
+      if observing_provider then
+        forbidden_provider_calls[#forbidden_provider_calls + 1] =
+          "vim.schedule"
+      end
+      return original_schedule(...)
+    end
 
     API.nvim_buf_set_extmark = function(...)
       local arguments = { ... }
@@ -717,6 +745,9 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
       elseif fault_mode == "throw" then
         error(string.rep("provider-extmark-fault-", 80), 0)
       elseif fault_mode == "dispose" and not dispose_from_provider then
+        delete_from_provider = {
+          fault_projection:dispose(),
+        }
         dispose_from_provider = {
           fault_projection:dispose(false),
         }
@@ -747,26 +778,24 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
         put_at_top(window, 1)
 
         fault_mode = "splice"
+        observing_provider = true
         assert(projection:redraw())
+        observing_provider = false
         H.eq(fault_list:generation(), 1)
-        H.eq(refresh_from_provider[1], true)
+        assert_rejected(
+          refresh_from_provider[1],
+          refresh_from_provider[2],
+          "provider callback"
+        )
         assert_no_leases(fault_list)
         H.eq(PageList.validate(fault_list), true)
         local pending = projection:stats()
-        if pending.projected_generation
-            ~= pending.source_generation then
-          assert_call_rejected("not synchronized", function()
-            return projection:validate()
-          end)
-        end
-        assert(vim.wait(1000, function()
-          local stats = projection:stats()
-          return stats.projected_generation
-              == stats.source_generation
-            and not stats.needs_sync
-            and not stats.sync_scheduled
-        end, 10))
-        H.eq(projection:validate(), true)
+        H.eq(pending.projected_generation, 0)
+        H.eq(pending.source_generation, 1)
+        H.eq(pending.needs_sync, true)
+        assert_call_rejected("not synchronized", function()
+          return projection:validate()
+        end)
         assert(#seen_options > 0)
         for _, options in ipairs(seen_options) do
           H.eq(options.ephemeral, true)
@@ -782,6 +811,7 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
         fault_mode = nil
         seen_options = {}
         assert(projection:redraw())
+        H.eq(projection:validate(), true)
         H.eq(
           screen_prefix(window, 0, #"mid-cycle-new"),
           "mid-cycle-new"
@@ -790,7 +820,9 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
         assert_no_leases(fault_list)
 
         fault_mode = "throw"
+        observing_provider = true
         assert(projection:redraw())
+        observing_provider = false
         local diagnostic = projection:last_error()
         assert(type(diagnostic) == "string" and diagnostic ~= "")
         assert(
@@ -835,8 +867,10 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
         configure_window(window)
         put_at_top(window, 1)
         fault_mode = "dispose"
+        observing_provider = true
         local redraw_called, redraw_ok, redraw_err =
           pcall(isolated_projection.redraw, projection)
+        observing_provider = false
         assert(redraw_called, redraw_ok)
         if not redraw_ok then
           assert(
@@ -844,6 +878,11 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
             tostring(redraw_err)
           )
         end
+        assert_rejected(
+          delete_from_provider[1],
+          delete_from_provider[2],
+          "provider callback"
+        )
         H.eq(dispose_from_provider[1], true)
         H.eq(API.nvim_buf_is_valid(dispose_buffer), true)
         H.eq(projection:stats().disposed, true)
@@ -854,13 +893,18 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
         H.eq(projection:dispose(), true)
         API.nvim_buf_delete(dispose_buffer, { force = true })
         projection = nil
+        H.eq(forbidden_provider_calls, {})
       end)
     end, debug.traceback)
 
+    observing_provider = false
     if projection then
       pcall(isolated_projection.dispose, projection)
     end
     API.nvim_buf_set_extmark = original_set_extmark
+    API.nvim_buf_set_lines = original_set_lines
+    API.nvim_buf_delete = original_delete_buffer
+    vim.schedule = original_schedule
     package.loaded[page_list_name] = canonical_page_list
     package.loaded[module_name] = nil
     local restored_projection = require(module_name)
