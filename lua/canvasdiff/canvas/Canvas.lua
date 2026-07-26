@@ -258,6 +258,89 @@ end
 ---
 --- A name test rather than a registry lookup, so this stays a pure predicate
 --- that no live ownership state can go stale against.
+--- This canvas's logical text: the rows it is showing, addressed by logical
+--- row index rather than by buffer line.
+---
+--- The seam a page-backed canvas plugs into. Eager rendering puts every
+--- logical row in the buffer, so here the two are the same thing -- but every
+--- caller that asks "what text is at rows N..M" must ask through this, or it
+--- silently means "what buffer LINES are there", which a paged canvas does not
+--- have. `export` matches Projection:export so the two are interchangeable.
+--- @param state table
+--- @return table logical
+function M.logical(state)
+  local function buffer()
+    local buf = state and state.buf
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      return buf
+    end
+    return nil
+  end
+
+  local logical = {}
+
+  function logical.row_count()
+    local buf = buffer()
+    return buf and vim.api.nvim_buf_line_count(buf) or 0
+  end
+
+  function logical.rows(start0, count)
+    local buf = buffer()
+    if not buf then
+      return nil, "canvas buffer is unavailable"
+    end
+    if type(start0) ~= "number" or start0 < 0 or start0 % 1 ~= 0 then
+      return nil, "logical start row must be a non-negative integer"
+    end
+    if type(count) ~= "number" or count < 0 or count % 1 ~= 0 then
+      return nil, "logical row count must be a non-negative integer"
+    end
+    local total = vim.api.nvim_buf_line_count(buf)
+    if start0 + count > total then
+      return nil, "logical row range exceeds the canvas"
+    end
+    if count == 0 then
+      return {}
+    end
+    return vim.api.nvim_buf_get_lines(buf, start0, start0 + count, true)
+  end
+
+  function logical.row(row0)
+    local rows, err = logical.rows(row0, 1)
+    if not rows then
+      return nil, err
+    end
+    return rows[1]
+  end
+
+  function logical.export(start0, count, opts)
+    opts = opts or {}
+    local separator = opts.separator
+    if separator == nil then
+      separator = "\n"
+    elseif type(separator) ~= "string" then
+      return nil, "export separator must be a string"
+    end
+    local terminal_eol = opts.terminal_eol
+    if terminal_eol == nil then
+      terminal_eol = false
+    elseif type(terminal_eol) ~= "boolean" then
+      return nil, "export terminal_eol must be a boolean"
+    end
+    local rows, err = logical.rows(start0, count)
+    if not rows then
+      return nil, err
+    end
+    local result = table.concat(rows, separator)
+    if terminal_eol and count > 0 then
+      result = result .. separator
+    end
+    return result
+  end
+
+  return logical
+end
+
 function M.is_canvas_buf(buf)
   if type(buf) ~= "number" or not vim.api.nvim_buf_is_valid(buf) then
     return false

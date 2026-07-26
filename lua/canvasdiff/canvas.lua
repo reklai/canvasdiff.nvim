@@ -1,4 +1,5 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
+local PageList = require("canvasdiff.canvas.PageList")
 local Projection = require("canvasdiff.canvas.Projection")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
@@ -22,7 +23,12 @@ return {
   insert_section = Canvas.insert_section,
   is_canvas_buf = Canvas.is_canvas_buf,
   locate = Canvas.locate,
+  logical = Canvas.logical,
   open = Canvas.open,
+  -- The page-backed store a Projection renders. `paginate_stream` is the
+  -- ingestion entry point: it never materializes every logical row first.
+  paginate = PageList.create,
+  paginate_stream = PageList.from_iterator,
   project = Projection.create,
   reconcile_sections = Canvas.reconcile_sections,
   render_all = Canvas.render_all,
