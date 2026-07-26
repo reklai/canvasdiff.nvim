@@ -1,7 +1,7 @@
 local H = require("helpers")
-local collect = require("galley.collect")
-local model = require("galley.model")
-local util = require("galley.util")
+local collect = require("canvasdiff.collect")
+local model = require("canvasdiff.model")
+local util = require("canvasdiff.util")
 
 local T = {}
 
@@ -14,7 +14,7 @@ local function numstat(root, path)
 end
 
 --- What the plugin would render for `path`.
-local function galley_counts(root, path)
+local function canvasdiff_counts(root, path)
   for _, f in ipairs(collect.files(root, "HEAD")) do
     if f.path == path then
       local sec = model.build_section(f.path, f.old_text, f.new_text, f.status, 3)
@@ -65,7 +65,7 @@ end
 T["eol_ CRLF file matches git with no buffer loaded"] = function()
   local root = fixture()
   local ga, gd = numstat(root, "dos.txt")
-  local a, d = galley_counts(root, "dos.txt")
+  local a, d = canvasdiff_counts(root, "dos.txt")
   H.eq({ a, d }, { ga, gd }, "adds/dels must match git for an unloaded CRLF file")
 end
 
@@ -77,7 +77,7 @@ T["eol_ CRLF file matches git with the buffer loaded"] = function()
   local abs = vim.fs.joinpath(root, "dos.txt")
   local ga, gd = numstat(root, "dos.txt")
   local b = load_buf(abs)
-  local ok, a, d = pcall(galley_counts, root, "dos.txt")
+  local ok, a, d = pcall(canvasdiff_counts, root, "dos.txt")
   wipe(b)
   assert(ok, a)
   H.eq({ a, d }, { ga, gd }, "adds/dels must match git for a loaded CRLF file")
@@ -86,9 +86,9 @@ end
 T["eol_ noeol file agrees loaded and unloaded"] = function()
   local root = fixture()
   local abs = vim.fs.joinpath(root, "noeol.txt")
-  local ua, ud = galley_counts(root, "noeol.txt")
+  local ua, ud = canvasdiff_counts(root, "noeol.txt")
   local b = load_buf(abs)
-  local ok, la, ld = pcall(galley_counts, root, "noeol.txt")
+  local ok, la, ld = pcall(canvasdiff_counts, root, "noeol.txt")
   wipe(b)
   assert(ok, la)
   H.eq({ la, ld }, { ua, ud }, "loaded and unloaded must agree for a noeol file")
@@ -99,7 +99,7 @@ end
 T["eol_ plain LF file is unaffected"] = function()
   local root = fixture()
   local ga, gd = numstat(root, "plain.txt")
-  H.eq({ galley_counts(root, "plain.txt") }, { ga, gd })
+  H.eq({ canvasdiff_counts(root, "plain.txt") }, { ga, gd })
 end
 
 T["eol_ buf_text reconstructs fileformat and endofline"] = function()

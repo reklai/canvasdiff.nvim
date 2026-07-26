@@ -1,7 +1,7 @@
 local H = require("helpers")
-local lens = require("galley.lens")
-local collect = require("galley.collect")
-local git = require("galley.git")
+local lens = require("canvasdiff.lens")
+local collect = require("canvasdiff.collect")
+local git = require("canvasdiff.git")
 
 local T = {}
 
@@ -363,10 +363,10 @@ end
 
 -- --- through the plugin ---------------------------------------------------
 
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local jump = require("galley.jump")
-local session = require("galley.session")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local jump = require("canvasdiff.jump")
+local session = require("canvasdiff.session")
 
 local function open_lens(root, l)
   local st = canvas.open(model.build(collect.files(root, l), 3), {})
@@ -493,8 +493,8 @@ end
 
 -- --- which kind of change is this? ---------------------------------------
 
-local render = require("galley.render")
-local sidebar = require("galley.sidebar")
+local render = require("canvasdiff.render")
+local sidebar = require("canvasdiff.sidebar")
 
 -- `git status --porcelain=v2` yields an XY pair per file -- X is what the index did,
 -- Y is what the worktree did -- and the plugin used to collapse it to one character
@@ -534,7 +534,7 @@ T["lens_xy git.changed_files keeps both halves of the status"] = function()
 end
 
 T["lens_xy staged_then_changed reads it off the section"] = function()
-  local model_ = require("galley.model")
+  local model_ = require("canvasdiff.model")
   H.eq(model_.staged_then_changed({ staged = "M", unstaged = "M" }), true)
   H.eq(model_.staged_then_changed({ staged = "M" }), false, "staged only")
   H.eq(model_.staged_then_changed({ unstaged = "M" }), false, "unstaged only")

@@ -8,12 +8,12 @@
 -- re-render (what App:open and reconcile's 0<->N fallback do), and a section born
 -- under a live fold.
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local collect = require("galley.collect")
-local watch = require("galley.watch")
-local virt = require("galley.virt")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local collect = require("canvasdiff.collect")
+local watch = require("canvasdiff.watch")
+local virt = require("canvasdiff.virt")
+local fold = require("canvasdiff.fold")
 
 local T = {}
 
@@ -71,7 +71,7 @@ end
 local function is_stale(st, i)
   local sec = st.sections[i]
   return fold.stale(st, sec.path, model.fingerprint(sec),
-    require("galley.lens").of(st).id)
+    require("canvasdiff.lens").of(st).id)
 end
 
 local function index_of(st, path)
@@ -190,8 +190,8 @@ end
 
 T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   local root, st = open_fixture()
-  local sidebar = require("galley.sidebar")
-  local render = require("galley.render")
+  local sidebar = require("canvasdiff.sidebar")
+  local render = require("canvasdiff.render")
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
   sidebar.refresh(lease) -- fold_src only drives the canvas; the real path is S.select
@@ -239,12 +239,12 @@ end
 
 -- The marker is a real character in the buffer, so it inherits whatever the row is
 -- painted with unless something highlights just it. In the canvas that row is a
--- full-width GalleyFileHeader with hl_eol, so the marker's mark has to be
+-- full-width CanvasDiffFileHeader with hl_eol, so the marker's mark has to be
 -- col-ranged and win on priority.
 T["stale_ the marker is highlighted, in the canvas and in the tree"] = function()
   local root, st = open_fixture()
-  local sidebar = require("galley.sidebar")
-  local render = require("galley.render")
+  local sidebar = require("canvasdiff.sidebar")
+  local render = require("canvasdiff.render")
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
 
@@ -257,10 +257,10 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
     end,
   })
 
-  --- The GalleyStale mark on `row0` of `buf` in `ns`, as {start_col, end_col}.
+  --- The CanvasDiffStale mark on `row0` of `buf` in `ns`, as {start_col, end_col}.
   local function stale_span(buf, ns, row0)
     for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
-      if m[2] == row0 and m[4] and m[4].hl_group == "GalleyStale" then
+      if m[2] == row0 and m[4] and m[4].hl_group == "CanvasDiffStale" then
         return { m[3], m[4].end_col }
       end
     end
@@ -269,14 +269,14 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
   local i = index_of(st, "src/a.txt")
   local srow = (canvas.section_rows(st, i))
   local line = vim.api.nvim_buf_get_lines(st.buf, srow, srow + 1, false)[1]
-  local canvas_ns = vim.api.nvim_create_namespace("galley.canvas.hl")
+  local canvas_ns = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
   H.eq(stale_span(st.buf, canvas_ns, srow), { #line - #render.glyphs.stale, #line },
     "the canvas marker is highlighted, and only the marker")
 
   local sbuf = sidebar_buf(sidebar, lease)
   local srows = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(srows[1], "▸ src/ ●", "sanity: the folded dir row is marked")
-  local side_ns = vim.api.nvim_create_namespace("galley.sidebar")
+  local side_ns = vim.api.nvim_create_namespace("canvasdiff.sidebar")
   H.eq(stale_span(sbuf, side_ns, 0), { #srows[1] - #render.glyphs.stale, #srows[1] },
     "and so is the tree's")
 
@@ -296,7 +296,7 @@ end
 -- from the worktree to the index, so it is the only pivot that can misfire -- and
 -- without scoping it reports every folded file as changed.
 T["stale_ pivoting to the staged lens does not fake a change"] = function()
-  local lens = require("galley.lens")
+  local lens = require("canvasdiff.lens")
   local root = H.git_fixture({
     committed = { ["src/a.txt"] = bigtext(40, "a"), ["top.txt"] = bigtext(40, "t") },
   })

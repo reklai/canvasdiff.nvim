@@ -1,6 +1,6 @@
-# galley
+# CanvasDiff
 
-Galley proofs for your git diff — read the whole change as one continuous strip, fix it in place.
+CanvasDiff proofs for your git diff — read the whole change as one continuous strip, fix it in place.
 
 Every changed file's diff, concatenated into a single scrollable buffer. Jump into any hunk as a real, LSP-attached buffer and jump back to the exact spot. Status: pre-alpha MVP.
 
@@ -10,8 +10,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "your-name/galley", -- adjust to wherever this repo lives
-  cmd = "Galley",
+  "your-name/canvasdiff.nvim", -- adjust to wherever this repo lives
+  cmd = "CanvasDiff",
   opts = {}, -- optional; see Configuration below
 }
 ```
@@ -21,7 +21,7 @@ works with its defaults even if `setup()` is never called.
 
 ## Usage
 
-Run `:Galley` in any window inside a git repository. It replaces the
+Run `:CanvasDiff` in any window inside a git repository. It replaces the
 current window's buffer with a single scrollable "canvas": every changed
 file's diff, one after another, in alphabetical path order, each with a
 `▎ path (+adds −dels)` header and unified-diff-style hunks (3 lines of
@@ -43,7 +43,7 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
   `q` is "I'm done reading" — so a jump never changes where `q` puts you. If
   the buffer you came from was deleted meanwhile, it falls back to the file
   your review last touched, then to the alternate file, and only then to a
-  blank one. `:Galley close` works from any window in the tab, not just the
+  blank one. `:CanvasDiff close` works from any window in the tab, not just the
   one showing the canvas.
 - Press **r** to refresh: re-scan the repo and splice in whatever changed, without
   moving what you were reading. (`watch` already does this on save and focus — `r` is
@@ -79,17 +79,17 @@ peripheral vision instead of being one more line among diff lines:
 Folded files don't get one — a placeholder is already a visually distinct single row
 (it opens with `▸`) and has no body to close off, and barring all of them would turn a
 canvas of 200 auto-collapsed files into a solid block of colour. The group is
-`GalleyFileBar`, defaulting to `Folded` because that's the most visible group which
+`CanvasDiffFileBar`, defaulting to `Folded` because that's the most visible group which
 always carries a background — measured at +30 luminance against `Normal` under
 tokyonight, where `CursorLine` manages +15 and `ColorColumn` is actually *darker*.
-`GalleyFileHeader` stays foreground-only so the two compose: the filename keeps
+`CanvasDiffFileHeader` stays foreground-only so the two compose: the filename keeps
 `Title`'s colour on the tinted row.
 
 And once you're a screen deep and that header has scrolled off, two things say where
 you are — always the same answer:
 
 - **The winbar** names the file under the topline, next to the lens:
-  `galley: worktree vs HEAD │ src/canvas.lua`. It follows you as you scroll, so the
+  `CanvasDiff: worktree vs HEAD │ src/canvas.lua`. It follows you as you scroll, so the
   answer is on the canvas itself rather than only off to the side.
 - **The sidebar's highlighted row** tracks the same section — resolved from the
   topline, not the cursor, so the two can't disagree.
@@ -199,24 +199,24 @@ hue while leaving brightness intact, so that gap survives it; the earlier amber 
 gap of 23, which doesn't.
 
 **The stale marker is also bold**, and that part doesn't depend on your colourscheme at
-all. It has to be: measured, `GalleyStaged` against `GalleyStale` is 138 luminance apart
+all. It has to be: measured, `CanvasDiffStaged` against `CanvasDiffStale` is 138 luminance apart
 under tokyonight but only **23** under Neovim's builtin scheme, where `DiagnosticError`
 resolves to a pale salmon rather than a dark red. Two pale pastels 23 apart is not a
 distinction, and this is the one place where getting it wrong means reading the wrong
 fact about a file. Bold composes over whatever colour is underneath, identically
 everywhere — the same reasoning as the word-diff marks below.
 
-The groups are `GalleyStaged`, `GalleyUnstaged`, `GalleyStale` and
-`GalleyStaleEmphasis`, all `default = true`, so your colourscheme wins if it defines
+The groups are `CanvasDiffStaged`, `CanvasDiffUnstaged`, `CanvasDiffStale` and
+`CanvasDiffStaleEmphasis`, all `default = true`, so your colourscheme wins if it defines
 them. If the two `●`s are still hard to tell apart, the most reliable fix is a different
 *glyph*: `glyphs = { stale = " !" }`.
 
 ### Glyphs
 
-Every glyph galley draws is configurable through one table:
+Every glyph CanvasDiff draws is configurable through one table:
 
 ```lua
-require("galley").setup({
+require("canvasdiff").setup({
   glyphs = {
     ctx = " ", del = "-", add = "+",   -- diff row prefixes
     file = "▎", folded = "▸", open = "▾", minus = "−",
@@ -265,17 +265,17 @@ placeholders, `·` for pure deletions.
 
 ## Commands
 
-`:Galley` with no argument toggles the canvas — that's the one you'll use.
+`:CanvasDiff` with no argument toggles the canvas — that's the one you'll use.
 The rest exist so you can drive it from your own mappings and scripts:
 
 ```vim
-:Galley             " toggle the canvas
-:Galley open        " open it
-:Galley close       " close it
-:Galley refresh     " re-scan and splice in what changed, keeping your place
-:Galley all         " everything: worktree vs HEAD   (the default)
-:Galley unstaged    " what you haven't staged: worktree vs index
-:Galley staged      " what you have staged: index vs HEAD
+:CanvasDiff             " toggle the canvas
+:CanvasDiff open        " open it
+:CanvasDiff close       " close it
+:CanvasDiff refresh     " re-scan and splice in what changed, keeping your place
+:CanvasDiff all         " everything: worktree vs HEAD   (the default)
+:CanvasDiff unstaged    " what you haven't staged: worktree vs index
+:CanvasDiff staged      " what you have staged: index vs HEAD
 ```
 
 All of them complete with `<Tab>`.
@@ -291,7 +291,7 @@ The canvas always compares two sides, and the **lens** is which pair:
 | `staged` | `HEAD` | the index | `git diff --staged` |
 
 `B` cycles through the three; the commands **set** one, so they're safe in a
-mapping — `:Galley unstaged` always lands unstaged, which a toggle can't
+mapping — `:CanvasDiff unstaged` always lands unstaged, which a toggle can't
 promise. Any of them will open the canvas if it isn't showing, and the current
 lens is always named in the canvas's winbar.
 
@@ -306,16 +306,16 @@ file that is staged *and* then modified again appears in both the `staged` and
 `unstaged` lenses, which is git's own way of saying "you said you were done
 with this, then changed it".
 
-> `--staged` as a *flag* is still not accepted, because `:Galley staged` is the
+> `--staged` as a *flag* is still not accepted, because `:CanvasDiff staged` is the
 > spelling, and `--cached` means the same thing in git. The flag form reported
 > an error before `staged` existed; it now points at the word.
 
 An argument that isn't one of those words is treated as a revision spec
-(`:Galley main...HEAD`). Revision mode isn't implemented yet, so it says so and
+(`:CanvasDiff main...HEAD`). Revision mode isn't implemented yet, so it says so and
 does nothing — the grammar is reserved now so that adding it later won't be a
 breaking change.
 
-If the current directory isn't inside a git repository, `:Galley open`
+If the current directory isn't inside a git repository, `:CanvasDiff open`
 notifies you and does nothing further (it never errors).
 
 The canvas remembers, per repository, which files you folded, which
@@ -323,7 +323,7 @@ directories you folded, and roughly where you were scrolled/where
 your cursor was — restored the next time you open the canvas there, even
 across a Neovim restart. It's saved when you close the canvas and again on
 Neovim exit, to a small JSON file under `stdpath("state") ..
-"/galley/"`, keyed by the repo root. Nothing here is a raw line
+"/canvasdiff/"`, keyed by the repo root. Nothing here is a raw line
 number: the saved position is content-based (which line, near what text), so
 it still lands close to the right spot even if the file changed since you
 last looked. Set `session.enabled = false` to turn this off entirely.
@@ -331,7 +331,7 @@ last looked. Set `session.enabled = false` to turn this off entirely.
 ## Configuration
 
 ```lua
-require("galley").setup({
+require("canvasdiff").setup({
   -- Grouped by the buffer each key lives on, because the same key means
   -- different things in different places (`q` closes the canvas, but only the
   -- sidebar when pressed there). Every value takes one key or a list of them.
@@ -465,8 +465,8 @@ exactly three, so the **same line of text** stays under your cursor. That's the
 invariant the whole plugin is built on: content changing outside the viewport never
 moves what you're reading.
 
-Its honest limit: the reconcile compares galley's model against git, not against the
-buffer. If those ever diverge — only reachable through a bug in galley itself, since
+Its honest limit: the reconcile compares CanvasDiff's model against git, not against the
+buffer. If those ever diverge — only reachable through a bug in CanvasDiff itself, since
 `nomodifiable` blocks the buffer API too — refreshing can't fix it, because the
 comparison keeps concluding there's nothing to do. **The recovery is to close and
 reopen** (`q`, then whatever you bound the toggle to). That rebuilds from scratch
@@ -495,16 +495,16 @@ block to copy (lazy.nvim; adjust the prefixes to taste). With which-key installe
 
 ```lua
 keys = {
-  { "<leader><leader>", function() require("galley").toggle() end,
-    desc = "galley: toggle canvas" },
-  { "<leader>ll", function() require("galley").cycle_lens(1) end,
-    desc = "galley: cycle the lens" },
+  { "<leader><leader>", function() require("canvasdiff").toggle() end,
+    desc = "CanvasDiff: toggle canvas" },
+  { "<leader>ll", function() require("canvasdiff").cycle_lens(1) end,
+    desc = "CanvasDiff: cycle the lens" },
 },
 ```
 
 Assuming leader is **Space**: **Space Space** toggles the canvas, **Space l l**
 cycles the lens — the same thing Shift+Tab does on the canvas, reachable from
-anywhere. (`:Galley all` / `unstaged` / `staged` still set a lens directly, and each
+anywhere. (`:CanvasDiff all` / `unstaged` / `staged` still set a lens directly, and each
 opens the canvas if it isn't showing.)
 
 Leader mappings have no terminal-encoding problem at all — they are ordinary
@@ -535,7 +535,7 @@ as *virtual* lines above the row that replaced them, rather than as rows of thei
 @@ -1,6 +1,6 @@
  one
  two
-      -three          ← virtual, GalleyGhost
+      -three          ← virtual, CanvasDiffGhost
 +THREE                ← a real row, and really line 3 of a.lua
  four
 ```
@@ -558,7 +558,7 @@ Two deliberate limits:
   text, so the ghost renders whole and the `+` line carries the intra-line detail —
   the half that says what the code became.
 
-`GalleyGhost` is its own group (defaulting to `GalleyDel`) so you can dim the ghosts
+`CanvasDiffGhost` is its own group (defaulting to `CanvasDiffDel`) so you can dim the ghosts
 without touching anything else, which is usually what you want once deletions read as
 context for the line that replaced them rather than something to study on their own.
 
@@ -568,10 +568,10 @@ Four overridable groups, all `default = true` so your colourscheme wins:
 
 | Group | Default | Marks |
 | --- | --- | --- |
-| `GalleyAdd` | `DiffAdd` | an added row's background |
-| `GalleyDel` | `DiffDelete` | a removed row's background |
-| `GalleyWordAdd` | **bold + underline** | the changed span within an added line |
-| `GalleyWordDel` | **bold + underline** | the changed span within a removed line |
+| `CanvasDiffAdd` | `DiffAdd` | an added row's background |
+| `CanvasDiffDel` | `DiffDelete` | a removed row's background |
+| `CanvasDiffWordAdd` | **bold + underline** | the changed span within an added line |
+| `CanvasDiffWordDel` | **bold + underline** | the changed span within a removed line |
 
 Two deliberate choices behind that, both arrived at by measurement:
 
@@ -600,8 +600,8 @@ To quieten the row tints, which is the usual want once you notice how much scree
 cover:
 
 ```lua
-vim.api.nvim_set_hl(0, "GalleyAdd", { link = "CursorLine" })
-vim.api.nvim_set_hl(0, "GalleyDel", { link = "CursorLine" })
+vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "CursorLine" })
+vim.api.nvim_set_hl(0, "CanvasDiffDel", { link = "CursorLine" })
 ```
 
 The canvas auto-refreshes on `:write`, on regaining focus, and on file
@@ -630,7 +630,7 @@ What's here today:
   emphasis of the diffed code itself, applied within `margin` rows of the
   viewport.
 - Auto-refresh on save, focus, and external filesystem changes (see
-  Configuration above), plus manual refresh (`R` / `:Galley
+  Configuration above), plus manual refresh (`R` / `:CanvasDiff
   refresh`) for a full re-scan on demand.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.

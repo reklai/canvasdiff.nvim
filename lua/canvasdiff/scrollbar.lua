@@ -1,5 +1,5 @@
-local fold = require("galley.fold")
-local render = require("galley.render")
+local fold = require("canvasdiff.fold")
+local render = require("canvasdiff.render")
 
 local S = {}
 
@@ -88,13 +88,13 @@ function S.column(kinds, height, top0, bot0)
 
     local char, hl = " ", nil
     if has_hdr then
-      char, hl = render.glyphs.scroll_file, "GalleyScrollFile"
+      char, hl = render.glyphs.scroll_file, "CanvasDiffScrollFile"
     elseif has_add and has_del then
-      char, hl = render.glyphs.scroll_bar, "GalleyScrollChanged"
+      char, hl = render.glyphs.scroll_bar, "CanvasDiffScrollChanged"
     elseif has_add then
-      char, hl = render.glyphs.scroll_bar, "GalleyScrollAdd"
+      char, hl = render.glyphs.scroll_bar, "CanvasDiffScrollAdd"
     elseif has_del then
-      char, hl = render.glyphs.scroll_bar, "GalleyScrollDel"
+      char, hl = render.glyphs.scroll_bar, "CanvasDiffScrollDel"
     end
 
     -- Thumb: this row's non-empty bucket intersects the viewport line
@@ -108,18 +108,18 @@ function S.column(kinds, height, top0, bot0)
   return cells
 end
 
-local NS = vim.api.nvim_create_namespace("galley.scrollbar")
+local NS = vim.api.nvim_create_namespace("canvasdiff.scrollbar")
 
 -- Module singleton (Phase 4 discipline): callbacks resolve bar.state at
 -- call time; every window op liveness-guarded; close() safe always.
 local bar = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyScrollFile", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollDel", { link = "DiffDelete", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollChanged", { link = "DiffChange", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollThumb", { link = "PmenuThumb", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollFile", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollAdd", { link = "DiffAdd", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollDel", { link = "DiffDelete", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollChanged", { link = "DiffChange", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollThumb", { link = "PmenuThumb", default = true })
 end
 
 function S.is_open()
@@ -226,7 +226,7 @@ function S.update(state)
     end
     if cell.thumb then
       vim.api.nvim_buf_set_extmark(bar.buf, NS, r - 1, 0, {
-        line_hl_group = "GalleyScrollThumb",
+        line_hl_group = "CanvasDiffScrollThumb",
         priority = 200,
       })
     end
@@ -237,7 +237,7 @@ function S.close()
   if bar then
     local b = bar
     bar = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "galley.scrollbar")
+    pcall(vim.api.nvim_del_augroup_by_name, "canvasdiff.scrollbar")
     if b.win and vim.api.nvim_win_is_valid(b.win) then
       pcall(vim.api.nvim_win_close, b.win, true)
     end
@@ -248,7 +248,7 @@ function S.close()
 end
 
 local function install_autocmds(state)
-  local aug = vim.api.nvim_create_augroup("galley.scrollbar", { clear = true })
+  local aug = vim.api.nvim_create_augroup("canvasdiff.scrollbar", { clear = true })
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
     group = aug,
     callback = function(ev)

@@ -1,5 +1,5 @@
 local H = require("helpers")
-local U = require("galley.util")
+local U = require("canvasdiff.util")
 return {
   ["smoke: util.clamp"] = function()
     H.eq(U.clamp(5, 1, 3), 3)

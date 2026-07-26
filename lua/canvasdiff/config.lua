@@ -1,5 +1,5 @@
-local util = require("galley.util")
-local render = require("galley.render")
+local util = require("canvasdiff.util")
+local render = require("canvasdiff.render")
 
 local M = {}
 
@@ -182,7 +182,7 @@ function M.setup(opts)
       "keymaps are now grouped by context; found flat key(s): "
         .. table.concat(legacy, ", ")
         .. ". Use keymaps = { canvas = {...}, sidebar = {...}, file = { back = ... } }"
-        .. " -- see :help galley-mappings"
+        .. " -- see :help canvasdiff-mappings"
     )
   end
   M.user_opts = vim.deepcopy(opts)
@@ -195,7 +195,7 @@ function M.setup(opts)
   --
   -- `glyphs = "ascii"` selects the preset above; a table overrides individual slots.
   -- Unknown slots are reported rather than ignored: `glyphs = { fyle = "|" }` would
-  -- otherwise do nothing at all and look like galley failing to honour the option,
+  -- otherwise do nothing at all and look like CanvasDiff failing to honour the option,
   -- which is exactly the failure mode the legacy-keymaps check above exists for.
   render.reset_glyphs()
   local g = opts.glyphs

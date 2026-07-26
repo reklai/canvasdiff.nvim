@@ -1,4 +1,4 @@
-local App = require("galley.App")
+local App = require("canvasdiff.App")
 
 local app = App.new()
 

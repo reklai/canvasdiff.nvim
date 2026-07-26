@@ -1,8 +1,8 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local virt = require("galley.virt")
-local hl = require("galley.hl")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local virt = require("canvasdiff.virt")
+local hl = require("canvasdiff.hl")
 
 local T = {}
 

@@ -144,7 +144,7 @@ end
 --- Detection is a COMPARISON, not a flag, and that is the point: canvas.render_all
 --- re-renders a folded section straight into placeholder form without going
 --- through resplice or replace_section, so anything that set a flag from a mutation
---- site would miss `:Galley refresh` and watch's full-render paths. Comparing at
+--- site would miss `:CanvasDiff refresh` and watch's full-render paths. Comparing at
 --- read time covers every path that can ever change a section, including ones added
 --- later.
 ---

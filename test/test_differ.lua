@@ -1,5 +1,5 @@
 local H = require("helpers")
-local differ = require("galley.differ")
+local differ = require("canvasdiff.differ")
 return {
   ["differ: simple change"] = function()
     local h = differ.hunks("a\nb\nc\n", "a\nX\nc\n")

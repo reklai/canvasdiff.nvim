@@ -1,5 +1,5 @@
-local canvas = require("galley.canvas")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local fold = require("canvasdiff.fold")
 
 local M = {}
 

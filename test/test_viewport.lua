@@ -1,5 +1,5 @@
 local H = require("helpers")
-local V = require("galley.viewport")
+local V = require("canvasdiff.viewport")
 
 local function mkentries(n)
   local es = {}

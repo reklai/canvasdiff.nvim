@@ -1,12 +1,12 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local virt = require("galley.virt")
-local session = require("galley.session")
-local config = require("galley.config")
-local scrollbar = require("galley.scrollbar")
-local fold = require("galley.fold")
-local sidebar = require("galley.sidebar")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local virt = require("canvasdiff.virt")
+local session = require("canvasdiff.session")
+local config = require("canvasdiff.config")
+local scrollbar = require("canvasdiff.scrollbar")
+local fold = require("canvasdiff.fold")
+local sidebar = require("canvasdiff.sidebar")
 
 local T = {}
 
@@ -72,8 +72,8 @@ local function in_repo(root, opts, fn)
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    fm = require("canvasdiff")
     fm.setup(opts)
     fn(fm)
   end)
@@ -171,10 +171,48 @@ local function span(st, i)
   return e - s
 end
 
+T["session_identity boundary isolates retired state and rejects version 1"] = function()
+  local root = H.tmpdir()
+  local retired = "gal" .. "ley"
+  local retired_dir = vim.fs.joinpath(vim.fn.stdpath("state"), retired)
+  local retired_path = vim.fs.joinpath(retired_dir, vim.fn.sha256(root) .. ".json")
+  local canonical_path = session.path_for(root)
+  local sentinel = "retired-state-must-remain-byte-exact\n"
+
+  vim.fn.mkdir(retired_dir, "p")
+  local old_file = assert(io.open(retired_path, "wb"))
+  old_file:write(sentinel)
+  old_file:close()
+
+  session.save({
+    root = root,
+    base = "HEAD",
+    collapsed = {},
+    folded = {},
+    folded_seen = {},
+  })
+
+  local untouched = assert(io.open(retired_path, "rb"))
+  H.eq(untouched:read("*a"), sentinel,
+    "saving the canonical identity must not read, migrate, or rewrite retired state")
+  untouched:close()
+  H.eq(session.load(root).version, 2)
+
+  local copied = assert(io.open(canonical_path, "wb"))
+  copied:write(vim.json.encode({ version = 1, base = "HEAD" }))
+  copied:close()
+  H.eq(session.load(root), nil,
+    "a manually copied version-1 payload must not cross the identity boundary")
+
+  os.remove(retired_path)
+  vim.fn.delete(retired_dir, "d")
+  cleanup(root)
+end
+
 T["session_folds persist with the sidebar closed"] = function()
   local root = H.tmpdir()
   local st = open_ab(root)
-  require("galley.sidebar").close() -- folds are state's, not the sidebar's
+  require("canvasdiff.sidebar").close() -- folds are state's, not the sidebar's
   st.folded = { ["a/"] = true }
 
   session.save(st)
@@ -254,7 +292,7 @@ T["session_folds restore skips a view anchored on a folded-away file"] = functio
   -- Hand-written payload: a saved view pointing into a file that the saved
   -- fold set hides. save() never produces this, but a stale file can.
   session.restore(st, {
-    version = 1,
+    version = 2,
     base = "HEAD",
     collapsed = {},
     folds = { "a/" },
@@ -289,7 +327,7 @@ T["session_ save and load round-trip the payload"] = function()
   session.save(st)
   local data = session.load(root)
 
-  H.eq(data.version, 1)
+  H.eq(data.version, 2)
   H.eq(data.base, "HEAD")
   H.eq(data.collapsed, { "a/one.txt" })
   H.eq(data.view.path, "c/three.txt")
@@ -505,7 +543,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
 
   -- A previously-saved USER collapse of that same path, restored onto this
   -- virt-active canvas (mirrors App:open's restore-LAST ordering).
-  session.restore(st, { version = 1, base = "HEAD", collapsed = { "c/three.txt" } })
+  session.restore(st, { version = 2, base = "HEAD", collapsed = { "c/three.txt" } })
 
   local c_row = (canvas.section_rows(st, 3))
   vim.api.nvim_win_call(st.win, function()
@@ -691,7 +729,7 @@ T["session_folds reveal works after reopening with the sidebar disabled"] = func
     vim.cmd("tabnew")
     fm.setup({ sidebar = { enabled = false } })
     fm.open()
-    H.eq(require("galley.sidebar").is_open(), false, "sanity: no sidebar this time")
+    H.eq(require("canvasdiff.sidebar").is_open(), false, "sanity: no sidebar this time")
 
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     assert(lines[1]:match("^▸ a/one%.txt"),
@@ -717,8 +755,8 @@ T["session_ init round trip"] = function()
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
 
     -- alphabetical order: a.txt's file_hdr is row 1; collapse it the same

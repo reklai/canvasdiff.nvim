@@ -1,5 +1,5 @@
 local H = require("helpers")
-local config = require("galley.config")
+local config = require("canvasdiff.config")
 
 local T = {}
 
@@ -84,7 +84,7 @@ end
 -- without which two setup() calls layer their overrides on each other.
 
 T["config_ glyphs default to the shipped unicode set"] = function()
-  local render = require("galley.render")
+  local render = require("canvasdiff.render")
   config.setup({})
   H.eq(render.glyphs.file, "▎")
   H.eq(render.glyphs.folded, "▸")
@@ -93,7 +93,7 @@ T["config_ glyphs default to the shipped unicode set"] = function()
 end
 
 T["config_ a glyph table overrides only the slots it names"] = function()
-  local render = require("galley.render")
+  local render = require("canvasdiff.render")
   config.setup({ glyphs = { file = "|", stale = " !" } })
   H.eq(render.glyphs.file, "|")
   H.eq(render.glyphs.stale, " !")
@@ -103,7 +103,7 @@ T["config_ a glyph table overrides only the slots it names"] = function()
 end
 
 T["config_ glyphs = 'ascii' selects the preset"] = function()
-  local render = require("galley.render")
+  local render = require("canvasdiff.render")
   config.setup({ glyphs = "ascii" })
   for name, want in pairs(config.ASCII_GLYPHS) do
     H.eq(render.glyphs[name], want, name .. " must come from the preset")

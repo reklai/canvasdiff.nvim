@@ -1,6 +1,6 @@
 local R = {}
 
---- Every glyph galley draws, in one place, so all of them are configurable through one
+--- Every glyph CanvasDiff draws, in one place, so all of them are configurable through one
 --- surface instead of five constants and four inline literals.
 ---
 --- Written into by config.setup from `opts.glyphs`; read LIVE everywhere, never
@@ -113,18 +113,18 @@ function R.section_path(section)
 end
 
 local HL_GROUP = {
-  file_hdr = "GalleyFileHeader",
-  hunk_hdr = "GalleyHunkHeader",
-  binary = "GalleyBinary",
+  file_hdr = "CanvasDiffFileHeader",
+  hunk_hdr = "CanvasDiffHunkHeader",
+  binary = "CanvasDiffBinary",
   -- Aliased rather than pointing straight at DiffDelete/DiffAdd, which is what these
-  -- were. Two reasons. Every other visual element in galley goes through an
-  -- overridable Galley* group, and these were the last exceptions -- so tuning the
+  -- were. Two reasons. Every other visual element in canvasdiff goes through an
+  -- overridable CanvasDiff* group, and these were the last exceptions -- so tuning the
   -- diff rows meant redefining the groups your full-window vimdiff also uses. And the
   -- defaults a colourscheme picks for DiffAdd/DiffDelete are chosen for a two-pane
   -- vimdiff, where a whole-window wash is the point; here they sit under
   -- syntax-highlighted code and compete with the word-diff marks on top of them.
-  del = "GalleyDel",
-  add = "GalleyAdd",
+  del = "CanvasDiffDel",
+  add = "CanvasDiffAdd",
 }
 
 function R.section_lines(section)
@@ -185,7 +185,7 @@ end
 --- Green / yellow / red, in that order: staged is done, unstaged is pending, stale
 --- wants your attention.
 ---
---- GalleyStaged vs GalleyStale is the pair that MATTERS -- both draw `●` (see the
+--- CanvasDiffStaged vs CanvasDiffStale is the pair that MATTERS -- both draw `●` (see the
 --- note on GLYPHS.stale), so these links are the only thing telling a staged file from one
 --- that changed behind a fold. The choice is LUMINANCE, not hue: measured under
 --- tokyonight-moon, `Added` is #b3f6c0 (luminance 228) against `DiagnosticError`'s
@@ -194,18 +194,18 @@ end
 --- since red/green colour blindness confuses hue while leaving brightness intact. A
 --- light dot against a dark dot survives that; two light dots do not.
 ---
---- GalleyUnstaged is the least load-bearing of the three: `○` is hollow, so shape
+--- CanvasDiffUnstaged is the least load-bearing of the three: `○` is hollow, so shape
 --- already separates it from both filled markers whatever colour it lands on.
 --- DiagnosticWarn rather than `Changed` because `Changed` is cyan in several popular
 --- schemes (tokyonight included), which breaks the progression for no gain.
 function R.ensure_marker_hl()
-  vim.api.nvim_set_hl(0, "GalleyStale", { link = "DiagnosticError", default = true })
-  -- Layered over GalleyStale, carrying an attribute and no colour of its own, so the
+  vim.api.nvim_set_hl(0, "CanvasDiffStale", { link = "DiagnosticError", default = true })
+  -- Layered over CanvasDiffStale, carrying an attribute and no colour of its own, so the
   -- stale marker stays distinguishable from the identically-shaped staged marker under
   -- any colourscheme. See the note in R.marker_spans for the measurement.
-  vim.api.nvim_set_hl(0, "GalleyStaleEmphasis", { bold = true, default = true })
-  vim.api.nvim_set_hl(0, "GalleyStaged", { link = "Added", default = true })
-  vim.api.nvim_set_hl(0, "GalleyUnstaged", { link = "DiagnosticWarn", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffStaleEmphasis", { bold = true, default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffStaged", { link = "Added", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffUnstaged", { link = "DiagnosticWarn", default = true })
 end
 
 --- Byte spans of the trailing marker glyphs on a sidebar row, each with the
@@ -235,7 +235,7 @@ function R.marker_spans(line, staged, unstaged, stale)
     -- The bold is what makes this robust rather than lucky. STALE and STAGED are the
     -- same `●`, so colour is the only thing separating "staged" from "changed behind a
     -- fold" -- and how well it separates them is entirely up to the colourscheme.
-    -- Measured: GalleyStaged against GalleyStale is 138 luminance apart under
+    -- Measured: CanvasDiffStaged against CanvasDiffStale is 138 luminance apart under
     -- tokyonight-moon but only 23 under Neovim's builtin scheme, where DiagnosticError
     -- resolves to a pale salmon rather than a dark red. Two pale pastels 23 apart is
     -- not a distinction, and it is the one place in the sidebar where getting it wrong
@@ -244,15 +244,15 @@ function R.marker_spans(line, staged, unstaged, stale)
     -- Bold cannot lose that contest because it is not in it: it composes over whatever
     -- colour is underneath, identically under every scheme. Same conclusion the
     -- word-diff marks reached, for the same reason.
-    take(GLYPHS.stale, "GalleyStale")
+    take(GLYPHS.stale, "CanvasDiffStale")
     local s = spans[#spans]
-    spans[#spans + 1] = { s[1], s[2], "GalleyStaleEmphasis" }
+    spans[#spans + 1] = { s[1], s[2], "CanvasDiffStaleEmphasis" }
   end
   if unstaged then
-    take(GLYPHS.unstaged, "GalleyUnstaged")
+    take(GLYPHS.unstaged, "CanvasDiffUnstaged")
   end
   if staged then
-    take(GLYPHS.staged, "GalleyStaged")
+    take(GLYPHS.staged, "CanvasDiffStaged")
   end
   return spans
 end
@@ -293,7 +293,7 @@ function R.ghost_lines(entry, which)
   end
   local lines = {}
   for i, g in ipairs(ghosts) do
-    lines[i] = { { PREFIX.del .. (g.content or ""), "GalleyGhost" } }
+    lines[i] = { { PREFIX.del .. (g.content or ""), "CanvasDiffGhost" } }
   end
   return lines
 end

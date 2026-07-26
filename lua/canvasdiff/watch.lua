@@ -1,7 +1,7 @@
-local canvas = require("galley.canvas")
-local collect = require("galley.collect")
-local config = require("galley.config")
-local lens = require("galley.lens")
+local canvas = require("canvasdiff.canvas")
+local collect = require("canvasdiff.collect")
+local config = require("canvasdiff.config")
+local lens = require("canvasdiff.lens")
 
 local W = {}
 
@@ -279,7 +279,7 @@ function W.start(state, opts, callbacks)
   current = lease
 
   local ok, err = pcall(function()
-    lease.aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
+    lease.aug = vim.api.nvim_create_augroup("canvasdiff.watch", { clear = true })
     vim.api.nvim_create_autocmd("BufWritePost", {
       group = lease.aug,
       callback = function(ev)

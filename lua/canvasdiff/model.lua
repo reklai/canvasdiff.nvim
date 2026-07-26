@@ -1,5 +1,5 @@
-local differ = require("galley.differ")
-local util = require("galley.util")
+local differ = require("canvasdiff.differ")
+local util = require("canvasdiff.util")
 
 local M = {}
 

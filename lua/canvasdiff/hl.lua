@@ -1,10 +1,10 @@
 local M = {}
 
-local canvas = require("galley.canvas")
-local worddiff = require("galley.worddiff")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local worddiff = require("canvasdiff.worddiff")
+local fold = require("canvasdiff.fold")
 
-local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
+local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 
 local CACHE_CAP = 20
 local current = nil
@@ -226,7 +226,7 @@ end
 ---
 --- ATTRIBUTES, not a colour, and deliberately no background of their own.
 ---
---- The problem being solved: this mark sits INSIDE a GalleyAdd/GalleyDel row tint, so a
+--- The problem being solved: this mark sits INSIDE a CanvasDiffAdd/CanvasDiffDel row tint, so a
 --- background here has to out-contrast a background that has already claimed most of
 --- the available range. It used to link to DiffText and lost that fight badly -- under
 --- tokyonight-moon DiffText's background cleared the row it sat on by only 9 luminance,
@@ -252,8 +252,8 @@ end
 --- survives colour-vision deficiency and a monochrome terminal, a hue cue does not.
 --- `default = true`, so a colourscheme or your config can still replace these outright.
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyWordAdd", { bold = true, underline = true, default = true })
-  vim.api.nvim_set_hl(0, "GalleyWordDel", { bold = true, underline = true, default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffWordAdd", { bold = true, underline = true, default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffWordDel", { bold = true, underline = true, default = true })
 end
 
 local function close_timer(timer)
@@ -790,7 +790,7 @@ function M.attach(state, opts, callbacks)
   opts = opts or {}
   local lease = {
     id = next_id,
-    group_name = "galley.hl." .. next_id,
+    group_name = "canvasdiff.hl." .. next_id,
     state = state,
     opts = opts,
     callbacks = callbacks or {},

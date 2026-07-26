@@ -1,11 +1,11 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local sidebar = require("galley.sidebar")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local sidebar = require("canvasdiff.sidebar")
 
 local T = {}
 
-local SIDE_NS = vim.api.nvim_create_namespace("galley.sidebar")
+local SIDE_NS = vim.api.nvim_create_namespace("canvasdiff.sidebar")
 
 local function section(path, tag)
   local old = {}
@@ -132,7 +132,7 @@ local function sidebar_autocmds()
   local out = {}
   for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
     local group = autocmd.group_name or ""
-    if group == "galley.sidebar" or group:match("^galley%.sidebar%.") then
+    if group == "canvasdiff.sidebar" or group:match("^canvasdiff%.sidebar%.") then
       out[#out + 1] = autocmd
     end
   end
@@ -609,7 +609,7 @@ T["sidebar_lease foreign buffer and window survive exact teardown"] = function()
     local win = one_view(lease)
     local foreign = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_name(
-      foreign, "galley-test://foreign-sidebar-window/" .. tostring(vim.uv.hrtime()))
+      foreign, "canvasdiff-test://foreign-sidebar-window/" .. tostring(vim.uv.hrtime()))
     vim.api.nvim_buf_set_lines(foreign, 0, -1, false, { "foreign content" })
 
     vim.api.nvim_set_option_value("winfixbuf", false, { win = win })

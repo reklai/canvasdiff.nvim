@@ -1,15 +1,15 @@
-local render = require("galley.render")
-local viewport = require("galley.viewport")
-local fold = require("galley.fold")
-local model = require("galley.model")
-local lens = require("galley.lens")
+local render = require("canvasdiff.render")
+local viewport = require("canvasdiff.viewport")
+local fold = require("canvasdiff.fold")
+local model = require("canvasdiff.model")
+local lens = require("canvasdiff.lens")
 
 local M = {}
 
-local BUFNAME = "galley://canvas"
+local BUFNAME = "canvasdiff://canvas"
 
-local ANCHOR_NS = vim.api.nvim_create_namespace("galley.canvas.anchors")
-local HL_NS = vim.api.nvim_create_namespace("galley.canvas.hl")
+local ANCHOR_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.anchors")
+local HL_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
 
 -- Anchors are placed with right_gravity = false. Empirically (verified via a
 -- headless probe, not just the docs) a left-gravity mark sitting at the exact
@@ -27,7 +27,7 @@ local ANCHOR_OPTS = { right_gravity = false, invalidate = false, undo_restore = 
 local canvas_buf = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyFileHeader", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffFileHeader", { link = "Title", default = true })
   -- The background of the file-boundary bar. `Folded` because it is the most visible
   -- of the groups that always carry a background: measured under tokyonight-moon it is
   -- +30 luminance against Normal, where CursorLine manages +15 and ColorColumn is
@@ -36,26 +36,26 @@ local function ensure_hl_groups()
   -- already the sidebar's active-row colour, and one colour should mean one thing.
   --
   -- Background only matters here: the filename's own colour comes from
-  -- GalleyFileHeader above, at a higher priority.
-  vim.api.nvim_set_hl(0, "GalleyFileBar", { link = "Folded", default = true })
+  -- CanvasDiffFileHeader above, at a higher priority.
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { link = "Folded", default = true })
   -- The diff row tints. Aliases so they are tunable without redefining the groups
   -- your ordinary vimdiff uses -- see the note in render.HL_GROUP.
   --
   -- To quieten them, which is the usual want once you notice how much of the screen
   -- they cover, point them at something with less contrast against Normal:
-  --   vim.api.nvim_set_hl(0, "GalleyAdd", { link = "CursorLine" })
+  --   vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "CursorLine" })
   -- Measured under tokyonight-moon: DiffAdd is +27 luminance over Normal and
   -- DiffDelete +13, where CursorLine is +15 and ColorColumn is -7.
-  vim.api.nvim_set_hl(0, "GalleyAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "GalleyDel", { link = "DiffDelete", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "DiffAdd", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffDel", { link = "DiffDelete", default = true })
   -- Deleted lines, which are virtual rather than buffer rows. Its own group rather
-  -- than reusing GalleyDel so you can dim the ghosts without touching anything else --
+  -- than reusing CanvasDiffDel so you can dim the ghosts without touching anything else --
   -- the usual want, since the point of ghosting a deletion is that it is context for
   -- the line that replaced it rather than a thing to read on its own.
-  vim.api.nvim_set_hl(0, "GalleyGhost", { link = "GalleyDel", default = true })
-  vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
-  vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
-  -- GalleyStale and the sidebar's stage markers live in render, next to the glyphs.
+  vim.api.nvim_set_hl(0, "CanvasDiffGhost", { link = "CanvasDiffDel", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffHunkHeader", { link = "Comment", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffBinary", { link = "Comment", default = true })
+  -- CanvasDiffStale and the sidebar's stage markers live in render, next to the glyphs.
   render.ensure_marker_hl()
 end
 
@@ -118,7 +118,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
     local ids = { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
       end_row = start_row + 1,
       end_col = 0,
-      hl_group = "GalleyFileHeader",
+      hl_group = "CanvasDiffFileHeader",
       hl_eol = true,
       priority = 100,
     }) }
@@ -131,7 +131,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
       -- Colour, then a bold layer over the same range. The bold is the part that does
       -- not depend on the colourscheme -- see R.marker_spans for why that matters on
       -- the sidebar, and this keeps the canvas placeholder's marker consistent with it.
-      for group, prio in pairs({ GalleyStale = 101, GalleyStaleEmphasis = 102 }) do
+      for group, prio in pairs({ CanvasDiffStale = 101, CanvasDiffStaleEmphasis = 102 }) do
         ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, #line - #render.glyphs.stale, {
           end_row = start_row,
           end_col = #line,
@@ -155,7 +155,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
   -- unaffected by virtual lines) -- but it would need width management and re-application
   -- on resize to earn the same result.
   --
-  -- Priority BELOW the header's own mark, deliberately: GalleyFileHeader links to
+  -- Priority BELOW the header's own mark, deliberately: CanvasDiffFileHeader links to
   -- Title, which is foreground-only, so the two COMPOSE rather than fight -- Title's
   -- colour and boldness on the text, this group's background across the whole row.
   --
@@ -163,7 +163,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
   -- (it opens with the ▸ glyph) and has no body below it to delimit; barring every one
   -- would turn an auto-virtualized canvas of 200 collapsed files into a solid block.
   ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
-    line_hl_group = "GalleyFileBar",
+    line_hl_group = "CanvasDiffFileBar",
     priority = 99,
   })
 
@@ -179,7 +179,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
   --
   -- Dropping it costs nothing for the other kinds -- file_hdr, hunk_hdr and binary all
   -- resolve to foreground-only groups (Title, Comment), where hl_eol has nothing to
-  -- fill with. The expanded header's full-width bar comes from the GalleyFileBar
+  -- fill with. The expanded header's full-width bar comes from the CanvasDiffFileBar
   -- line_hl_group above, which is unaffected.
   --
   -- Side effect worth having: syntax highlighting reads at full contrast again. On a

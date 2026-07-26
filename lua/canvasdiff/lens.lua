@@ -20,7 +20,7 @@ local L = {}
 --- The staged blob of a path, in git's rev syntax.
 L.INDEX_REV = ":0"
 
---- @class GalleyLens
+--- @class CanvasDiffLens
 --- @field id string     stable key for per-lens bookkeeping and the session
 --- @field old string    git rev for the old side
 --- @field new string    "worktree" | "index"

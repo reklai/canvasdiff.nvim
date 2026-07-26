@@ -10,10 +10,10 @@
 
 ## Global Constraints
 
-- Neovim ≥0.10; `vim.text.diff`/`vim.diff` shim lives ONLY in `lua/galley/differ.lua` (`differ.hunks(old, new)` → list of `{old_start, old_count, new_start, new_count}`, `result_type="indices"`).
+- Neovim ≥0.10; `vim.text.diff`/`vim.diff` shim lives ONLY in `lua/canvasdiff/differ.lua` (`differ.hunks(old, new)` → list of `{old_start, old_count, new_start, new_count}`, `result_type="indices"`).
 - No external runtime dependencies. Tests use the bespoke runner: `make test` = `nvim --headless --clean -l tests/run.lua`; `make test FILTER=pat` filters by test NAME pattern.
 - **Never attach a treesitter parser, highlighter, or syntax to the canvas buffer.** All treesitter color arrives as plain extmarks computed from `get_string_parser` runs over whole-file text strings.
-- Highlight priorities (fixed contract): line tier **100** (existing `galley.canvas.hl` namespace), word-diff tier **105**, treesitter tier **110**. Word+TS marks live in namespace `galley.canvas.ts`.
+- Highlight priorities (fixed contract): line tier **100** (existing `canvasdiff.canvas.hl` namespace), word-diff tier **105**, treesitter tier **110**. Word+TS marks live in namespace `canvasdiff.canvas.ts`.
 - Rendered diff content lines have a **1-byte prefix** (`" "`/`"-"`/`"+"`), so buffer col = source byte col + 1. `file_hdr`/`hunk_hdr` lines never get TS or word marks.
 - Side mapping: `ctx` and `add` entries are highlighted from `new_text` at `entry.new_lnum`; `del` entries from `old_text` at `entry.old_lnum`. Never highlight a `ctx` line from the old side (no double marks).
 - Parse cache: module-level in hl.lua, keyed by section path, LRU capacity **20**, invalidated per-path via hook when a section is replaced.
@@ -25,13 +25,13 @@
 
 ## File Structure
 
-- `lua/galley/hl.lua` — NEW: lang detection, parse cache (LRU 20), `section_ts_marks`, apply/evict engine (`attach`/`apply_now`/`invalidate`).
-- `lua/galley/worddiff.lua` — NEW: pure char-level word-diff marks per section.
-- `lua/galley/model.lua` — MODIFY: sections carry `old_text`/`new_text`.
-- `lua/galley/canvas.lua` — MODIFY: two optional hooks (`state.hooks.on_render_all`, `state.hooks.on_section_replaced(path)`).
-- `lua/galley/config.lua` — MODIFY: `highlight = { enabled, margin, debounce_ms }` defaults.
-- `lua/galley/init.lua` — MODIFY: attach on open, re-apply on refresh.
-- `lua/galley/jump.lua` — MODIFY: re-apply after back-splice.
+- `lua/canvasdiff/hl.lua` — NEW: lang detection, parse cache (LRU 20), `section_ts_marks`, apply/evict engine (`attach`/`apply_now`/`invalidate`).
+- `lua/canvasdiff/worddiff.lua` — NEW: pure char-level word-diff marks per section.
+- `lua/canvasdiff/model.lua` — MODIFY: sections carry `old_text`/`new_text`.
+- `lua/canvasdiff/canvas.lua` — MODIFY: two optional hooks (`state.hooks.on_render_all`, `state.hooks.on_section_replaced(path)`).
+- `lua/canvasdiff/config.lua` — MODIFY: `highlight = { enabled, margin, debounce_ms }` defaults.
+- `lua/canvasdiff/init.lua` — MODIFY: attach on open, re-apply on refresh.
+- `lua/canvasdiff/jump.lua` — MODIFY: re-apply after back-splice.
 - `tests/test_hl.lua`, `tests/test_worddiff.lua` — NEW.
 - `README.md` — MODIFY: document highlighting + config.
 
@@ -40,8 +40,8 @@
 ### Task 1: Section texts + treesitter mark computation (`hl.lua` core)
 
 **Files:**
-- Modify: `lua/galley/model.lua` (build_section return table)
-- Create: `lua/galley/hl.lua`
+- Modify: `lua/canvasdiff/model.lua` (build_section return table)
+- Create: `lua/canvasdiff/hl.lua`
 - Test: `tests/test_hl.lua`
 - Modify: `tests/test_model.lua` (one added case)
 
@@ -59,8 +59,8 @@ Create `tests/test_hl.lua`:
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local hl = require("galley.hl")
+local model = require("canvasdiff.model")
+local hl = require("canvasdiff.hl")
 
 local T = {}
 
@@ -174,11 +174,11 @@ end
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `make test FILTER=hl_`
-Expected: FAIL — `module 'galley.hl' not found`. Also run `make test FILTER=model_section` → FAIL on missing `old_text`.
+Expected: FAIL — `module 'canvasdiff.hl' not found`. Also run `make test FILTER=model_section` → FAIL on missing `old_text`.
 
 - [ ] **Step 3: Implement**
 
-In `lua/galley/model.lua`, extend the return table of `build_section`:
+In `lua/canvasdiff/model.lua`, extend the return table of `build_section`:
 
 ```lua
   return {
@@ -188,7 +188,7 @@ In `lua/galley/model.lua`, extend the return table of `build_section`:
   }
 ```
 
-Create `lua/galley/hl.lua`:
+Create `lua/canvasdiff/hl.lua`:
 
 ```lua
 local M = {}
@@ -358,7 +358,7 @@ Expected: PASS everywhere.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/galley/hl.lua lua/galley/model.lua tests/test_hl.lua tests/test_model.lua
+git add lua/canvasdiff/hl.lua lua/canvasdiff/model.lua tests/test_hl.lua tests/test_model.lua
 git commit -m "feat: treesitter mark computation from whole-file string parses"
 ```
 
@@ -367,12 +367,12 @@ git commit -m "feat: treesitter mark computation from whole-file string parses"
 ### Task 2: Word-diff tier (`worddiff.lua`)
 
 **Files:**
-- Create: `lua/galley/worddiff.lua`
+- Create: `lua/canvasdiff/worddiff.lua`
 - Test: `tests/test_worddiff.lua`
 
 **Interfaces:**
 - Consumes: section entries (same shape as Task 1); `differ.hunks(old, new)` → `{ {old_start, old_count, new_start, new_count}, ... }` (1-based starts; count 0 = pure insert/delete anchored after start).
-- Produces: `worddiff.section_marks(section) -> marks` — same mark shape as Task 1 but `priority = 105` and `group = "GalleyWordDel"|"GalleyWordAdd"`. Pairing rule: within each consecutive del-run followed by add-run, pair del k with add k; unpaired lines get no marks. Pairs where either side is empty, identical, or > 500 bytes are skipped. Cols are byte cols (UTF-8 safe) + 1 prefix.
+- Produces: `worddiff.section_marks(section) -> marks` — same mark shape as Task 1 but `priority = 105` and `group = "CanvasDiffWordDel"|"CanvasDiffWordAdd"`. Pairing rule: within each consecutive del-run followed by add-run, pair del k with add k; unpaired lines get no marks. Pairs where either side is empty, identical, or > 500 bytes are skipped. Cols are byte cols (UTF-8 safe) + 1 prefix.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -380,8 +380,8 @@ Create `tests/test_worddiff.lua`:
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local worddiff = require("galley.worddiff")
+local model = require("canvasdiff.model")
+local worddiff = require("canvasdiff.worddiff")
 
 local T = {}
 
@@ -401,7 +401,7 @@ T["word_marks highlight only the changed span of a paired line"] = function()
   -- "local b = 2" -> "local b = 20 -- changed": pure insertion of 12 chars
   -- after byte 11. Buffer col = 11 + 1 prefix + 1 (1-based) = 12.
   H.eq(marks, {
-    { row = 4, col = 12, end_col = 24, group = "GalleyWordAdd", priority = 105 },
+    { row = 4, col = 12, end_col = 24, group = "CanvasDiffWordAdd", priority = 105 },
   })
 end
 
@@ -413,9 +413,9 @@ T["word_marks are byte-correct on multibyte lines"] = function()
   -- (the rendered prefix), so col = 7; é/á are 2 UTF-8 bytes, so end_col = 9.
   H.eq(#marks, 2)
   local del, add = marks[1], marks[2]
-  if del.group == "GalleyWordAdd" then del, add = add, del end
-  H.eq(del.group, "GalleyWordDel")
-  H.eq(add.group, "GalleyWordAdd")
+  if del.group == "CanvasDiffWordAdd" then del, add = add, del end
+  H.eq(del.group, "CanvasDiffWordDel")
+  H.eq(add.group, "CanvasDiffWordAdd")
   H.eq(del.col, 7)
   H.eq(del.end_col, 9)  -- é is 2 bytes
   H.eq(add.col, 7)
@@ -448,14 +448,14 @@ return T
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `make test FILTER=word_`
-Expected: FAIL — `module 'galley.worddiff' not found`.
+Expected: FAIL — `module 'canvasdiff.worddiff' not found`.
 
 - [ ] **Step 3: Implement**
 
-Create `lua/galley/worddiff.lua`:
+Create `lua/canvasdiff/worddiff.lua`:
 
 ```lua
-local differ = require("galley.differ")
+local differ = require("canvasdiff.differ")
 
 local W = {}
 
@@ -493,7 +493,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
         row = del_row,
         col = doff[old_start] + 1,
         end_col = doff[old_start + old_count] + 1,
-        group = "GalleyWordDel",
+        group = "CanvasDiffWordDel",
         priority = 105,
       }
     end
@@ -502,7 +502,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
         row = add_row,
         col = aoff[new_start] + 1,
         end_col = aoff[new_start + new_count] + 1,
-        group = "GalleyWordAdd",
+        group = "CanvasDiffWordAdd",
         priority = 105,
       }
     end
@@ -552,7 +552,7 @@ Expected: PASS. If the first test's exact hunk boundaries differ (diff may split
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/galley/worddiff.lua tests/test_worddiff.lua
+git add lua/canvasdiff/worddiff.lua tests/test_worddiff.lua
 git commit -m "feat: char-level word-diff tier marks"
 ```
 
@@ -561,25 +561,25 @@ git commit -m "feat: char-level word-diff tier marks"
 ### Task 3: Apply/evict engine + canvas hooks + wiring
 
 **Files:**
-- Modify: `lua/galley/hl.lua` (append engine)
-- Modify: `lua/galley/canvas.lua` (hooks in `render_all` + `replace_section`)
-- Modify: `lua/galley/config.lua` (highlight defaults)
-- Modify: `lua/galley/init.lua` (attach/apply wiring)
-- Modify: `lua/galley/jump.lua` (apply after back)
+- Modify: `lua/canvasdiff/hl.lua` (append engine)
+- Modify: `lua/canvasdiff/canvas.lua` (hooks in `render_all` + `replace_section`)
+- Modify: `lua/canvasdiff/config.lua` (highlight defaults)
+- Modify: `lua/canvasdiff/init.lua` (attach/apply wiring)
+- Modify: `lua/canvasdiff/jump.lua` (apply after back)
 - Modify: `README.md`
 - Test: `tests/test_hl.lua` (engine cases appended)
 
 **Interfaces:**
 - Consumes: `canvas.open(sections, opts) -> state {buf, win, sections, anchor_ids, hl_ids}`; `canvas.section_rows(state, i) -> start_row0, end_row0_exclusive`; `canvas.render_all(state, sections)`; `canvas.replace_section(state, i, new_section|nil)`; `hl.section_ts_marks`, `worddiff.section_marks`, `hl.invalidate` from Tasks 1–2.
 - Produces:
-  - `hl.attach(state, opts)` — `opts = { margin = rows beyond viewport (default 100), debounce_ms = 30 }`; sets `state.ts = { ids_by_path = {}, margin, debounce_ms }`, installs `state.hooks`, a `WinScrolled` autocmd (augroup `galley.hl`, cleared on re-attach), defines `GalleyWordAdd`/`GalleyWordDel` (→ `DiffText`, `default = true`), and runs one immediate `apply_now`.
+  - `hl.attach(state, opts)` — `opts = { margin = rows beyond viewport (default 100), debounce_ms = 30 }`; sets `state.ts = { ids_by_path = {}, margin, debounce_ms }`, installs `state.hooks`, a `WinScrolled` autocmd (augroup `canvasdiff.hl`, cleared on re-attach), defines `CanvasDiffWordAdd`/`CanvasDiffWordDel` (→ `DiffText`, `default = true`), and runs one immediate `apply_now`.
   - `hl.apply_now(state)` — synchronous; no-op when `state.ts` is nil or the state window isn't showing the canvas. Applies marks for sections intersecting `[top - margin, bot + margin]`, evicts applied sections fully outside `[top - 2*margin, bot + 2*margin]`.
   - canvas.lua calls `state.hooks.on_render_all()` at the start of `render_all` and `state.hooks.on_section_replaced(path)` after every `replace_section` splice (both optional, nil-safe).
   - `config.defaults.highlight = { enabled = true, margin = 100, debounce_ms = 30 }`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_hl.lua` (before `return T`; add `local canvas = require("galley.canvas")` at the top):
+Append to `tests/test_hl.lua` (before `return T`; add `local canvas = require("canvasdiff.canvas")` at the top):
 
 ```lua
 -- ~90-row sections: 100 lines with a change every 10th line = 10 separated
@@ -646,7 +646,7 @@ T["hl_engine replace_section invalidates and reapplies inside new rows"] = funct
   assert(st.ts.ids_by_path["r.lua"] and #st.ts.ids_by_path["r.lua"] > 0, "reapplied")
 
   local srow, erow = canvas.section_rows(st, 1)
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(m[2] >= srow and m[2] < erow,
       ("stale mark at row %d outside [%d, %d)"):format(m[2], srow, erow))
@@ -657,7 +657,7 @@ T["hl_engine render_all clears the ts namespace via hook"] = function()
   local st = canvas.open(big_sections(), {})
   hl.attach(st, { margin = 5 })
   canvas.render_all(st, big_sections())
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   H.eq(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {}), {}, "namespace cleared")
   H.eq(next(st.ts.ids_by_path), nil, "bookkeeping reset")
   hl.apply_now(st)
@@ -675,18 +675,18 @@ Expected: FAIL — `attempt to call field 'attach' (a nil value)`.
 Add at the top of `hl.lua` (after `local M = {}` — NOT before; canvas does not require hl, so this cannot cycle):
 
 ```lua
-local canvas = require("galley.canvas")
-local worddiff = require("galley.worddiff")
+local canvas = require("canvasdiff.canvas")
+local worddiff = require("canvasdiff.worddiff")
 
-local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
+local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 ```
 
 Append before `return M`:
 
 ```lua
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyWordAdd", { link = "DiffText", default = true })
-  vim.api.nvim_set_hl(0, "GalleyWordDel", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffWordAdd", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffWordDel", { link = "DiffText", default = true })
 end
 
 local function del_path_marks(state, path)
@@ -783,7 +783,7 @@ function M.attach(state, opts)
     M.invalidate(path)
   end
 
-  local aug = vim.api.nvim_create_augroup("galley.hl", { clear = true })
+  local aug = vim.api.nvim_create_augroup("canvasdiff.hl", { clear = true })
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = aug,
     callback = function(ev)
@@ -832,7 +832,7 @@ Expected: PASS (all four). Then `make test` — full suite green.
 
 - [ ] **Step 6: Wire config / init / jump / README**
 
-`lua/galley/config.lua` — add to `M.defaults`:
+`lua/canvasdiff/config.lua` — add to `M.defaults`:
 
 ```lua
   highlight = {
@@ -842,7 +842,7 @@ Expected: PASS (all four). Then `make test` — full suite green.
   },
 ```
 
-`lua/galley/init.lua` — add `local hl = require("galley.hl")` to the requires; at the end of `M.open()` (after `set_canvas_keymaps(st)`):
+`lua/canvasdiff/init.lua` — add `local hl = require("canvasdiff.hl")` to the requires; at the end of `M.open()` (after `set_canvas_keymaps(st)`):
 
 ```lua
   if config.options.highlight.enabled then
@@ -856,13 +856,13 @@ and at the end of `M.refresh()`:
   hl.apply_now(state)
 ```
 
-`lua/galley/jump.lua` — add `local hl = require("galley.hl")` to the requires; in `M.back()`, after the final `winrestview` call:
+`lua/canvasdiff/jump.lua` — add `local hl = require("canvasdiff.hl")` to the requires; in `M.back()`, after the final `winrestview` call:
 
 ```lua
   hl.apply_now(state)
 ```
 
-`README.md` — in the features/config sections: note that diff content is syntax-highlighted with the user's own treesitter setup plus intra-line word-diff emphasis, and document the `highlight` config table (`enabled`, `margin` = rows beyond the viewport kept highlighted, `debounce_ms` = scroll debounce) and the `GalleyWordAdd`/`GalleyWordDel` groups (default: `DiffText`).
+`README.md` — in the features/config sections: note that diff content is syntax-highlighted with the user's own treesitter setup plus intra-line word-diff emphasis, and document the `highlight` config table (`enabled`, `margin` = rows beyond the viewport kept highlighted, `debounce_ms` = scroll debounce) and the `CanvasDiffWordAdd`/`CanvasDiffWordDel` groups (default: `DiffText`).
 
 - [ ] **Step 7: Full suite + smoke**
 
@@ -872,8 +872,8 @@ Expected: all tests pass, zero warnings.
 Headless smoke (from the repo root — repo must have at least one uncommitted change; if clean, `echo "-- smoke" >> README.md` first, then `git checkout -- README.md` after):
 
 ```bash
-nvim --headless --clean -c "set rtp+=." -c "lua require('galley').open()" \
-  -c "lua local ns = vim.api.nvim_create_namespace('galley.canvas.ts'); print('ts marks: ' .. #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {}))" \
+nvim --headless --clean -c "set rtp+=." -c "lua require('canvasdiff').open()" \
+  -c "lua local ns = vim.api.nvim_create_namespace('canvasdiff.canvas.ts'); print('ts marks: ' .. #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {}))" \
   -c "qa!"
 ```
 
@@ -882,7 +882,7 @@ Expected: `ts marks: N` with N > 0 when a lua/known-language file is dirty.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add lua/galley/ tests/test_hl.lua README.md
+git add lua/canvasdiff/ tests/test_hl.lua README.md
 git commit -m "feat: lazy treesitter + word-diff highlighting on the canvas"
 ```
 

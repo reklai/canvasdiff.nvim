@@ -1,5 +1,5 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
+local canvas = require("canvasdiff.canvas")
 
 local T = {}
 
@@ -16,8 +16,8 @@ local function in_repo(fn)
   local root = fixture()
   vim.cmd("tabnew")
   vim.api.nvim_set_current_dir(root)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
   local ok, err = pcall(fn, fm, root)
   pcall(fm.close)
   vim.cmd("tabclose")
@@ -100,7 +100,7 @@ T["landing_ falls back to the last jumped file when the origin is gone"] = funct
   end)
 end
 
--- Regression: close() only acted on the CURRENT window, so `:Galley close`
+-- Regression: close() only acted on the CURRENT window, so `:CanvasDiff close`
 -- from a neighbouring split was a silent no-op that read as the plugin being
 -- broken.
 T["landing_ close works from a neighbouring split"] = function()

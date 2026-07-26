@@ -1,11 +1,11 @@
-local config = require("galley.config")
-local hl = require("galley.hl")
-local scrollbar = require("galley.scrollbar")
-local session = require("galley.session")
-local sidebar = require("galley.sidebar")
-local statuscol = require("galley.statuscol")
-local virt = require("galley.virt")
-local watch = require("galley.watch")
+local config = require("canvasdiff.config")
+local hl = require("canvasdiff.hl")
+local scrollbar = require("canvasdiff.scrollbar")
+local session = require("canvasdiff.session")
+local sidebar = require("canvasdiff.sidebar")
+local statuscol = require("canvasdiff.statuscol")
+local virt = require("canvasdiff.virt")
+local watch = require("canvasdiff.watch")
 
 local Surface = {}
 Surface.__index = Surface
@@ -14,9 +14,9 @@ local next_id = 0
 local next_generation = 0
 
 local OWNED_GROUPS = {
-  "galley.session",
-  "galley.close",
-  "galley.winbar",
+  "canvasdiff.session",
+  "canvasdiff.close",
+  "canvasdiff.winbar",
 }
 
 function Surface.new(state, callbacks, ownership)

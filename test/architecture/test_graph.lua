@@ -10,9 +10,9 @@ T.architecture_graph_lexer_ignores_require_text_in_every_comment_and_string_form
 local quoted = "require('fake.quoted')"
 local escaped = "escaped quote: \" require('fake.escaped')"
 local long = [=[require("fake.long_string")]=]
-local first = require("galley.diff")
-local second = require 'galley.canvas'
-local third = require [=[galley.source]=]
+local first = require("canvasdiff.diff")
+local second = require 'canvasdiff.canvas'
+local third = require [=[canvasdiff.source]=]
 object.require("fake.member")
 object:require("fake.method")
 ]==]
@@ -21,9 +21,9 @@ object:require("fake.method")
   H.eq(vim.tbl_map(function(item)
     return item.module
   end, dependencies), {
-    "galley.diff",
-    "galley.canvas",
-    "galley.source",
+    "canvasdiff.diff",
+    "canvasdiff.canvas",
+    "canvasdiff.source",
   })
 end
 
@@ -33,19 +33,19 @@ T.architecture_graph_lexer_handles_arbitrary_long_bracket_delimiters = function(
 require("fake.comment")
 ]===]
 local text = [===[require("fake.string") ]=] ]===]
-local real = require [===[galley.diff]===]
+local real = require [===[canvasdiff.diff]===]
 ]====]
 
   local dependencies = graph.requires(source, "long_brackets.lua")
   H.eq(#dependencies, 1)
-  H.eq(dependencies[1].module, "galley.diff")
+  H.eq(dependencies[1].module, "canvasdiff.diff")
 end
 
 T.architecture_graph_rejects_noncanonical_and_computed_requires = function()
   for _, source in ipairs({
-    "local name = 'galley.diff'; require(name)",
-    "local name = 'diff'; require('galley.' .. name)",
-    "pcall(require, 'galley.diff')",
+    "local name = 'canvasdiff.diff'; require(name)",
+    "local name = 'diff'; require('canvasdiff.' .. name)",
+    "pcall(require, 'canvasdiff.diff')",
   }) do
     local ok, err = pcall(graph.requires, source, "dynamic.lua")
     H.eq(ok, false)
@@ -94,23 +94,23 @@ end
 T.architecture_graph_inspection_reports_duplicate_and_unresolved_modules = function()
   local root = H.git_fixture({
     committed = {
-      ["lua/galley.lua"] = 'require("galley.missing")\nreturn {}\n',
-      ["lua/galley/init.lua"] = "return {}\n",
+      ["lua/canvasdiff.lua"] = 'require("canvasdiff.missing")\nreturn {}\n',
+      ["lua/canvasdiff/init.lua"] = "return {}\n",
     },
   })
 
   local inspection = graph.inspect(root)
   H.eq(#inspection.errors, 2)
   local message = table.concat(inspection.errors, "\n")
-  assert(message:find('duplicate module "galley"', 1, true), message)
-  assert(message:find('unresolved internal require "galley.missing"', 1, true), message)
+  assert(message:find('duplicate module "canvasdiff"', 1, true), message)
+  assert(message:find('unresolved internal require "canvasdiff.missing"', 1, true), message)
 end
 
 T.architecture_graph_module_ids_and_cycles_are_deterministic = function()
-  H.eq(graph.module_id("lua/galley.lua"), "galley")
-  H.eq(graph.module_id("lua/galley/init.lua"), "galley")
-  H.eq(graph.module_id("lua/galley/canvas/Page.lua"), "galley.canvas.Page")
-  H.eq(graph.module_id("plugin/galley.lua"), nil)
+  H.eq(graph.module_id("lua/canvasdiff.lua"), "canvasdiff")
+  H.eq(graph.module_id("lua/canvasdiff/init.lua"), "canvasdiff")
+  H.eq(graph.module_id("lua/canvasdiff/canvas/Page.lua"), "canvasdiff.canvas.Page")
+  H.eq(graph.module_id("plugin/canvasdiff.lua"), nil)
 
   local nodes = {
     a = { rel = "a.lua" },

@@ -44,7 +44,7 @@ T.architecture_layout_legacy_ledger_is_sorted_unique_and_exact = function()
       assert(rules.legacy_paths[index - 1] < path, "legacy ledger must stay sorted")
     end
     assert(rules.legacy_ceiling[path], "new legacy exemptions are forbidden: " .. path)
-    assert(path:match("^lua/galley/[^/]+%.lua$"), "legacy exemptions must be flat: " .. path)
+    assert(path:match("^lua/canvasdiff/[^/]+%.lua$"), "legacy exemptions must be flat: " .. path)
     assert(files[path], "stale legacy ledger entry; remove or restore it: " .. path)
     H.eq(rules.classify(path), "legacy", "ledger path must classify as legacy")
     actual[#actual + 1] = path
@@ -71,10 +71,10 @@ T.architecture_layout_module_ids_are_unique_and_paths_are_owned = function()
         modules[module] = file.rel
       end
 
-      if file.rel:match("^lua/galley") and not rules.classify(file.rel) then
-        errors[#errors + 1] = "unowned Galley module path: " .. file.rel
-      elseif not file.rel:match("^lua/galley") then
-        errors[#errors + 1] = "production Lua must live in the Galley package: " .. file.rel
+      if file.rel:match("^lua/canvasdiff") and not rules.classify(file.rel) then
+        errors[#errors + 1] = "unowned CanvasDiff module path: " .. file.rel
+      elseif not file.rel:match("^lua/canvasdiff") then
+        errors[#errors + 1] = "production Lua must live in the CanvasDiff package: " .. file.rel
       end
     elseif file.rel:match("^plugin/") and not rules.classify(file.rel) then
       errors[#errors + 1] = "unowned plugin entrypoint: " .. file.rel
@@ -88,9 +88,9 @@ T.architecture_layout_names_have_one_meaning = function()
   local errors = {}
 
   for _, file in ipairs(graph.source_files(graph.root)) do
-    if file.rel:match("^lua/galley") or file.rel:match("^plugin/") then
+    if file.rel:match("^lua/canvasdiff") or file.rel:match("^plugin/") then
       local basename = file.rel:match("([^/]+)%.lua$")
-      local legacy_util = file.rel == "lua/galley/util.lua" and rules.legacy[file.rel]
+      local legacy_util = file.rel == "lua/canvasdiff/util.lua" and rules.legacy[file.rel]
 
       if not basename then
         errors[#errors + 1] = "invalid Lua filename: " .. file.rel
@@ -114,7 +114,7 @@ T.architecture_layout_names_have_one_meaning = function()
         errors[#errors + 1] = "non-stateful module must use lower_snake_case: " .. file.rel
       end
 
-      local directory = file.rel:match("^lua/galley/(.+)/[^/]+%.lua$")
+      local directory = file.rel:match("^lua/canvasdiff/(.+)/[^/]+%.lua$")
       if directory then
         for segment in directory:gmatch("[^/]+") do
           if not segment:match("^[a-z][a-z0-9_]*$") then
@@ -135,10 +135,10 @@ T.architecture_layout_every_domain_has_a_facade_and_a_real_owner = function()
   local domains = vim.tbl_keys(rules.domains)
   table.sort(domains)
   for _, domain in ipairs(domains) do
-    local facade_path = ("lua/galley/%s.lua"):format(domain)
+    local facade_path = ("lua/canvasdiff/%s.lua"):format(domain)
     local has_facade = files[facade_path] and not rules.legacy[facade_path]
     local has_owner = false
-    local owner_prefix = ("lua/galley/%s/"):format(domain)
+    local owner_prefix = ("lua/canvasdiff/%s/"):format(domain)
 
     for path in pairs(files) do
       if path:sub(1, #owner_prefix) == owner_prefix then
@@ -151,6 +151,51 @@ T.architecture_layout_every_domain_has_a_facade_and_a_real_owner = function()
       errors[#errors + 1] = ("%s has internals but no %s facade"):format(owner_prefix, facade_path)
     elseif has_facade and not has_owner then
       errors[#errors + 1] = ("%s is empty taxonomy without a real owner"):format(facade_path)
+    end
+  end
+
+  assert_no_errors(errors)
+end
+
+T.architecture_identity_contains_no_retired_token_or_path = function()
+  local retired = "gal" .. "ley"
+  local historical_record = "docs/journeys/2026-07-26-canvasdiff-migration.md"
+  local result = vim.system({
+    "git",
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  }, { cwd = graph.root }):wait()
+  assert(result.code == 0, "could not enumerate repository files: " .. (result.stderr or ""))
+
+  local errors = {}
+  local casefolded_paths = {}
+  for relative in (result.stdout or ""):gmatch("([^%z]+)") do
+    local absolute = vim.fs.joinpath(graph.root, relative)
+    local stat = vim.uv.fs_stat(absolute)
+    if stat and stat.type == "file" then
+      local folded_path = relative:lower()
+      if folded_path:find(retired, 1, true) then
+        errors[#errors + 1] = "retired identity remains in path: " .. relative
+      end
+      if casefolded_paths[folded_path] and casefolded_paths[folded_path] ~= relative then
+        errors[#errors + 1] = (
+          "case-folded path collision: %s and %s"
+        ):format(casefolded_paths[folded_path], relative)
+      end
+      casefolded_paths[folded_path] = relative
+
+      if relative ~= historical_record then
+        local file, open_err = io.open(absolute, "rb")
+        assert(file, ("%s: %s"):format(relative, open_err or "could not open"))
+        local content = file:read("*a")
+        file:close()
+        if content:lower():find(retired, 1, true) then
+          errors[#errors + 1] = "retired identity remains in content: " .. relative
+        end
+      end
     end
   end
 

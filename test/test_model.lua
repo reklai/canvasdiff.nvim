@@ -1,6 +1,6 @@
 local H = require("helpers")
-local model = require("galley.model")
-local render = require("galley.render")
+local model = require("canvasdiff.model")
+local render = require("canvasdiff.render")
 
 return {
   ["model: modified file entries"] = function()
@@ -199,15 +199,15 @@ return {
     -- No "-b" row: it renders as a virtual line above "+B" instead.
     H.eq(lines[4], "+B")
     H.eq(lines[5], nil, "the deletion consumed no buffer row")
-    H.eq(render.ghost_lines(s.entries[4]), { { { "-b", "GalleyGhost" } } },
+    H.eq(render.ghost_lines(s.entries[4]), { { { "-b", "CanvasDiffGhost" } } },
       "and comes back as a virt_lines chunk spec")
     local hl = render.section_hl(s)
-    H.eq(hl[1], { row = 0, group = "GalleyFileHeader" })
-    H.eq(hl[2], { row = 1, group = "GalleyHunkHeader" })
-    -- Galley* aliases, not DiffDelete/DiffAdd directly. Every other visual element
+    H.eq(hl[1], { row = 0, group = "CanvasDiffFileHeader" })
+    H.eq(hl[2], { row = 1, group = "CanvasDiffHunkHeader" })
+    -- CanvasDiff* aliases, not DiffDelete/DiffAdd directly. Every other visual element
     -- already went through an overridable group; these were the last two that did not,
     -- so tuning the diff rows meant redefining the groups your ordinary vimdiff uses.
-    H.eq(hl[3], { row = 3, group = "GalleyAdd" })
+    H.eq(hl[3], { row = 3, group = "CanvasDiffAdd" })
     H.eq(hl[4], nil, "only one content row is highlighted now")
   end,
   ["model_section carries old_text and new_text"] = function()

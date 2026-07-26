@@ -1,11 +1,11 @@
-local canvas = require("galley.canvas")
-local viewport = require("galley.viewport")
-local fold = require("galley.fold")
-local lens = require("galley.lens")
+local canvas = require("canvasdiff.canvas")
+local viewport = require("canvasdiff.viewport")
+local fold = require("canvasdiff.fold")
+local lens = require("canvasdiff.lens")
 
 local M = {}
 
-local VERSION = 1
+local VERSION = 2
 
 local function win_showing_canvas(state)
   return state.win and vim.api.nvim_win_is_valid(state.win)
@@ -77,7 +77,7 @@ end
 
 --- Where a root's session file lives on disk.
 function M.path_for(root)
-  return vim.fn.stdpath("state") .. "/galley/" .. vim.fn.sha256(root) .. ".json"
+  return vim.fn.stdpath("state") .. "/canvasdiff/" .. vim.fn.sha256(root) .. ".json"
 end
 
 --- Persist `state`'s base/collapsed/folds and (when the canvas is actually
@@ -91,9 +91,9 @@ function M.save(state)
 
     -- `lens` is the truth; `base` is written alongside as a courtesy to readers
     -- that only know the older two-value vocabulary, and is nil for the `staged`
-    -- and branch lenses it cannot express. VERSION deliberately stays 1: M.load
-    -- rejects a mismatch outright, so bumping it would silently discard every
-    -- session saved before lenses existed, and `lens` is purely additive.
+    -- and branch lenses it cannot express. Version 2 is the CanvasDiff identity
+    -- boundary: copied version-1 payloads are intentionally rejected rather than
+    -- being mistaken for state created under this package.
     local l = lens.of(state)
     local data = { version = VERSION, base = lens.to_base(l), lens = l }
 

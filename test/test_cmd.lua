@@ -1,5 +1,5 @@
 local H = require("helpers")
-local cmd = require("galley.cmd")
+local cmd = require("canvasdiff.cmd")
 
 local T = {}
 
@@ -22,7 +22,7 @@ T["cmd_parse each word maps to its action"] = function()
 end
 
 -- States rather than a flip: a toggle inside a user mapping is a coin flip,
--- while `:Galley unstaged` must always land unstaged.
+-- while `:CanvasDiff unstaged` must always land unstaged.
 T["cmd_parse each lens word names its lens"] = function()
   H.eq(cmd.parse({ "all" }).lens, "all", "worktree vs HEAD")
   H.eq(cmd.parse({ "unstaged" }).lens, "unstaged", "worktree vs index")
@@ -114,7 +114,7 @@ local function capture(fn)
 end
 
 T["cmd_run a commit range reports and opens nothing"] = function()
-  local canvas = require("galley.canvas")
+  local canvas = require("canvasdiff.canvas")
   local before = 0
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if canvas.is_canvas_buf(b) then before = before + 1 end

@@ -1,9 +1,9 @@
 local H = require("helpers")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
-local collect = require("galley.collect")
-local watch = require("galley.watch")
-local lens = require("galley.lens")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
+local collect = require("canvasdiff.collect")
+local watch = require("canvasdiff.watch")
+local lens = require("canvasdiff.lens")
 
 local T = {}
 
@@ -88,7 +88,7 @@ T["watch_reconcile deleted branch ref retains everything and recovers"] = functi
     tick = vim.api.nvim_buf_get_changedtick(st.buf),
     anchors = vim.deepcopy(st.anchor_ids),
     anchor_marks = vim.api.nvim_buf_get_extmarks(
-      st.buf, vim.api.nvim_get_namespaces()["galley.canvas.anchors"],
+      st.buf, vim.api.nvim_get_namespaces()["canvasdiff.canvas.anchors"],
       0, -1, { details = true }),
     hl_ids = vim.deepcopy(st.hl_ids),
     view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview),
@@ -116,7 +116,7 @@ T["watch_reconcile deleted branch ref retains everything and recovers"] = functi
     "no canvas write happened on failed preflight")
   H.eq(st.anchor_ids, before.anchors)
   H.eq(vim.api.nvim_buf_get_extmarks(
-    st.buf, vim.api.nvim_get_namespaces()["galley.canvas.anchors"],
+    st.buf, vim.api.nvim_get_namespaces()["canvasdiff.canvas.anchors"],
     0, -1, { details = true }), before.anchor_marks)
   H.eq(st.hl_ids, before.hl_ids)
   H.eq(vim.api.nvim_win_call(st.win, vim.fn.winsaveview), before.view)
@@ -550,12 +550,12 @@ T["watch_start stops itself when the canvas buffer is wiped"] = function()
   local root = fixture()
   local st = open_state(root)
   watch.start(st, { debounce_ms = 20 })
-  assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
+  assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
     "augroup exists while watching")
 
   vim.api.nvim_buf_delete(st.buf, { force = true })
 
-  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" })
+  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" })
   H.eq(group_gone, true, "BufWipeout stopped the watch (augroup torn down)")
 end
 
@@ -656,7 +656,7 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     end
 
     H.eq(watch.stop(lease_a), false, "a stale owner cannot stop current lease B")
-    assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
+    assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
       "B's autocmd group survives stop(A)")
 
     local timers_before_stale_fs = #timers
@@ -696,7 +696,7 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
 
     H.eq(watch.stop(lease_c), true)
     assert(lease_d, "the injected timer stop started replacement D")
-    assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
+    assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
       "C's resumed teardown cannot delete reentrant replacement D's group")
 
     local timers_before_d = #timers

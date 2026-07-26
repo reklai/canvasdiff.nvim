@@ -1,7 +1,7 @@
 local H = require("helpers")
-local model = require("galley.model")
-local hl = require("galley.hl")
-local canvas = require("galley.canvas")
+local model = require("canvasdiff.model")
+local hl = require("canvasdiff.hl")
+local canvas = require("canvasdiff.canvas")
 
 local T = {}
 
@@ -162,7 +162,7 @@ end
 -- headless process into this test's "top of viewport" assumption. Pin the
 -- view deterministically, matching the same idiom test_canvas.lua already
 -- uses for this exact reason.
-local TS_NS = vim.api.nvim_create_namespace("galley.canvas.ts")
+local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 
 local function reset_view(st)
   vim.api.nvim_win_call(st.win, function()
@@ -210,7 +210,7 @@ T["hl_engine replace_section invalidates and reapplies inside new rows"] = funct
   assert(lease.ids_by_path["r.lua"] and #lease.ids_by_path["r.lua"] > 0, "reapplied")
 
   local srow, erow = canvas.section_rows(st, 1)
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(m[2] >= srow and m[2] < erow,
       ("stale mark at row %d outside [%d, %d)"):format(m[2], srow, erow))
@@ -224,7 +224,7 @@ T["hl_engine render_all clears the ts namespace via hook"] = function()
   local lease = hl.attach(st, { margin = 5 })
   assert(hl._cache_size(lease) > 0, "initial apply populated the lease cache")
   canvas.render_all(st, big_sections())
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   H.eq(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {}), {}, "namespace cleared")
   H.eq(next(lease.ids_by_path), nil, "bookkeeping reset")
   H.eq(hl._cache_size(lease), 0, "full render releases cached source/tree graph")
@@ -240,7 +240,7 @@ T["hl_engine reattach after reopen leaves no stale marks"] = function()
   -- state, then attach must start from a clean namespace
   local st2 = canvas.open(big_sections(), {})
   local lease2 = hl.attach(st2, { margin = 50 })
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local total = #vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
   local tracked = 0
   for _, ids in pairs(lease2.ids_by_path) do
@@ -264,7 +264,7 @@ T["hl_engine stale state apply is a no-op after reattach"] = function()
     vim.cmd("normal! G")
   end)
 
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local before = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
 
   hl.apply_now(lease1) -- simulated stale debounce callback
@@ -930,7 +930,7 @@ T["hl_lease unique group survives a predecessor create return race"] = function(
   local first = true
   local outer_name, replacement
   vim.api.nvim_create_augroup = function(name, opts)
-    if first and name:match("^galley%.hl%.") then
+    if first and name:match("^canvasdiff%.hl%.") then
       first = false
       outer_name = name
       replacement = hl.attach(st, { margin = 0 }, {
@@ -959,7 +959,7 @@ T["hl_lease stale autocmd creation cannot join a recycled winner group"] = funct
   local first = true
   local replacement
   vim.api.nvim_create_autocmd = function(events, spec)
-    if first and type(spec.group) == "string" and spec.group:match("^galley%.hl%.") then
+    if first and type(spec.group) == "string" and spec.group:match("^canvasdiff%.hl%.") then
       first = false
       replacement = hl.attach(st, { margin = 0 }, {
         windows = function() return {} end,
@@ -996,7 +996,7 @@ T["hl_rows add and del tints stop at end-of-text, never filling the window"] = f
   local flooders, tinted = {}, 0
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, -1, 0, -1, { details = true })) do
     local d = m[4]
-    if d and (d.hl_group == "GalleyAdd" or d.hl_group == "GalleyDel") then
+    if d and (d.hl_group == "CanvasDiffAdd" or d.hl_group == "CanvasDiffDel") then
       tinted = tinted + 1
       if d.hl_eol then flooders[#flooders + 1] = ("row %d %s"):format(m[2] + 1, d.hl_group) end
     end
@@ -1009,15 +1009,15 @@ end
 
 -- These were the last two visual elements pointing straight at standard groups, so
 -- tuning the diff rows meant redefining the groups your ordinary vimdiff also uses.
-T["hl_rows the row tints go through overridable Galley aliases"] = function()
-  for _, g in ipairs({ "GalleyAdd", "GalleyDel" }) do
+T["hl_rows the row tints go through overridable CanvasDiff aliases"] = function()
+  for _, g in ipairs({ "CanvasDiffAdd", "CanvasDiffDel" }) do
     local direct = vim.api.nvim_get_hl(0, { name = g, link = false })
     assert(next(direct) ~= nil, g .. " must be defined, or the diff rows render unstyled")
   end
   -- `default = true` throughout, so a colourscheme that defines these wins.
-  local linked = vim.api.nvim_get_hl(0, { name = "GalleyAdd", link = true })
+  local linked = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
   assert(linked.link == "DiffAdd" or linked.bg,
-    "GalleyAdd should default to DiffAdd (or be overridden), got: " .. vim.inspect(linked))
+    "CanvasDiffAdd should default to DiffAdd (or be overridden), got: " .. vim.inspect(linked))
 end
 
 -- The word-diff marks have to beat the row tint they sit inside, and a BACKGROUND
@@ -1030,9 +1030,9 @@ end
 -- compose over whatever is underneath instead of competing with it, which is the only
 -- form of this that holds under every colourscheme. This test is therefore structural
 -- on purpose -- a luminance assertion here would pass or fail on the test runner's
--- colourscheme rather than on anything galley decides.
+-- colourscheme rather than on anything canvasdiff decides.
 T["hl_rows word-diff marks emphasise by attribute, not by a competing background"] = function()
-  for _, name in ipairs({ "GalleyWordAdd", "GalleyWordDel" }) do
+  for _, name in ipairs({ "CanvasDiffWordAdd", "CanvasDiffWordDel" }) do
     local h = vim.api.nvim_get_hl(0, { name = name, link = false })
     assert(next(h) ~= nil, name .. " must be defined, or changed spans get no mark at all")
     assert(h.bg == nil, name .. " must not set a background: it sits inside the row tint, "

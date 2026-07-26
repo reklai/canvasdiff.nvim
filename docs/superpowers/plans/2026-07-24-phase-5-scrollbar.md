@@ -13,10 +13,10 @@
 - Neovim ≥0.10; no external runtime deps; `make test` (FILTER by test NAME).
 - The scrollbar float is `focusable = false`, `style = "minimal"`, width 1, `zindex = 40`, anchored `relative = "win"` to the canvas window at its right edge (`col = win_width - 1`, `row = 0`, `height = win_height`). It must never steal focus, never receive keymaps, and never affect the canvas window's options or the niri invariant (it renders state; it never mutates the canvas).
 - The float must be hidden (closed) whenever `state.win` is not showing `state.buf` (jump excursion, canvas hidden) and reappear on re-show — a leftover float over a real file buffer is a defect.
-- Singleton + callback discipline from Phase 4: module-level `bar` holds `state`; autocmd callbacks resolve `bar.state` at call time; every window op is liveness-guarded; `close()` safe always; augroup `galley.scrollbar` cleared on re-open; `WinClosed` on the canvas window tears the bar down (scheduled). The bar window needs no WinClosed backstop — liveness guards recreate it on the next update; `close()` tears down.
+- Singleton + callback discipline from Phase 4: module-level `bar` holds `state`; autocmd callbacks resolve `bar.state` at call time; every window op is liveness-guarded; `close()` safe always; augroup `canvasdiff.scrollbar` cleared on re-open; `WinClosed` on the canvas window tears the bar down (scheduled). The bar window needs no WinClosed backstop — liveness guards recreate it on the next update; `close()` tears down.
 - Pure half must not touch windows/buffers.
-- Highlight groups (default=true links): `GalleyScrollFile` → `Title`, `GalleyScrollAdd` → `DiffAdd`, `GalleyScrollDel` → `DiffDelete`, `GalleyScrollChanged` → `DiffChange`, `GalleyScrollThumb` → `PmenuThumb`. Cell hl via `line_hl_group` extmarks in namespace `galley.scrollbar`; thumb overlays at higher priority (200 vs 100).
-- Cell contract: file-boundary bucket → char `"─"` hl `GalleyScrollFile`; else adds+dels both present → `"│"` `GalleyScrollChanged`; only adds → `"│"` `GalleyScrollAdd`; only dels → `"│"` `GalleyScrollDel`; else `" "` with no hl. `cell.thumb = true` for rows whose bucket intersects the viewport `[top0, bot0]`.
+- Highlight groups (default=true links): `CanvasDiffScrollFile` → `Title`, `CanvasDiffScrollAdd` → `DiffAdd`, `CanvasDiffScrollDel` → `DiffDelete`, `CanvasDiffScrollChanged` → `DiffChange`, `CanvasDiffScrollThumb` → `PmenuThumb`. Cell hl via `line_hl_group` extmarks in namespace `canvasdiff.scrollbar`; thumb overlays at higher priority (200 vs 100).
+- Cell contract: file-boundary bucket → char `"─"` hl `CanvasDiffScrollFile`; else adds+dels both present → `"│"` `CanvasDiffScrollChanged`; only adds → `"│"` `CanvasDiffScrollAdd`; only dels → `"│"` `CanvasDiffScrollDel`; else `" "` with no hl. `cell.thumb = true` for rows whose bucket intersects the viewport `[top0, bot0]`.
 - Bucket math: display row r (1-based, height H, total lines n) covers canvas lines `[floor((r-1)*n/H), floor(r*n/H))` (0-based, empty buckets possible when n < H — then the cell is blank and thumb mapping still works).
 - `<2-LeftMouse>` is canvas-buffer-local and triggers the existing jump (mouse click moves the cursor before the mapping fires, so `jump.enter` picks up the clicked row).
 - Config: `scrollbar = { enabled = true }`.
@@ -26,11 +26,11 @@
 
 ## File Structure
 
-- `lua/galley/scrollbar.lua` — NEW: pure column model + float lifecycle.
-- `lua/galley/config.lua` — MODIFY: `scrollbar` defaults.
-- `lua/galley/init.lua` — MODIFY: open/close/refresh wiring + `<2-LeftMouse>` keymap.
-- `lua/galley/watch.lua` — MODIFY: `scrollbar.update(state)` after reconcile mutations.
-- `lua/galley/jump.lua` — MODIFY: `scrollbar.update(state)` after back.
+- `lua/canvasdiff/scrollbar.lua` — NEW: pure column model + float lifecycle.
+- `lua/canvasdiff/config.lua` — MODIFY: `scrollbar` defaults.
+- `lua/canvasdiff/init.lua` — MODIFY: open/close/refresh wiring + `<2-LeftMouse>` keymap.
+- `lua/canvasdiff/watch.lua` — MODIFY: `scrollbar.update(state)` after reconcile mutations.
+- `lua/canvasdiff/jump.lua` — MODIFY: `scrollbar.update(state)` after back.
 - `tests/test_scrollbar.lua` — NEW.
 - `README.md` — MODIFY.
 
@@ -39,7 +39,7 @@
 ### Task 1: Pure column model
 
 **Files:**
-- Create: `lua/galley/scrollbar.lua` (pure half)
+- Create: `lua/canvasdiff/scrollbar.lua` (pure half)
 - Test: `tests/test_scrollbar.lua`
 
 **Interfaces:**
@@ -54,8 +54,8 @@ Create `tests/test_scrollbar.lua`:
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local scrollbar = require("galley.scrollbar")
+local model = require("canvasdiff.model")
+local scrollbar = require("canvasdiff.scrollbar")
 
 local T = {}
 
@@ -81,10 +81,10 @@ T["scroll_column buckets density and file boundaries"] = function()
   kinds[36] = "del"       -- bucket 4: mixed
   local cells = scrollbar.column(kinds, 4, 100, 100) -- viewport far away: no thumb
   H.eq(#cells, 4)
-  H.eq({ cells[1].char, cells[1].hl }, { "─", "GalleyScrollFile" })
-  H.eq({ cells[2].char, cells[2].hl }, { "│", "GalleyScrollAdd" })
-  H.eq({ cells[3].char, cells[3].hl }, { "│", "GalleyScrollDel" })
-  H.eq({ cells[4].char, cells[4].hl }, { "│", "GalleyScrollChanged" })
+  H.eq({ cells[1].char, cells[1].hl }, { "─", "CanvasDiffScrollFile" })
+  H.eq({ cells[2].char, cells[2].hl }, { "│", "CanvasDiffScrollAdd" })
+  H.eq({ cells[3].char, cells[3].hl }, { "│", "CanvasDiffScrollDel" })
+  H.eq({ cells[4].char, cells[4].hl }, { "│", "CanvasDiffScrollChanged" })
   for r = 1, 4 do H.eq(cells[r].thumb, false) end
 end
 
@@ -126,11 +126,11 @@ return T
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `make test FILTER=scroll_`
-Expected: FAIL — `module 'galley.scrollbar' not found`.
+Expected: FAIL — `module 'canvasdiff.scrollbar' not found`.
 
 - [ ] **Step 3: Implement**
 
-Create `lua/galley/scrollbar.lua`:
+Create `lua/canvasdiff/scrollbar.lua`:
 
 ```lua
 local S = {}
@@ -181,13 +181,13 @@ function S.column(kinds, height, top0, bot0)
 
     local char, hl = " ", nil
     if has_hdr then
-      char, hl = "─", "GalleyScrollFile"
+      char, hl = "─", "CanvasDiffScrollFile"
     elseif has_add and has_del then
-      char, hl = "│", "GalleyScrollChanged"
+      char, hl = "│", "CanvasDiffScrollChanged"
     elseif has_add then
-      char, hl = "│", "GalleyScrollAdd"
+      char, hl = "│", "CanvasDiffScrollAdd"
     elseif has_del then
-      char, hl = "│", "GalleyScrollDel"
+      char, hl = "│", "CanvasDiffScrollDel"
     end
 
     -- Thumb: this row's bucket intersects the viewport line range. For the
@@ -212,7 +212,7 @@ Run: `make test FILTER=scroll_` then `make test` (97/97 expected).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/galley/scrollbar.lua tests/test_scrollbar.lua
+git add lua/canvasdiff/scrollbar.lua tests/test_scrollbar.lua
 git commit -m "feat: scrollbar column model (pure)"
 ```
 
@@ -221,25 +221,25 @@ git commit -m "feat: scrollbar column model (pure)"
 ### Task 2: Float lifecycle + wiring + mouse
 
 **Files:**
-- Modify: `lua/galley/scrollbar.lua` (window half)
-- Modify: `lua/galley/config.lua`, `lua/galley/init.lua`, `lua/galley/watch.lua`, `lua/galley/jump.lua`
+- Modify: `lua/canvasdiff/scrollbar.lua` (window half)
+- Modify: `lua/canvasdiff/config.lua`, `lua/canvasdiff/init.lua`, `lua/canvasdiff/watch.lua`, `lua/canvasdiff/jump.lua`
 - Modify: `README.md`
 - Test: `tests/test_scrollbar.lua` (window cases appended)
 
 **Interfaces:**
 - Consumes: Task 1's pure half; canvas state `{buf, win, sections}`.
 - Produces (module singleton `bar = {buf, win, state}`):
-  - `scrollbar.open(state, opts)` — creates the scratch buffer (`nofile`/`hide`/noswap) + float per Global Constraints, installs autocmds (augroup `galley.scrollbar`, cleared): `WinScrolled` (canvas win → update), `WinResized` (update), `BufWinEnter` on the canvas buffer (re-show + update), `WinClosed` on the canvas window (scheduled `close`). Idempotent (open-while-open rebinds `bar.state` + autocmds, updates). No-op when `state.win` invalid.
+  - `scrollbar.open(state, opts)` — creates the scratch buffer (`nofile`/`hide`/noswap) + float per Global Constraints, installs autocmds (augroup `canvasdiff.scrollbar`, cleared): `WinScrolled` (canvas win → update), `WinResized` (update), `BufWinEnter` on the canvas buffer (re-show + update), `WinClosed` on the canvas window (scheduled `close`). Idempotent (open-while-open rebinds `bar.state` + autocmds, updates). No-op when `state.win` invalid.
   - `scrollbar.close()` — closes the float, clears singleton + augroup; safe always.
   - `scrollbar.is_open() -> bool` — float window valid.
-  - `scrollbar.update(state)` — nil-safe no-op when the bar was never opened. When the canvas window isn't showing the canvas buffer: hide the float (close the window, KEEP the singleton so `BufWinEnter` can re-show). When showing: ensure the float exists (recreate if hidden), reposition/resize to the canvas window, render `column(line_kinds(state.sections), height, top0, bot0)` — chars as buffer lines, hl via `line_hl_group` extmarks (priority 100), thumb rows an additional `GalleyScrollThumb` mark (priority 200).
+  - `scrollbar.update(state)` — nil-safe no-op when the bar was never opened. When the canvas window isn't showing the canvas buffer: hide the float (close the window, KEEP the singleton so `BufWinEnter` can re-show). When showing: ensure the float exists (recreate if hidden), reposition/resize to the canvas window, render `column(line_kinds(state.sections), height, top0, bot0)` — chars as buffer lines, hl via `line_hl_group` extmarks (priority 100), thumb rows an additional `CanvasDiffScrollThumb` mark (priority 200).
   - init: `<2-LeftMouse>` canvas-buffer-local → same handler as the jump key; `scrollbar.open` when `config.options.scrollbar.enabled`; `scrollbar.close()` in `M.close`; `scrollbar.update(state)` in `M.refresh`.
   - watch: `scrollbar.update(state)` after each of the three `sidebar.refresh(state)` sites. jump: `scrollbar.update(state)` after back's `sidebar.refresh(state)`.
   - config: `defaults.scrollbar = { enabled = true }`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_scrollbar.lua` (add `local canvas = require("galley.canvas")` at top):
+Append to `tests/test_scrollbar.lua` (add `local canvas = require("canvasdiff.canvas")` at top):
 
 ```lua
 local function bigtext(n, tag)
@@ -271,12 +271,12 @@ local function bar_win(st)
   end
 end
 
-local SCROLL_NS = vim.api.nvim_create_namespace("galley.scrollbar")
+local SCROLL_NS = vim.api.nvim_create_namespace("canvasdiff.scrollbar")
 
 local function thumb_rows(bbuf)
   local rows = {}
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bbuf, SCROLL_NS, 0, -1, { details = true })) do
-    if m[4] and m[4].line_hl_group == "GalleyScrollThumb" then
+    if m[4] and m[4].line_hl_group == "CanvasDiffScrollThumb" then
       rows[#rows + 1] = m[2]
     end
   end
@@ -368,21 +368,21 @@ Expected: FAIL — `attempt to call field 'open' (a nil value)` (close/open miss
 
 - [ ] **Step 3: Implement the window half**
 
-Append to `lua/galley/scrollbar.lua` (before `return S`):
+Append to `lua/canvasdiff/scrollbar.lua` (before `return S`):
 
 ```lua
-local NS = vim.api.nvim_create_namespace("galley.scrollbar")
+local NS = vim.api.nvim_create_namespace("canvasdiff.scrollbar")
 
 -- Module singleton (Phase 4 discipline): callbacks resolve bar.state at
 -- call time; every window op liveness-guarded; close() safe always.
 local bar = nil
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyScrollFile", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollDel", { link = "DiffDelete", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollChanged", { link = "DiffChange", default = true })
-  vim.api.nvim_set_hl(0, "GalleyScrollThumb", { link = "PmenuThumb", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollFile", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollAdd", { link = "DiffAdd", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollDel", { link = "DiffDelete", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollChanged", { link = "DiffChange", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffScrollThumb", { link = "PmenuThumb", default = true })
 end
 
 function S.is_open()
@@ -463,7 +463,7 @@ function S.update(state)
     end
     if cell.thumb then
       vim.api.nvim_buf_set_extmark(bar.buf, NS, r - 1, 0, {
-        line_hl_group = "GalleyScrollThumb",
+        line_hl_group = "CanvasDiffScrollThumb",
         priority = 200,
       })
     end
@@ -474,7 +474,7 @@ function S.close()
   if bar then
     local b = bar
     bar = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "galley.scrollbar")
+    pcall(vim.api.nvim_del_augroup_by_name, "canvasdiff.scrollbar")
     if b.win and vim.api.nvim_win_is_valid(b.win) then
       pcall(vim.api.nvim_win_close, b.win, true)
     end
@@ -485,7 +485,7 @@ function S.close()
 end
 
 local function install_autocmds(state)
-  local aug = vim.api.nvim_create_augroup("galley.scrollbar", { clear = true })
+  local aug = vim.api.nvim_create_augroup("canvasdiff.scrollbar", { clear = true })
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
     group = aug,
     callback = function(ev)
@@ -544,7 +544,7 @@ end
 
 `config.lua` — add to `M.defaults`: `scrollbar = { enabled = true }`.
 
-`init.lua` — add `local scrollbar = require("galley.scrollbar")`; in `set_canvas_keymaps` add:
+`init.lua` — add `local scrollbar = require("canvasdiff.scrollbar")`; in `set_canvas_keymaps` add:
 
 ```lua
   vim.keymap.set("n", "<2-LeftMouse>", function()
@@ -562,9 +562,9 @@ in `M.open`, after the sidebar block:
 
 in `M.close`, next to `sidebar.close()`: `scrollbar.close()`. In `M.refresh`, after `sidebar.refresh(state)`: `scrollbar.update(state)`.
 
-`watch.lua` — add `local scrollbar = require("galley.scrollbar")`; add `scrollbar.update(state)` after each of the three `sidebar.refresh(state)` sites.
+`watch.lua` — add `local scrollbar = require("canvasdiff.scrollbar")`; add `scrollbar.update(state)` after each of the three `sidebar.refresh(state)` sites.
 
-`jump.lua` — add `local scrollbar = require("galley.scrollbar")`; in `M.back`, after `sidebar.refresh(state)`: `scrollbar.update(state)`.
+`jump.lua` — add `local scrollbar = require("canvasdiff.scrollbar")`; in `M.back`, after `sidebar.refresh(state)`: `scrollbar.update(state)`.
 
 `README.md` — document the scrollbar/minimap (file boundaries + add/del density + viewport thumb; disable with `scrollbar = { enabled = false }` for satellite.nvim/nvim-scrollbar users — both work fine on the canvas window), and double-click-to-jump.
 
@@ -575,7 +575,7 @@ Run: `make test FILTER=scroll_` then `make test` twice (102/102 both runs, zero 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lua/galley/ tests/test_scrollbar.lua README.md
+git add lua/canvasdiff/ tests/test_scrollbar.lua README.md
 git commit -m "feat: scrollbar minimap float and double-click jump"
 ```
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** MVP of `galley` — a Neovim plugin rendering ALL changed files' diffs (working tree vs HEAD, alphabetical) in one scrollable scratch canvas; `<CR>` on any diff line jumps into the real file buffer (full LSP/treesitter); `<M-CR>` returns to the canvas at the exact semantic position with that file's diff regenerated.
+**Goal:** MVP of `canvasdiff` — a Neovim plugin rendering ALL changed files' diffs (working tree vs HEAD, alphabetical) in one scrollable scratch canvas; `<CR>` on any diff line jumps into the real file buffer (full LSP/treesitter); `<M-CR>` returns to the canvas at the exact semantic position with that file's diff regenerated.
 
 **Architecture:** Single scratch buffer + extmark section anchors (one per file section, left-gravity). A pure model layer (git → differ → model → render) builds sections; canvas.lua owns buffer/anchors/splice; viewport.lua owns semantic anchor capture/resolution (position identity = file + line content + approx new_lnum, fuzzy-matched — never raw line numbers); jump.lua owns the excursion. Diff-tier highlights only in MVP (DiffAdd/DiffDelete backgrounds); treesitter tier, watcher, sidebar, scrollbar are later phases.
 
@@ -10,16 +10,16 @@
 
 ## Global Constraints
 
-- Neovim ≥0.10; use `vim.text.diff` when present, else `vim.diff` (shim lives ONLY in `lua/galley/differ.lua`).
+- Neovim ≥0.10; use `vim.text.diff` when present, else `vim.diff` (shim lives ONLY in `lua/canvasdiff/differ.lua`).
 - No external runtime dependencies (no plenary, no nui). Tests use the bespoke runner in `tests/run.lua`.
 - Canvas buffer: `buftype=nofile`, `bufhidden=hide` (NEVER wipe — extmark anchors must survive excursions), `swapfile=false`, `modifiable=false` toggled only inside canvas.lua writes, `undolevels=-1` buffer-local.
-- Section anchors: extmarks in namespace `galley/anchors` with `right_gravity=false, invalidate=false, undo_restore=false`; one per section start + one EOF sentinel. Never `nvim_buf_set_lines` across a foreign section's anchor row.
+- Section anchors: extmarks in namespace `canvasdiff/anchors` with `right_gravity=false, invalidate=false, undo_restore=false`; one per section start + one EOF sentinel. Never `nvim_buf_set_lines` across a foreign section's anchor row.
 - Position identity is ALWAYS a semantic anchor `{path, new_lnum, content}` resolved via the match chain in viewport.lua — never a stored canvas line number.
 - Splices + viewport restore happen in one synchronous event-loop tick (no `vim.schedule` between `set_lines` and `winrestview`).
 - Never attach a treesitter parser or syntax to the canvas buffer.
 - Default keys: `<CR>` jump (canvas-local), `<M-CR>` return (excursion-buffer-local), `q` close canvas (canvas-local only — NEVER map `q` in real file buffers).
 - Files sorted alphabetically by path (plain `table.sort` on repo-relative path, case-sensitive byte order).
-- All Lua modules under `lua/galley/`; pure modules (`differ`, `model`, `render`, `viewport` resolution) must not touch `vim.api` window/buffer state except where stated.
+- All Lua modules under `lua/canvasdiff/`; pure modules (`differ`, `model`, `render`, `viewport` resolution) must not touch `vim.api` window/buffer state except where stated.
 - Commit after each green test cycle; commit messages end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Test commands must exit non-zero on failure: `make test` runs `nvim --headless --clean -l tests/run.lua`.
 
@@ -28,14 +28,14 @@
 ### Task 1: Scaffold + headless test runner
 
 **Files:**
-- Create: `.gitignore`, `Makefile`, `README.md`, `tests/run.lua`, `tests/helpers.lua`, `tests/test_smoke.lua`, `lua/galley/util.lua`
+- Create: `.gitignore`, `Makefile`, `README.md`, `tests/run.lua`, `tests/helpers.lua`, `tests/test_smoke.lua`, `lua/canvasdiff/util.lua`
 
 **Interfaces:**
 - Consumes: nothing (first task)
 - Produces:
   - `tests/run.lua`: discovers `tests/test_*.lua`; each test file returns `{ [test_name_string] = function() ... end }`; runner prepends repo root to `runtimepath`, runs each fn in `pcall`, prints `PASS name` / `FAIL name: err`, calls `os.exit(1)` if any failed, `os.exit(0)` otherwise. Supports optional CLI arg as Lua pattern filter on test names: `nvim --headless --clean -l tests/run.lua canvas`.
   - `tests/helpers.lua`: `H.tmpdir() -> path` (fresh dir under `vim.uv.os_tmpdir()`), `H.git_fixture(spec) -> root` where `spec = { committed = {[relpath]=content}, worktree = {[relpath]=content_or_false} }` — creates repo, commits `committed`, then applies `worktree` (write content, or delete file when `false`); `H.eq(a, b, msg)` deep-equality assert (use `vim.deep_equal`, error with `vim.inspect` of both on mismatch).
-  - `lua/galley/util.lua`: `U.list_slice(t, s, e)`, `U.clamp(n, lo, hi)`.
+  - `lua/canvasdiff/util.lua`: `U.list_slice(t, s, e)`, `U.clamp(n, lo, hi)`.
 
 - [ ] **Step 1: Write `.gitignore`, `Makefile`, `README.md` stub**
 
@@ -95,7 +95,7 @@ os.exit(failed == 0 and 0 or 1)
 local H = {}
 
 function H.tmpdir()
-  local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "galley_test_" .. vim.uv.hrtime())
+  local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_" .. vim.uv.hrtime())
   vim.fn.mkdir(dir, "p")
   return dir
 end
@@ -139,7 +139,7 @@ end
 return H
 ```
 
-- [ ] **Step 4: Write `lua/galley/util.lua` and `tests/test_smoke.lua`**
+- [ ] **Step 4: Write `lua/canvasdiff/util.lua` and `tests/test_smoke.lua`**
 
 `util.lua`:
 ```lua
@@ -156,7 +156,7 @@ return U
 `tests/test_smoke.lua`:
 ```lua
 local H = require("helpers")
-local U = require("galley.util")
+local U = require("canvasdiff.util")
 return {
   ["smoke: util.clamp"] = function()
     H.eq(U.clamp(5, 1, 3), 3)
@@ -316,7 +316,7 @@ os.exit(ok and 0 or 1)
 ### Task 4: viewport.lua — semantic anchor resolution (pure core) + fuzz test
 
 **Files:**
-- Create: `lua/galley/viewport.lua`, `tests/test_viewport.lua`
+- Create: `lua/canvasdiff/viewport.lua`, `tests/test_viewport.lua`
 
 **Interfaces:**
 - Consumes: nothing internal (pure Lua; no vim window APIs in this task).
@@ -333,7 +333,7 @@ os.exit(ok and 0 or 1)
 
 ```lua
 local H = require("helpers")
-local V = require("galley.viewport")
+local V = require("canvasdiff.viewport")
 
 local function mkentries(n)
   local es = {}
@@ -400,7 +400,7 @@ return {
 
 - [ ] **Step 2: Run `make test FILTER=viewport` — expect FAIL (module missing).**
 
-- [ ] **Step 3: Implement `lua/galley/viewport.lua`** exactly per the match chain above. Keep it pure (no `vim.api`). ~60 lines.
+- [ ] **Step 3: Implement `lua/canvasdiff/viewport.lua`** exactly per the match chain above. Keep it pure (no `vim.api`). ~60 lines.
 
 - [ ] **Step 4: Run `make test` — all green.**
 
@@ -411,7 +411,7 @@ return {
 ### Task 5: git.lua + differ.lua
 
 **Files:**
-- Create: `lua/galley/git.lua`, `lua/galley/differ.lua`, `tests/test_git.lua`, `tests/test_differ.lua`
+- Create: `lua/canvasdiff/git.lua`, `lua/canvasdiff/differ.lua`, `tests/test_git.lua`, `tests/test_differ.lua`
 
 **Interfaces:**
 - Consumes: `tests/helpers.lua` fixtures.
@@ -427,7 +427,7 @@ return {
 `tests/test_git.lua`:
 ```lua
 local H = require("helpers")
-local git = require("galley.git")
+local git = require("canvasdiff.git")
 return {
   ["git: root finds toplevel, nil outside"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
@@ -458,7 +458,7 @@ return {
 `tests/test_differ.lua`:
 ```lua
 local H = require("helpers")
-local differ = require("galley.differ")
+local differ = require("canvasdiff.differ")
 return {
   ["differ: simple change"] = function()
     local h = differ.hunks("a\nb\nc\n", "a\nX\nc\n")
@@ -502,7 +502,7 @@ return D
 ### Task 6: model.lua + render.lua (pure section building)
 
 **Files:**
-- Create: `lua/galley/model.lua`, `lua/galley/render.lua`, `tests/test_model.lua`
+- Create: `lua/canvasdiff/model.lua`, `lua/canvasdiff/render.lua`, `tests/test_model.lua`
 
 **Interfaces:**
 - Consumes: `differ.hunks` (Task 5).
@@ -524,15 +524,15 @@ return D
     `content` for ctx/del/add is the RAW file line (no +/- prefix). Context = 3 lines around each hunk; hunks whose context regions touch or overlap merge into one displayed hunk (one `hunk_hdr`). Split texts with `vim.split(text, "\n", { plain = true })`; drop the trailing empty element iff the text ends with `\n`; `old_text == nil` ⇒ treat as `""` (new/untracked file).
   - `model.build(files) -> sections` — `files = list of { path, old_text, new_text, status }`; returns non-nil sections sorted alphabetically by path.
   - `render.section_lines(section) -> list of string` — same length as `section.entries`; `file_hdr` → `"▎ " .. path .. ("  (+%d −%d)"):format(adds, dels)`; `hunk_hdr` → its content; ctx → `" " .. content`; del → `"-" .. content`; add → `"+" .. content`.
-  - `render.section_hl(section) -> list of { row = 0based_offset, group = "GalleyFileHeader"|"GalleyHunkHeader"|"DiffAdd"|"DiffDelete" }` — one per non-ctx line; ctx lines get no mark.
-  - Highlight groups: define `GalleyFileHeader` (default link `Title`) and `GalleyHunkHeader` (default link `Comment`) — definition itself happens in Task 7's canvas setup, NOT here (render stays pure; it only names groups).
+  - `render.section_hl(section) -> list of { row = 0based_offset, group = "CanvasDiffFileHeader"|"CanvasDiffHunkHeader"|"DiffAdd"|"DiffDelete" }` — one per non-ctx line; ctx lines get no mark.
+  - Highlight groups: define `CanvasDiffFileHeader` (default link `Title`) and `CanvasDiffHunkHeader` (default link `Comment`) — definition itself happens in Task 7's canvas setup, NOT here (render stays pure; it only names groups).
 
 - [ ] **Step 1: Write failing tests `tests/test_model.lua`** — cover: modified file (entry kinds/lnums exact for a 2-hunk case), hunk merging when hunks are ≤6 lines apart, new file (all `add`, old_lnum nil), deleted file (all `del`), unchanged file → nil, `model.build` sorts alphabetically, render prefixes and header format exact:
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local render = require("galley.render")
+local model = require("canvasdiff.model")
+local render = require("canvasdiff.render")
 
 return {
   ["model: modified file entries"] = function()
@@ -577,8 +577,8 @@ return {
     H.eq(lines[4], "-b")
     H.eq(lines[5], "+B")
     local hl = render.section_hl(s)
-    H.eq(hl[1], { row = 0, group = "GalleyFileHeader" })
-    H.eq(hl[2], { row = 1, group = "GalleyHunkHeader" })
+    H.eq(hl[1], { row = 0, group = "CanvasDiffFileHeader" })
+    H.eq(hl[2], { row = 1, group = "CanvasDiffHunkHeader" })
     H.eq(hl[3], { row = 3, group = "DiffDelete" })
     H.eq(hl[4], { row = 4, group = "DiffAdd" })
   end,
@@ -594,12 +594,12 @@ return {
 ### Task 7: canvas.lua — buffer, anchors, render, locate, section replace
 
 **Files:**
-- Create: `lua/galley/canvas.lua`, `tests/test_canvas.lua`
+- Create: `lua/canvasdiff/canvas.lua`, `tests/test_canvas.lua`
 
 **Interfaces:**
 - Consumes: `render.section_lines/section_hl` (Task 6), section shape (Task 6), `viewport.resolve/capture_from_entries` (Task 4).
 - Produces (used by Tasks 8-9): a `Canvas` object (module-level singleton is fine for MVP):
-  - `canvas.open(sections, opts) -> canvas_state` — creates/reuses the scratch buffer (name `galley://canvas`, options per Global Constraints; define hl groups `GalleyFileHeader`→`Title`, `GalleyHunkHeader`→`Comment` with `default = true`), shows it in the current window (plain `nvim_win_set_buf` — the canvas takes over the current window; store `state.win`), renders all sections, places anchors.
+  - `canvas.open(sections, opts) -> canvas_state` — creates/reuses the scratch buffer (name `canvasdiff://canvas`, options per Global Constraints; define hl groups `CanvasDiffFileHeader`→`Title`, `CanvasDiffHunkHeader`→`Comment` with `default = true`), shows it in the current window (plain `nvim_win_set_buf` — the canvas takes over the current window; store `state.win`), renders all sections, places anchors.
   - `canvas.render_all(state, sections)` — with `modifiable` toggled: clear buffer, `nvim_buf_set_lines` with all sections' lines concatenated, place one left-gravity anchor extmark at each section's first row + EOF sentinel anchor, apply line-tier highlights via `nvim_buf_set_extmark` with `hl_group`, `end_row = row+1`, `hl_eol = true`, `priority = 100` (full-line: use `end_col = 0` of next row), store `state.sections` (list) and `state.anchor_ids` (parallel list).
   - `canvas.section_rows(state, i) -> start_row, end_row_exclusive` (0-based) — resolved LIVE from extmarks (`nvim_buf_get_extmark_by_id`), never cached rows.
   - `canvas.locate(state, row0) -> i, offset` — binary search anchors: section index and 1-based entry offset for a 0-based buffer row; nil when buffer empty.
@@ -610,8 +610,8 @@ return {
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
 
 -- Big generated fixture: the headless window is ~24 rows tall, so sections
 -- must be MUCH taller for "above/below viewport" cases to be real.
@@ -709,12 +709,12 @@ Note for the implementer: the "above viewport" test regenerates the SAME section
 ### Task 8: jump.lua — excursion (jump into file, return with regeneration)
 
 **Files:**
-- Create: `lua/galley/jump.lua`, `tests/test_jump.lua`
+- Create: `lua/canvasdiff/jump.lua`, `tests/test_jump.lua`
 
 **Interfaces:**
 - Consumes: `canvas.locate/section_rows/replace_section/is_canvas_buf` (Task 7), `viewport` (Task 4), `model.build_section` (Task 6), `git.show_head` (Task 5).
 - Produces (used by Task 9):
-  - `jump.enter(state)` — from the canvas window: locate cursor row → `(section, entry)`; target line = `entry.new_lnum` or (for del/hdr entries) the first following entry with a `new_lnum`, else 1. Save excursion `{ path, view = winsaveview(), anchor = viewport.capture_from_entries(entries, top_offset_of_view), cursor = { new_lnum = target, content = entry.content } }` where `top_offset_of_view` = locate() offset of `line("w0")` clamped into this section (if w0 is in an earlier section, use offset 1). Then `vim.cmd.edit { vim.fs.joinpath(state.root, path), mods = { keepalt = true } }` in the canvas window, move cursor to target line col 0, and set buffer-local keymap `opts.keymaps.back` (default `<M-CR>`) → `require("galley.jump").back()`.
+  - `jump.enter(state)` — from the canvas window: locate cursor row → `(section, entry)`; target line = `entry.new_lnum` or (for del/hdr entries) the first following entry with a `new_lnum`, else 1. Save excursion `{ path, view = winsaveview(), anchor = viewport.capture_from_entries(entries, top_offset_of_view), cursor = { new_lnum = target, content = entry.content } }` where `top_offset_of_view` = locate() offset of `line("w0")` clamped into this section (if w0 is in an earlier section, use offset 1). Then `vim.cmd.edit { vim.fs.joinpath(state.root, path), mods = { keepalt = true } }` in the canvas window, move cursor to target line col 0, and set buffer-local keymap `opts.keymaps.back` (default `<M-CR>`) → `require("canvasdiff.jump").back()`.
   - `jump.back()` — if no live excursion, no-op with `vim.notify` "no diff-canvas excursion". Else: read current content of the excursed file (loaded buffer via `nvim_buf_get_lines` if a buffer exists — unsaved edits count — else `io.open` read; file gone ⇒ `""`), `old = git.show_head(root, path)`, `new_section = model.build_section(path, old, content, status)`; switch the window back to the canvas buffer (`nvim_win_set_buf`); `canvas.replace_section(state, i, new_section)` (nil deletes when file reverted); restore viewport: resolve `excursion.anchor` against the new section's entries → topline; resolve `excursion.cursor` → cursor lnum (fall back to section start / nearest section when the section vanished); one `winrestview` call. Clear excursion.
   - Excursion state lives module-level; only one at a time (a second `enter` overwrites).
 
@@ -722,10 +722,10 @@ Note for the implementer: the "above viewport" test regenerates the SAME section
 
 ```lua
 local H = require("helpers")
-local git = require("galley.git")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
-local jump = require("galley.jump")
+local git = require("canvasdiff.git")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
+local jump = require("canvasdiff.jump")
 
 local function setup_repo()
   local root = H.git_fixture({
@@ -792,7 +792,7 @@ return {
 }
 ```
 
-- [ ] **Step 2: Run, FAIL. Implement `lua/galley/jump.lua`** (~120 lines) per interface. Detail: to compute `status` on back, reuse the section's stored `status`; content read must handle `nvim_buf_get_lines` needing `table.concat(lines, "\n") .. "\n"` (empty buffer ⇒ `""`).
+- [ ] **Step 2: Run, FAIL. Implement `lua/canvasdiff/jump.lua`** (~120 lines) per interface. Detail: to compute `status` on back, reuse the section's stored `status`; content read must handle `nvim_buf_get_lines` needing `table.concat(lines, "\n") .. "\n"` (empty buffer ⇒ `""`).
 
 - [ ] **Step 3: Run `make test` — green. Commit** — `feat: jump excursion with semantic position restore`
 
@@ -801,18 +801,18 @@ return {
 ### Task 9: init.lua + config.lua + user command + E2E test + README
 
 **Files:**
-- Create: `lua/galley/init.lua`, `lua/galley/config.lua`, `plugin/galley.lua`, `tests/test_e2e.lua`
+- Create: `lua/canvasdiff/init.lua`, `lua/canvasdiff/config.lua`, `plugin/canvasdiff.lua`, `tests/test_e2e.lua`
 - Modify: `README.md`
 
 **Interfaces:**
 - Consumes: everything prior.
 - Produces (public API):
-  - `require("galley").setup(opts)` — merge into defaults (`vim.tbl_deep_extend("force", ...)`); optional (plugin works with defaults without calling setup).
+  - `require("canvasdiff").setup(opts)` — merge into defaults (`vim.tbl_deep_extend("force", ...)`); optional (plugin works with defaults without calling setup).
   - `config.defaults = { keymaps = { jump = "<CR>", back = "<M-CR>", close = "q", refresh = "R" }, context = 3 }`.
-  - `require("galley").open()` — `git.root(vim.fn.getcwd())`; error notify when not a repo; collect changed files (worktree content read from loaded buffer if one exists, else disk; deleted ⇒ `""`), `model.build`, `canvas.open`, set canvas-local keymaps: jump→`jump.enter(state)`, close→`close()`, refresh→`refresh()`. Empty diff ⇒ canvas shows single line `-- no changes --`.
+  - `require("canvasdiff").open()` — `git.root(vim.fn.getcwd())`; error notify when not a repo; collect changed files (worktree content read from loaded buffer if one exists, else disk; deleted ⇒ `""`), `model.build`, `canvas.open`, set canvas-local keymaps: jump→`jump.enter(state)`, close→`close()`, refresh→`refresh()`. Empty diff ⇒ canvas shows single line `-- no changes --`.
   - `.close()` — restore the window's previous buffer if still valid, else `enew`; keep canvas buffer hidden (state cached).
   - `.toggle()`, `.refresh()` (full re-collect + `render_all`).
-  - `plugin/galley.lua`: `:Galley {open|close|toggle|refresh}` with completion, default subcommand `toggle`. Guard `vim.g.loaded_galley`.
+  - `plugin/canvasdiff.lua`: `:CanvasDiff {open|close|toggle|refresh}` with completion, default subcommand `toggle`. Guard `vim.g.loaded_canvasdiff`.
 
 - [ ] **Step 1: Write failing E2E test `tests/test_e2e.lua`**
 
@@ -831,7 +831,7 @@ return {
       },
     })
     vim.api.nvim_set_current_dir(root)
-    local fm = require("galley")
+    local fm = require("canvasdiff")
     fm.open()
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     -- alphabetical file order: new.txt, src/a.lua, src/z.lua, top.txt
@@ -857,7 +857,7 @@ return {
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)
-    local fm = require("galley")
+    local fm = require("canvasdiff")
     local ok = pcall(fm.open)
     assert(ok, "open outside a repo must not throw (notify instead)")
   end,
@@ -866,11 +866,11 @@ return {
 
 Note: `nvim_feedkeys` with mode `"x"` executes pending keys synchronously — required headless.
 
-- [ ] **Step 2: Run, FAIL. Implement `config.lua`, `init.lua`, `plugin/galley.lua`** per interface.
+- [ ] **Step 2: Run, FAIL. Implement `config.lua`, `init.lua`, `plugin/canvasdiff.lua`** per interface.
 
 - [ ] **Step 3: Run FULL suite `make test` — all green.**
 
-- [ ] **Step 4: Update README.md** — install (lazy.nvim spec), `:Galley`, default keymaps table, MVP scope + roadmap phases (treesitter tier, live watch, sidebar, scrollbar, virtualization, persistence).
+- [ ] **Step 4: Update README.md** — install (lazy.nvim spec), `:CanvasDiff`, default keymaps table, MVP scope + roadmap phases (treesitter tier, live watch, sidebar, scrollbar, virtualization, persistence).
 
 - [ ] **Step 5: Commit** — `feat: public API, user command, e2e round-trip`
 
@@ -880,4 +880,4 @@ Note: `nvim_feedkeys` with mode `"x"` executes pending keys synchronously — re
 
 1. `make test` — every test green, exit 0.
 2. Spike verdicts recorded in `spikes/README.md` (both GO).
-3. Manual smoke (documented in README, executed by a human later): in any dirty repo `nvim`, `:Galley` → scroll, `<CR>` into a hunk (LSP attaches — it's a real `:edit`), edit, `<M-CR>` back → position and updated diff verified.
+3. Manual smoke (documented in README, executed by a human later): in any dirty repo `nvim`, `:CanvasDiff` → scroll, `<CR>` into a hunk (LSP attaches — it's a real `:edit`), edit, `<M-CR>` back → position and updated diff verified.

@@ -1,4 +1,4 @@
--- `:Galley` argument grammar.
+-- `:CanvasDiff` argument grammar.
 --
 -- Split into a pure parser and an impure runner so the whole grammar is
 -- table-testable with no windows and no git.
@@ -7,7 +7,7 @@
 -- inside it you press keys rather than typing `:`. Every word here earns its
 -- place by being useful from OUTSIDE the canvas, or inside a user mapping.
 
-local util = require("galley.util")
+local util = require("canvasdiff.util")
 
 local C = {}
 
@@ -38,7 +38,7 @@ local REFUSED_FLAGS = {
   ["--cached"] = true,
 }
 
---- @class GalleyParse
+--- @class CanvasDiffParse
 --- @field action string  "toggle"|"open"|"close"|"refresh"|"set_lens"|"rev"|"range"|"error"
 --- @field base string|nil
 --- @field lens string|nil  named lens id, set only when action is "set_lens"
@@ -47,7 +47,7 @@ local REFUSED_FLAGS = {
 
 --- Parse `fargs`. Pure: no git, no vim state, no side effects.
 --- @param fargs string[]|nil
---- @return GalleyParse
+--- @return CanvasDiffParse
 function C.parse(fargs)
   fargs = fargs or {}
 
@@ -103,10 +103,10 @@ function C.run(parse)
     return
   end
 
-  local fm = require("galley")
+  local fm = require("canvasdiff")
 
   if parse.action == "set_lens" then
-    fm.set_lens(require("galley.lens").get(parse.lens))
+    fm.set_lens(require("canvasdiff.lens").get(parse.lens))
     return
   end
 
@@ -120,7 +120,7 @@ function C.run(parse)
     -- worktree-vs-HEAD when the user asked for `main...HEAD` would be worse than
     -- refusing, because the diff would look plausible and be wrong.
     util.warn(("commit ranges are not supported (got '%s'). A bare ref works:"
-      .. " `:Galley main` shows your worktree against it"):format(parse.rev))
+      .. " `:CanvasDiff main` shows your worktree against it"):format(parse.rev))
     return
   end
 

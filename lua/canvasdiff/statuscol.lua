@@ -1,9 +1,9 @@
-local canvas = require("galley.canvas")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local fold = require("canvasdiff.fold")
 
 local M = {}
 
-local STATUSCOL_EXPR = "%!v:lua.require'galley.statuscol'.text()"
+local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.statuscol'.text()"
 local current = nil
 local next_id = 0
 
@@ -804,7 +804,7 @@ function M.attach(state, callbacks)
 
   local ok, err = pcall(function()
     lease.aug = vim.api.nvim_create_augroup(
-      "galley.statuscol", { clear = true })
+      "canvasdiff.statuscol", { clear = true })
     vim.api.nvim_create_autocmd("BufWinEnter", {
       group = lease.aug,
       buffer = state.buf,

@@ -12,7 +12,7 @@
 
 - Neovim ≥0.10; no external runtime dependencies; tests via `make test` (= `nvim --headless --clean -l tests/run.lua`; `FILTER=pat` filters by test NAME).
 - **Niri invariant is law:** splice + view correction happen in one synchronous tick (no `vim.schedule` between `set_lines` and `winrestview`); content changes outside the viewport never move what the user is reading.
-- Section anchors: extmarks in namespace `galley.canvas.anchors`, `right_gravity = false, invalidate = false, undo_restore = false`, one per section start + EOF sentinel. **Known landmine:** a left-gravity mark at the exact boundary row of an edit stays/collapses at that row — boundary anchors must be explicitly deleted and recreated after every splice/insert (canvas.lua's `replace_boundary_extmark` exists for this).
+- Section anchors: extmarks in namespace `canvasdiff.canvas.anchors`, `right_gravity = false, invalidate = false, undo_restore = false`, one per section start + EOF sentinel. **Known landmine:** a left-gravity mark at the exact boundary row of an edit stays/collapses at that row — boundary anchors must be explicitly deleted and recreated after every splice/insert (canvas.lua's `replace_boundary_extmark` exists for this).
 - Position identity is ALWAYS a semantic anchor resolved through viewport.lua — never a stored canvas line number.
 - Sections stay sorted alphabetically by path (byte order); reconcile must preserve this.
 - Sections carry `old_text`/`new_text` (Phase 2); reconcile uses string equality on those to decide whether a section needs replacing.
@@ -27,12 +27,12 @@
 
 ## File Structure
 
-- `lua/galley/canvas.lua` — MODIFY: add `insert_section` (new primitive; mirrors `replace_section`'s view-correction discipline).
-- `lua/galley/collect.lua` — NEW: worktree/HEAD content collection (`collect.files(root)`), extracted verbatim from init.lua's private helpers.
-- `lua/galley/watch.lua` — NEW: reconcile engine + triggers (`start`/`stop`/`reconcile`, module-level `on_empty` callback).
-- `lua/galley/hl.lua` — MODIFY: add `hl.detach(state)` (augroup + timer + live_state cleanup; approved follow-up from the Phase 2 final review).
-- `lua/galley/init.lua` — MODIFY: use collect.lua; start/stop watch on open/close; detach hl on close.
-- `lua/galley/config.lua` — MODIFY: `watch` defaults.
+- `lua/canvasdiff/canvas.lua` — MODIFY: add `insert_section` (new primitive; mirrors `replace_section`'s view-correction discipline).
+- `lua/canvasdiff/collect.lua` — NEW: worktree/HEAD content collection (`collect.files(root)`), extracted verbatim from init.lua's private helpers.
+- `lua/canvasdiff/watch.lua` — NEW: reconcile engine + triggers (`start`/`stop`/`reconcile`, module-level `on_empty` callback).
+- `lua/canvasdiff/hl.lua` — MODIFY: add `hl.detach(state)` (augroup + timer + live_state cleanup; approved follow-up from the Phase 2 final review).
+- `lua/canvasdiff/init.lua` — MODIFY: use collect.lua; start/stop watch on open/close; detach hl on close.
+- `lua/canvasdiff/config.lua` — MODIFY: `watch` defaults.
 - `tests/test_canvas.lua` — MODIFY: insert_section cases.
 - `tests/test_watch.lua` — NEW: reconcile + trigger cases.
 - `README.md` — MODIFY: live-update behavior + `watch` config.
@@ -42,7 +42,7 @@
 ### Task 1: `canvas.insert_section`
 
 **Files:**
-- Modify: `lua/galley/canvas.lua`
+- Modify: `lua/canvasdiff/canvas.lua`
 - Test: `tests/test_canvas.lua`
 
 **Interfaces:**
@@ -147,7 +147,7 @@ Expected: FAIL — `attempt to call field 'insert_section' (a nil value)`.
 
 - [ ] **Step 3: Implement**
 
-Add to `lua/galley/canvas.lua` (after `replace_section`, before `return M`):
+Add to `lua/canvasdiff/canvas.lua` (after `replace_section`, before `return M`):
 
 ```lua
 --- Inserts `section` BEFORE current section index i (i = #sections + 1
@@ -211,7 +211,7 @@ Run: `make test FILTER=canvas_insert` then `make test` (full suite, 60/60 expect
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lua/galley/canvas.lua tests/test_canvas.lua
+git add lua/canvasdiff/canvas.lua tests/test_canvas.lua
 git commit -m "feat: canvas.insert_section with same-tick view correction"
 ```
 
@@ -220,9 +220,9 @@ git commit -m "feat: canvas.insert_section with same-tick view correction"
 ### Task 2: `collect.lua` extraction + reconcile engine
 
 **Files:**
-- Create: `lua/galley/collect.lua`
-- Create: `lua/galley/watch.lua` (reconcile half only — triggers are Task 3)
-- Modify: `lua/galley/init.lua` (use collect.lua; drop the now-moved private helpers)
+- Create: `lua/canvasdiff/collect.lua`
+- Create: `lua/canvasdiff/watch.lua` (reconcile half only — triggers are Task 3)
+- Modify: `lua/canvasdiff/init.lua` (use collect.lua; drop the now-moved private helpers)
 - Test: `tests/test_watch.lua`
 
 **Interfaces:**
@@ -238,10 +238,10 @@ Create `tests/test_watch.lua`:
 
 ```lua
 local H = require("helpers")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
-local collect = require("galley.collect")
-local watch = require("galley.watch")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
+local collect = require("canvasdiff.collect")
+local watch = require("canvasdiff.watch")
 
 local T = {}
 
@@ -407,14 +407,14 @@ return T
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `make test FILTER=watch_`
-Expected: FAIL — `module 'galley.collect' not found`.
+Expected: FAIL — `module 'canvasdiff.collect' not found`.
 
 - [ ] **Step 3: Implement `collect.lua`**
 
-Create `lua/galley/collect.lua` — move (verbatim, including comments) `find_loaded_buf`, `read_worktree_content`, and `collect_files` out of init.lua:
+Create `lua/canvasdiff/collect.lua` — move (verbatim, including comments) `find_loaded_buf`, `read_worktree_content`, and `collect_files` out of init.lua:
 
 ```lua
-local git = require("galley.git")
+local git = require("canvasdiff.git")
 
 local M = {}
 
@@ -473,18 +473,18 @@ end
 return M
 ```
 
-In `init.lua`: add `local collect = require("galley.collect")`, delete the three moved private functions, and change both call sites (`M.open`, `M.refresh`) from `collect_files(...)` to `collect.files(...)`.
+In `init.lua`: add `local collect = require("canvasdiff.collect")`, delete the three moved private functions, and change both call sites (`M.open`, `M.refresh`) from `collect_files(...)` to `collect.files(...)`.
 
 - [ ] **Step 4: Implement the reconcile half of `watch.lua`**
 
-Create `lua/galley/watch.lua`:
+Create `lua/canvasdiff/watch.lua`:
 
 ```lua
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local collect = require("galley.collect")
-local config = require("galley.config")
-local hl = require("galley.hl")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local collect = require("canvasdiff.collect")
+local config = require("canvasdiff.config")
+local hl = require("canvasdiff.hl")
 
 local W = {}
 
@@ -555,7 +555,7 @@ Run: `make test FILTER=watch_` then `make test` (full suite — the init.lua ref
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lua/galley/collect.lua lua/galley/watch.lua lua/galley/init.lua tests/test_watch.lua
+git add lua/canvasdiff/collect.lua lua/canvasdiff/watch.lua lua/canvasdiff/init.lua tests/test_watch.lua
 git commit -m "feat: reconcile engine splices working-tree changes into the canvas"
 ```
 
@@ -564,19 +564,19 @@ git commit -m "feat: reconcile engine splices working-tree changes into the canv
 ### Task 3: Triggers, lifecycle, and wiring
 
 **Files:**
-- Modify: `lua/galley/watch.lua` (triggers + start/stop)
-- Modify: `lua/galley/hl.lua` (`hl.detach`)
-- Modify: `lua/galley/config.lua` (`watch` defaults)
-- Modify: `lua/galley/init.lua` (start/stop/detach wiring)
+- Modify: `lua/canvasdiff/watch.lua` (triggers + start/stop)
+- Modify: `lua/canvasdiff/hl.lua` (`hl.detach`)
+- Modify: `lua/canvasdiff/config.lua` (`watch` defaults)
+- Modify: `lua/canvasdiff/init.lua` (start/stop/detach wiring)
 - Modify: `README.md`
 - Test: `tests/test_watch.lua` (trigger cases appended)
 
 **Interfaces:**
-- Consumes: Task 2's `watch.reconcile`; hl.lua's module internals (augroup `galley.hl`, module-level `timer` and `live_state`); `config.options.watch`.
+- Consumes: Task 2's `watch.reconcile`; hl.lua's module internals (augroup `canvasdiff.hl`, module-level `timer` and `live_state`); `config.options.watch`.
 - Produces:
-  - `watch.start(state, opts)` — `opts = { debounce_ms = 200 }` (enabled is checked by the caller). Stops any previous watch first (idempotent). Installs: augroup `galley.watch` with `BufWritePost` (only files under `state.root`) and `FocusGained`, both funneling into a single debounced dirty timer; fs_event watchers on the repo root (non-recursive), `<root>/.git` (filtering out `*.lock` churn), and the parent directories of currently-changed files; watcher set refreshed after each reconcile.
+  - `watch.start(state, opts)` — `opts = { debounce_ms = 200 }` (enabled is checked by the caller). Stops any previous watch first (idempotent). Installs: augroup `canvasdiff.watch` with `BufWritePost` (only files under `state.root`) and `FocusGained`, both funneling into a single debounced dirty timer; fs_event watchers on the repo root (non-recursive), `<root>/.git` (filtering out `*.lock` churn), and the parent directories of currently-changed files; watcher set refreshed after each reconcile.
   - `watch.stop()` — stops the timer, closes all fs_event handles, deletes the augroup; safe to call repeatedly/when never started.
-  - `hl.detach(state)` — clears augroup `galley.hl`, stops the module debounce timer, and resets `live_state` when it is `state`; nil-safe.
+  - `hl.detach(state)` — clears augroup `canvasdiff.hl`, stops the module debounce timer, and resets `live_state` when it is `state`; nil-safe.
   - config: `defaults.watch = { enabled = true, debounce_ms = 200 }`.
   - init: `M.open` sets `watch.on_empty` (shows the empty message) and calls `watch.start(st, config.options.watch)` when `config.options.watch.enabled`; `M.close` (in the branch that actually restores the window) calls `watch.stop()` and `hl.detach(state)`.
 
@@ -726,7 +726,7 @@ function W.start(state, opts)
   live = state
   debounce_ms = (opts and opts.debounce_ms) or 200
 
-  aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
+  aug = vim.api.nvim_create_augroup("canvasdiff.watch", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = aug,
     callback = function(ev)
@@ -765,14 +765,14 @@ Note on the forward reference: `mark_dirty` calls `refresh_fs_watches`, which is
 
 - [ ] **Step 4: `hl.detach`, config, init wiring**
 
-`lua/galley/hl.lua` — add after `M.attach`:
+`lua/canvasdiff/hl.lua` — add after `M.attach`:
 
 ```lua
 --- Undo attach: remove the scroll trigger, cancel any pending debounce, and
 --- release the live-state guard so a stale callback can never fire against
 --- this state. Nil-safe; safe to call when never attached.
 function M.detach(state)
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.hl")
+  pcall(vim.api.nvim_del_augroup_by_name, "canvasdiff.hl")
   if timer then
     timer:stop()
   end
@@ -784,7 +784,7 @@ end
 
 (This requires `M.detach` to be defined AFTER the `local timer` / `local live_state` declarations so the upvalues bind — same ordering rule the stale-state fix established.)
 
-`lua/galley/config.lua` — add to `M.defaults`:
+`lua/canvasdiff/config.lua` — add to `M.defaults`:
 
 ```lua
   watch = {
@@ -793,8 +793,8 @@ end
   },
 ```
 
-`lua/galley/init.lua`:
-- add `local watch = require("galley.watch")` to the requires;
+`lua/canvasdiff/init.lua`:
+- add `local watch = require("canvasdiff.watch")` to the requires;
 - in `M.open`, after the `hl.attach` block:
 
 ```lua
@@ -822,7 +822,7 @@ Run: `make test FILTER=watch_trigger` (3/3), then `make test` — expected 70/70
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lua/galley/ tests/test_watch.lua README.md
+git add lua/canvasdiff/ tests/test_watch.lua README.md
 git commit -m "feat: live watch triggers with debounced reconcile"
 ```
 

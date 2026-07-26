@@ -1,11 +1,11 @@
 local H = require("helpers")
-local git = require("galley.git")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
-local jump = require("galley.jump")
-local fold = require("galley.fold")
-local collect = require("galley.collect")
-local lens = require("galley.lens")
+local git = require("canvasdiff.git")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
+local jump = require("canvasdiff.jump")
+local fold = require("canvasdiff.fold")
+local collect = require("canvasdiff.collect")
+local lens = require("canvasdiff.lens")
 
 local function sh(root, cmd)
   local res = vim.system(cmd, { cwd = root, text = true }):wait()
@@ -304,7 +304,7 @@ return {
       committed = { ["a.txt"] = lines("l", 20) },
       worktree = { ["a.txt"] = lines("L", 20) },
     })
-    local sidebar = require("galley.sidebar")
+    local sidebar = require("canvasdiff.sidebar")
     local lease = assert(sidebar.open(st, { width = 30 }))
 
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 })

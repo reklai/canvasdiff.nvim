@@ -1,7 +1,7 @@
 local H = {}
 
 function H.tmpdir()
-  local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "galley_test_" .. vim.uv.hrtime())
+  local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_" .. vim.uv.hrtime())
   vim.fn.mkdir(dir, "p")
   return dir
 end

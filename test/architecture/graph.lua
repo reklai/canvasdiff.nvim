@@ -302,8 +302,8 @@ function G.inspect(root)
         else
           local from = G.module_id(file.rel) or ("@" .. file.rel)
           for _, dependency in ipairs(dependencies) do
-            local internal = dependency.module == "galley"
-              or dependency.module:match("^galley%.") ~= nil
+            local internal = dependency.module == "canvasdiff"
+              or dependency.module:match("^canvasdiff%.") ~= nil
             if internal then
               local target_path = inspection.modules[dependency.module]
               if not target_path then

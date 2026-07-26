@@ -1,5 +1,5 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
+local canvas = require("canvasdiff.canvas")
 
 local T = {}
 
@@ -14,8 +14,8 @@ local function in_cwd(cwd, fn)
 
   vim.cmd("tabnew")
   vim.api.nvim_set_current_dir(cwd)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
 
   local ok, err = pcall(fn, fm, msgs)
 
@@ -41,8 +41,8 @@ end
 -- methods. Ordinary repeated require() calls must also resolve to the one
 -- cached facade; manually evicting package.loaded is not a lifecycle API.
 T["root_ facade is cached and exports exactly the supported API"] = function()
-  local first = require("galley")
-  local second = require("galley")
+  local first = require("canvasdiff")
+  local second = require("canvasdiff")
   assert(rawequal(first, second), "ordinary require() calls share one facade")
   H.eq(getmetatable(first), nil, "the public facade is a plain table")
 
@@ -66,23 +66,23 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
 end
 
 T["root_ loader has no init shim and App instances own separate Surfaces"] = function()
-  local cached = require("galley")
-  package.loaded["galley"] = nil
-  local reloaded = require("galley")
+  local cached = require("canvasdiff")
+  package.loaded["canvasdiff"] = nil
+  local reloaded = require("canvasdiff")
   assert(not rawequal(cached, reloaded),
     "manual root eviction reloads a fresh facade and default App")
 
-  package.loaded["galley.init"] = nil
-  local loaded = pcall(require, "galley.init")
-  assert(not loaded, "galley.init must not remain as a second root loader")
+  package.loaded["canvasdiff.init"] = nil
+  local loaded = pcall(require, "canvasdiff.init")
+  assert(not loaded, "canvasdiff.init must not remain as a second root loader")
 
-  local App = require("galley.App")
+  local App = require("canvasdiff.App")
   local first = App.new()
   local second = App.new()
   assert(not rawequal(first, second), "each App.new() returns a distinct owner")
 
   local state = {}
-  local surface = require("galley.Surface").new(state)
+  local surface = require("canvasdiff.Surface").new(state)
   first.surface = surface
   H.eq(first.surface, surface, "the active Surface is stored on its owning App")
   H.eq(second.surface, nil, "one App's Surface cannot leak into another App")
@@ -97,7 +97,7 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   assert(not surface:is_showing(), "a Surface without a canvas buffer is hidden")
   assert(surface:guard(surface.generation), "the current generation passes its guard")
 
-  local util = require("galley.util")
+  local util = require("canvasdiff.util")
   local real_warn = util.warn
   local warnings = {}
   util.warn = function(msg)
@@ -122,11 +122,11 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
 end
 
 T["root_ Surface never issues unqualified controller teardown"] = function()
-  local watch = require("galley.watch")
-  local hl = require("galley.hl")
-  local sidebar = require("galley.sidebar")
-  local virt = require("galley.virt")
-  local statuscol = require("galley.statuscol")
+  local watch = require("canvasdiff.watch")
+  local hl = require("canvasdiff.hl")
+  local sidebar = require("canvasdiff.sidebar")
+  local virt = require("canvasdiff.virt")
+  local statuscol = require("canvasdiff.statuscol")
   local real_stop = watch.stop
   local real_hl_detach = hl.detach
   local real_sidebar_close = sidebar.close
@@ -156,7 +156,7 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
 
   local ok, err = xpcall(function()
     local state = {}
-    local surface = require("galley.Surface").new(state)
+    local surface = require("canvasdiff.Surface").new(state)
     surface.saved = true
     H.eq(surface.controllers.watch, nil, "this Surface acquired no watch lease")
     H.eq(surface.controllers.hl, nil, "this Surface acquired no highlighter lease")

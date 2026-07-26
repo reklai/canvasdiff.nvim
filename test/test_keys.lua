@@ -1,6 +1,6 @@
 local H = require("helpers")
-local keys = require("galley.keys")
-local config = require("galley.config")
+local keys = require("canvasdiff.keys")
+local config = require("canvasdiff.config")
 
 local T = {}
 
@@ -153,8 +153,8 @@ T["keys_install every canvas mapping is registered with a desc"] = function()
   })
   local old_cwd = vim.fn.getcwd()
   vim.api.nvim_set_current_dir(root)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
   fm.open()
   local buf = vim.api.nvim_get_current_buf()
 

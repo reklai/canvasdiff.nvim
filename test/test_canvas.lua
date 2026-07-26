@@ -1,6 +1,6 @@
 local H = require("helpers")
-local model = require("galley.model")
-local canvas = require("galley.canvas")
+local model = require("canvasdiff.model")
+local canvas = require("canvasdiff.canvas")
 
 -- Big generated fixture: the headless window is ~24 rows tall, so sections
 -- must be MUCH taller for "above/below viewport" cases to be real.

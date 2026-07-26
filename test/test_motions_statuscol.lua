@@ -1,11 +1,11 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local motions = require("galley.motions")
-local statuscol = require("galley.statuscol")
-local Surface = require("galley.Surface")
-local virt = require("galley.virt")
-local config = require("galley.config")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local motions = require("canvasdiff.motions")
+local statuscol = require("canvasdiff.statuscol")
+local Surface = require("canvasdiff.Surface")
+local virt = require("canvasdiff.virt")
+local config = require("canvasdiff.config")
 
 local T = {}
 
@@ -285,7 +285,7 @@ T["motions_ 2]h skips one hunk header ahead"] = function()
   assert(two_step[1] > one_step[1], "2]h must land further than a single ]h step")
 end
 
-local STATUSCOL_EXPR = "%!v:lua.require'galley.statuscol'.text()"
+local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.statuscol'.text()"
 
 local function with_fake_statuscolumn(callback)
   statuscol.detach()
@@ -1759,7 +1759,7 @@ T["statuscol_ never leaks into a foreign buffer"] = function()
     return vim.api.nvim_get_option_value("statuscolumn", { win = st.win }) ~= ""
   end)
   H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = st.win }),
-    "%!v:lua.require'galley.statuscol'.text()",
+    "%!v:lua.require'canvasdiff.statuscol'.text()",
     "statuscolumn restored once the canvas is showing again")
 
   statuscol.detach(lease)

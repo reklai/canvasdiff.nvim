@@ -1,11 +1,11 @@
-local canvas = require("galley.canvas")
-local viewport = require("galley.viewport")
-local model = require("galley.model")
-local git = require("galley.git")
-local config = require("galley.config")
-local util = require("galley.util")
-local fold = require("galley.fold")
-local lens = require("galley.lens")
+local canvas = require("canvasdiff.canvas")
+local viewport = require("canvasdiff.viewport")
+local model = require("canvasdiff.model")
+local git = require("canvasdiff.git")
+local config = require("canvasdiff.config")
+local util = require("canvasdiff.util")
+local fold = require("canvasdiff.fold")
+local lens = require("canvasdiff.lens")
 
 local M = {}
 
@@ -152,10 +152,10 @@ function M.enter(state, opts)
   -- Never map `q` in the real file buffer.
   for _, lhs in ipairs(back_keys) do
     vim.keymap.set("n", lhs, function()
-      require("galley.jump").back()
+      require("canvasdiff.jump").back()
     end, {
       buffer = buf, silent = true, noremap = true,
-      desc = "Return to the galley canvas at the same spot",
+      desc = "Return to the CanvasDiff canvas at the same spot",
     })
   end
 
@@ -217,7 +217,7 @@ function M.back(opts)
     opts = opts or {}
   end
   if not excursion then
-    util.notify("no diff-canvas excursion")
+    util.notify("no active review excursion")
     return
   end
 

@@ -1,7 +1,7 @@
-local git = require("galley.git")
-local util = require("galley.util")
-local lens = require("galley.lens")
-local model = require("galley.model")
+local git = require("canvasdiff.git")
+local util = require("canvasdiff.util")
+local lens = require("canvasdiff.lens")
+local model = require("canvasdiff.model")
 
 local M = {}
 
@@ -85,7 +85,7 @@ end
 --- previously-saved sessions still speak it. lens.from_base does the translation.
 ---
 --- @param root string
---- @param spec GalleyLens|string|nil a lens, a legacy base string, or nil
+--- @param spec CanvasDiffLens|string|nil a lens, a legacy base string, or nil
 --- @return table[]|nil files
 --- @return string|nil err
 function M.files(root, spec)
@@ -205,7 +205,7 @@ end
 --- this boundary so a failed ref lookup is distinguishable from a valid empty
 --- diff before any buffer, lens, view, or UI state is touched.
 --- @param root string
---- @param spec GalleyLens|string|nil
+--- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
 --- @return table[]|nil sections
 --- @return string|nil err

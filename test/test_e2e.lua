@@ -1,5 +1,5 @@
 local H = require("helpers")
-local sidebar = require("galley.sidebar")
+local sidebar = require("canvasdiff.sidebar")
 
 -- E2E cases deliberately change cwd and open real files from throwaway repos.
 -- Restore a path that outlives every fixture before removing one: deleting the
@@ -19,7 +19,7 @@ local function sidebar_view(st, tab)
 end
 
 local function group_alive(name)
-  if name == "galley.hl" or name == "galley.sidebar" then
+  if name == "canvasdiff.hl" or name == "canvasdiff.sidebar" then
     for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
       local group = autocmd.group_name
       if group and (group == name or group:sub(1, #name + 1) == name .. ".") then
@@ -54,7 +54,7 @@ local function wipe_buffer(buf)
 end
 
 local function remove_fixture(root)
-  H.eq(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }), false,
+  H.eq(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }), false,
     "the canvas watch is stopped before its fixture is removed")
   vim.api.nvim_set_current_dir(PROJECT_ROOT)
   H.eq(vim.fn.delete(root, "rf"), 0, "fixture directory was removed")
@@ -73,7 +73,7 @@ return {
       },
     })
     vim.api.nvim_set_current_dir(root)
-    local fm = require("galley")
+    local fm = require("canvasdiff")
     fm.open()
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     -- alphabetical file order: new.txt, src/a.lua, src/z.lua, top.txt
@@ -112,11 +112,11 @@ return {
       worktree = { ["a.txt"] = "A1\na2\na3\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
 
-    local canvas_mod = require("galley.canvas")
+    local canvas_mod = require("canvasdiff.canvas")
     local canvas_buf = vim.api.nvim_get_current_buf()
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
     vim.api.nvim_feedkeys(vim.keycode("za"), "x", false)
@@ -158,8 +158,8 @@ return {
       worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n", ["b/three.txt"] = "3x\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     local st = assert(fm.open())
     local canvas_win = vim.api.nvim_get_current_win()
 
@@ -219,7 +219,7 @@ return {
     vim.api.nvim_win_set_cursor(canvas_win, { 1, 0 })
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     local selected_buf = vim.api.nvim_get_current_buf()
-    local file_buf = not require("galley.canvas").is_canvas_buf(selected_buf)
+    local file_buf = not require("canvasdiff.canvas").is_canvas_buf(selected_buf)
       and selected_buf or nil
     H.eq(vim.api.nvim_get_current_win(), canvas_win, "<CR> must not jump out of the canvas")
     assert(not canvas_lines()[1]:match("^▸"), "<CR> reveals it too")
@@ -240,8 +240,8 @@ return {
       worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     local st = assert(fm.open())
     local canvas_win = vim.api.nvim_get_current_win()
 
@@ -290,7 +290,7 @@ return {
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)
-    local fm = require("galley")
+    local fm = require("canvasdiff")
     local messages = {}
     local real_notify = vim.notify
     vim.notify = function(msg, level)
@@ -324,10 +324,10 @@ return {
     local other = vim.fs.joinpath(root, "other.txt")
     local f = assert(io.open(other, "w")); f:write("other content\n"); f:close()
 
-    local fm = require("galley")
+    local fm = require("canvasdiff")
     fm.open()
     assert(
-      require("galley.canvas").is_canvas_buf(vim.api.nvim_get_current_buf()),
+      require("canvasdiff.canvas").is_canvas_buf(vim.api.nvim_get_current_buf()),
       "canvas should be showing after open()"
     )
 
@@ -354,9 +354,9 @@ return {
       worktree = { ["src/a.txt"] = "ax\n", ["src/b.txt"] = "bx\n", ["top.txt"] = "tx\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
-    local session = require("galley.session")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local session = require("canvasdiff.session")
     os.remove(session.path_for(root))
 
     -- Own tab with a spare non-canvas window, so closing the canvas window neither
@@ -387,18 +387,18 @@ return {
     select_cr()
 
     for _, g in ipairs({
-      "galley.watch", "galley.virt", "galley.hl", "galley.sidebar", "galley.session",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.sidebar", "canvasdiff.session",
     }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
     end
 
     -- The `:q`. nvim_win_close fires WinClosed exactly as `:quit` does.
     vim.api.nvim_win_close(canvas_win, false)
-    vim.wait(200, function() return not group_alive("galley.watch") end)
+    vim.wait(200, function() return not group_alive("canvasdiff.watch") end)
 
     for _, g in ipairs({
-      "galley.watch", "galley.virt", "galley.hl", "galley.statuscol",
-      "galley.sidebar", "galley.session",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.statuscol",
+      "canvasdiff.sidebar", "canvasdiff.session",
     }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")
     end
@@ -418,9 +418,9 @@ return {
       committed = { ["a.txt"] = "a\n" }, worktree = { ["a.txt"] = "ax\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
-    local session = require("galley.session")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local session = require("canvasdiff.session")
 
     vim.cmd("tabnew")
     fm.open()
@@ -432,7 +432,7 @@ return {
     vim.api.nvim_win_close(second, false)
     vim.wait(120, function() return false end)
 
-    assert((pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" })),
+    assert((pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" })),
       "the canvas is still on screen in the other window, so nothing may tear down")
     fm.close()
     os.remove(session.path_for(root))
@@ -464,8 +464,8 @@ return {
       worktree = { ["a.txt"] = body("a", true), ["z.txt"] = body("z", true) },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
     local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
 
@@ -525,7 +525,7 @@ return {
   -- recovery genuinely does.
   --
   -- Note the corruption has to unset 'modifiable' first: nomodifiable blocks
-  -- nvim_buf_set_lines as well as typed keys, so only galley can corrupt galley's
+  -- nvim_buf_set_lines as well as typed keys, so only canvasdiff can corrupt canvasdiff's
   -- own buffer. That is itself part of why a user-facing rebuild key is not needed.
   ["e2e: refresh cannot repair a divergent buffer, close+open can"] = function()
     local root = H.git_fixture({
@@ -533,8 +533,8 @@ return {
       worktree = { ["a.txt"] = "A1\na2\na3\na4\nA5\na6\na7\na8\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
     local buf = vim.api.nvim_get_current_buf()
 
@@ -590,8 +590,8 @@ return {
       worktree = { ["aaa.txt"] = body("aaa", true), ["zzz.txt"] = body("zzz", true) },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
     vim.api.nvim_win_set_height(cwin, 12)
@@ -617,7 +617,7 @@ return {
 
     fm.close()
     -- Left armed, this resolves sections against a dead state on every scroll anywhere.
-    assert(not pcall(vim.api.nvim_get_autocmds, { group = "galley.winbar" }),
+    assert(not pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.winbar" }),
       "the winbar augroup must be reaped by teardown")
     remove_fixture(root)
   end,
@@ -635,12 +635,12 @@ return {
       worktree = { ["aaa.txt"] = "A1\na2\na3\n", ["zzz.txt"] = "Z1\nz2\nz3\n" },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     local st = assert(fm.open())
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
 
-    local NS = vim.api.nvim_create_namespace("galley.sidebar")
+    local NS = vim.api.nvim_create_namespace("canvasdiff.sidebar")
     local function sbwin()
       return sidebar_view(st)
     end
@@ -649,7 +649,7 @@ return {
       if not w then return nil end
       local b = vim.api.nvim_win_get_buf(w)
       for _, m in ipairs(vim.api.nvim_buf_get_extmarks(b, NS, 0, -1, { details = true })) do
-        if m[4] and m[4].line_hl_group == "GalleySidebarActive" then
+        if m[4] and m[4].line_hl_group == "CanvasDiffSidebarActive" then
           return vim.api.nvim_buf_get_lines(b, m[2], m[2] + 1, false)[1]
         end
       end
@@ -730,15 +730,15 @@ return {
     end
     local root = H.git_fixture({ committed = committed, worktree = worktree })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
 
     local function bars()
       local rows = {}
       for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
-        if m[4] and m[4].line_hl_group == "GalleyFileBar" then rows[#rows + 1] = m[2] + 1 end
+        if m[4] and m[4].line_hl_group == "CanvasDiffFileBar" then rows[#rows + 1] = m[2] + 1 end
       end
       table.sort(rows)
       return rows
@@ -755,14 +755,14 @@ return {
     H.eq(#bars(), 3, "sanity: three files")
 
     -- The composition claim the priorities rest on: the bar supplies a background and
-    -- GalleyFileHeader supplies only a foreground, so the filename keeps Title's colour
+    -- CanvasDiffFileHeader supplies only a foreground, so the filename keeps Title's colour
     -- ON the tinted row. If the header group ever gains a bg, it would paint over the
     -- bar for the width of the text and the row would look striped.
-    local bar = vim.api.nvim_get_hl(0, { name = "GalleyFileBar", link = false })
-    local hdr = vim.api.nvim_get_hl(0, { name = "GalleyFileHeader", link = false })
+    local bar = vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = false })
+    local hdr = vim.api.nvim_get_hl(0, { name = "CanvasDiffFileHeader", link = false })
     assert(bar.bg, "the bar group must resolve to a real background to be visible")
     assert(hdr.bg == nil,
-      "GalleyFileHeader must stay foreground-only so it composes with the bar")
+      "CanvasDiffFileHeader must stay foreground-only so it composes with the bar")
 
     -- Fold the middle file: its bar goes with its body.
     vim.api.nvim_win_set_cursor(cwin, { rows_matching("^▎")[2], 0 })
@@ -812,8 +812,8 @@ return {
       },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
     fm.open()
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
     local text = table.concat(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false), "\n")
@@ -833,7 +833,7 @@ return {
     end
     H.eq(#ghosts, 1, "exactly one ghost, for the one replaced line")
     H.eq(ghosts[1].text, "-three", "carrying the old content, still prefixed")
-    H.eq(ghosts[1].hl, "GalleyGhost", "in its own group, so it can be dimmed alone")
+    H.eq(ghosts[1].hl, "CanvasDiffGhost", "in its own group, so it can be dimmed alone")
 
     -- A file with no new side keeps deletions as REAL rows: a result view of it would
     -- be empty, and its whole content would become unyankable virtual text.
@@ -874,10 +874,10 @@ return {
 
     -- A fresh owner state, while retaining the same subordinate modules and
     -- cached canvas buffer a real close/reopen cycle would use.
-    package.loaded["galley"] = nil
-    local fm = require("galley")
-    local lens = require("galley.lens")
-    local session = require("galley.session")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local lens = require("canvasdiff.lens")
+    local session = require("canvasdiff.session")
 
     local before = {
       win = vim.api.nvim_get_current_win(),
@@ -930,9 +930,9 @@ return {
       worktree = { ["a.txt"] = body("a", true), ["b.txt"] = body("b", true) },
     })
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
-    local session = require("galley.session")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local session = require("canvasdiff.session")
     local st = assert(fm.open())
 
     local win = vim.api.nvim_get_current_win()
@@ -944,7 +944,7 @@ return {
     local side_win = assert(sidebar_view(st))
     local sidebar_buf = vim.api.nvim_win_get_buf(side_win)
     assert(sidebar_buf, "sanity: default UI opened the sidebar")
-    local anchor_ns = vim.api.nvim_get_namespaces()["galley.canvas.anchors"]
+    local anchor_ns = vim.api.nvim_get_namespaces()["canvasdiff.canvas.anchors"]
     local before = {
       lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false),
       tick = vim.api.nvim_buf_get_changedtick(buf),
@@ -1013,10 +1013,10 @@ return {
     assert(branch.code == 0, branch.stderr)
 
     vim.api.nvim_set_current_dir(root)
-    package.loaded["galley"] = nil
-    local fm = require("galley")
-    local lens = require("galley.lens")
-    local session = require("galley.session")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local lens = require("canvasdiff.lens")
+    local session = require("canvasdiff.session")
     assert(fm.open({ lens = lens.branch("comparison-base") }))
 
     local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
@@ -1057,8 +1057,8 @@ return {
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh root facade so its default App has no state,
     -- regardless of what earlier test cases in this process did.
-    package.loaded["galley"] = nil
-    local fm = require("galley")
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
 
     local buf_before = vim.api.nvim_get_current_buf()
     local ok = pcall(fm.close)

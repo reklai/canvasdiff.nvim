@@ -1,7 +1,7 @@
 local H = require("helpers")
-local util = require("galley.util")
-local model = require("galley.model")
-local render = require("galley.render")
+local util = require("canvasdiff.util")
+local model = require("canvasdiff.model")
+local render = require("canvasdiff.render")
 
 local T = {}
 
@@ -84,8 +84,8 @@ T["binary_ section_hl highlights the notice row"] = function()
   local marks = render.section_hl(sec)
   local groups = {}
   for _, m in ipairs(marks) do groups[m.row] = m.group end
-  H.eq(groups[0], "GalleyFileHeader")
-  H.eq(groups[1], "GalleyBinary")
+  H.eq(groups[0], "CanvasDiffFileHeader")
+  H.eq(groups[1], "CanvasDiffBinary")
 end
 
 -- End to end through a real repo: this is the case that used to throw E976.
@@ -97,8 +97,8 @@ T["binary_ a repo with a binary file opens without error"] = function()
   local old_cwd = vim.fn.getcwd()
   vim.cmd("tabnew")
   vim.api.nvim_set_current_dir(root)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
 
   local ok, err = pcall(function()
     fm.open()
@@ -127,9 +127,9 @@ T["binary_ jumping into a binary section declines instead of opening it"] = func
 
   vim.cmd("tabnew")
   vim.api.nvim_set_current_dir(root)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
-  local canvas = require("galley.canvas")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local canvas = require("canvasdiff.canvas")
 
   local ok, err = pcall(function()
     fm.open()

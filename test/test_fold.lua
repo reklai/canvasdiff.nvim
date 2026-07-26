@@ -1,5 +1,5 @@
 local H = require("helpers")
-local fold = require("galley.fold")
+local fold = require("canvasdiff.fold")
 
 local T = {}
 

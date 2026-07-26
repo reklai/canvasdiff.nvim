@@ -1,6 +1,6 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local viewport = require("galley.viewport")
+local canvas = require("canvasdiff.canvas")
+local viewport = require("canvasdiff.viewport")
 
 local T = {}
 
@@ -8,29 +8,29 @@ local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
   vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
 
 local RESOURCE_GROUPS = {
-  "galley.watch",
-  "galley.virt",
-  "galley.hl",
-  "galley.statuscol",
-  "galley.sidebar",
-  "galley.scrollbar",
-  "galley.session",
-  "galley.close",
-  "galley.winbar",
+  "canvasdiff.watch",
+  "canvasdiff.virt",
+  "canvasdiff.hl",
+  "canvasdiff.statuscol",
+  "canvasdiff.sidebar",
+  "canvasdiff.scrollbar",
+  "canvasdiff.session",
+  "canvasdiff.close",
+  "canvasdiff.winbar",
 }
 
 -- These groups belong to the shared review surface rather than to one
 -- window-bound accessory. The sidebar follows the Surface across surviving
 -- split/tab hosts through its exact lease; scrollbar remains window-local.
 local SURFACE_GROUPS = {
-  "galley.watch",
-  "galley.virt",
-  "galley.hl",
-  "galley.statuscol",
-  "galley.sidebar",
-  "galley.session",
-  "galley.close",
-  "galley.winbar",
+  "canvasdiff.watch",
+  "canvasdiff.virt",
+  "canvasdiff.hl",
+  "canvasdiff.statuscol",
+  "canvasdiff.sidebar",
+  "canvasdiff.session",
+  "canvasdiff.close",
+  "canvasdiff.winbar",
 }
 
 local function controller_groups(prefix)
@@ -49,7 +49,7 @@ local function controller_groups(prefix)
 end
 
 local function group_alive(name)
-  if name == "galley.hl" or name == "galley.sidebar" then
+  if name == "canvasdiff.hl" or name == "canvasdiff.sidebar" then
     return #controller_groups(name) > 0
   end
   return pcall(vim.api.nvim_get_autocmds, { group = name })
@@ -67,11 +67,11 @@ end
 --- use. Normalize those test-only leftovers before characterizing the root
 --- lifecycle, so this file observes only the review it opens itself.
 local function reset_auxiliary_owners()
-  require("galley.watch").stop()
-  require("galley.scrollbar").close()
-  require("galley.virt").detach()
-  require("galley.statuscol").detach()
-  for _, name in ipairs(controller_groups("galley.hl")) do
+  require("canvasdiff.watch").stop()
+  require("canvasdiff.scrollbar").close()
+  require("canvasdiff.virt").detach()
+  require("canvasdiff.statuscol").detach()
+  for _, name in ipairs(controller_groups("canvasdiff.hl")) do
     pcall(vim.api.nvim_del_augroup_by_name, name)
   end
 end
@@ -127,11 +127,11 @@ end
 --- already torn every resource group down; package.loaded itself is not a
 --- lifecycle mechanism.
 local function with_canvas(body)
-  assert(not group_alive("galley.watch"),
+  assert(not group_alive("canvasdiff.watch"),
     "the preceding test must close its review before lifecycle isolation")
   reset_auxiliary_owners()
   assert_groups(false, "before the isolated review opens")
-  package.loaded["galley"] = nil
+  package.loaded["canvasdiff"] = nil
 
   local root = H.git_fixture({
     committed = { ["a.txt"] = "one\ntwo\nthree\n" },
@@ -142,7 +142,7 @@ local function with_canvas(body)
   local tab = vim.api.nvim_get_current_tabpage()
   vim.api.nvim_set_current_dir(root)
 
-  local fm = require("galley")
+  local fm = require("canvasdiff")
   fm.setup({})
   local previous_buf = vim.api.nvim_get_current_buf()
   local st = fm.open()
@@ -167,7 +167,7 @@ local function with_canvas(body)
   -- On an assertion failure, reclaim any still-live owner before restoring the
   -- shared test process. Surface disposal is idempotent, so this is also safe
   -- after a successful terminal path.
-  if group_alive("galley.watch") then
+  if group_alive("canvasdiff.watch") then
     pcall(fm.close)
   end
 
@@ -178,18 +178,18 @@ local function with_canvas(body)
     pcall(vim.cmd, "tabclose!")
   end
 
-  local session = require("galley.session")
+  local session = require("canvasdiff.session")
   os.remove(session.path_for(root))
   vim.api.nvim_set_current_dir(PROJECT_ROOT)
   H.eq(vim.fn.delete(root, "rf"), 0, "fixture directory was removed")
-  package.loaded["galley"] = nil
+  package.loaded["canvasdiff"] = nil
 
   assert(ok, err)
 end
 
 T["lifecycle_ a duplicate canvas split shares the review and only the final close tears down"] = function()
   with_canvas(function(ctx)
-    local session = require("galley.session")
+    local session = require("canvasdiff.session")
     with_spies({
       { name = "session.save", target = session, method = "save" },
     }, function(counts)
@@ -233,7 +233,7 @@ T["lifecycle_ a duplicate canvas split shares the review and only the final clos
       -- the completed teardown.
       vim.api.nvim_win_close(ctx.owner, false)
       local stopped = vim.wait(500, function()
-        return not group_alive("galley.watch")
+        return not group_alive("canvasdiff.watch")
       end, 10)
       assert(stopped, "the final canvas close completed its deferred teardown")
 
@@ -246,7 +246,7 @@ end
 
 T["lifecycle_ closing the original split first rebinds and persists the survivor"] = function()
   with_canvas(function(ctx)
-    local session = require("galley.session")
+    local session = require("canvasdiff.session")
     with_spies({
       { name = "session.save", target = session, method = "save" },
     }, function(counts)
@@ -315,7 +315,7 @@ end
 
 T["lifecycle_ one Surface spans tabs until its global final host closes"] = function()
   with_canvas(function(ctx)
-    local session = require("galley.session")
+    local session = require("canvasdiff.session")
     with_spies({
       { name = "session.save", target = session, method = "save" },
     }, function(counts)
@@ -367,7 +367,7 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     vim.api.nvim_win_set_buf(remote, ctx.buf)
     surface:adopt_window(remote, remote_landing)
     H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = remote }),
-      "%!v:lua.require'galley.statuscol'.text()",
+      "%!v:lua.require'canvasdiff.statuscol'.text()",
       "a newly-adopted remote host receives the review status column")
 
     -- Explicit close is tab-local. It restores the original host to its own
@@ -392,7 +392,7 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     H.eq(vim.api.nvim_win_get_buf(third), ctx.buf,
       "toggle shows the existing remote review in this tab")
     H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = third }),
-      "%!v:lua.require'galley.statuscol'.text()")
+      "%!v:lua.require'canvasdiff.statuscol'.text()")
     H.eq(ctx.state.surface, surface, "toggle did not create a replacement Surface")
     H.eq(#surface:canvas_windows(), 2)
 
@@ -477,13 +477,13 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
     end
 
     local specs = {
-      { name = "session.save", target = require("galley.session"), method = "save" },
-      { name = "watch.stop", target = require("galley.watch"), method = "stop" },
-      { name = "hl.detach", target = require("galley.hl"), method = "detach" },
-      { name = "sidebar.close", target = require("galley.sidebar"), method = "close" },
-      { name = "scrollbar.close", target = require("galley.scrollbar"), method = "close" },
-      { name = "virt.detach", target = require("galley.virt"), method = "detach" },
-      { name = "statuscol.detach", target = require("galley.statuscol"), method = "detach" },
+      { name = "session.save", target = require("canvasdiff.session"), method = "save" },
+      { name = "watch.stop", target = require("canvasdiff.watch"), method = "stop" },
+      { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
+      { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
+      { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
+      { name = "virt.detach", target = require("canvasdiff.virt"), method = "detach" },
+      { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
 
     with_spies(specs, function(counts, calls)
@@ -498,7 +498,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
 
       -- VimLeave, explicit close, repeat close, and the already-queued
       -- WinClosed callback all converge on the same once gate.
-      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "galley.session" })
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "canvasdiff.session" })
       ctx.fm.close()
       ctx.fm.close()
       H.eq(surface:dispose("again"), false, "terminal disposal is idempotent")
@@ -547,18 +547,18 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local old_shape_change = assert(ctx.state.hooks.on_shape_change)
     local old_virt = assert(old.controllers.virt)
     local old_statuscol = assert(old.controllers.statuscol)
-    local session = require("galley.session")
-    local watch = require("galley.watch")
-    local hl = require("galley.hl")
-    local virt = require("galley.virt")
-    local statuscol = require("galley.statuscol")
+    local session = require("canvasdiff.session")
+    local watch = require("canvasdiff.watch")
+    local hl = require("canvasdiff.hl")
+    local virt = require("canvasdiff.virt")
+    local statuscol = require("canvasdiff.statuscol")
 
     with_spies({
       { name = "session.save", target = session, method = "save" },
       { name = "watch.stop", target = watch, method = "stop" },
       { name = "hl.apply_now", target = hl, method = "apply_now" },
       { name = "hl.detach", target = hl, method = "detach" },
-      { name = "sidebar.close", target = require("galley.sidebar"), method = "close" },
+      { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
       { name = "virt.detach", target = virt, method = "detach" },
       { name = "statuscol.detach", target = statuscol, method = "detach" },
     }, function(counts, calls)
@@ -669,13 +669,13 @@ T["lifecycle_ one explicit close performs one complete teardown pass"] = functio
   with_canvas(function(ctx)
     local sidebar_lease = assert(ctx.surface.controllers.sidebar)
     local specs = {
-      { name = "session.save", target = require("galley.session"), method = "save" },
-      { name = "watch.stop", target = require("galley.watch"), method = "stop" },
-      { name = "hl.detach", target = require("galley.hl"), method = "detach" },
-      { name = "sidebar.close", target = require("galley.sidebar"), method = "close" },
-      { name = "scrollbar.close", target = require("galley.scrollbar"), method = "close" },
-      { name = "virt.detach", target = require("galley.virt"), method = "detach" },
-      { name = "statuscol.detach", target = require("galley.statuscol"), method = "detach" },
+      { name = "session.save", target = require("canvasdiff.session"), method = "save" },
+      { name = "watch.stop", target = require("canvasdiff.watch"), method = "stop" },
+      { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
+      { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
+      { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
+      { name = "virt.detach", target = require("canvasdiff.virt"), method = "detach" },
+      { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
 
     with_spies(specs, function(counts, calls)

@@ -1,10 +1,10 @@
 local H = require("helpers")
-local sidebar = require("galley.sidebar")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local render = require("galley.render")
-local virt = require("galley.virt")
-local motions = require("galley.motions")
+local sidebar = require("canvasdiff.sidebar")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local render = require("canvasdiff.render")
+local virt = require("canvasdiff.virt")
+local motions = require("canvasdiff.motions")
 
 local T = {}
 
@@ -147,15 +147,15 @@ T["sidebar_render marker spans colour the right ● in a staged-and-stale row"] 
   for _, sp in ipairs(spans) do
     at[sp[3]] = { col = sp[1], text = line:sub(sp[1] + 1, sp[2]) }
   end
-  H.eq(at.GalleyStaged.text, render.glyphs.staged, "the staged span covers exactly one ●")
-  H.eq(at.GalleyStale.text, render.glyphs.stale, "the stale span covers the space and its ●")
-  H.eq(at.GalleyStaleEmphasis.text, render.glyphs.stale,
+  H.eq(at.CanvasDiffStaged.text, render.glyphs.staged, "the staged span covers exactly one ●")
+  H.eq(at.CanvasDiffStale.text, render.glyphs.stale, "the stale span covers the space and its ●")
+  H.eq(at.CanvasDiffStaleEmphasis.text, render.glyphs.stale,
     "and the bold layer covers exactly the same range as the colour")
-  H.eq(at.GalleyStaleEmphasis.col, at.GalleyStale.col,
+  H.eq(at.CanvasDiffStaleEmphasis.col, at.CanvasDiffStale.col,
     "same start too -- a bold layer offset from its colour would be worse than none")
-  assert(at.GalleyStaged.col ~= at.GalleyStale.col,
+  assert(at.CanvasDiffStaged.col ~= at.CanvasDiffStale.col,
     "the two spans must not point at the SAME ● -- that is the whole failure mode")
-  assert(at.GalleyStaged.col < at.GalleyStale.col,
+  assert(at.CanvasDiffStaged.col < at.CanvasDiffStale.col,
     "staged is appended before stale, so its span sits to the left")
   -- The stale span must reach the end of the line; anything shorter means the
   -- trailing ● is uncoloured and reads as a second staged marker.
@@ -171,7 +171,7 @@ T["sidebar_render marker spans handle every combination of the three facts"] = f
     local line = sidebar.render_lines(entries)[1]
     local got = {}
     for _, sp in ipairs(render.marker_spans(line, staged, unstaged, stale)) do
-      got[#got + 1] = sp[3]:gsub("^Galley", "") .. "=" .. line:sub(sp[1] + 1, sp[2])
+      got[#got + 1] = sp[3]:gsub("^CanvasDiff", "") .. "=" .. line:sub(sp[1] + 1, sp[2])
     end
     table.sort(got)
     return line, table.concat(got, " ")
@@ -209,8 +209,8 @@ T["sidebar_render a stale dir row gets exactly one span, over its marker"] = fun
   for _, sp in ipairs(spans) do
     H.eq(line:sub(sp[1] + 1, sp[2]), render.glyphs.stale, "both cover exactly the marker")
   end
-  H.eq(spans[1][3], "GalleyStale")
-  H.eq(spans[2][3], "GalleyStaleEmphasis")
+  H.eq(spans[1][3], "CanvasDiffStale")
+  H.eq(spans[2][3], "CanvasDiffStaleEmphasis")
 end
 
 T["sidebar_render formats dirs, files, indent, and counts"] = function()
@@ -273,12 +273,12 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(sidebar.is_open(lease), false)
 end
 
-local SIDE_NS = vim.api.nvim_create_namespace("galley.sidebar")
+local SIDE_NS = vim.api.nvim_create_namespace("canvasdiff.sidebar")
 
 local function active_row(side_buf)
   local marks = vim.api.nvim_buf_get_extmarks(side_buf, SIDE_NS, 0, -1, { details = true })
   for _, m in ipairs(marks) do
-    if m[4] and m[4].line_hl_group == "GalleySidebarActive" then
+    if m[4] and m[4].line_hl_group == "CanvasDiffSidebarActive" then
       return m[2]
     end
   end
@@ -383,7 +383,7 @@ T["sidebar_win reopen rebinds callbacks to the new state"] = function()
   vim.cmd("vsplit")
   local win_b = vim.api.nvim_get_current_win()
   local secs = { big_section("x/new.txt", "x"), big_section("y/other.txt", "y") }
-  local canvas_mod = require("galley.canvas")
+  local canvas_mod = require("canvasdiff.canvas")
   local st2 = canvas_mod.open(secs, {})
   H.eq(st2.win, win_b, "sanity: st2 opened in the new window, not win_a")
 
@@ -460,13 +460,13 @@ T["sidebar_cycle works without a sidebar open"] = function()
 end
 
 T["sidebar_integration reconcile refreshes the tree"] = function()
-  local watch = require("galley.watch")
+  local watch = require("canvasdiff.watch")
   local root = H.git_fixture({
     committed = { ["m/a.txt"] = bigtext(40, "a") },
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
   })
-  local st = canvas.open(require("galley.model").build(
-    require("galley.collect").files(root), 3), {})
+  local st = canvas.open(require("canvasdiff.model").build(
+    require("canvasdiff.collect").files(root), 3), {})
   st.root = root
   local lease = assert(sidebar.open(st, { width = 30 }))
   local sbuf = sidebar_buf(lease)
@@ -509,12 +509,12 @@ T["sidebar_integration toggle from inside the sidebar redirects instead of throw
   })
   vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
   vim.api.nvim_set_current_dir(root)
-  package.loaded["galley"] = nil
-  local fm = require("galley")
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
   local st = assert(fm.open())
   local lease = assert(st.surface.controllers.sidebar)
 
-  local canvas_mod = require("galley.canvas")
+  local canvas_mod = require("canvasdiff.canvas")
   -- Identify the sidebar window specifically (not just "any non-canvas
   -- window"): the scrollbar float is also a non-canvas window in this
   -- tabpage now, and picking it here would set focus on a non-focusable
@@ -592,7 +592,7 @@ T["sidebar_win double-click selects, same as <CR>"] = function()
 
   -- a file row scrolls the canvas to that section
   local file_row
-  for i, e in ipairs(require("galley.sidebar").build_entries(st.sections, {})) do
+  for i, e in ipairs(require("canvasdiff.sidebar").build_entries(st.sections, {})) do
     if e.kind == "file" and e.section_i == #st.sections then file_row = i end
   end
   assert(file_row, "a file row for the last section")
@@ -603,7 +603,7 @@ T["sidebar_win double-click selects, same as <CR>"] = function()
 
   -- a dir row folds instead, exactly as <CR> does there
   local dir_row
-  for i, e in ipairs(require("galley.sidebar").build_entries(st.sections, {})) do
+  for i, e in ipairs(require("canvasdiff.sidebar").build_entries(st.sections, {})) do
     if e.kind == "dir" then dir_row = i break end
   end
   if dir_row then

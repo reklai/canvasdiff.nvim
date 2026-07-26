@@ -1,8 +1,8 @@
 local H = require("helpers")
-local render = require("galley.render")
-local model = require("galley.model")
-local scrollbar = require("galley.scrollbar")
-local canvas = require("galley.canvas")
+local render = require("canvasdiff.render")
+local model = require("canvasdiff.model")
+local scrollbar = require("canvasdiff.scrollbar")
+local canvas = require("canvasdiff.canvas")
 
 local T = {}
 
@@ -30,10 +30,10 @@ T["scroll_column buckets density and file boundaries"] = function()
   kinds[36] = "del"       -- bucket 4: mixed
   local cells = scrollbar.column(kinds, 4, 100, 100) -- viewport far away: no thumb
   H.eq(#cells, 4)
-  H.eq({ cells[1].char, cells[1].hl }, { render.glyphs.scroll_file, "GalleyScrollFile" })
-  H.eq({ cells[2].char, cells[2].hl }, { render.glyphs.scroll_bar, "GalleyScrollAdd" })
-  H.eq({ cells[3].char, cells[3].hl }, { render.glyphs.scroll_bar, "GalleyScrollDel" })
-  H.eq({ cells[4].char, cells[4].hl }, { render.glyphs.scroll_bar, "GalleyScrollChanged" })
+  H.eq({ cells[1].char, cells[1].hl }, { render.glyphs.scroll_file, "CanvasDiffScrollFile" })
+  H.eq({ cells[2].char, cells[2].hl }, { render.glyphs.scroll_bar, "CanvasDiffScrollAdd" })
+  H.eq({ cells[3].char, cells[3].hl }, { render.glyphs.scroll_bar, "CanvasDiffScrollDel" })
+  H.eq({ cells[4].char, cells[4].hl }, { render.glyphs.scroll_bar, "CanvasDiffScrollChanged" })
   for r = 1, 4 do H.eq(cells[r].thumb, false) end
 end
 
@@ -142,12 +142,12 @@ local function bar_win()
   end
 end
 
-local SCROLL_NS = vim.api.nvim_create_namespace("galley.scrollbar")
+local SCROLL_NS = vim.api.nvim_create_namespace("canvasdiff.scrollbar")
 
 local function thumb_rows(bbuf)
   local rows = {}
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bbuf, SCROLL_NS, 0, -1, { details = true })) do
-    if m[4] and m[4].line_hl_group == "GalleyScrollThumb" then
+    if m[4] and m[4].line_hl_group == "CanvasDiffScrollThumb" then
       rows[#rows + 1] = m[2]
     end
   end

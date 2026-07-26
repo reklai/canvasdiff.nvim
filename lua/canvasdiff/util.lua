@@ -1,7 +1,7 @@
 local U = {}
 
 -- Prefix on every user-facing message. Rename touchpoint.
-U.PREFIX = "galley: "
+U.PREFIX = "CanvasDiff: "
 
 function U.list_slice(t, s, e)
   local out = {}

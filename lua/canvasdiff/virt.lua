@@ -1,5 +1,5 @@
-local canvas = require("galley.canvas")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local fold = require("canvasdiff.fold")
 
 local M = {}
 
@@ -329,7 +329,7 @@ function M.attach(state, opts, callbacks)
   current = lease
 
   local ok, err = pcall(function()
-    lease.aug = vim.api.nvim_create_augroup("galley.virt", { clear = true })
+    lease.aug = vim.api.nvim_create_augroup("canvasdiff.virt", { clear = true })
     vim.api.nvim_create_autocmd("WinScrolled", {
       group = lease.aug,
       callback = function(ev)

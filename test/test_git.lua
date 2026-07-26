@@ -1,5 +1,5 @@
 local H = require("helpers")
-local git = require("galley.git")
+local git = require("canvasdiff.git")
 
 local function sh(root, cmd)
   local res = vim.system(cmd, { cwd = root, text = true }):wait()

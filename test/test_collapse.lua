@@ -1,10 +1,10 @@
 local H = require("helpers")
-local canvas = require("galley.canvas")
-local model = require("galley.model")
-local render = require("galley.render")
-local scrollbar = require("galley.scrollbar")
-local hl = require("galley.hl")
-local fold = require("galley.fold")
+local canvas = require("canvasdiff.canvas")
+local model = require("canvasdiff.model")
+local render = require("canvasdiff.render")
+local scrollbar = require("canvasdiff.scrollbar")
+local hl = require("canvasdiff.hl")
+local fold = require("canvasdiff.fold")
 
 local T = {}
 
@@ -147,7 +147,7 @@ T["collapse_ hl never marks a collapsed section"] = function()
   H.eq(lease.ids_by_path["a/one.txt"], nil,
     "ids_by_path has no entry for the collapsed section")
 
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local s1, e1 = canvas.section_rows(st, 1)
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(not (m[2] >= s1 and m[2] < e1), "no TS-namespace mark within the collapsed section's rows")
@@ -217,7 +217,7 @@ T["collapse_ hl never marks a folded-away section"] = function()
   -- The real failure mode: a section that renders as one row still carries all
   -- its entries, so a reader that thinks it expanded writes marks at
   -- srow + m.row -- inside the FOLLOWING file.
-  local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local s2, e2 = canvas.section_rows(st, 2)
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(not (m[2] >= s2 and m[2] < e2),

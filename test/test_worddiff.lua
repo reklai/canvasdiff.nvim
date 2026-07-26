@@ -1,6 +1,6 @@
 local H = require("helpers")
-local model = require("galley.model")
-local worddiff = require("galley.worddiff")
+local model = require("canvasdiff.model")
+local worddiff = require("canvasdiff.worddiff")
 
 local T = {}
 
@@ -24,11 +24,11 @@ T["word_marks highlight only the changed span of a paired line"] = function()
   -- and produces hunks for "2"→"2" (row 3 and 4, cols 11-12) and insertion of
   -- "0 -- changed" (row 4, cols 12-24). Together they cover bytes 10-23.
   H.eq(marks, {
-    { row = 3, col = 11, end_col = 12, group = "GalleyWordAdd", priority = 105 },
-    { row = 3, col = 12, end_col = 24, group = "GalleyWordAdd", priority = 105 },
+    { row = 3, col = 11, end_col = 12, group = "CanvasDiffWordAdd", priority = 105 },
+    { row = 3, col = 12, end_col = 24, group = "CanvasDiffWordAdd", priority = 105 },
   })
   for _, m in ipairs(marks) do
-    H.eq(m.group, "GalleyWordAdd", "no GalleyWordDel marks: there is no del row to put one on")
+    H.eq(m.group, "CanvasDiffWordAdd", "no CanvasDiffWordDel marks: there is no del row to put one on")
   end
 end
 
@@ -40,7 +40,7 @@ T["word_marks are byte-correct on multibyte lines"] = function()
   -- (the rendered prefix), so col = 7; é/á are 2 UTF-8 bytes, so end_col = 9.
   H.eq(#marks, 1, "add side only -- the deleted line is virtual and cannot hold a mark")
   local add = marks[1]
-  H.eq(add.group, "GalleyWordAdd")
+  H.eq(add.group, "CanvasDiffWordAdd")
   H.eq(add.col, 7)
   H.eq(add.end_col, 9)  -- á is 2 bytes
 end
@@ -55,7 +55,7 @@ T["word_marks skip unpaired and blank lines"] = function()
   -- The second del (row 4) is unpaired and should have no marks.
   local rows_with_del_marks = {}
   for _, m in ipairs(marks) do
-    if m.group == "GalleyWordDel" then
+    if m.group == "CanvasDiffWordDel" then
       rows_with_del_marks[m.row] = true
     end
   end

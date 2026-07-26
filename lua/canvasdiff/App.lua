@@ -1,22 +1,22 @@
-local canvas = require("galley.canvas")
-local git = require("galley.git")
-local jump = require("galley.jump")
-local config = require("galley.config")
-local hl = require("galley.hl")
-local collect = require("galley.collect")
-local watch = require("galley.watch")
-local sidebar = require("galley.sidebar")
-local scrollbar = require("galley.scrollbar")
-local virt = require("galley.virt")
-local motions = require("galley.motions")
-local statuscol = require("galley.statuscol")
-local session = require("galley.session")
-local util = require("galley.util")
-local keys = require("galley.keys")
-local fold = require("galley.fold")
-local lens = require("galley.lens")
-local render = require("galley.render")
-local Surface = require("galley.Surface")
+local canvas = require("canvasdiff.canvas")
+local git = require("canvasdiff.git")
+local jump = require("canvasdiff.jump")
+local config = require("canvasdiff.config")
+local hl = require("canvasdiff.hl")
+local collect = require("canvasdiff.collect")
+local watch = require("canvasdiff.watch")
+local sidebar = require("canvasdiff.sidebar")
+local scrollbar = require("canvasdiff.scrollbar")
+local virt = require("canvasdiff.virt")
+local motions = require("canvasdiff.motions")
+local statuscol = require("canvasdiff.statuscol")
+local session = require("canvasdiff.session")
+local util = require("canvasdiff.util")
+local keys = require("canvasdiff.keys")
+local fold = require("canvasdiff.fold")
+local lens = require("canvasdiff.lens")
+local render = require("canvasdiff.render")
+local Surface = require("canvasdiff.Surface")
 
 local App = {}
 App.__index = App
@@ -92,7 +92,7 @@ local function set_winbar(st, text, win, path)
     local here = path or path_under_top(st, win)
     local file = here and ("  │  " .. render.escape_path(here)) or ""
 
-    text = ("  galley: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
+    text = ("  CanvasDiff: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
   end
   -- Skipped when nothing changed, because this runs on every WinScrolled and writing
   -- 'winbar' forces a redraw of the window. Comparing the resolved string also covers
@@ -348,7 +348,7 @@ end
 
 --- Directory of `buf`'s own file, or nil when it doesn't have one.
 --- Restricted to ordinary file buffers, so scratch buffers, terminals and
---- URI-backed buffers (oil://, fugitive://, our own galley://) never
+--- URI-backed buffers (oil://, fugitive://, our own canvasdiff://) never
 --- contribute a bogus path.
 local function buf_dir(buf)
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then
@@ -610,7 +610,7 @@ function App:open(opts)
   -- (WinScrolled never fires headlessly -- see the harness notes -- so tests drive
   -- set_winbar or this callback by hand, as they already do for hl and the minimap.)
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
-    group = vim.api.nvim_create_augroup("galley.winbar", { clear = true }),
+    group = vim.api.nvim_create_augroup("canvasdiff.winbar", { clear = true }),
     callback = function(ev)
       surface:guard(generation, function(owner)
         local event_win = tonumber(ev.match)
@@ -626,7 +626,7 @@ function App:open(opts)
     end,
   })
   vim.api.nvim_create_autocmd({ "CursorMoved", "WinLeave" }, {
-    group = "galley.winbar",
+    group = "canvasdiff.winbar",
     buffer = st.buf,
     callback = function()
       local win = vim.api.nvim_get_current_win()
@@ -649,7 +649,7 @@ function App:open(opts)
   end
 
   if config.options.session.enabled then
-    local aug = vim.api.nvim_create_augroup("galley.session", { clear = true })
+    local aug = vim.api.nvim_create_augroup("canvasdiff.session", { clear = true })
     vim.api.nvim_create_autocmd("VimLeavePre", {
       group = aug,
       callback = function()
@@ -673,7 +673,7 @@ function App:open(opts)
   -- Deferred and re-checked, because another window in this tabpage may still be
   -- showing the canvas -- and because doing window work from inside WinClosed is
   -- fragile (the same reason sidebar.lua schedules its own).
-  local close_aug = vim.api.nvim_create_augroup("galley.close", { clear = true })
+  local close_aug = vim.api.nvim_create_augroup("canvasdiff.close", { clear = true })
   vim.api.nvim_create_autocmd("BufWinEnter", {
     group = close_aug,
     buffer = st.buf,
@@ -803,7 +803,7 @@ end
 --- keeps it cached/hidden, which is what makes reopening cheap.
 ---
 --- Acts on every window in this tabpage showing the canvas, not just the
---- current one. Restricting it to the current window meant `:Galley close`
+--- current one. Restricting it to the current window meant `:CanvasDiff close`
 --- from a neighbouring split was a silent no-op that read as the plugin being
 --- broken. Surface records a landing per host, so views in different tabs
 --- return to their own buffers rather than inheriting another window's history.
@@ -996,7 +996,7 @@ end
 --- Point the canvas at a different comparison, opening it if it isn't showing.
 ---
 --- Idempotent, which is the whole point: commands get put inside user mappings, and
---- `:Galley unstaged` must always land unstaged. A toggle in a mapping is a coin
+--- `:CanvasDiff unstaged` must always land unstaged. A toggle in a mapping is a coin
 --- flip. Opening rather than warning is likewise the only sensible reading of a
 --- command that names a state.
 function App:set_lens(l)
@@ -1053,7 +1053,7 @@ function App:set_branch(ref)
 end
 
 --- Set the diff base to "HEAD" or "index" -- the older two-value vocabulary, which
---- `:Galley all` / `:Galley unstaged` still speak.
+--- `:CanvasDiff all` / `:CanvasDiff unstaged` still speak.
 function App:set_base(base)
   return self:set_lens(lens.from_base(base))
 end

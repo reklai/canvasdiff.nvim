@@ -1,11 +1,11 @@
-local canvas = require("galley.canvas")
-local config = require("galley.config")
-local keys = require("galley.keys")
-local fold = require("galley.fold")
-local render = require("galley.render")
-local model = require("galley.model")
-local lens = require("galley.lens")
-local util = require("galley.util")
+local canvas = require("canvasdiff.canvas")
+local config = require("canvasdiff.config")
+local keys = require("canvasdiff.keys")
+local fold = require("canvasdiff.fold")
+local render = require("canvasdiff.render")
+local model = require("canvasdiff.model")
+local lens = require("canvasdiff.lens")
+local util = require("canvasdiff.util")
 
 local S = {}
 
@@ -121,7 +121,7 @@ function S.render_lines(entries)
   return lines
 end
 
-local NS = vim.api.nvim_create_namespace("galley.sidebar")
+local NS = vim.api.nvim_create_namespace("canvasdiff.sidebar")
 local next_lease_id = 0
 local next_view_id = 0
 local next_mark_id = 0
@@ -138,11 +138,11 @@ local WINDOW_OPTIONS = {
 }
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleySidebarDir", {
+  vim.api.nvim_set_hl(0, "CanvasDiffSidebarDir", {
     link = "Directory",
     default = true,
   })
-  vim.api.nvim_set_hl(0, "GalleySidebarActive", {
+  vim.api.nvim_set_hl(0, "CanvasDiffSidebarActive", {
     link = "Visual",
     default = true,
   })
@@ -513,7 +513,7 @@ local function set_active(lease, view, section_i, path)
 
   local previous = view.active_mark
   local id = place_mark(lease, view, best, 0, {
-    line_hl_group = "GalleySidebarActive",
+    line_hl_group = "CanvasDiffSidebarActive",
     priority = 100,
   })
   if not id then
@@ -587,7 +587,7 @@ local function refresh_view(lease, view, observed)
     for row, entry in ipairs(entries) do
       if entry.kind == "dir" then
         local id = place_mark(lease, view, row - 1, 0, {
-          line_hl_group = "GalleySidebarDir",
+          line_hl_group = "CanvasDiffSidebarDir",
           priority = 90,
         })
         if id then
@@ -879,7 +879,7 @@ local function create_view(lease, tab, host_win, observed)
       error("sidebar open was superseded while creating a buffer", 0)
     end
     view.buf = buf
-    vim.api.nvim_buf_set_name(buf, ("galley://sidebar/%d/%d"):format(lease.id, view.id))
+    vim.api.nvim_buf_set_name(buf, ("canvasdiff://sidebar/%d/%d"):format(lease.id, view.id))
     vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
     vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
     vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
@@ -1244,7 +1244,7 @@ function S.open(state, opts, callbacks)
     opts = opts,
     callbacks = callbacks or {},
     width = opts.width or 32,
-    group_name = "galley.sidebar." .. next_lease_id,
+    group_name = "canvasdiff.sidebar." .. next_lease_id,
     autocmd_ids = {},
     views_by_tab = {},
     views_by_win = {},
