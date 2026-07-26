@@ -2,7 +2,7 @@
 
 Date: 2026-07-27
 
-Implementation checkpoint: `1d1ece1`
+Implementation checkpoint: `55e7be9`
 
 This is a stopping-point handoff, not a completion claim. The original goal
 remains the full [CanvasDiff migration and million-line journey](2026-07-26-canvasdiff-migration.md),
@@ -34,50 +34,40 @@ Keep these decisions fixed unless the product direction is explicitly changed:
 
 ## Exact checkpoint state
 
-At `1d1ece1`, the implementation tree was clean and the full suite passed
-`653/653`. Section 1 of the remaining implementation order below -- emptying
-the architecture ledger -- is **done**. `test/architecture/rules.lua` now has
-`R.legacy_paths = {}`, and that is a gate rather than a milestone: nothing
-classifies as legacy any more, so a new flat module under `lua/canvasdiff/`
-fails the scan for having no architectural owner.
+At `55e7be9`, the implementation tree was clean and the full suite passed
+`668/668`. Sections 1 and 2 below are **done**, and the ingestion half of
+section 3 is done. Sections 4 to 7 have not been started.
 
 Commits since the previous checkpoint:
 
-- `dafa45a` -- highlighter leases are independent: weak-keyed identity, and a
-  hook chain that splices correctly on out-of-order teardown.
-- `24e5a5c` -- `canvasdiff.hl` becomes `canvasdiff.ui.highlight`.
-- `2d869a2` -- `canvasdiff.sidebar` becomes `canvasdiff.ui.sidebar`, with
-  unforgeable lease identity.
-- `801bb25` -- the status column dispatches per window and becomes
-  `canvasdiff.ui.status_column`. Three real concurrency defects fixed; the
-  commit message names them.
-- `8e3b1bd` -- `canvasdiff.cmd` becomes `canvasdiff.input.command`, returning
-  plans that App executes and presents.
-- `f41da90` -- `canvasdiff.jump` becomes `canvasdiff.input.jump` with
-  per-Surface excursion stores; `util.lua` deleted; ledger empty.
+- `dafa45a`, `24e5a5c` -- highlighter leases are independent, and the owner
+  moves to `canvasdiff.ui.highlight`.
+- `2d869a2` -- the sidebar moves to `canvasdiff.ui.sidebar` with unforgeable
+  lease identity.
+- `801bb25` -- the status column dispatches per window and moves to
+  `canvasdiff.ui.status_column`. Three real concurrency defects fixed.
+- `8e3b1bd` -- `canvasdiff.input.command` returns plans App executes.
+- `f41da90` -- `canvasdiff.input.jump` owns excursions per Surface;
+  `util.lua` deleted; the architecture ledger is empty.
 - `1d1ece1` -- tests grouped by intent; `docs/architecture.md` written.
+- `0ec79e8` -- two reviews can be open at once, through the production path.
+- `50d3cac` -- fault tests build second reviews with `canvas.open`.
+- `851d2c0` -- collection streams one file at a time.
+- `55e7be9` -- a section can release both file sides and still fingerprint
+  and render.
 
-Identity migration is done. Every domain boundary is established and enforced,
-and `docs/architecture.md` is the contributor-facing statement of all of it.
+The architecture ledger is empty and that is a gate, not a milestone:
+nothing classifies as legacy any more, so a new flat module under
+`lua/canvasdiff/` fails the scan for having no architectural owner.
 
-Important interim constraints that REMAIN:
+Interim constraints that REMAIN:
 
-- The root facade owns one App and App owns only `app.surface`.
-- Production still enters the eager `canvas.open` path. `Canvas.lua` owns one
-  module-global `canvas_buf` named `canvasdiff://canvas`. This is now the
-  single largest remaining bottleneck: two fault-suite files build a second
-  review by calling `canvas.render_all` on a buffer of their own, precisely
-  because `canvas.open` cannot express two.
-- The current lifecycle suite deliberately shares that buffer and Surface
-  across tabs. This is useful interim coverage, not satisfaction of the final
-  independent-buffer/independent-Surface contract.
-- Projection and Scheduler are exposed by the canvas facade and heavily tested,
-  but App/Surface do not yet own them in the production open path.
-- Source collection and model building still synchronously materialize whole
-  section texts. Streaming patch ingestion is not yet the production path.
-- `Surface` still deletes the fixed `canvasdiff.session`, `canvasdiff.close`
-  and `canvasdiff.winbar` groups by name. Every controller group is per-lease
-  now; these three are not.
+- Production still enters the eager `canvas.open` path. Nothing calls
+  `diff.release_text` yet, and Surface owns no Projection or Scheduler.
+- Projection and Scheduler are exposed by the canvas facade and heavily
+  tested, but no production code creates one.
+- The root facade owns one App; App now indexes many Surfaces, one per
+  canvas buffer.
 
 The executable source of truth is `test/architecture/rules.lua`. Never add to
 `R.legacy_paths` or broaden `legacy_ceiling`.
@@ -101,39 +91,65 @@ what the remaining sections will hit:
 - Attach reads one synchronous snapshot. When it runs inside another window's
   creation event that snapshot can already be stale, and nothing will say so.
 
-### 2. Make the production owner graph multi-Surface
+### 2. Make the production owner graph multi-Surface -- DONE at `0ec79e8`
 
-After the controller ledger is empty, remove the one-App/one-buffer bottleneck:
+App indexes reviews by their own canvas buffer, `Canvas.open` creates a
+distinct `canvasdiff://canvas/<n>` per review, and the session/close/winbar
+groups carry the Surface id. Which review a command acts on is answered by
+the window you are in, falling back to the most recently opened live review.
+`test/integration/test_concurrent_reviews.lua` drives two repositories, two
+windows, independent mutation, per-repo session files, and closing in both
+orders through `require("canvasdiff")` alone.
 
-1. Let App index live Surfaces by exact canvas-buffer identity instead of one
-   `app.surface`.
-2. Make Canvas create/own distinct buffers rather than finding one process-wide
-   `canvasdiff://canvas`. Give every buffer a unique stable internal name.
-3. Preserve the intended sharing rule: splits/tabs showing the same canvas
-   buffer share one Surface; distinct canvas buffers have distinct models,
-   controllers, generations, sessions, and teardown.
-4. Replace fixed `canvasdiff.session`, `canvasdiff.close`, and
-   `canvasdiff.winbar` groups with unique Surface-owned resources and exact
-   deletion. A stale Surface must not clear a peer's group.
-5. Add production-reachable tests that open two reviews concurrently, mutate
-   each independently, close them in both orders, and prove no state, callback,
-   option, buffer, or controller crosses ownership.
+Two findings worth carrying forward:
 
-Do not reinterpret the current cross-tab shared-buffer lifecycle tests as this
-gate; retain them alongside the new distinct-buffer cases.
+- A replacement review has its own buffer, so inheriting a host window is no
+  longer enough to keep the review visible in it. Hosts showing the retired
+  canvas must be moved onto the new one.
+- Window adoption was wrong in a way one review could never reveal. A window
+  being CREATED beside a canvas view transiently displays that canvas, and
+  stays on it across WinNew, BufWinEnter, WinEnter and WinResized. Adoption
+  is now provisional until the event loop turns -- a second synchronous
+  sighting is NOT enough, and that was tried first.
 
-### 3. Put paging and streaming on the production path
+### 3. Put paging and streaming on the production path -- PARTLY DONE
 
-Replace eager `canvas.open` ownership in App/Surface with the logical page
-store, Projection, and Scheduler. Surface must own and dispose the exact
-projection/scheduler instances, activity must reset the bounded idle scheduler,
-and small canvases may use eager rendering only as a measured optimization
-behind the same logical-text contract.
+The ingestion half is done at `851d2c0` and `55e7be9`:
 
-Before attempting million-row acceptance, make patch ingestion incremental.
-The current source/model path holds whole old/new texts and synchronously builds
-the complete section list, so page-backed display alone cannot meet the
-end-to-end memory and responsiveness goal.
+- `source.file_stream` and `source.section_stream` read one file's two sides
+  at a time. Planning (ref resolution, the ref-relative diff, the porcelain
+  status merge, path ordering) is one bounded round of git plumbing that
+  reads no content at all. `files` and `sections` are the eager consumers.
+- `diff.release_text` drops a section's two sides. Its fingerprint is taken
+  at build time and stored, so "did this file change" outlives the text.
+  Highlighting asks its owner for a released side; App answers through the
+  source boundary, and a missing, throwing or non-string answer yields no
+  treesitter marks rather than a wrong highlight.
+
+What REMAINS, and what makes it large:
+
+1. Nothing calls `release_text` in production, because nothing yet consumes
+   sections incrementally -- `App:open` still collects the whole list.
+2. Surface owns no Projection or Scheduler. It must own and dispose exact
+   instances, and activity must call `Scheduler:touch()`.
+3. The real work: `Projection` renders a BLANK skeleton buffer and emits
+   ephemeral decoration through a decoration provider. The entire existing
+   display stack -- section anchors as extmarks, `section_rows`, fold and
+   collapse splices, `replace_section`, the highlighter's per-section
+   extmarks, the sidebar's row mapping, the status column, the scrollbar,
+   session view restore, and hunk/file motions -- assumes real buffer text at
+   real buffer rows. A page-backed canvas needs a counterpart for each of
+   those against LOGICAL rows.
+
+   This is why the journey says "behind the same logical-text contract": the
+   seam to build first is one interface (`row_count`, `row`, `rows`,
+   `export`) that both the eager `Canvas` and a paged canvas satisfy, with
+   App/Surface talking only to it. Introducing that seam while only the eager
+   implementation exists is the next tractable commit; the paged
+   implementation follows it.
+
+4. `PageList.from_iterator` is the ingestion entry point for step 3 -- it
+   takes exactly the `next_row` shape `section_stream` can be adapted into.
 
 ### 4. Close the logical-text and compaction gates
 
@@ -257,9 +273,13 @@ fact here disagrees with executable tests or `test/architecture/rules.lua`,
 the executable contract wins and this handoff should be corrected in the same
 commit as the discovery.
 
-The next slice is section 2: give App a Surface index keyed by exact canvas
-buffer, and make `Canvas.open` create distinct, uniquely named buffers instead
-of resolving one process-wide `canvasdiff://canvas`. The hand-built second
-canvas states in `test/fault/test_highlight.lua` and
-`test/fault/test_status_column.lua` exist only because the production path
-cannot express two reviews; they should collapse into it once it can.
+The next slice is the logical-text seam described under section 3: one
+interface both the eager `Canvas` and a page-backed canvas satisfy, with
+App and Surface talking only to it. Build it with the eager implementation
+alone first, so the tree stays green, then add the paged implementation and
+Surface's ownership of the Projection and Scheduler behind it.
+
+Sections 4 to 7 are untouched and each is substantial: the logical-text and
+compaction oracles, a million-row performance lane with measured RSS and
+latency budgets, 10,000 deterministic chaos actions across at least three
+seeds, and live acceptance evidence checked into `docs/verification/`.
