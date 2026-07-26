@@ -310,10 +310,11 @@ with this, then changed it".
 > spelling, and `--cached` means the same thing in git. The flag form reported
 > an error before `staged` existed; it now points at the word.
 
-An argument that isn't one of those words is treated as a revision spec
-(`:CanvasDiff main...HEAD`). Revision mode isn't implemented yet, so it says so and
-does nothing — the grammar is reserved now so that adding it later won't be a
-breaking change.
+A bare revision such as `:CanvasDiff main` is a supported branch lens: it
+shows the editable worktree against that ref. A commit range such as
+`:CanvasDiff main...HEAD` would put commits on both sides and make the canvas
+read-only, so ranges are rejected with a message that points back to the
+supported bare-ref form.
 
 If the current directory isn't inside a git repository, `:CanvasDiff open`
 notifies you and does nothing further (it never errors).

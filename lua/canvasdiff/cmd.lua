@@ -129,8 +129,9 @@ end
 
 --- Completion candidates for `arglead`. Pure.
 ---
---- Refs are deliberately NOT offered yet: completing branch names for a mode
---- that then reports "not implemented" is worse than not completing them.
+--- Bare refs are supported, but refs are deliberately NOT offered yet because
+--- branch-name enumeration/completion has not been implemented. Fixed command
+--- words remain complete and deterministic in the meantime.
 function C.complete(arglead)
   local out = {}
   for _, c in ipairs(C.candidate_order) do

@@ -93,9 +93,9 @@ T["cmd_complete filters by prefix and offers every word"] = function()
   H.eq(cmd.complete("re"), { "refresh" })
 end
 
-T["cmd_complete offers no refs while revision mode is unimplemented"] = function()
-  -- Completing branch names for a mode that then refuses is worse than not
-  -- completing them; this pins that until open_rev exists.
+T["cmd_complete omits refs until branch completion exists"] = function()
+  -- Bare refs work, but branch enumeration is not part of completion yet.
+  -- Until it is, every candidate must remain one of the fixed command words.
   for _, c in ipairs(cmd.complete("")) do
     assert(cmd.words[c], "completion offered '" .. c .. "', which is not a known word")
   end
