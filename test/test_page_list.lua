@@ -53,6 +53,10 @@ T["page_list_ empty input owns no phantom page"] = function()
     generation = 0,
     row_count = 0,
     page_count = 0,
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
     decoded_bytes = 0,
     storage_bytes = 0,
     oversized_pages = 0,
@@ -428,6 +432,7 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
   local pages = list._pages
   local starts = list._starts
   local nodes = list_nodes(list)
+  local lease = assert(list:pin_range(2, 1))
   local stats = list:stats()
   local next_page_id = list._next_page_id
 
@@ -460,6 +465,8 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
   for index, node in ipairs(nodes) do
     assert(list._pages[index] == node)
   end
+  H.eq(list:pin_is_current(lease), true)
+  H.eq(list:pin_count(nodes[2]), 1)
   H.eq(PageList.validate(list), true)
 
   Page.create = function()
@@ -479,6 +486,9 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
   for index, node in ipairs(nodes) do
     assert(list._pages[index] == node)
   end
+  H.eq(list:pin_is_current(lease), true)
+  H.eq(list:pin_count(nodes[2]), 1)
+  H.eq(list:release_pin(lease), true)
   H.eq(PageList.validate(list), true)
 end
 
@@ -785,6 +795,476 @@ T["page_list_ splice rollback survives poisoned standard formatting"] =
     H.eq(PageList.validate(list), true)
   end
 
+T["page_list_ pin ranges count exact overlapping concrete pages"] = function()
+  local list = PageList.new({
+    "a", "b", "c", "d", "e", "f", "g", "h",
+  }, { max_rows = 2 })
+  local nodes = list_nodes(list)
+
+  local wide = assert(list:pin_range(1, 4, 0))
+  local narrow = assert(list:pin_range(2, 2, 0))
+  local empty = assert(list:pin_range(8, 0, 0))
+
+  H.eq(list:pin_count(nodes[1]), 1)
+  H.eq(list:pin_count(nodes[2]), 2)
+  H.eq(list:pin_count(nodes[3]), 1)
+  H.eq(list:pin_count(nodes[4]), 0)
+  H.eq(list:pin_stats(), {
+    active_leases = 3,
+    pin_references = 4,
+    current_pinned_pages = 3,
+    retired_pinned_pages = 0,
+  })
+  H.eq(list:pin_is_current(wide), true)
+  H.eq(list:pin_is_current(narrow), true)
+  H.eq(list:pin_is_current(empty), true)
+  H.eq(PageList.validate(list), true)
+
+  H.eq(list:release_pin(narrow), true)
+  H.eq(list:pin_count(nodes[2]), 1)
+  H.eq(list:release_pin(empty), true)
+  H.eq(list:release_pin(wide), true)
+  H.eq(list:pin_stats(), {
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  })
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ pin acquisition is generation fenced and atomic"] = function()
+  local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
+  local stats = list:pin_stats()
+
+  local lease, err = list:pin_range(0, 1, 1)
+  H.eq(lease, nil)
+  assert(err:match("generation changed"), err)
+  H.eq(list:pin_range(-1, 1), nil)
+  H.eq(list:pin_range(3, 1), nil)
+  H.eq(list:pin_range(0, 4), nil)
+  H.eq(list:pin_range(0, 1, math.huge), nil)
+  H.eq(list:pin_stats(), stats)
+
+  local node = assert(list:page_at(2))
+  lease = assert(list:pin_range(2, 1, list:generation()))
+  H.eq(list:splice(0, 0, { "x" }), true)
+  H.eq(list:pin_is_current(lease), false)
+  H.eq(list:pin_count(node), 1)
+  H.eq(list:pin_stats().retired_pinned_pages, 0)
+  H.eq(list:pin_range(0, 1, 0), nil)
+  H.eq(list:release_pin(lease), true)
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ pin generation authorization is private"] = function()
+  local list = PageList.new({ "a" }, { max_rows = 1 })
+  H.eq(list:splice(1, 0, { "b" }), true)
+  local lease = assert(list:pin_range(0, 1, 1))
+  local stats = list:pin_stats()
+
+  list._generation = 0
+  local acquired, acquire_err = list:pin_range(0, 1, 0)
+  H.eq(acquired, nil)
+  assert(acquire_err:match("invalid metadata"), acquire_err)
+  local current, current_err = list:pin_is_current(lease)
+  H.eq(current, nil)
+  assert(current_err:match("generation metadata is inconsistent"), current_err)
+  H.eq(list:pin_stats(), stats)
+
+  H.eq(list:release_pin(lease), true)
+  H.eq(list:pin_stats(), {
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  })
+
+  list._generation = 2
+  local ok, validate_err = PageList.validate(list)
+  H.eq(ok, nil)
+  assert(validate_err:match("pin generation is inconsistent"), validate_err)
+
+  list._generation = 1
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ generation fences never invoke cdata equality"] = function()
+  local ffi = require("ffi")
+  ffi.cdef([[
+    typedef struct {
+      int value;
+    } canvasdiff_pin_generation_probe;
+  ]])
+
+  local list = PageList.new({ "a" })
+  local old = assert(list:pin_range(0, 1, 0))
+  local stats = list:pin_stats()
+  local calls = 0
+  local Probe = ffi.metatype("canvasdiff_pin_generation_probe", {
+    __eq = function()
+      calls = calls + 1
+      if calls == 2 then
+        list._generation = 0
+        assert(list:release_pin(old))
+      end
+      return true
+    end,
+  })
+  list._generation = Probe(0)
+
+  local lease, err = list:pin_range(0, 1, 0)
+  H.eq(lease, nil)
+  assert(err:match("invalid metadata"), err)
+  H.eq(calls, 0)
+  H.eq(list:pin_stats(), stats)
+
+  local current, current_err = list:pin_is_current(old)
+  H.eq(current, nil)
+  assert(current_err:match("generation metadata is inconsistent"), current_err)
+  H.eq(calls, 0)
+  H.eq(list:pin_stats(), stats)
+
+  list._generation = 0
+  H.eq(list:release_pin(old), true)
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ pin acquisition rejects public page reordering atomically"] =
+  function()
+    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local first = assert(list:page_at(0))
+    local second = assert(list:page_at(1))
+    local stats = list:pin_stats()
+
+    list._pages[1], list._pages[2] = second, first
+    local lease, err = list:pin_range(0, 1)
+    H.eq(lease, nil)
+    assert(err:match("disagrees with public page metadata"), err)
+    H.eq(list:pin_stats(), stats)
+    H.eq(list:pin_count(first), 0)
+    H.eq(list:pin_count(second), 0)
+
+    local ok, validate_err = PageList.validate(list)
+    H.eq(ok, nil)
+    assert(validate_err:match("trusted pin layout is inconsistent"), validate_err)
+
+    list._pages[1], list._pages[2] = first, second
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ pin lookup cannot execute hostile public prefixes"] = function()
+  local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+  local original = list._starts[1]
+  local called = false
+  list._starts[1] = setmetatable({}, {
+    __le = function()
+      called = true
+      list._starts[1] = original
+      assert(list:splice(2, 0, { "c" }))
+      return true
+    end,
+  })
+
+  local lease, err = list:pin_range(0, 1, 0)
+  H.eq(lease, nil)
+  assert(err:match("disagrees with public page metadata"), err)
+  H.eq(called, false)
+  H.eq(list:generation(), 0)
+  H.eq(list:pin_stats(), {
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  })
+
+  list._starts[1] = original
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ pin lookup does not invoke cdata prefix equality"] = function()
+  local ffi = require("ffi")
+  ffi.cdef([[
+    typedef struct {
+      int value;
+    } canvasdiff_pin_prefix_probe;
+  ]])
+
+  local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+  local first = assert(list:page_at(0))
+  local second = assert(list:page_at(1))
+  local called = false
+  local Probe = ffi.metatype("canvasdiff_pin_prefix_probe", {
+    __eq = function()
+      called = true
+      list._starts[1] = 0
+      list._pages[1] = second
+      return true
+    end,
+  })
+  list._starts[1] = Probe(0)
+
+  local lease, err = list:pin_range(0, 1, 0)
+  H.eq(lease, nil)
+  assert(err:match("disagrees with public page metadata"), err)
+  H.eq(called, false)
+  H.eq(list:pin_count(first), 0)
+  H.eq(list:pin_count(second), 0)
+
+  list._starts[1] = 0
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ private prefixes prevent wrong-node pin routing"] = function()
+  local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+  local first = assert(list:page_at(0))
+  local second = assert(list:page_at(1))
+  list._starts[2] = 0
+
+  local lease = assert(list:pin_range(0, 1, 0))
+  H.eq(list:pin_count(first), 1)
+  H.eq(list:pin_count(second), 0)
+  H.eq(list:release_pin(lease), true)
+
+  local rejected, err = list:pin_range(1, 1, 0)
+  H.eq(rejected, nil)
+  assert(err:match("disagrees with public page metadata"), err)
+  H.eq(list:pin_stats(), {
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  })
+
+  list._starts[2] = 1
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ removed pinned pages retire until every lease releases"] =
+  function()
+    local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
+    local node = assert(list:page_at(1))
+    local first = assert(list:pin_range(1, 1))
+    local second = assert(list:pin_range(1, 1))
+
+    H.eq(list:splice(1, 1, {}), true)
+    H.eq(list:rows(0, 2), { "a", "c" })
+    H.eq(list:pin_count(node), 2)
+    H.eq(list:pin_is_current(first), false)
+    H.eq(list:pin_is_current(second), false)
+    H.eq(list:pin_stats(), {
+      active_leases = 2,
+      pin_references = 2,
+      current_pinned_pages = 0,
+      retired_pinned_pages = 1,
+    })
+    H.eq(PageList.validate(list), true)
+
+    H.eq(list:release_pin(first), true)
+    H.eq(list:pin_count(node), 1)
+    H.eq(list:pin_stats().retired_pinned_pages, 1)
+    H.eq(list:release_pin(second), true)
+    H.eq(list:pin_count(node), nil)
+    H.eq(list:pin_stats(), {
+      active_leases = 0,
+      pin_references = 0,
+      current_pinned_pages = 0,
+      retired_pinned_pages = 0,
+    })
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ validation fully checks retired pinned nodes"] = function()
+  local cases = {
+    {
+      mutate = function(node)
+        node.id = -1
+      end,
+      error = "invalid id",
+    },
+    {
+      mutate = function(node)
+        node.id = 2
+      end,
+      error = "duplicated",
+    },
+    {
+      mutate = function(node)
+        node.created_generation = 99
+      end,
+      error = "creation generation",
+    },
+    {
+      mutate = function(node)
+        node.page = Page.new({ "evil" }, { max_rows = 1 })
+      end,
+      error = "not owned",
+    },
+    {
+      mutate = function(node)
+        node.page.payload = "evil"
+      end,
+      error = "retired page 1 is invalid",
+    },
+    {
+      mutate = function(node)
+        setmetatable(node, {})
+      end,
+      error = "plain table",
+    },
+  }
+
+  for _, case in ipairs(cases) do
+    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local node = assert(list:page_at(0))
+    local lease = assert(list:pin_range(0, 1))
+    H.eq(list:splice(0, 1, {}), true)
+    case.mutate(node)
+
+    local ok, err = PageList.validate(list)
+    H.eq(ok, nil)
+    assert(err:match(case.error), err)
+
+    H.eq(list:release_pin(lease), true)
+    H.eq(PageList.validate(list), true)
+  end
+end
+
+T["page_list_ pin leases use exact private list identity and release once"] =
+  function()
+    local left = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local right = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local node = assert(left:page_at(0))
+    local lease = assert(left:pin_range(0, 1))
+    local forged = setmetatable({}, {
+      __eq = function()
+        return true
+      end,
+    })
+
+    H.eq(right:release_pin(lease), nil)
+    H.eq(left:release_pin(forged), nil)
+    H.eq(left:pin_count(node), 1)
+
+    lease.generation = -1
+    setmetatable(lease, {
+      __eq = function()
+        return true
+      end,
+    })
+    H.eq(left:pin_is_current(lease), true)
+    H.eq(PageList.validate(left), true)
+    H.eq(left:release_pin(lease), true)
+    H.eq(left:release_pin(lease), nil)
+    H.eq(left:pin_is_current(lease), false)
+    H.eq(left:pin_count(node), 0)
+    H.eq(PageList.validate(left), true)
+    H.eq(PageList.validate(right), true)
+  end
+
+T["page_list_ private splice fence protects pin state from callbacks"] =
+  function()
+    local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
+    local pinned_node = assert(list:page_at(2))
+    local lease = assert(list:pin_range(2, 1))
+    local original = Page.create
+    local attempts = 0
+
+    Page.create = function(...)
+      attempts = attempts + 1
+      rawset(list, "_splice_active", nil)
+      local acquired, acquire_err = list:pin_range(0, 1)
+      H.eq(acquired, nil)
+      assert(acquire_err:match("splice is already active"), acquire_err)
+      local released, release_err = list:release_pin(lease)
+      H.eq(released, nil)
+      assert(release_err:match("splice is already active"), release_err)
+      local nested, nested_err = list:splice(0, 0, { "nested" })
+      H.eq(nested, nil)
+      assert(nested_err:match("splice is already active"), nested_err)
+      rawset(list, "_splice_active", true)
+      return original(...)
+    end
+    local called, change, err = pcall(
+      PageList.splice,
+      list,
+      0,
+      0,
+      { "x" }
+    )
+    Page.create = original
+
+    assert(called, change)
+    assert(change, err)
+    H.eq(attempts, 1)
+    H.eq(list:rows(0, 4), { "x", "a", "b", "c" })
+    H.eq(list:pin_count(pinned_node), 1)
+    H.eq(list:pin_is_current(lease), false)
+    H.eq(list:release_pin(lease), true)
+    H.eq(rawget(list, "_splice_active"), nil)
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ splice rollback restores retired pinned page graphs"] =
+  function()
+    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local node = assert(list:page_at(0))
+    local page = node.page
+    local node_id = node.id
+    local lease = assert(list:pin_range(0, 1))
+    H.eq(list:splice(0, 1, {}), true)
+    local stats = list:stats()
+    local original = Page.create
+
+    Page.create = function(...)
+      node.id = -1
+      page.payload = "corrupt"
+      setmetatable(node, {})
+      return original(...)
+    end
+    local called, change, err = pcall(
+      PageList.splice,
+      list,
+      1,
+      0,
+      { "x" }
+    )
+    Page.create = original
+
+    assert(called, change)
+    H.eq(change, nil)
+    assert(err:match("mutated the source PageList"), err)
+    H.eq(list:rows(0, 1), { "b" })
+    H.eq(list:stats(), stats)
+    H.eq(node.id, node_id)
+    assert(node.page == page)
+    H.eq(page.payload, "a")
+    H.eq(getmetatable(node), nil)
+    H.eq(list:pin_count(node), 1)
+    H.eq(list:release_pin(lease), true)
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ retired pin lifetime ends on exact release"] = function()
+  local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+  local node = assert(list:page_at(0))
+  local lease = assert(list:pin_range(0, 1))
+  local weak = setmetatable({ node }, { __mode = "v" })
+
+  H.eq(list:splice(0, 1, {}), true)
+  node = nil
+  collectgarbage("collect")
+  collectgarbage("collect")
+  assert(weak[1], "an active retired pin must retain its exact node")
+
+  H.eq(list:release_pin(lease), true)
+  lease = nil
+  collectgarbage("collect")
+  collectgarbage("collect")
+  H.eq(weak[1], nil, "release must drop the retired node lifetime")
+  H.eq(PageList.validate(list), true)
+end
+
 T["page_list_ a live node cannot lose its Page claim through GC"] = function()
   local list = PageList.new({ "a" })
   local node = assert(list:page_at(0))
@@ -870,6 +1350,11 @@ T["page_list_ trusted dispatch rejects PageList method shadows"] = function()
     "rows",
     "splice",
     "stats",
+    "pin_range",
+    "release_pin",
+    "pin_is_current",
+    "pin_count",
+    "pin_stats",
   }
   for _, method in ipairs(methods) do
     local list = PageList.new({ "a", "b", "c" })
@@ -1081,6 +1566,119 @@ T["page_list_fuzz_ splice matches an eager oracle and stable id registry"] = fun
       end
     end
   end
+end
+
+T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
+  local oracle = { "a", "b", "c", "d", "e", "f" }
+  local list = PageList.new(oracle, { max_rows = 3, max_bytes = 12 })
+  local leases = {}
+  local random_state = 32452843
+  local function random0(limit)
+    random_state = (random_state * 48271) % 2147483647
+    return random_state % limit
+  end
+  local function range_nodes(start0, count)
+    if count == 0 then
+      return {}
+    end
+    local _, _, first_page0 = assert(list:locate(start0))
+    local _, _, last_page0 = assert(list:locate(start0 + count - 1))
+    local nodes = {}
+    for page_index0 = first_page0, last_page0 do
+      nodes[#nodes + 1] = assert(list:page_at(page_index0))
+    end
+    return nodes
+  end
+
+  for iteration = 1, 600 do
+    local action = random0(8)
+    if action <= 3 then
+      local start0 = random0(#oracle + 1)
+      local limit = math.min(10, #oracle - start0)
+      local count = random0(limit + 1)
+      local generation = list:generation()
+      leases[#leases + 1] = {
+        lease = assert(list:pin_range(start0, count, generation)),
+        nodes = range_nodes(start0, count),
+        generation = generation,
+      }
+    elseif action <= 5 and #leases > 0 then
+      local index = random0(#leases) + 1
+      H.eq(list:release_pin(leases[index].lease), true)
+      table.remove(leases, index)
+    else
+      local start0 = random0(#oracle + 1)
+      local delete_count = random0(
+        math.min(3, #oracle - start0) + 1
+      )
+      local insert_count = random0(4)
+      local inserted = {}
+      for index = 1, insert_count do
+        inserted[index] = ("p%d-%d"):format(iteration, index)
+      end
+      H.eq(list:splice(start0, delete_count, inserted), true)
+      oracle = oracle_splice(
+        oracle,
+        start0,
+        delete_count,
+        inserted
+      )
+      H.eq(list:rows(0, #oracle), oracle)
+    end
+
+    local current = {}
+    for _, node in ipairs(list_nodes(list)) do
+      current[node] = true
+    end
+    local expected = {}
+    local references = 0
+    for _, record in ipairs(leases) do
+      H.eq(
+        list:pin_is_current(record.lease),
+        record.generation == list:generation()
+      )
+      for _, node in ipairs(record.nodes) do
+        expected[node] = (expected[node] or 0) + 1
+        references = references + 1
+      end
+    end
+    local current_pinned = 0
+    local retired_pinned = 0
+    for node, count in pairs(expected) do
+      H.eq(list:pin_count(node), count)
+      if current[node] then
+        current_pinned = current_pinned + 1
+      else
+        retired_pinned = retired_pinned + 1
+      end
+    end
+    for node in pairs(current) do
+      H.eq(list:pin_count(node), expected[node] or 0)
+    end
+    H.eq(list:pin_stats(), {
+      active_leases = #leases,
+      pin_references = references,
+      current_pinned_pages = current_pinned,
+      retired_pinned_pages = retired_pinned,
+    })
+    H.eq(
+      PageList.validate(list),
+      true,
+      "pin invariants at randomized operation " .. iteration
+    )
+  end
+
+  while #leases > 0 do
+    H.eq(list:release_pin(leases[#leases].lease), true)
+    leases[#leases] = nil
+  end
+  H.eq(list:pin_stats(), {
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  })
+  H.eq(PageList.validate(list), true)
 end
 
 T["page_list_ validate rejects corrupt prefixes ids pages and totals"] = function()

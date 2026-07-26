@@ -27,6 +27,9 @@ local RAW_SET_METATABLE = debug.setmetatable
 local RAW_EQUAL = rawequal
 local OWNED_LISTS = setmetatable({}, { __mode = "k" })
 local NODE_LINEAGES = setmetatable({}, { __mode = "k" })
+local PIN_STATES = setmetatable({}, { __mode = "k" })
+local PIN_LEASES = setmetatable({}, { __mode = "k" })
+local SPLICE_ACTIVE = setmetatable({}, { __mode = "k" })
 local PAGE_VALIDATE = Page.validate
 local PAGE_ROW = Page.row
 local PAGE_ROWS = Page.rows
@@ -40,6 +43,40 @@ local function own(fields, lineage)
   lineage = lineage or {}
   local list = setmetatable(fields, PageList)
   OWNED_LISTS[list] = lineage
+  local current = {}
+  local trusted_pages = {}
+  local trusted_starts = {}
+  local pages = rawget(fields, "_pages")
+  if type(pages) == "table" then
+    for index = 1, #pages do
+      local node = rawget(pages, index)
+      current[node] = true
+      trusted_pages[index] = node
+    end
+  end
+  local starts = rawget(fields, "_starts")
+  if type(starts) == "table" then
+    for index = 1, #starts do
+      trusted_starts[index] = rawget(starts, index)
+    end
+  end
+  PIN_STATES[list] = {
+    token = {},
+    generation = rawget(fields, "_generation"),
+    row_count = rawget(fields, "_row_count"),
+    public_pages = pages,
+    public_starts = starts,
+    trusted_pages = trusted_pages,
+    trusted_starts = trusted_starts,
+    active = {},
+    counts = {},
+    current = current,
+    retired = {},
+    active_leases = 0,
+    pin_references = 0,
+    current_pinned_pages = 0,
+    retired_pinned_pages = 0,
+  }
   return list
 end
 
@@ -58,6 +95,11 @@ local TRUSTED_INSTANCE_METHODS = {
   "rows",
   "splice",
   "stats",
+  "pin_range",
+  "release_pin",
+  "pin_is_current",
+  "pin_count",
+  "pin_stats",
 }
 local PAGE_REPRESENTATION_FIELDS = {
   "codec",
@@ -186,6 +228,265 @@ local function dense_table(value, label)
   return count
 end
 
+local function pin_state_for(list)
+  if type(list) ~= "table" then
+    return nil, nil, "page list must be a table"
+  end
+  local lineage = OWNED_LISTS[list]
+  if not lineage or not RAW_EQUAL(RAW_METATABLE(list), PageList) then
+    return nil, nil, "page list is not an owned PageList"
+  end
+  local state = PIN_STATES[list]
+  if type(state) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(state), nil) then
+    return nil, nil, "page-list pin state is invalid"
+  end
+  return state, lineage
+end
+
+local function pin_stats_snapshot(state)
+  return {
+    active_leases = rawget(state, "active_leases"),
+    pin_references = rawget(state, "pin_references"),
+    current_pinned_pages = rawget(state, "current_pinned_pages"),
+    retired_pinned_pages = rawget(state, "retired_pinned_pages"),
+  }
+end
+
+local function validate_pin_state(
+    list,
+    lineage,
+    pages,
+    starts,
+    page_count,
+    row_count,
+    generation,
+    next_page_id,
+    max_rows,
+    max_bytes,
+    seen_ids,
+    seen_pages
+)
+  local state = PIN_STATES[list]
+  if type(state) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(state), nil) then
+    return nil, "page-list pin state is invalid"
+  end
+
+  local token = rawget(state, "token")
+  local pin_generation = rawget(state, "generation")
+  local pin_row_count = rawget(state, "row_count")
+  local public_pages = rawget(state, "public_pages")
+  local public_starts = rawget(state, "public_starts")
+  local trusted_pages = rawget(state, "trusted_pages")
+  local trusted_starts = rawget(state, "trusted_starts")
+  local active = rawget(state, "active")
+  local counts = rawget(state, "counts")
+  local current = rawget(state, "current")
+  local retired = rawget(state, "retired")
+  if type(token) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(token), nil)
+      or type(active) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(active), nil)
+      or type(counts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(counts), nil)
+      or type(current) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(current), nil)
+      or type(retired) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(retired), nil) then
+    return nil, "page-list pin tables are invalid"
+  end
+  if not integer(pin_generation)
+      or pin_generation > MAX_SAFE_INTEGER
+      or pin_generation ~= generation then
+    return nil, "page-list pin generation is inconsistent"
+  end
+  if pin_row_count ~= row_count
+      or not RAW_EQUAL(public_pages, pages)
+      or not RAW_EQUAL(public_starts, starts) then
+    return nil, "page-list pin layout source is inconsistent"
+  end
+  local trusted_page_count, trusted_pages_err =
+    dense_table(trusted_pages, "trusted pin pages")
+  if trusted_page_count == nil then
+    return nil, trusted_pages_err
+  end
+  local trusted_start_count, trusted_starts_err =
+    dense_table(trusted_starts, "trusted pin starts")
+  if trusted_start_count == nil then
+    return nil, trusted_starts_err
+  end
+  if trusted_page_count ~= page_count
+      or trusted_start_count ~= page_count then
+    return nil, "page-list trusted pin layout has the wrong length"
+  end
+  for index = 1, page_count do
+    if not RAW_EQUAL(
+      rawget(trusted_pages, index),
+      rawget(pages, index)
+    ) or rawget(trusted_starts, index) ~= rawget(starts, index) then
+      return nil, "page-list trusted pin layout is inconsistent"
+    end
+  end
+
+  local expected_current = {}
+  for index = 1, trusted_page_count do
+    expected_current[rawget(trusted_pages, index)] = true
+  end
+  local current_count = 0
+  for node, present in next, current do
+    if present ~= true or not expected_current[node] then
+      return nil, "page-list current pin membership is invalid"
+    end
+    current_count = current_count + 1
+  end
+  if current_count ~= page_count then
+    return nil, "page-list current pin membership is incomplete"
+  end
+
+  local expected_counts = {}
+  local active_count = 0
+  local reference_count = 0
+  for lease, record in next, active do
+    active_count = active_count + 1
+    if type(lease) ~= "table"
+        or type(record) ~= "table"
+        or not RAW_EQUAL(RAW_METATABLE(record), nil)
+        or not RAW_EQUAL(PIN_LEASES[lease], record)
+        or not RAW_EQUAL(rawget(record, "token"), token)
+        or rawget(record, "released") ~= false then
+      return nil, "page-list active pin lease is invalid"
+    end
+    local lease_generation = rawget(record, "generation")
+    if not integer(lease_generation) or lease_generation > generation then
+      return nil, "page-list pin lease has an invalid generation"
+    end
+    local nodes = rawget(record, "nodes")
+    local node_count, nodes_err = dense_table(nodes, "pin lease nodes")
+    if node_count == nil then
+      return nil, nodes_err
+    end
+    local seen = {}
+    for index = 1, node_count do
+      local node = rawget(nodes, index)
+      if seen[node] then
+        return nil, "pin lease repeats a page node"
+      end
+      seen[node] = true
+      if not RAW_EQUAL(NODE_LINEAGES[node], lineage)
+          or (not current[node] and not retired[node]) then
+        return nil, "pin lease references an unowned page node"
+      end
+      expected_counts[node] = (expected_counts[node] or 0) + 1
+      reference_count = reference_count + 1
+    end
+  end
+
+  local current_pinned_pages = 0
+  local retired_pinned_pages = 0
+  for node, count in next, counts do
+    if not positive_integer(count)
+        or count > MAX_SAFE_INTEGER
+        or expected_counts[node] ~= count
+        or not RAW_EQUAL(NODE_LINEAGES[node], lineage) then
+      return nil, "page-list page pin count is invalid"
+    end
+    if current[node] then
+      if retired[node] ~= nil then
+        return nil, "current page node is also retired"
+      end
+      current_pinned_pages = current_pinned_pages + 1
+    else
+      if retired[node] ~= true then
+        return nil, "non-current pinned page node is not retired"
+      end
+      retired_pinned_pages = retired_pinned_pages + 1
+    end
+  end
+  for node in next, expected_counts do
+    if rawget(counts, node) == nil then
+      return nil, "page-list pin count is missing"
+    end
+  end
+
+  local retired_count = 0
+  for node, present in next, retired do
+    if present ~= true
+        or current[node]
+        or rawget(counts, node) == nil
+        or not RAW_EQUAL(NODE_LINEAGES[node], lineage) then
+      return nil, "page-list retired pin membership is invalid"
+    end
+    if type(node) ~= "table"
+        or not RAW_EQUAL(RAW_METATABLE(node), nil) then
+      return nil, "retired page node must be a plain table"
+    end
+    local node_id = rawget(node, "id")
+    local created_generation = rawget(node, "created_generation")
+    local page = rawget(node, "page")
+    if not positive_integer(node_id) then
+      return nil, "retired page node has an invalid id"
+    end
+    if seen_ids[node_id] then
+      return nil, STRING_FORMAT("retired page id %d is duplicated", node_id)
+    end
+    if node_id >= next_page_id then
+      return nil, STRING_FORMAT(
+        "retired page id %d is beyond the allocator",
+        node_id
+      )
+    end
+    if not integer(created_generation)
+        or created_generation > generation then
+      return nil, STRING_FORMAT(
+        "retired page %d has an invalid creation generation",
+        node_id
+      )
+    end
+    local page_ok, page_err = PAGE_VALIDATE(page)
+    if not page_ok then
+      return nil, STRING_FORMAT(
+        "retired page %d is invalid: %s",
+        node_id,
+        page_err
+      )
+    end
+    if seen_pages[page] then
+      return nil, STRING_FORMAT(
+        "retired page %d shares a Page object",
+        node_id
+      )
+    end
+    if not PAGE_IS_OWNED_BY(page, node) then
+      return nil, STRING_FORMAT(
+        "retired page %d is not owned by its PageList node",
+        node_id
+      )
+    end
+    if rawget(page, "max_rows") ~= max_rows
+        or rawget(page, "max_bytes") ~= max_bytes then
+      return nil, STRING_FORMAT(
+        "retired page %d uses different limits",
+        node_id
+      )
+    end
+    seen_ids[node_id] = true
+    seen_pages[page] = true
+    retired_count = retired_count + 1
+  end
+  if retired_count ~= retired_pinned_pages then
+    return nil, "page-list retired pin membership is incomplete"
+  end
+
+  if rawget(state, "active_leases") ~= active_count
+      or rawget(state, "pin_references") ~= reference_count
+      or rawget(state, "current_pinned_pages") ~= current_pinned_pages
+      or rawget(state, "retired_pinned_pages") ~= retired_pinned_pages then
+    return nil, "page-list pin totals are inconsistent"
+  end
+  return true
+end
+
 local function snapshot_table(value)
   local entries = {}
   local count = 0
@@ -246,6 +547,14 @@ local function snapshot_list_graph(list)
     local node = rawget(pages, index)
     capture(node)
     capture(rawget(node, "page"))
+  end
+  local pin_state = PIN_STATES[list]
+  local retired = pin_state and rawget(pin_state, "retired") or nil
+  if type(retired) == "table" then
+    for node in next, retired do
+      capture(node)
+      capture(rawget(node, "page"))
+    end
   end
   return snapshots
 end
@@ -339,9 +648,15 @@ local function append_page(state, rows, manifest)
   end
 
   state._next_page_id = state._next_page_id + 1
-  state._starts[#state._starts + 1] = state._row_count
+  local start0 = state._row_count
+  state._starts[#state._starts + 1] = start0
   state._pages[#state._pages + 1] = node
+  local pin_state = PIN_STATES[state]
+  pin_state.trusted_starts[#pin_state.trusted_starts + 1] = start0
+  pin_state.trusted_pages[#pin_state.trusted_pages + 1] = node
+  pin_state.current[node] = true
   state._row_count = state._row_count + rawget(page, "row_count")
+  pin_state.row_count = state._row_count
   state._decoded_bytes =
     state._decoded_bytes + rawget(page, "decoded_bytes")
   state._storage_bytes =
@@ -573,25 +888,47 @@ end
 --- Locate one zero-based logical row in O(log page_count).
 --- Returns the page node, zero-based row within that page, and zero-based page
 --- index. EOF is a range boundary, not a row, and therefore does not locate.
-local function locate(self, row0)
-  if not integer(row0) or row0 >= self._row_count then
+local function locate_layout(pages, starts, row_count, row0)
+  if not integer(row0) or not integer(row_count) or row0 >= row_count then
     return nil, "row index is outside the list"
   end
+  if type(pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(pages), nil)
+      or type(starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil) then
+    return nil, "page-list lookup metadata is invalid"
+  end
 
-  local low, high = 1, #self._starts
+  local low, high = 1, #starts
   local found = 0
   while low <= high do
     local middle = MATH.floor((low + high) / 2)
-    if self._starts[middle] <= row0 then
+    local prefix = rawget(starts, middle)
+    if not integer(prefix) then
+      return nil, "page-list lookup prefix is invalid"
+    end
+    if prefix <= row0 then
       found = middle
       low = middle + 1
     else
       high = middle - 1
     end
   end
+  if found == 0 then
+    return nil, "page-list lookup prefixes do not cover the row"
+  end
 
-  local node = self._pages[found]
-  return node, row0 - self._starts[found], found - 1
+  local node = rawget(pages, found)
+  return node, row0 - rawget(starts, found), found - 1
+end
+
+local function locate(self, row0)
+  return locate_layout(
+    rawget(self, "_pages"),
+    rawget(self, "_starts"),
+    rawget(self, "_row_count"),
+    row0
+  )
 end
 PageList.locate = locate
 
@@ -644,6 +981,271 @@ function PageList:rows(start0, count)
     end
   end
   return result
+end
+
+local function pin_record_for(state, lease)
+  if type(lease) ~= "table" then
+    return nil, "pin lease must be a table"
+  end
+  local record = PIN_LEASES[lease]
+  if not record then
+    return nil, "pin lease is not owned by a PageList"
+  end
+  if not RAW_EQUAL(rawget(record, "token"), rawget(state, "token")) then
+    return nil, "pin lease belongs to another PageList"
+  end
+  return record
+end
+
+--- Pin every concrete page intersecting the half-open logical row range.
+---
+--- This is a viewport hot path: ownership/range checks and two binary lookups
+--- are bounded by the requested range. Full graph reconciliation remains an
+--- explicit PageList.validate operation.
+function PageList:pin_range(start0, count, expected_generation)
+  local state, lineage, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  if SPLICE_ACTIVE[self]
+      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+    return nil, "page-list splice is already active"
+  end
+
+  local pin_generation = rawget(state, "generation")
+  local row_count = rawget(state, "row_count")
+  local pages = rawget(state, "trusted_pages")
+  local starts = rawget(state, "trusted_starts")
+  local public_pages = rawget(self, "_pages")
+  local public_starts = rawget(self, "_starts")
+  local public_generation = rawget(self, "_generation")
+  local public_row_count = rawget(self, "_row_count")
+  if not integer(pin_generation) or pin_generation > MAX_SAFE_INTEGER
+      or not integer(public_generation)
+      or public_generation ~= pin_generation
+      or not integer(row_count)
+      or not integer(public_row_count)
+      or public_row_count ~= row_count
+      or type(pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(pages), nil)
+      or type(starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil)
+      or type(public_pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(public_pages), nil)
+      or type(public_starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(public_starts), nil)
+      or not RAW_EQUAL(public_pages, rawget(state, "public_pages"))
+      or not RAW_EQUAL(public_starts, rawget(state, "public_starts")) then
+    return nil, "page list cannot acquire pins from invalid metadata"
+  end
+  if not RAW_EQUAL(expected_generation, nil) then
+    if not integer(expected_generation)
+        or expected_generation > MAX_SAFE_INTEGER then
+      return nil, "expected generation must be a safe non-negative integer"
+    end
+    if expected_generation ~= pin_generation then
+      return nil, "page-list generation changed before pin acquisition"
+    end
+  end
+  if not integer(start0) or not integer(count)
+      or start0 > row_count
+      or count > row_count - start0 then
+    return nil, "pin range is outside the list"
+  end
+
+  local nodes = {}
+  local seen = {}
+  if count > 0 then
+    local first, _, first_page0 =
+      locate_layout(pages, starts, row_count, start0)
+    local last, _, last_page0 =
+      locate_layout(pages, starts, row_count, start0 + count - 1)
+    if not first or not last then
+      return nil, "pin range could not resolve its page nodes"
+    end
+    for page_index0 = first_page0, last_page0 do
+      local node = rawget(pages, page_index0 + 1)
+      if type(node) ~= "table"
+          or not RAW_EQUAL(RAW_METATABLE(node), nil)
+          or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
+          or rawget(state.current, node) ~= true
+          or not PAGE_IS_OWNED_BY(rawget(node, "page"), node) then
+        return nil, "pin range resolved an invalid page node"
+      end
+      local public_prefix = rawget(public_starts, page_index0 + 1)
+      if not RAW_EQUAL(rawget(public_pages, page_index0 + 1), node)
+          or not integer(public_prefix)
+          or public_prefix ~= rawget(starts, page_index0 + 1) then
+        return nil, "pin range disagrees with public page metadata"
+      end
+      if seen[node] then
+        return nil, "pin range repeats a concrete page node"
+      end
+      seen[node] = true
+      nodes[#nodes + 1] = node
+    end
+  end
+
+  local active_leases = rawget(state, "active_leases")
+  local pin_references = rawget(state, "pin_references")
+  if not integer(active_leases) or active_leases >= MAX_SAFE_INTEGER
+      or not integer(pin_references)
+      or pin_references > MAX_SAFE_INTEGER - #nodes then
+    return nil, "page-list pin counters are exhausted"
+  end
+  for _, node in ipairs(nodes) do
+    local node_count = rawget(state.counts, node)
+    if node_count ~= nil
+        and (not positive_integer(node_count)
+          or node_count >= MAX_SAFE_INTEGER) then
+      return nil, "page-list page pin counter is exhausted"
+    end
+  end
+
+  local final_generation = rawget(self, "_generation")
+  local final_row_count = rawget(self, "_row_count")
+  if rawget(state, "generation") ~= pin_generation
+      or not integer(final_generation)
+      or final_generation ~= pin_generation
+      or rawget(state, "row_count") ~= row_count
+      or not integer(final_row_count)
+      or final_row_count ~= row_count
+      or not RAW_EQUAL(rawget(self, "_pages"), public_pages)
+      or not RAW_EQUAL(rawget(self, "_starts"), public_starts) then
+    return nil, "page-list generation changed before pin publication"
+  end
+
+  local lease = {}
+  local record = {
+    token = state.token,
+    generation = pin_generation,
+    nodes = nodes,
+    released = false,
+  }
+  PIN_LEASES[lease] = record
+  state.active[lease] = record
+  state.active_leases = active_leases + 1
+  state.pin_references = pin_references + #nodes
+  for _, node in ipairs(nodes) do
+    local node_count = rawget(state.counts, node)
+    if node_count == nil then
+      state.counts[node] = 1
+      state.current_pinned_pages = state.current_pinned_pages + 1
+    else
+      state.counts[node] = node_count + 1
+    end
+  end
+  return lease
+end
+
+--- Release one exact lease. A generation change never prevents cleanup: the
+--- lease decrements the concrete nodes it originally pinned, including nodes
+--- retired by a later splice.
+function PageList:release_pin(lease)
+  local state, _, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  if SPLICE_ACTIVE[self]
+      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+    return nil, "page-list splice is already active"
+  end
+  local record, record_err = pin_record_for(state, lease)
+  if not record then
+    return nil, record_err
+  end
+  if rawget(record, "released") then
+    return nil, "pin lease is already released"
+  end
+  if not RAW_EQUAL(rawget(state.active, lease), record) then
+    return nil, "pin lease is not active"
+  end
+
+  local nodes = rawget(record, "nodes")
+  local node_count, nodes_err = dense_table(nodes, "pin lease nodes")
+  if node_count == nil then
+    return nil, nodes_err
+  end
+  if rawget(state, "active_leases") < 1
+      or rawget(state, "pin_references") < node_count then
+    return nil, "page-list pin totals are inconsistent"
+  end
+  for index = 1, node_count do
+    local node = rawget(nodes, index)
+    local count = rawget(state.counts, node)
+    if not positive_integer(count)
+        or (not state.current[node] and not state.retired[node]) then
+      return nil, "pin lease references an untracked page node"
+    end
+  end
+
+  state.active[lease] = nil
+  state.active_leases = state.active_leases - 1
+  state.pin_references = state.pin_references - node_count
+  for index = 1, node_count do
+    local node = rawget(nodes, index)
+    local count = state.counts[node] - 1
+    if count == 0 then
+      state.counts[node] = nil
+      if state.retired[node] then
+        state.retired[node] = nil
+        state.retired_pinned_pages = state.retired_pinned_pages - 1
+      else
+        state.current_pinned_pages = state.current_pinned_pages - 1
+      end
+    else
+      state.counts[node] = count
+    end
+  end
+  record.nodes = nil
+  record.released = true
+  return true
+end
+
+function PageList:pin_is_current(lease)
+  local state, _, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  local record, record_err = pin_record_for(state, lease)
+  if not record then
+    return nil, record_err
+  end
+  if rawget(record, "released") then
+    return false, "pin lease is released"
+  end
+  if not RAW_EQUAL(rawget(state.active, lease), record) then
+    return nil, "pin lease is not active"
+  end
+  local generation = rawget(self, "_generation")
+  local pin_generation = rawget(state, "generation")
+  if not integer(generation)
+      or generation > MAX_SAFE_INTEGER
+      or generation ~= pin_generation then
+    return nil, "page-list generation metadata is inconsistent"
+  end
+  return rawget(record, "generation") == pin_generation
+end
+
+function PageList:pin_count(node)
+  local state, lineage, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  if type(node) ~= "table"
+      or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
+      or (not state.current[node] and not state.retired[node]) then
+    return nil, "page node does not belong to this PageList"
+  end
+  return rawget(state.counts, node) or 0
+end
+
+function PageList:pin_stats()
+  local state, _, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  return pin_stats_snapshot(state)
 end
 
 local function summarize_pages(pages)
@@ -842,14 +1444,41 @@ local function splice_transaction(
     return nil, candidate_err
   end
 
-  self._pages = candidate._pages
-  self._starts = candidate._starts
-  self._row_count = candidate._row_count
-  self._decoded_bytes = candidate._decoded_bytes
-  self._storage_bytes = candidate._storage_bytes
-  self._oversized_pages = candidate._oversized_pages
-  self._next_page_id = candidate._next_page_id
-  self._generation = candidate._generation
+  local pin_state = PIN_STATES[self]
+  local candidate_pin_state = PIN_STATES[candidate]
+  local next_current = {}
+  for _, node in ipairs(candidate._pages) do
+    next_current[node] = true
+  end
+  local retiring = {}
+  for node in next, pin_state.current do
+    if not next_current[node] and pin_state.counts[node] then
+      retiring[#retiring + 1] = node
+    end
+  end
+
+  rawset(self, "_pages", candidate._pages)
+  rawset(self, "_starts", candidate._starts)
+  rawset(self, "_row_count", candidate._row_count)
+  rawset(self, "_decoded_bytes", candidate._decoded_bytes)
+  rawset(self, "_storage_bytes", candidate._storage_bytes)
+  rawset(self, "_oversized_pages", candidate._oversized_pages)
+  rawset(self, "_next_page_id", candidate._next_page_id)
+  rawset(self, "_generation", candidate._generation)
+  pin_state.current = next_current
+  pin_state.generation = candidate._generation
+  pin_state.row_count = candidate_pin_state.row_count
+  pin_state.public_pages = candidate._pages
+  pin_state.public_starts = candidate._starts
+  pin_state.trusted_pages = candidate_pin_state.trusted_pages
+  pin_state.trusted_starts = candidate_pin_state.trusted_starts
+  for _, node in ipairs(retiring) do
+    pin_state.retired[node] = true
+    pin_state.current_pinned_pages =
+      pin_state.current_pinned_pages - 1
+    pin_state.retired_pinned_pages =
+      pin_state.retired_pinned_pages + 1
+  end
 
   return true
 end
@@ -861,10 +1490,12 @@ function PageList:splice(start0, delete_count, insert_rows)
   if type(self) ~= "table" then
     return nil, "page list must be a table"
   end
-  if rawget(self, "_splice_active") ~= nil then
+  if SPLICE_ACTIVE[self]
+      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
     return nil, "page-list splice is already active"
   end
 
+  SPLICE_ACTIVE[self] = {}
   rawset(self, "_splice_active", true)
   local context = {}
   local called, change, err = pcall(
@@ -882,6 +1513,7 @@ function PageList:splice(start0, delete_count, insert_rows)
     source_restored = true
   end
   rawset(self, "_splice_active", nil)
+  SPLICE_ACTIVE[self] = nil
 
   if source_restored then
     return nil, "page creation mutated the source PageList"
@@ -893,7 +1525,7 @@ function PageList:splice(start0, delete_count, insert_rows)
 end
 
 function PageList:stats()
-  return {
+  local result = {
     generation = self._generation,
     row_count = self._row_count,
     page_count = #self._pages,
@@ -903,6 +1535,11 @@ function PageList:stats()
     max_rows = self._max_rows,
     max_bytes = self._max_bytes,
   }
+  local pin_stats = pin_stats_snapshot(PIN_STATES[self])
+  for name, value in next, pin_stats do
+    result[name] = value
+  end
+  return result
 end
 
 --- Check structural metadata and every owned Page without reading through the
@@ -916,7 +1553,7 @@ validate_list = function(list)
     return nil, "page list is not an owned PageList"
   end
   for _, method in ipairs(TRUSTED_INSTANCE_METHODS) do
-    if rawget(list, method) ~= nil then
+    if not RAW_EQUAL(rawget(list, method), nil) then
       return nil, "page list shadows trusted method " .. method
     end
   end
@@ -1013,7 +1650,8 @@ validate_list = function(list)
     seen_ids[node_id] = true
     greatest_id = MATH.max(greatest_id, node_id)
 
-    if rawget(starts, index) ~= expected_start then
+    local start = rawget(starts, index)
+    if not integer(start) or start ~= expected_start then
       return nil, STRING_FORMAT(
         "page prefix %d is not contiguous",
         index
@@ -1067,6 +1705,23 @@ validate_list = function(list)
   end
   if oversized_pages ~= expected_oversized_pages then
     return nil, "oversized page count is inconsistent"
+  end
+  local pins_ok, pins_err = validate_pin_state(
+    list,
+    lineage,
+    pages,
+    starts,
+    page_count,
+    row_count,
+    generation,
+    next_page_id,
+    max_rows,
+    max_bytes,
+    seen_ids,
+    seen_pages
+  )
+  if not pins_ok then
+    return nil, pins_err
   end
   return true
 end
