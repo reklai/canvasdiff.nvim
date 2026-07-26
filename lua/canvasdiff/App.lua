@@ -5,6 +5,7 @@ local jump = require("canvasdiff.jump")
 local config = require("canvasdiff.config")
 local runtime = require("canvasdiff.runtime")
 local input = require("canvasdiff.input")
+local command = input.command
 local motions = input.motions
 local virt = runtime.virtualizer
 local watch = runtime.watch
@@ -50,6 +51,39 @@ function App:setup(opts)
     ui.err(message)
   end
   return options
+end
+
+--- Run one `:CanvasDiff` invocation.
+---
+--- The grammar and its outcome are pure input-domain data; executing the
+--- planned operation and showing its diagnostic are the owner's job. Keeping
+--- the split here is what lets input stay free of both UI and a cycle back
+--- through the root facade.
+--- @param fargs string[]|nil
+--- @return CanvasDiffCommand
+function App:command(fargs)
+  local outcome = command.plan(command.parse(fargs))
+  local diagnostic = outcome.diagnostic
+  if diagnostic then
+    if diagnostic.level == "error" then
+      ui.err(diagnostic.message)
+    else
+      ui.warn(diagnostic.message)
+    end
+  end
+  if outcome.call then
+    local operation = self[outcome.call]
+    assert(type(operation) == "function",
+      "command planned an operation this owner does not have: " .. outcome.call)
+    operation(self, outcome.argument)
+  end
+  return outcome
+end
+
+--- Completion candidates for `:CanvasDiff`. Pure, but routed through the owner
+--- so the plugin file imports only the root facade.
+function App:command_complete(arglead)
+  return command.complete(arglead)
 end
 
 --- Show which lens the canvas is looking through, in a winbar on its own window.

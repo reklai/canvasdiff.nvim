@@ -50,6 +50,8 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   table.sort(names)
   H.eq(names, {
     "close",
+    "command",
+    "command_complete",
     "cycle_lens",
     "open",
     "refresh",

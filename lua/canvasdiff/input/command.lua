@@ -7,7 +7,7 @@
 -- inside it you press keys rather than typing `:`. Every word here earns its
 -- place by being useful from OUTSIDE the canvas, or inside a user mapping.
 
-local ui = require("canvasdiff.ui")
+local lens = require("canvasdiff.diff").lens
 
 local C = {}
 
@@ -96,35 +96,45 @@ function C.parse(fargs)
   return { action = "rev", rev = arg, errors = {} }
 end
 
---- Execute a parse. Impure.
-function C.run(parse)
+--- @class CanvasDiffCommand
+--- @field call string|nil       operation the owner should perform
+--- @field argument any|nil      that operation's single argument
+--- @field diagnostic { level: "error"|"warn", message: string }|nil
+
+--- Turn a parse into what the owner should DO, without doing any of it.
+---
+--- Input never presents messages and never calls back into the application:
+--- both would make the domain graph cyclic, and neither is testable without a
+--- window. The owner executes the call and shows the diagnostic.
+--- @param parse CanvasDiffParse
+--- @return CanvasDiffCommand
+function C.plan(parse)
   if parse.action == "error" then
-    ui.err(parse.errors[1])
-    return
+    return { diagnostic = { level = "error", message = parse.errors[1] } }
   end
 
-  local fm = require("canvasdiff")
-
   if parse.action == "set_lens" then
-    fm.set_lens(require("canvasdiff.diff").lens.get(parse.lens))
-    return
+    return { call = "set_lens", argument = lens.get(parse.lens) }
   end
 
   if parse.action == "rev" then
-    fm.set_branch(parse.rev)
-    return
+    return { call = "set_branch", argument = parse.rev }
   end
 
   if parse.action == "range" then
-    -- Deliberately does NOT fall through to anything: silently showing
-    -- worktree-vs-HEAD when the user asked for `main...HEAD` would be worse than
-    -- refusing, because the diff would look plausible and be wrong.
-    ui.warn(("commit ranges are not supported (got '%s'). A bare ref works:"
-      .. " `:CanvasDiff main` shows your worktree against it"):format(parse.rev))
-    return
+    -- Deliberately plans NO call: silently showing worktree-vs-HEAD when the
+    -- user asked for `main...HEAD` would be worse than refusing, because the
+    -- diff would look plausible and be wrong.
+    return {
+      diagnostic = {
+        level = "warn",
+        message = ("commit ranges are not supported (got '%s'). A bare ref works:"
+          .. " `:CanvasDiff main` shows your worktree against it"):format(parse.rev),
+      },
+    }
   end
 
-  fm[parse.action]()
+  return { call = parse.action }
 end
 
 --- Completion candidates for `arglead`. Pure.

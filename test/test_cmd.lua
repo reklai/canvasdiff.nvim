@@ -1,5 +1,5 @@
 local H = require("helpers")
-local cmd = require("canvasdiff.cmd")
+local cmd = require("canvasdiff.input").command
 
 local T = {}
 
@@ -120,7 +120,9 @@ T["cmd_run a commit range reports and opens nothing"] = function()
     if canvas.is_canvas_buf(b) then before = before + 1 end
   end
 
-  local msgs = capture(function() cmd.run(cmd.parse({ "main...HEAD" })) end)
+  local msgs = capture(function()
+    require("canvasdiff").command({ "main...HEAD" })
+  end)
 
   H.eq(#msgs, 1, "exactly one notification")
   assert(msgs[1].msg:match("not supported"), "got: " .. msgs[1].msg)
@@ -136,9 +138,66 @@ T["cmd_run a commit range reports and opens nothing"] = function()
 end
 
 T["cmd_run an error is reported at ERROR level"] = function()
-  local msgs = capture(function() cmd.run(cmd.parse({ "--staged" })) end)
+  local msgs = capture(function()
+    require("canvasdiff").command({ "--staged" })
+  end)
   H.eq(#msgs, 1)
   H.eq(msgs[1].level, vim.log.levels.ERROR)
+end
+
+-- --- planning ----------------------------------------------------------
+--
+-- The grammar produces data, not effects. Input neither presents messages nor
+-- calls back into the application: doing either would put a cycle in the
+-- domain graph and make the whole grammar untestable without a window.
+
+T["cmd_plan every action names an operation the root facade exposes"] = function()
+  local root = require("canvasdiff")
+  for _, word in ipairs(cmd.candidate_order) do
+    local outcome = cmd.plan(cmd.parse({ word }))
+    assert(outcome.call, "'" .. word .. "' must plan an operation")
+    H.eq(type(root[outcome.call]), "function",
+      "'" .. word .. "' planned " .. outcome.call .. ", which the facade lacks")
+    H.eq(outcome.diagnostic, nil, "a known word needs no diagnostic")
+  end
+  H.eq(cmd.plan(cmd.parse({})).call, "toggle", "a bare invocation toggles")
+end
+
+T["cmd_plan a lens word resolves its lens rather than passing a name"] = function()
+  local outcome = cmd.plan(cmd.parse({ "staged" }))
+  H.eq(outcome.call, "set_lens")
+  H.eq(outcome.argument, require("canvasdiff.diff").lens.get("staged"))
+end
+
+T["cmd_plan a bare ref becomes a branch change"] = function()
+  local outcome = cmd.plan(cmd.parse({ "main" }))
+  H.eq(outcome.call, "set_branch")
+  H.eq(outcome.argument, "main")
+end
+
+T["cmd_plan refusals carry a level and plan no operation"] = function()
+  local range = cmd.plan(cmd.parse({ "main...HEAD" }))
+  H.eq(range.call, nil, "a range must not fall through to any operation")
+  H.eq(range.diagnostic.level, "warn")
+  assert(range.diagnostic.message:match("not supported"), range.diagnostic.message)
+
+  local refused = cmd.plan(cmd.parse({ "--cached" }))
+  H.eq(refused.call, nil)
+  H.eq(refused.diagnostic.level, "error")
+  assert(refused.diagnostic.message:match("staged"), refused.diagnostic.message)
+end
+
+T["cmd_plan the input domain reaches neither UI nor the root facade"] = function()
+  local source = assert(io.open(
+    vim.fs.joinpath(vim.fs.dirname(vim.fs.dirname(
+      vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))),
+      "lua/canvasdiff/input/command.lua"), "rb"))
+  local text = source:read("*a")
+  source:close()
+  assert(not text:find('require("canvasdiff.ui")', 1, true),
+    "input must not present its own messages")
+  assert(not text:find('require("canvasdiff")', 1, true),
+    "input must not call back into the application")
 end
 
 return T

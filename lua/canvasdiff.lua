@@ -33,4 +33,12 @@ return {
   toggle_base = function()
     return app:toggle_base()
   end,
+  --- Run one `:CanvasDiff` invocation from its raw arguments.
+  command = function(fargs)
+    return app:command(fargs)
+  end,
+  --- Completion candidates for `:CanvasDiff`.
+  command_complete = function(arglead)
+    return app:command_complete(arglead)
+  end,
 }
