@@ -41,6 +41,7 @@ return {
       "is_canvas_buf",
       "locate",
       "open",
+      "project",
       "reconcile_sections",
       "render_all",
       "replace_section",

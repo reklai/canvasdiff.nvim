@@ -1,4 +1,5 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
+local Projection = require("canvasdiff.canvas.Projection")
 local config = require("canvasdiff.config")
 local format = require("canvasdiff.canvas.format")
 
@@ -21,6 +22,7 @@ return {
   is_canvas_buf = Canvas.is_canvas_buf,
   locate = Canvas.locate,
   open = Canvas.open,
+  project = Projection.create,
   reconcile_sections = Canvas.reconcile_sections,
   render_all = Canvas.render_all,
   replace_section = Canvas.replace_section,
