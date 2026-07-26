@@ -1,6 +1,7 @@
 local git = require("galley.git")
 local util = require("galley.util")
 local lens = require("galley.lens")
+local model = require("galley.model")
 
 local M = {}
 
@@ -149,6 +150,23 @@ function M.files(root, spec)
     }
   end
   return files
+end
+
+--- Collect and build the complete desired section list without mutating a
+--- canvas. Open, manual pivots, and file-watch reconciliation all go through
+--- this boundary so a failed ref lookup is distinguishable from a valid empty
+--- diff before any buffer, lens, view, or UI state is touched.
+--- @param root string
+--- @param spec GalleyLens|string|nil
+--- @param context integer|nil
+--- @return table[]|nil sections
+--- @return string|nil err
+function M.sections(root, spec, context)
+  local files, err = M.files(root, spec)
+  if not files then
+    return nil, err
+  end
+  return model.build(files, context)
 end
 
 --- The lens's NEW side for one path: the worktree as it stands (unsaved buffer

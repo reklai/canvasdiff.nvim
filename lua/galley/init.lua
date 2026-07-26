@@ -1,6 +1,5 @@
 local canvas = require("galley.canvas")
 local git = require("galley.git")
-local model = require("galley.model")
 local jump = require("galley.jump")
 local config = require("galley.config")
 local hl = require("galley.hl")
@@ -323,8 +322,9 @@ function M.open(opts)
     root = dir and git.root(dir) or nil
   end
   if not root then
-    util.warn("not inside a git repository (looked in " .. cwd .. ")")
-    return
+    local err = "not inside a git repository (looked in " .. cwd .. ")"
+    util.warn(err)
+    return nil, err
   end
 
   -- Load any saved session BEFORE collect, so a restored lens is honored from the
@@ -340,7 +340,15 @@ function M.open(opts)
     or (sess and sess.base and lens.from_base(sess.base))
     or lens.from_base(config.options.base)
 
-  local sections = model.build(collect.files(root, l), config.options.context)
+  -- Transaction boundary: collection and model construction finish before
+  -- canvas.open changes the current window or the module-level state. In
+  -- particular, an invalid/deleted branch ref is an error, not an empty old
+  -- side and not an empty canvas.
+  local sections, collect_err = collect.sections(root, l, config.options.context)
+  if not sections then
+    util.warn(collect_err)
+    return nil, collect_err
+  end
 
   local st = canvas.open(sections, {})
   st.root = root
@@ -386,6 +394,9 @@ function M.open(opts)
   if config.options.watch.enabled then
     watch.on_empty = function()
       show_empty_message(st)
+    end
+    watch.on_error = function(err)
+      util.warn(err)
     end
     watch.start(st, config.options.watch)
   end
@@ -482,6 +493,7 @@ function M.open(opts)
     -- on_shape_change hook is already in place from the top of this function.
     virt.attach(st, config.options.virt)
   end
+  return st
 end
 
 --- Windows in the CURRENT tabpage showing the canvas buffer.
@@ -607,11 +619,25 @@ end
 ---
 --- Shared by the lens pivot, M.refresh and watch -- they are one operation ("go and
 --- see what is true now"), differing only in what prompted it.
-local function pivot(st)
+local function pivot(st, target_lens)
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
-    return
+    return nil, "no valid diff canvas"
   end
-  local desired = model.build(collect.files(st.root, lens.of(st)), config.options.context)
+
+  local next_lens = target_lens or lens.of(st)
+  local desired, err = collect.sections(st.root, next_lens, config.options.context)
+  if not desired then
+    return nil, err
+  end
+
+  -- Collection succeeded, so the candidate comparison is now safe to publish.
+  -- It is assigned before reconciliation because folded placeholders and
+  -- newly-inserted folded sections record the active lens while they render.
+  if target_lens then
+    st.lens = target_lens
+    st.base = lens.to_base(target_lens)
+  end
+
   local full = canvas.reconcile_sections(st, desired)
   if full and #desired == 0 then
     show_empty_message(st)
@@ -619,6 +645,7 @@ local function pivot(st)
   set_winbar(st)
   sync_after_collapse(st)
   virt.apply(st, config.options.virt)
+  return true
 end
 
 --- Re-collect and splice in whatever changed: the manual version of the pass
@@ -643,7 +670,12 @@ function M.refresh()
   if not state then
     return
   end
-  pivot(state)
+  local ok, err = pivot(state)
+  if not ok then
+    util.warn(err)
+    return nil, err
+  end
+  return true
 end
 
 --- Point the canvas at a different comparison, opening it if it isn't showing.
@@ -654,20 +686,28 @@ end
 --- command that names a state.
 function M.set_lens(l)
   if not lens.valid(l) then
-    util.warn("not a lens")
-    return
+    local err = "not a lens"
+    util.warn(err)
+    return nil, err
   end
   if not (state and canvas_showing(state)) then
-    M.open({ lens = l })
-    return
+    local opened, err = M.open({ lens = l })
+    if not opened then
+      return nil, err
+    end
+    return true
   end
   if lens.same(lens.of(state), l) then
-    return
+    return true
   end
-  state.lens = l
-  state.base = lens.to_base(l)
-  pivot(state)
+
+  local ok, err = pivot(state, l)
+  if not ok then
+    util.warn(err)
+    return nil, err
+  end
   util.notify("showing " .. l.label)
+  return true
 end
 
 --- Step through the three named lenses: all → unstaged → staged → all.
@@ -680,7 +720,7 @@ function M.cycle_lens(delta)
     util.warn("no live diff canvas")
     return
   end
-  M.set_lens(lens.step(lens.of(state), delta or 1))
+  return M.set_lens(lens.step(lens.of(state), delta or 1))
 end
 
 --- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.
@@ -688,16 +728,17 @@ end
 function M.set_branch(ref)
   local l = lens.branch(ref)
   if not l then
-    util.warn("no ref given")
-    return
+    local err = "no ref given"
+    util.warn(err)
+    return nil, err
   end
-  M.set_lens(l)
+  return M.set_lens(l)
 end
 
 --- Set the diff base to "HEAD" or "index" -- the older two-value vocabulary, which
 --- `:Galley all` / `:Galley unstaged` still speak.
 function M.set_base(base)
-  M.set_lens(lens.from_base(base))
+  return M.set_lens(lens.from_base(base))
 end
 
 --- Flip between "worktree vs HEAD" and "worktree vs index" (unstaged-only review).
@@ -710,7 +751,7 @@ function M.toggle_base()
     util.warn("no live diff canvas")
     return
   end
-  M.set_base(lens.to_base(lens.of(state)) == "index" and "HEAD" or "index")
+  return M.set_base(lens.to_base(lens.of(state)) == "index" and "HEAD" or "index")
 end
 
 return M

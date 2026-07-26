@@ -771,6 +771,205 @@ return {
     fm.close()
     vim.fn.delete(root, "rf")
   end,
+  ["e2e: invalid ref on initial open leaves the file window untouched"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "before\n" },
+      worktree = { ["a.txt"] = "after\n" },
+    })
+    -- Earlier e2e cases may have restored a file buffer and then removed its
+    -- fixture directory. Detach from that dead path before this test records
+    -- what its own real-file window looks like.
+    vim.cmd("enew!")
+    vim.api.nvim_set_current_dir(root)
+    vim.cmd.edit(vim.fs.joinpath(root, "a.txt"))
+
+    -- A fresh owner state, while retaining the same subordinate modules and
+    -- cached canvas buffer a real close/reopen cycle would use.
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    local lens = require("galley.lens")
+    local session = require("galley.session")
+
+    local before = {
+      win = vim.api.nvim_get_current_win(),
+      buf = vim.api.nvim_get_current_buf(),
+      wins = vim.api.nvim_list_wins(),
+      lines = vim.api.nvim_buf_get_lines(0, 0, -1, false),
+      view = vim.fn.winsaveview(),
+      winbar = vim.api.nvim_get_option_value("winbar", { win = 0 }),
+    }
+    local messages = {}
+    local real_notify = vim.notify
+    vim.notify = function(msg, level)
+      messages[#messages + 1] = { msg = msg, level = level }
+    end
+    local result, open_err
+    local called, call_err = pcall(function()
+      result, open_err = fm.open({ lens = lens.branch("definitely-missing") })
+    end)
+    vim.notify = real_notify
+
+    assert(called, "invalid initial open must report, not throw: " .. tostring(call_err))
+    H.eq(result, nil)
+    assert(type(open_err) == "string" and open_err:find("does not resolve", 1, true),
+      "open returns the collection error: " .. tostring(open_err))
+    H.eq(vim.api.nvim_get_current_win(), before.win, "the current window is untouched")
+    H.eq(vim.api.nvim_get_current_buf(), before.buf, "the real file remains displayed")
+    H.eq(vim.api.nvim_list_wins(), before.wins, "no sidebar or scrollbar window opened")
+    H.eq(vim.api.nvim_buf_get_lines(before.buf, 0, -1, false), before.lines)
+    H.eq(vim.fn.winsaveview(), before.view)
+    H.eq(vim.api.nvim_get_option_value("winbar", { win = before.win }), before.winbar)
+    assert(#messages == 1 and messages[1].msg:find("does not resolve", 1, true),
+      "exactly the failure is reported: " .. vim.inspect(messages))
+    H.eq(vim.uv.fs_stat(session.path_for(root)), nil,
+      "no owner state was created that close/session persistence could observe")
+
+    vim.cmd("bwipeout!")
+    vim.fn.delete(root, "rf")
+  end,
+  ["e2e: invalid live lens pivot is an observational no-op"] = function()
+    local function body(tag, changed)
+      local lines = {}
+      for i = 1, 70 do
+        lines[i] = ("%s line %d%s"):format(tag, i,
+          changed and i % 10 == 0 and " changed" or "")
+      end
+      return table.concat(lines, "\n") .. "\n"
+    end
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = body("a"), ["b.txt"] = body("b") },
+      worktree = { ["a.txt"] = body("a", true), ["b.txt"] = body("b", true) },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    local session = require("galley.session")
+    assert(fm.open())
+
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_call(win, function()
+      vim.fn.winrestview({ topline = 12, lnum = 18 })
+    end)
+
+    local sidebar_buf
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+          and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
+        sidebar_buf = b
+      end
+    end
+    assert(sidebar_buf, "sanity: default UI opened the sidebar")
+    local anchor_ns = vim.api.nvim_get_namespaces()["galley.canvas.anchors"]
+    local before = {
+      lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false),
+      tick = vim.api.nvim_buf_get_changedtick(buf),
+      anchors = vim.api.nvim_buf_get_extmarks(buf, anchor_ns, 0, -1, { details = true }),
+      view = vim.api.nvim_win_call(win, vim.fn.winsaveview),
+      winbar = vim.api.nvim_get_option_value("winbar", { win = win }),
+      statuscolumn = vim.api.nvim_get_option_value("statuscolumn", { win = win }),
+      sidebar_lines = vim.api.nvim_buf_get_lines(sidebar_buf, 0, -1, false),
+      sidebar_tick = vim.api.nvim_buf_get_changedtick(sidebar_buf),
+      windows = vim.api.nvim_list_wins(),
+    }
+
+    local messages = {}
+    local real_notify = vim.notify
+    vim.notify = function(msg, level)
+      messages[#messages + 1] = { msg = msg, level = level }
+    end
+    local result, pivot_err
+    local called, call_err = pcall(function()
+      result, pivot_err = fm.set_branch("definitely-missing")
+    end)
+    vim.notify = real_notify
+
+    assert(called, "invalid pivot must report, not throw: " .. tostring(call_err))
+    H.eq(result, nil)
+    assert(type(pivot_err) == "string" and pivot_err:find("does not resolve", 1, true),
+      "set_branch returns the collection error: " .. tostring(pivot_err))
+    H.eq(vim.api.nvim_get_current_win(), win)
+    H.eq(vim.api.nvim_get_current_buf(), buf)
+    H.eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), before.lines,
+      "no section was reconciled")
+    H.eq(vim.api.nvim_buf_get_changedtick(buf), before.tick,
+      "the canvas buffer was not written at all")
+    H.eq(vim.api.nvim_buf_get_extmarks(buf, anchor_ns, 0, -1, { details = true }),
+      before.anchors, "anchors were not recreated or moved")
+    H.eq(vim.api.nvim_win_call(win, vim.fn.winsaveview), before.view,
+      "cursor and viewport are identical")
+    H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), before.winbar,
+      "the visible lens label did not change")
+    H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = win }), before.statuscolumn)
+    H.eq(vim.api.nvim_buf_get_lines(sidebar_buf, 0, -1, false), before.sidebar_lines)
+    H.eq(vim.api.nvim_buf_get_changedtick(sidebar_buf), before.sidebar_tick,
+      "no sidebar refresh ran")
+    H.eq(vim.api.nvim_list_wins(), before.windows, "no UI window was replaced")
+    assert(#messages == 1 and messages[1].msg:find("does not resolve", 1, true),
+      "only the error is reported, never a showing-success message: " .. vim.inspect(messages))
+
+    -- The winbar is observable evidence; the saved payload pins the private
+    -- owner fields too. A failed candidate may not leak into lens or base.
+    fm.close()
+    local saved = assert(session.load(root))
+    H.eq(saved.lens.id, "all")
+    H.eq(saved.base, "HEAD")
+    os.remove(session.path_for(root))
+    vim.cmd("enew!")
+    vim.fn.delete(root, "rf")
+  end,
+  ["e2e: refresh retains a branch canvas after its ref disappears"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "before\n" },
+      worktree = { ["a.txt"] = "after\n" },
+    })
+    local branch = vim.system(
+      { "git", "branch", "comparison-base", "HEAD" },
+      { cwd = root, text = true }):wait()
+    assert(branch.code == 0, branch.stderr)
+
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    local lens = require("galley.lens")
+    local session = require("galley.session")
+    assert(fm.open({ lens = lens.branch("comparison-base") }))
+
+    local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+    local before = {
+      lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false),
+      tick = vim.api.nvim_buf_get_changedtick(buf),
+      view = vim.api.nvim_win_call(win, vim.fn.winsaveview),
+      winbar = vim.api.nvim_get_option_value("winbar", { win = win }),
+    }
+    local deleted = vim.system(
+      { "git", "branch", "-D", "comparison-base" },
+      { cwd = root, text = true }):wait()
+    assert(deleted.code == 0, deleted.stderr)
+
+    local messages = {}
+    local real_notify = vim.notify
+    vim.notify = function(msg) messages[#messages + 1] = msg end
+    local refreshed, refresh_err = fm.refresh()
+    vim.notify = real_notify
+
+    H.eq(refreshed, nil)
+    assert(type(refresh_err) == "string" and refresh_err:find("does not resolve", 1, true))
+    H.eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), before.lines)
+    H.eq(vim.api.nvim_buf_get_changedtick(buf), before.tick)
+    H.eq(vim.api.nvim_win_call(win, vim.fn.winsaveview), before.view)
+    H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), before.winbar)
+    assert(#messages == 1 and messages[1]:find("does not resolve", 1, true),
+      "refresh reports the failure exactly once: " .. vim.inspect(messages))
+
+    fm.close()
+    local saved = assert(session.load(root))
+    H.eq(saved.lens.id, "branch:comparison-base",
+      "the private active lens remains the last valid branch comparison")
+    os.remove(session.path_for(root))
+    vim.cmd("enew!")
+    vim.fn.delete(root, "rf")
+  end,
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh module instance so its module-level `state` is nil,
     -- regardless of what earlier test cases in this process did.

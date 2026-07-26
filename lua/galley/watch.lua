@@ -1,5 +1,4 @@
 local canvas = require("galley.canvas")
-local model = require("galley.model")
 local collect = require("galley.collect")
 local config = require("galley.config")
 local hl = require("galley.hl")
@@ -14,6 +13,12 @@ local W = {}
 --- (all changes gone), so the owner can render its empty-state message.
 W.on_empty = nil
 
+--- Assignable callback for a scheduled reconcile failure. The synchronous
+--- W.reconcile API returns the error to its caller; the timer has no caller, so
+--- this seam lets init report it without coupling watch to notification policy.
+--- Identical consecutive failures are reported only once.
+W.on_error = nil
+
 local uv = vim.uv
 
 -- Trigger state: one live watched canvas at a time (mirrors init's
@@ -23,6 +28,7 @@ local debounce_ms = 200
 local timer = nil
 local aug = nil
 local fs_handles = {}
+local last_error = nil
 
 local function close_fs_handles()
   for _, h in ipairs(fs_handles) do
@@ -50,8 +56,21 @@ local function mark_dirty()
   timer:start(debounce_ms, 0, vim.schedule_wrap(function()
     local state = live
     if state then
-      W.reconcile(state)
-      refresh_fs_watches(state)
+      local ok, err = W.reconcile(state)
+      if ok then
+        last_error = nil
+        -- refresh_fs_watches starts by closing the existing handles. Only do
+        -- that after a successful truth pass; on an invalid/deleted ref, the
+        -- prior canvas and its watcher coverage stay intact for recovery.
+        if live == state then
+          refresh_fs_watches(state)
+        end
+      elseif err ~= last_error then
+        last_error = err
+        if W.on_error then
+          pcall(W.on_error, err)
+        end
+      end
     end
   end))
 end
@@ -101,6 +120,7 @@ end
 function W.start(state, opts)
   W.stop()
   live = state
+  last_error = nil
   debounce_ms = (opts and opts.debounce_ms) or 200
 
   aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
@@ -142,6 +162,7 @@ function W.stop()
     aug = nil
   end
   live = nil
+  last_error = nil
 end
 
 --- Synchronous full reconcile of the live canvas against the working tree:
@@ -151,9 +172,15 @@ end
 --- niri invariant then rests entirely on the canvas splice primitives.
 function W.reconcile(state)
   if not state or not vim.api.nvim_buf_is_valid(state.buf) then
-    return
+    return nil, "no valid canvas state to reconcile"
   end
-  local desired = model.build(collect.files(state.root, lens.of(state)), config.options.context)
+  local desired, err = collect.sections(
+    state.root, lens.of(state), config.options.context)
+  if not desired then
+    -- Transactional failure: no canvas reconciliation and no follow-up UI
+    -- consumer gets to observe a half-refreshed or fabricated empty state.
+    return nil, err
+  end
 
   -- The merge-walk itself lives in canvas, because a user-initiated LENS pivot
   -- needs exactly the same "splice only what actually differs" behaviour and has
@@ -167,6 +194,7 @@ function W.reconcile(state)
   sidebar.refresh(state)
   scrollbar.update(state)
   virt.apply(state, config.options.virt)
+  return true
 end
 
 return W

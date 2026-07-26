@@ -3,6 +3,7 @@ local model = require("galley.model")
 local canvas = require("galley.canvas")
 local collect = require("galley.collect")
 local watch = require("galley.watch")
+local lens = require("galley.lens")
 
 local T = {}
 
@@ -12,6 +13,12 @@ local function write_file(root, rel, content)
   local f = assert(io.open(abs, "w"))
   f:write(content)
   f:close()
+end
+
+local function sh(root, cmd)
+  local res = vim.system(cmd, { cwd = root, text = true }):wait()
+  assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  return res.stdout
 end
 
 local function bigtext(n, tag)
@@ -53,6 +60,120 @@ T["watch_collect files matches init behavior"] = function()
   H.eq(files[1].status, "M")
   assert(files[1].old_text:find("b line 40", 1, true))
   assert(files[1].new_text:find("b line 40 changed", 1, true))
+end
+
+T["watch_reconcile deleted branch ref retains everything and recovers"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = bigtext(50, "old") } })
+  sh(root, { "git", "branch", "comparison-base", "HEAD" })
+  local base_oid = vim.trim(sh(root, { "git", "rev-parse", "comparison-base" }))
+  write_file(root, "a.txt", bigtext(50, "new"))
+  sh(root, { "git", "add", "-A" })
+  sh(root, { "git", "commit", "-m", "advance past comparison base" })
+
+  local l = lens.branch("comparison-base")
+  local sections, build_err = collect.sections(root, l, 3)
+  assert(sections, build_err)
+  local st = canvas.open(sections, {})
+  st.root, st.lens, st.base = root, l, nil
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 3, lnum = 5 })
+  end)
+  st.collapsed["sentinel"] = "user"
+  st.folded["sentinel/"] = true
+  st.folded_seen["sentinel"] = { lens = l.id, fp = "unchanged" }
+
+  local before = {
+    sections = vim.deepcopy(st.sections),
+    lines = vim.api.nvim_buf_get_lines(st.buf, 0, -1, false),
+    tick = vim.api.nvim_buf_get_changedtick(st.buf),
+    anchors = vim.deepcopy(st.anchor_ids),
+    anchor_marks = vim.api.nvim_buf_get_extmarks(
+      st.buf, vim.api.nvim_get_namespaces()["galley.canvas.anchors"],
+      0, -1, { details = true }),
+    hl_ids = vim.deepcopy(st.hl_ids),
+    view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview),
+    collapsed = vim.deepcopy(st.collapsed),
+    folded = vim.deepcopy(st.folded),
+    folded_seen = vim.deepcopy(st.folded_seen),
+    lens = vim.deepcopy(st.lens),
+    base = st.base,
+  }
+
+  sh(root, { "git", "branch", "-D", "comparison-base" })
+  local ok, err = watch.reconcile(st)
+  H.eq(ok, nil)
+  assert(type(err) == "string" and err:find("does not resolve", 1, true),
+    "a deleted ref is an error, not an empty desired canvas: " .. tostring(err))
+  H.eq(st.sections, before.sections)
+  H.eq(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), before.lines)
+  H.eq(vim.api.nvim_buf_get_changedtick(st.buf), before.tick,
+    "no canvas write happened on failed preflight")
+  H.eq(st.anchor_ids, before.anchors)
+  H.eq(vim.api.nvim_buf_get_extmarks(
+    st.buf, vim.api.nvim_get_namespaces()["galley.canvas.anchors"],
+    0, -1, { details = true }), before.anchor_marks)
+  H.eq(st.hl_ids, before.hl_ids)
+  H.eq(vim.api.nvim_win_call(st.win, vim.fn.winsaveview), before.view)
+  H.eq(st.collapsed, before.collapsed)
+  H.eq(st.folded, before.folded)
+  H.eq(st.folded_seen, before.folded_seen)
+  H.eq(st.lens, before.lens)
+  H.eq(st.base, before.base)
+
+  -- Recreating the symbolic ref makes the same state usable again; then a
+  -- worktree edit proves this is a real reconcile rather than a truthy no-op.
+  sh(root, { "git", "branch", "comparison-base", base_oid })
+  local newest = bigtext(50, "new"):gsub("new line 20", "new line 20 recovered")
+  write_file(root, "a.txt", newest)
+  local recovered, recover_err = watch.reconcile(st)
+  H.eq(recovered, true, recover_err)
+  assert(st.sections[1].new_text:find("new line 20 recovered", 1, true),
+    "the retained canvas reconciles normally after the ref returns")
+
+  vim.fn.delete(root, "rf")
+end
+
+T["watch_trigger deduplicates identical ref errors and resets after recovery"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "old\n" } })
+  sh(root, { "git", "branch", "comparison-base", "HEAD" })
+  local base_oid = vim.trim(sh(root, { "git", "rev-parse", "comparison-base" }))
+  write_file(root, "a.txt", "new\n")
+  sh(root, { "git", "add", "-A" })
+  sh(root, { "git", "commit", "-m", "advance" })
+
+  local l = lens.branch("comparison-base")
+  local sections, build_err = collect.sections(root, l, 3)
+  assert(sections, build_err)
+  local st = canvas.open(sections, {})
+  st.root, st.lens, st.base = root, l, nil
+
+  local errors = {}
+  watch.on_error = function(err) errors[#errors + 1] = err end
+  watch.start(st, { debounce_ms = 10 })
+  sh(root, { "git", "branch", "-D", "comparison-base" })
+
+  vim.api.nvim_exec_autocmds("FocusGained", {})
+  assert(vim.wait(1000, function() return #errors == 1 end, 10),
+    "the scheduled failure reached the error seam")
+  vim.api.nvim_exec_autocmds("FocusGained", {})
+  vim.wait(100, function() return false end, 10)
+  H.eq(#errors, 1, "an identical consecutive failure is reported only once")
+
+  sh(root, { "git", "branch", "comparison-base", base_oid })
+  write_file(root, "a.txt", "recovered\n")
+  vim.api.nvim_exec_autocmds("FocusGained", {})
+  assert(vim.wait(1000, function()
+    return st.sections[1] and st.sections[1].new_text == "recovered\n"
+  end, 10), "a successful scheduled pass clears the error state and reconciles")
+
+  sh(root, { "git", "branch", "-D", "comparison-base" })
+  vim.api.nvim_exec_autocmds("FocusGained", {})
+  assert(vim.wait(1000, function() return #errors == 2 end, 10),
+    "after a success, the same later error is reportable again")
+
+  watch.stop()
+  watch.on_error = nil
+  vim.fn.delete(root, "rf")
 end
 
 T["watch_reconcile replaces a modified section in place"] = function()
