@@ -27,12 +27,79 @@ App.__index = App
 local EMPTY_MSG = "-- no changes --"
 
 function App.new()
-  return setmetatable({}, App)
+  -- Reviews are indexed by their own canvas buffer, which is the only identity
+  -- that cannot drift: windows move between tabs, a review may have none on
+  -- screen for a while, and two reviews of the same repository are legal.
+  return setmetatable({ surfaces = {}, opened = {} }, App)
 end
 
-local function active_surface(app)
-  local surface = app.surface
-  return surface and surface:is_alive() and surface or nil
+--- Forget a review, whoever disposed it.
+local function forget(app, surface)
+  local buf = surface and surface.canvas_buf
+  if buf and app.surfaces[buf] == surface then
+    app.surfaces[buf] = nil
+  end
+  for index = #app.opened, 1, -1 do
+    if app.opened[index] == surface then
+      table.remove(app.opened, index)
+    end
+  end
+end
+
+--- Every live review, oldest first.
+local function live_surfaces(app)
+  local out = {}
+  for _, surface in ipairs(app.opened) do
+    if surface:is_alive() then
+      out[#out + 1] = surface
+    end
+  end
+  return out
+end
+
+--- The review a window belongs to: it shows that review's canvas, or the
+--- review adopted it as a host, or it is that review's own sidebar.
+local function surface_for_window(app, win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return nil
+  end
+  local ok, buf = pcall(vim.api.nvim_win_get_buf, win)
+  if ok then
+    local owner = app.surfaces[buf]
+    if owner and owner:is_alive() then
+      return owner
+    end
+  end
+  for _, surface in ipairs(live_surfaces(app)) do
+    -- Refresh ownership first: a window that only ever showed this canvas
+    -- transiently, while it was being created, is dropped here rather than
+    -- answering for a review it never belonged to.
+    surface:canvas_snapshot()
+    if surface:owns_window(win) then
+      return surface
+    end
+    local side = surface.controllers.sidebar
+    if side and sidebar.is_sidebar_win(side, win) then
+      return surface
+    end
+  end
+  return nil
+end
+
+--- Which review a command acts on.
+---
+--- Context first: the window you are in answers it unambiguously, including
+--- from that review's own sidebar. With no context, the most recently opened
+--- live review is the only defensible default -- and with a single review, the
+--- only one there is, which is why every existing single-review behavior is
+--- unchanged.
+local function active_surface(app, win)
+  local contextual = surface_for_window(app, win or vim.api.nvim_get_current_win())
+  if contextual then
+    return contextual
+  end
+  local live = live_surfaces(app)
+  return live[#live] or nil
 end
 
 --- Is one concrete window displaying this Canvas?
@@ -512,12 +579,33 @@ function App:open(opts)
     return nil, collect_err
   end
 
-  -- Collection is transactional: only a valid replacement may retire the
-  -- current Surface. Dispose before canvas.open rewrites the shared scratch
-  -- buffer, so the outgoing session is saved from the model it owned.
-  local previous = active_surface(self)
+  -- Collection is transactional: only a valid replacement may retire a review.
+  --
+  -- Deliberately the review owning THIS window, not the active one: opening
+  -- from inside a review replaces that review in place and inherits its hosts,
+  -- while opening from a window that belongs to no review starts a second one
+  -- and leaves every other review alone.
+  -- Retire any review whose last window has already gone. Its WinClosed
+  -- recheck is queued but has not run, and leaving a hostless review live
+  -- would let it answer for commands issued from windows it does not own.
+  for _, surface in ipairs(live_surfaces(self)) do
+    if #surface:canvas_windows() == 0 and #surface:host_windows() == 0 then
+      surface:dispose("last_window")
+    end
+  end
+
+  local previous = surface_for_window(self, win)
   local ownership = previous and previous:handoff() or nil
+  -- Which hosts were actually DISPLAYING the outgoing review. A replacement
+  -- has a canvas buffer of its own now, so inheriting a window is no longer
+  -- enough to keep showing the review in it -- the ones that were on the old
+  -- canvas have to be moved onto the new one below, or a remote tab would sit
+  -- on a retired buffer.
+  local displaced = {}
   if previous then
+    for _, host in ipairs(previous:canvas_windows()) do
+      displaced[#displaced + 1] = host
+    end
     previous:dispose("replaced")
   end
 
@@ -541,13 +629,25 @@ function App:open(opts)
       end
     end,
     on_dispose = function(owner)
-      -- A late callback from an older Surface must never clear a replacement.
-      if self.surface == owner then
-        self.surface = nil
-      end
+      -- Unregisters by exact identity, so a late callback from an older
+      -- review can never evict its replacement from the index.
+      forget(self, owner)
     end,
   }, ownership)
-  self.surface = surface
+  self.surfaces[st.buf] = surface
+  self.opened[#self.opened + 1] = surface
+
+  -- Move every inherited host that was showing the retired canvas onto this
+  -- one. `canvas.show` rebinds the primary as a side effect, so the window the
+  -- user actually invoked from is restored as primary afterwards.
+  local primary = st.win
+  for _, host in ipairs(displaced) do
+    if host ~= primary and vim.api.nvim_win_is_valid(host)
+        and surface:owns_window(host) then
+      canvas.show(st, host)
+    end
+  end
+  st.win = primary
   local generation = surface.generation
 
   -- A sidebar fold reshapes the canvas, and neither the highlight tier nor the
@@ -729,7 +829,7 @@ function App:open(opts)
   -- (WinScrolled never fires headlessly -- see the harness notes -- so tests drive
   -- set_winbar or this callback by hand, as they already do for hl and the minimap.)
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
-    group = vim.api.nvim_create_augroup("canvasdiff.winbar", { clear = true }),
+    group = vim.api.nvim_create_augroup(surface.groups.winbar, { clear = true }),
     callback = function(ev)
       surface:guard(generation, function(owner)
         local event_win = tonumber(ev.match)
@@ -745,7 +845,7 @@ function App:open(opts)
     end,
   })
   vim.api.nvim_create_autocmd({ "CursorMoved", "WinLeave" }, {
-    group = "canvasdiff.winbar",
+    group = surface.groups.winbar,
     buffer = st.buf,
     callback = function()
       local win = vim.api.nvim_get_current_win()
@@ -786,7 +886,7 @@ function App:open(opts)
   end
 
   if config.options.session.enabled then
-    local aug = vim.api.nvim_create_augroup("canvasdiff.session", { clear = true })
+    local aug = vim.api.nvim_create_augroup(surface.groups.session, { clear = true })
     vim.api.nvim_create_autocmd("VimLeavePre", {
       group = aug,
       callback = function()
@@ -810,7 +910,7 @@ function App:open(opts)
   -- Deferred and re-checked, because another window in this tabpage may still be
   -- showing the canvas -- and because doing window work from inside WinClosed is
   -- fragile (the same reason sidebar.lua schedules its own).
-  local close_aug = vim.api.nvim_create_augroup("canvasdiff.close", { clear = true })
+  local close_aug = vim.api.nvim_create_augroup(surface.groups.close, { clear = true })
   vim.api.nvim_create_autocmd("BufWinEnter", {
     group = close_aug,
     buffer = st.buf,

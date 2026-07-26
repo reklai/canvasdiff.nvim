@@ -84,11 +84,15 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   local second = App.new()
   assert(not rawequal(first, second), "each App.new() returns a distinct owner")
 
-  local state = {}
+  -- A review is filed under its own canvas buffer, so a synthetic state gets
+  -- a synthetic key. What matters is that the index is per App instance.
+  local state = { buf = -1 }
   local surface = require("canvasdiff.Surface").new(state)
-  first.surface = surface
-  H.eq(first.surface, surface, "the active Surface is stored on its owning App")
-  H.eq(second.surface, nil, "one App's Surface cannot leak into another App")
+  first.surfaces[state.buf] = surface
+  first.opened[#first.opened + 1] = surface
+  H.eq(first.surfaces[state.buf], surface,
+    "a review is indexed by its own canvas buffer on its owning App")
+  H.eq(next(second.surfaces), nil, "one App's review cannot leak into another App")
   H.eq(state.surface, surface, "the canvas state names its exact Surface owner")
   H.eq(type(surface.id), "number")
   H.eq(type(surface.generation), "number")

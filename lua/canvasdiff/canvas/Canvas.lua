@@ -8,7 +8,11 @@ local lens = diff.lens
 
 local M = {}
 
-local BUFNAME = "canvasdiff://canvas"
+-- One review, one buffer. The name carries a monotonic ordinal so two
+-- concurrent reviews are distinguishable in `:ls` and can never collide -- a
+-- single fixed name is exactly what made a second review impossible.
+local BUFNAME_PREFIX = "canvasdiff://canvas/"
+local next_canvas_id = 0
 
 local ANCHOR_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.anchors")
 local HL_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
@@ -25,8 +29,6 @@ local HL_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
 -- explicitly deleted and recreated at the correct row after every splice via
 -- replace_boundary_extmark below.
 local ANCHOR_OPTS = { right_gravity = false, invalidate = false, undo_restore = false }
-
-local canvas_buf = nil
 
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffFileHeader", { link = "Title", default = true })
@@ -82,31 +84,20 @@ local function apply_win_opts(win)
   end
 end
 
-local function find_canvas_buf()
-  if canvas_buf and vim.api.nvim_buf_is_valid(canvas_buf) then
-    return canvas_buf
-  end
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_name(b) == BUFNAME then
-      canvas_buf = b
-      return b
-    end
-  end
-  return nil
-end
-
-local function get_or_create_buf()
-  local existing = find_canvas_buf()
-  if existing then return existing end
-
+--- Create this review's own canvas buffer.
+---
+--- Deliberately never reuses one: a review that shared its buffer with another
+--- would share its model, its anchors and its extmark namespaces too, and
+--- disposing either would rewrite what the other is showing.
+local function create_buf()
+  next_canvas_id = next_canvas_id + 1
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, BUFNAME)
+  vim.api.nvim_buf_set_name(buf, BUFNAME_PREFIX .. next_canvas_id)
   vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
   vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
   vim.api.nvim_set_option_value("undolevels", -1, { buf = buf })
   set_modifiable(buf, false)
-  canvas_buf = buf
   return buf
 end
 
@@ -263,9 +254,17 @@ local function replace_boundary_extmark(state, idx, row)
   return new_id
 end
 
+--- Is this buffer a review canvas?
+---
+--- A name test rather than a registry lookup, so this stays a pure predicate
+--- that no live ownership state can go stale against.
 function M.is_canvas_buf(buf)
-  return type(buf) == "number" and vim.api.nvim_buf_is_valid(buf)
-    and vim.api.nvim_buf_get_name(buf) == BUFNAME
+  if type(buf) ~= "number" or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  return name:sub(1, #BUFNAME_PREFIX) == BUFNAME_PREFIX
+    and name:sub(#BUFNAME_PREFIX + 1):match("^%d+$") ~= nil
 end
 
 --- Clears the buffer and re-renders every section from scratch, placing one
@@ -314,12 +313,12 @@ function M.render_all(state, sections)
   set_modifiable(buf, false)
 end
 
---- Creates/reuses the scratch canvas buffer, shows it in the current window,
---- and renders `sections`.
+--- Creates this review's own scratch canvas buffer, shows it in the current
+--- window, and renders `sections`.
 function M.open(sections, opts)
   opts = opts or {}
   ensure_hl_groups()
-  local buf = get_or_create_buf()
+  local buf = create_buf()
   local win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, buf)
   apply_win_opts(win)

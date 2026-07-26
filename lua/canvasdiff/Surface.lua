@@ -1,3 +1,4 @@
+local canvas = require("canvasdiff.canvas")
 local config = require("canvasdiff.config")
 local session = require("canvasdiff.session")
 local input = require("canvasdiff.input")
@@ -17,11 +18,11 @@ Surface.__index = Surface
 local next_id = 0
 local next_generation = 0
 
-local OWNED_GROUPS = {
-  "canvasdiff.session",
-  "canvasdiff.close",
-  "canvasdiff.winbar",
-}
+-- Autocommand groups this Surface installs itself, rather than through a
+-- controller lease. Their names carry the Surface id for the same reason every
+-- controller group does: a fixed name means a second review's teardown deletes
+-- the first review's event sources.
+local OWNED_GROUP_KINDS = { "session", "close", "winbar" }
 
 function Surface.new(state, callbacks, ownership)
   next_id = next_id + 1
@@ -31,19 +32,33 @@ function Surface.new(state, callbacks, ownership)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     baseline_windows[win] = true
   end
+  local groups = {}
+  for _, kind in ipairs(OWNED_GROUP_KINDS) do
+    groups[kind] = ("canvasdiff.%s.%d"):format(kind, next_id)
+  end
+
   local self = setmetatable({
     id = next_id,
     generation = next_generation,
+    groups = groups,
     phase = "active",
     saved = false,
     disposed = false,
     state = state,
+    -- The index key App files this review under. Captured once: `state.buf`
+    -- is released at disposal, but a late callback still has to be able to
+    -- unregister the exact review it belonged to.
+    canvas_buf = state and state.buf or nil,
     callbacks = callbacks or {},
     controllers = {},
     -- One review, one way back. Two concurrent reviews keep independent
     -- excursions rather than overwriting a shared module-global one.
     excursion = jump.store(),
     windows = {},
+    -- Windows adopted from a single scan and not yet seen twice. See
+    -- canvas_snapshot: one sighting is not proof a window is really a view of
+    -- this review.
+    provisional = {},
     landings = {},
     baseline_windows = baseline_windows,
   }, Surface)
@@ -51,6 +66,7 @@ function Surface.new(state, callbacks, ownership)
   state.surface = self
   for _, win in ipairs(ownership.windows or {}) do
     if vim.api.nvim_win_is_valid(win) then
+      -- Inherited from a predecessor that already proved these are its hosts.
       self.windows[win] = true
     end
   end
@@ -73,6 +89,26 @@ function Surface:is_alive()
   return self.phase == "active" and not self.disposed
 end
 
+--- Confirm a provisionally adopted window once the event loop has turned.
+---
+--- Deferred rather than confirmed on a second synchronous sighting, because a
+--- window being created beside a Canvas view stays on that Canvas across
+--- several events -- WinNew, BufWinEnter, WinEnter, WinResized -- before
+--- Neovim installs its real buffer. Only a turn of the loop separates "a real
+--- duplicate view" from "a window that had not finished being made".
+local function confirm_later(self, win)
+  vim.schedule(function()
+    if not (self:is_alive() and self.provisional[win]) then
+      return
+    end
+    local buf = self.state and self.state.buf
+    if buf and vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_win_get_buf(win) == buf then
+      self.provisional[win] = nil
+    end
+  end)
+end
+
 --- Snapshot this Surface's valid hosts and Canvas windows without electing a
 --- new scalar primary.
 ---
@@ -80,16 +116,40 @@ end
 --- but deliberately does not write `state.win`. Controllers with per-window
 --- state need a stable ownership snapshot, not a write to an unrelated
 --- scalar merely because one of their callbacks happened to run.
+---
+--- Adoption is provisional until the event loop turns. A window being created
+--- next to a Canvas view transiently displays that Canvas, and any unrelated
+--- event in that moment -- a resize is enough -- scans it. Adopting outright
+--- made the review claim a window it never had, so a `:CanvasDiff` there
+--- replaced the review instead of starting a second one.
 function Surface:canvas_snapshot()
   local canvas_windows = {}
   local state = self.state
-  if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+  local buf = state and state.buf
+  local valid_buf = buf ~= nil and vim.api.nvim_buf_is_valid(buf)
+
+  for win in pairs(self.provisional) do
+    local showing = valid_buf
+      and vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_win_get_buf(win) == buf
+    if not showing then
+      self.provisional[win] = nil
+      self.windows[win] = nil
+      self.landings[win] = nil
+    end
+  end
+
+  if valid_buf then
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_is_valid(win)
-          and vim.api.nvim_win_get_buf(win) == state.buf
+          and vim.api.nvim_win_get_buf(win) == buf
           and (self.windows[win] or not self.baseline_windows[win]) then
         canvas_windows[#canvas_windows + 1] = win
-        self.windows[win] = true
+        if self.windows[win] == nil then
+          self.windows[win] = true
+          self.provisional[win] = true
+          confirm_later(self, win)
+        end
       end
     end
   end
@@ -121,17 +181,22 @@ function Surface:canvas_windows()
   return out
 end
 
---- Explicitly adopt an existing window that has just entered the canvas
---- buffer. This distinguishes a real post-open view from a lower-level/raw
---- view that happened to display the process-wide scratch buffer before this
---- Surface existed.
+--- Adopt an existing window that has just entered the canvas buffer.
+---
+--- Provisional for the same reason snapshot adoption is: BufWinEnter also
+--- fires for a window that is merely being CREATED beside a canvas view and
+--- will hold a foreign buffer a moment later. See confirm_later.
 function Surface:adopt_window(win, landing)
   local state = self.state
   if not (win and state and state.buf and vim.api.nvim_win_is_valid(win)
       and vim.api.nvim_win_get_buf(win) == state.buf) then
     return false
   end
-  self.windows[win] = true
+  if self.windows[win] == nil then
+    self.windows[win] = true
+    self.provisional[win] = true
+    confirm_later(self, win)
+  end
 
   if self.landings[win] == nil then
     if landing == nil and self.baseline_windows[win] then
@@ -208,6 +273,7 @@ function Surface:release_window(win)
     return false
   end
   self.windows[win] = nil
+  self.provisional[win] = nil
   self.landings[win] = nil
   return true
 end
@@ -311,10 +377,10 @@ function Surface:dispose(reason)
     end
   end)
 
-  for _, group in ipairs(OWNED_GROUPS) do
+  for _, kind in ipairs(OWNED_GROUP_KINDS) do
     -- A disabled feature legitimately has no group. Missing groups are not
     -- teardown faults, so keep the historical best-effort deletion semantics.
-    pcall(vim.api.nvim_del_augroup_by_name, group)
+    pcall(vim.api.nvim_del_augroup_by_name, self.groups[kind])
   end
 
   local clear_winbar = self.callbacks.clear_winbar
@@ -325,6 +391,27 @@ function Surface:dispose(reason)
   -- The way back belonged to this review. Releasing it here keeps a disposed
   -- Surface from retaining a file buffer and a whole canvas state graph.
   self.excursion = nil
+
+  -- So did the canvas buffer. Reclaim it once the event loop turns: the
+  -- explicit-close path restores each host window to its landing buffer AFTER
+  -- disposal, and deleting the buffer synchronously would make Neovim pick a
+  -- replacement for those windows first.
+  local canvas_buf = self.state and self.state.buf or nil
+  if canvas_buf then
+    vim.schedule(function()
+      if not (vim.api.nvim_buf_is_valid(canvas_buf)
+          and canvas.is_canvas_buf(canvas_buf)) then
+        return
+      end
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local ok, showing = pcall(vim.api.nvim_win_get_buf, win)
+        if ok and showing == canvas_buf then
+          return
+        end
+      end
+      pcall(vim.api.nvim_buf_delete, canvas_buf, { force = true })
+    end)
+  end
 
   if self.state then
     self.state.hooks = nil

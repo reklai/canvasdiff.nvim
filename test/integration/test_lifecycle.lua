@@ -49,16 +49,13 @@ local function controller_groups(prefix)
   return out
 end
 
-local function group_alive(name)
-  if name == "canvasdiff.highlight"
-      or name == "canvasdiff.sidebar"
-      or name == "canvasdiff.scrollbar"
-      or name == "canvasdiff.status_column"
-      or name == "canvasdiff.virt"
-      or name == "canvasdiff.watch" then
-    return #controller_groups(name) > 0
-  end
-  return pcall(vim.api.nvim_get_autocmds, { group = name })
+--- Is any group with this prefix armed?
+---
+--- Every group a review installs is per-Surface now -- controllers and the
+--- Surface's own session/close/winbar groups alike -- because a fixed name
+--- means a second review's teardown deletes the first review's event sources.
+local function group_alive(prefix)
+  return #controller_groups(prefix) > 0
 end
 
 local function assert_groups(alive, where, groups)
@@ -505,7 +502,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
 
       -- VimLeave, explicit close, repeat close, and the already-queued
       -- WinClosed callback all converge on the same once gate.
-      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "canvasdiff.session" })
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = surface.groups.session })
       ctx.fm.close()
       ctx.fm.close()
       H.eq(surface:dispose("again"), false, "terminal disposal is idempotent")

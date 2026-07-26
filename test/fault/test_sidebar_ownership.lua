@@ -231,9 +231,12 @@ T["sidebar_lease two simultaneous leases keep independent views and teardown"] =
     local win_a = one_view(lease_a)
     local buf_a = vim.api.nvim_win_get_buf(win_a)
 
-    -- A second review opens while the first is still live. Nothing in the
-    -- sidebar arbitrates between them.
-    local st_b = state({ "x/new.txt", "y/other.txt" })
+    -- A second review opens while the first is still live, in a window of its
+    -- own -- reviews own one buffer each, so opening B over A's window would
+    -- simply take that window. Nothing in the sidebar arbitrates between them.
+    local st_b = H.in_new_window(function()
+      return state({ "x/new.txt", "y/other.txt" })
+    end)
     local owner_b = owner_for(st_b)
     local lease_b = remember(assert(
       sidebar.open(st_b, { width = 26 }, owner_callbacks(owner_b))))

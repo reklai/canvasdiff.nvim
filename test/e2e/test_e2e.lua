@@ -17,22 +17,17 @@ local function sidebar_view(st, tab)
   end
 end
 
-local function group_alive(name)
-  if name == "canvasdiff.highlight"
-      or name == "canvasdiff.sidebar"
-      or name == "canvasdiff.scrollbar"
-      or name == "canvasdiff.status_column"
-      or name == "canvasdiff.virt"
-      or name == "canvasdiff.watch" then
-    for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
-      local group = autocmd.group_name
-      if group and (group == name or group:sub(1, #name + 1) == name .. ".") then
-        return true
-      end
+--- Is any group with this prefix armed? Every group a review installs is
+--- per-Surface, so a fixed name would mean a second review's teardown deleting
+--- the first review's event sources.
+local function group_alive(prefix)
+  for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
+    local group = autocmd.group_name
+    if group and (group == prefix or group:sub(1, #prefix + 1) == prefix .. ".") then
+      return true
     end
-    return false
   end
-  return pcall(vim.api.nvim_get_autocmds, { group = name })
+  return false
 end
 
 local function wipe_buffer(buf)

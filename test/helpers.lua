@@ -9,6 +9,30 @@ local H = {}
 H.project_root = vim.fs.dirname(vim.fs.dirname(
   vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
 
+--- Run `open` in a window of its own, returning its result and that window.
+---
+--- `canvas.open` shows a review in the CURRENT window, and a review now owns
+--- one buffer of its own: a second open in the same window replaces what the
+--- first is displaying, and the first review's controllers correctly stop
+--- seeing it. A test that wants two LIVE reviews has to give each somewhere to
+--- live -- which is exactly what a user does.
+function H.in_new_window(open)
+  vim.cmd("split")
+  local win = vim.api.nvim_get_current_win()
+  return open(), win
+end
+
+--- Close windows opened by H.in_new_window, newest first, keeping the last one.
+function H.close_windows(...)
+  for i = select("#", ...), 1, -1 do
+    local win = select(i, ...)
+    if win and vim.api.nvim_win_is_valid(win)
+        and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+end
+
 function H.tmpdir()
   local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_" .. vim.uv.hrtime())
   vim.fn.mkdir(dir, "p")

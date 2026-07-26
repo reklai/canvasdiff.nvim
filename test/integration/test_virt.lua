@@ -315,8 +315,12 @@ T["virt_ concurrent owners and stale async work remain isolated"] = function()
 end
 
 T["virt_ teardown deletes C group before reentrant D attach"] = function()
-  local state_c = canvas.open(six_sections(), {})
-  local state_d = canvas.open(six_sections(), {})
+  local state_c, win_c = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
+  local state_d, win_d = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
 
   with_fake_runtime(function(runtime)
     local lease_c = virt.attach(state_c, { enabled = false })
@@ -338,12 +342,19 @@ T["virt_ teardown deletes C group before reentrant D attach"] = function()
       "disposed C can never apply")
     H.eq(virt.detach(lease_d), true, "D remains an independent live exact lease")
   end)
+  H.close_windows(win_c, win_d)
 end
 
 T["virt_ attaching a peer never invokes predecessor teardown"] = function()
-  local state_a = canvas.open(six_sections(), {})
-  local state_b = canvas.open(six_sections(), {})
-  local state_c = canvas.open(six_sections(), {})
+  local state_a, win_a = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
+  local state_b, win_b = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
+  local state_c, win_c = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
 
   with_fake_runtime(function(runtime)
     local lease_a = virt.attach(state_a, { enabled = false })
@@ -368,6 +379,7 @@ T["virt_ attaching a peer never invokes predecessor teardown"] = function()
     H.eq(virt.detach(lease_c), true)
     H.eq(virt.detach(lease_b), true)
   end)
+  H.close_windows(win_a, win_b, win_c)
 end
 
 T["virt_ alive reentrancy can create a peer without revoking either lease"] = function()
@@ -494,9 +506,13 @@ T["virt_ owner callback faults are observable and attach is transactional"] = fu
 end
 
 T["virt_ immediate callback may attach an independent peer"] = function()
-  local state_a = canvas.open(six_sections(), {})
+  local state_a, win_a = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
   reset_view(state_a)
-  local state_b = canvas.open(six_sections(), {})
+  local state_b, win_b = H.in_new_window(function()
+    return canvas.open(six_sections(), {})
+  end)
   local lease_b
   local opts = {
     enabled = true,
@@ -521,6 +537,7 @@ T["virt_ immediate callback may attach an independent peer"] = function()
     "the peer remains independently usable")
   H.eq(virt.detach(lease_a), true)
   H.eq(virt.detach(lease_b), true)
+  H.close_windows(win_a, win_b)
 end
 
 T["virt_ queued work resolves the latest rebound canvas window"] = function()
