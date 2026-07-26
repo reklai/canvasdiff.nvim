@@ -26,7 +26,21 @@ local canvas_buf = nil
 
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyFileHeader", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "GalleyGhost", { link = "DiffDelete", default = true })
+  -- The background of the file-boundary bar. `Folded` because it is the most visible
+  -- of the groups that always carry a background: measured under tokyonight-moon it is
+  -- +30 luminance against Normal, where CursorLine manages +15 and ColorColumn is
+  -- actually DARKER (-7) -- too subtle for something whose entire job is to be noticed
+  -- in peripheral vision as you scroll past. `Visual` is comparable (+26) but is
+  -- already the sidebar's active-row colour, and one colour should mean one thing.
+  --
+  -- Background only matters here: the filename's own colour comes from
+  -- GalleyFileHeader above, at a higher priority.
+  vim.api.nvim_set_hl(0, "GalleyFileBar", { link = "Folded", default = true })
+  -- The diff row tints. Aliases so they are tunable without redefining the groups
+  -- your ordinary vimdiff uses -- see the note in render.HL_GROUP.
+  vim.api.nvim_set_hl(0, "GalleyAdd", { link = "DiffAdd", default = true })
+  vim.api.nvim_set_hl(0, "GalleyDel", { link = "DiffDelete", default = true })
+  vim.api.nvim_set_hl(0, "GalleyGhost", { link = "GalleyDel", default = true })
   vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
   vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
 end
@@ -97,13 +111,26 @@ local function apply_section_hl(buf, start_row, section, collapsed)
   end
   local marks = render.section_hl(section)
   local ids = {}
+
+  -- A full-width tint across the file header row, so crossing from one file into the
+  -- next is visible while you scroll instead of being one more line among diff lines.
+  -- `line_hl_group` fills the entire screen line and survives resize untouched.
+  -- Priority below the header mark lets the filename's Title foreground compose with
+  -- this background. Folded placeholders are already visually distinct and get no bar.
+  ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
+    line_hl_group = "GalleyFileBar",
+    priority = 99,
+  })
+
+  -- Diff tints stop at end-of-text. Filling to the screen edge makes the coloured area
+  -- scale with window width rather than with the change and competes with the more
+  -- precise word-diff marks.
   for _, m in ipairs(marks) do
     local row = start_row + m.row
     ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
       end_row = row + 1,
       end_col = 0,
       hl_group = m.group,
-      hl_eol = true,
       priority = 100,
     })
   end

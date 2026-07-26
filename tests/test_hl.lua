@@ -305,4 +305,68 @@ T["hl_engine BufWinEnter reapplies marks after a hidden splice"] = function()
     "BufWinEnter updated state.win to the window now showing the canvas")
 end
 
+-- --- the diff-row contrast budget -------------------------------------------
+--
+-- Three properties that together decide how the canvas reads, and none of which any
+-- other test would notice changing.
+
+-- `hl_eol` made an add/del tint fill the rest of the SCREEN LINE, so a three-character
+-- edit painted colour to the right edge of a 200-column window -- the coloured area
+-- scaled with the window, not with the change. This is the guard against it coming
+-- back, which is a one-word edit in apply_section_hl and looks like nothing in review.
+T["hl_rows add and del tints stop at end-of-text, never filling the window"] = function()
+  local st = canvas.open({
+    model.build_section("a.lua", "local a = 1\nlocal b = 2\n", "local a = 1\nlocal B = 2\n", "M", 3),
+  }, {})
+
+  local flooders, tinted = {}, 0
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, -1, 0, -1, { details = true })) do
+    local d = m[4]
+    if d and (d.hl_group == "GalleyAdd" or d.hl_group == "GalleyDel") then
+      tinted = tinted + 1
+      if d.hl_eol then flooders[#flooders + 1] = ("row %d %s"):format(m[2] + 1, d.hl_group) end
+    end
+  end
+  assert(tinted > 0, "sanity: the diff rows are tinted at all")
+  H.eq(flooders, {},
+    "no add/del mark may set hl_eol -- it spends the strongest visual channel on "
+    .. "'this line is involved', which is the least interesting thing on screen")
+end
+
+-- These were the last two visual elements pointing straight at standard groups, so
+-- tuning the diff rows meant redefining the groups your ordinary vimdiff also uses.
+T["hl_rows the row tints go through overridable Galley aliases"] = function()
+  for _, g in ipairs({ "GalleyAdd", "GalleyDel" }) do
+    local direct = vim.api.nvim_get_hl(0, { name = g, link = false })
+    assert(next(direct) ~= nil, g .. " must be defined, or the diff rows render unstyled")
+  end
+  -- `default = true` throughout, so a colourscheme that defines these wins.
+  local linked = vim.api.nvim_get_hl(0, { name = "GalleyAdd", link = true })
+  assert(linked.link == "DiffAdd" or linked.bg,
+    "GalleyAdd should default to DiffAdd (or be overridden), got: " .. vim.inspect(linked))
+end
+
+-- The word-diff marks have to beat the row tint they sit inside, and a BACKGROUND
+-- cannot be relied on to: which one wins is colourscheme luck. Measured both ways --
+-- under tokyonight-moon DiffText clears an added row by 9 and Search by 39, and under
+-- Neovim's builtin scheme that reverses to 28 and 19, with the row itself clearing
+-- Normal by 41 so neither dominates.
+--
+-- So the requirement is that these carry ATTRIBUTES and NO background: attributes
+-- compose over whatever is underneath instead of competing with it, which is the only
+-- form of this that holds under every colourscheme. This test is therefore structural
+-- on purpose -- a luminance assertion here would pass or fail on the test runner's
+-- colourscheme rather than on anything galley decides.
+T["hl_rows word-diff marks emphasise by attribute, not by a competing background"] = function()
+  for _, name in ipairs({ "GalleyWordAdd", "GalleyWordDel" }) do
+    local h = vim.api.nvim_get_hl(0, { name = name, link = false })
+    assert(next(h) ~= nil, name .. " must be defined, or changed spans get no mark at all")
+    assert(h.bg == nil, name .. " must not set a background: it sits inside the row tint, "
+      .. "so a background competes with one that already claimed the contrast range "
+      .. "(linking back to DiffText or Search is what breaks this)")
+    assert(h.bold or h.underline or h.reverse or h.italic or h.undercurl,
+      name .. " must carry at least one attribute, or it marks nothing")
+  end
+end
+
 return T

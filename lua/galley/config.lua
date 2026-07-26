@@ -1,6 +1,21 @@
 local util = require("galley.util")
+local render = require("galley.render")
 
 local M = {}
+
+--- A glyph set that needs nothing beyond ASCII, for a restricted font, a Linux
+--- framebuffer console, or anywhere the defaults render as boxes. Pass it as
+--- `glyphs = "ascii"`.
+---
+--- Every character here is one cell wide under BOTH `ambiwidth` settings, which the
+--- defaults are not: `▎ −` are East Asian Ambiguous and double under
+--- `ambiwidth=double`, so the marker column and the file-header gutter change width
+--- for anyone with that set.
+M.ASCII_GLYPHS = {
+  ctx = " ", del = "-", add = "+",
+  file = "|", folded = ">", open = "v", minus = "-",
+  scroll_file = "-", scroll_bar = "|",
+}
 
 -- Keymaps are grouped by the buffer they live on, because the same key means
 -- different things in different places: `q` closes the canvas but only the
@@ -166,6 +181,34 @@ function M.setup(opts)
   end
   M.user_opts = vim.deepcopy(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+
+  -- Glyphs live on `render`, not in M.options, because render must stay requirable
+  -- without config. Reset first, or two setup() calls layer on each other.
+  render.reset_glyphs()
+  local g = opts.glyphs
+  if g == "ascii" then
+    g = M.ASCII_GLYPHS
+  end
+  if type(g) == "table" then
+    local unknown = {}
+    for name, value in pairs(g) do
+      if not render.is_glyph(name) then
+        unknown[#unknown + 1] = tostring(name)
+      elseif type(value) ~= "string" then
+        util.err(("glyphs.%s must be a string, got %s"):format(name, type(value)))
+      else
+        render.glyphs[name] = value
+      end
+    end
+    if #unknown > 0 then
+      table.sort(unknown)
+      util.err("unknown glyph name(s): " .. table.concat(unknown, ", ")
+        .. ". Valid names: " .. table.concat(vim.tbl_keys(M.ASCII_GLYPHS), ", "))
+    end
+  elseif g ~= nil then
+    util.err('glyphs must be a table or the string "ascii", got ' .. type(g))
+  end
+
   return M.options
 end
 

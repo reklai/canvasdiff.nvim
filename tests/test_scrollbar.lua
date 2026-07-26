@@ -1,4 +1,5 @@
 local H = require("helpers")
+local render = require("galley.render")
 local model = require("galley.model")
 local scrollbar = require("galley.scrollbar")
 local canvas = require("galley.canvas")
@@ -29,10 +30,10 @@ T["scroll_column buckets density and file boundaries"] = function()
   kinds[36] = "del"       -- bucket 4: mixed
   local cells = scrollbar.column(kinds, 4, 100, 100) -- viewport far away: no thumb
   H.eq(#cells, 4)
-  H.eq({ cells[1].char, cells[1].hl }, { "─", "GalleyScrollFile" })
-  H.eq({ cells[2].char, cells[2].hl }, { "│", "GalleyScrollAdd" })
-  H.eq({ cells[3].char, cells[3].hl }, { "│", "GalleyScrollDel" })
-  H.eq({ cells[4].char, cells[4].hl }, { "│", "GalleyScrollChanged" })
+  H.eq({ cells[1].char, cells[1].hl }, { render.glyphs.scroll_file, "GalleyScrollFile" })
+  H.eq({ cells[2].char, cells[2].hl }, { render.glyphs.scroll_bar, "GalleyScrollAdd" })
+  H.eq({ cells[3].char, cells[3].hl }, { render.glyphs.scroll_bar, "GalleyScrollDel" })
+  H.eq({ cells[4].char, cells[4].hl }, { render.glyphs.scroll_bar, "GalleyScrollChanged" })
   for r = 1, 4 do H.eq(cells[r].thumb, false) end
 end
 
@@ -52,6 +53,43 @@ T["scroll_column thumb covers viewport-intersecting rows only"] = function()
   local thumbs = {}
   for r = 1, 10 do thumbs[r] = cells[r].thumb end
   H.eq(thumbs, { false, false, false, true, true, true, false, false, false, false })
+end
+
+-- The minimap float is ONE column wide, so a glyph that renders as two cells cannot
+-- fit in it. Every box-drawing and block-element character is East Asian Ambiguous
+-- and doubles under `ambiwidth=double` -- a legitimate setting CJK users have, not a
+-- misconfiguration. The original ─ and │ put a two-cell glyph in 13 of 21 rows there.
+--
+-- This is the guard against someone swapping in a better-looking ─, │, ▏, ▎, ━ or ┃:
+-- all of them pass every other test in this file and silently break that setup.
+T["scroll_column its glyphs stay one cell under ambiwidth=double"] = function()
+  local saved = vim.o.ambiwidth
+  local ok, err = pcall(function()
+    for _, aw in ipairs({ "single", "double" }) do
+      vim.o.ambiwidth = aw
+      for _, name in ipairs({ "scroll_file", "scroll_bar" }) do
+        H.eq(vim.fn.strwidth(render.glyphs[name]), 1,
+          ("%s must be 1 cell at ambiwidth=%s; it cannot fit a width-1 float otherwise")
+            :format(name, aw))
+      end
+    end
+
+    -- And end to end, through the real bucketing: no cell may exceed the float width.
+    vim.o.ambiwidth = "double"
+    local kinds = {}
+    for i = 1, 60 do kinds[i] = "ctx" end
+    kinds[1], kinds[20] = "hdr", "hdr"
+    kinds[10], kinds[40] = "add", "add"
+    kinds[30] = "del"
+    kinds[45], kinds[46] = "add", "del"
+    local over = {}
+    for r, c in ipairs(scrollbar.column(kinds, 12, 1, 12)) do
+      if vim.fn.strwidth(c.char) > 1 then over[#over + 1] = ("row %d = %q"):format(r, c.char) end
+    end
+    H.eq(over, {}, "no minimap cell may be wider than the one column it is drawn in")
+  end)
+  vim.o.ambiwidth = saved
+  assert(ok, err)
 end
 
 T["scroll_column degenerate inputs are safe"] = function()
@@ -197,7 +235,7 @@ T["scroll_win file boundary rows are drawn"] = function()
   local lines = vim.api.nvim_buf_get_lines(bbuf, 0, -1, false)
   local dashes = 0
   for _, l in ipairs(lines) do
-    if l == "─" then dashes = dashes + 1 end
+    if l == render.glyphs.scroll_file then dashes = dashes + 1 end
   end
   H.eq(dashes, 2, "two file-boundary rows for two sections")
   scrollbar.close()

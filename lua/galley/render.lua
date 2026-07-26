@@ -1,17 +1,56 @@
 local R = {}
 
-local PREFIX = {
+--- Every glyph galley draws, in one place, so all of them are configurable through one
+--- surface instead of five constants and four inline literals.
+---
+--- Written into by config.setup from `opts.glyphs`; read live everywhere, never
+--- snapshotted. `stale` includes its leading space deliberately because it is appended
+--- to a row rather than occupying its own column.
+---
+--- Width matters here. `▎ −` are East Asian Ambiguous and render two cells wide
+--- under `ambiwidth=double`, while `▸ ▾ ‒ ❘` stay one cell in both modes. If you
+--- override any of these, check `vim.fn.strwidth` under both settings -- see
+--- config.ASCII_GLYPHS for a set that is one cell everywhere and needs no font beyond
+--- ASCII.
+local GLYPHS = {
+  -- diff row prefixes
   ctx = " ",
   del = "-",
   add = "+",
+  -- structure
+  file = "▎",
+  folded = "▸",
+  open = "▾",
+  minus = "−",
+  -- minimap
+  scroll_file = "‒",
+  scroll_bar = "❘",
 }
+
+R.glyphs = GLYPHS
+local PREFIX = GLYPHS
+
+-- Pristine copy, so config.setup can start from the defaults every time instead of
+-- layering each call's overrides on the last one's.
+local DEFAULT_GLYPHS = vim.deepcopy(GLYPHS)
+
+function R.reset_glyphs()
+  for k, v in pairs(DEFAULT_GLYPHS) do
+    GLYPHS[k] = v
+  end
+end
+
+function R.is_glyph(name)
+  return DEFAULT_GLYPHS[name] ~= nil
+end
 
 local HL_GROUP = {
   file_hdr = "GalleyFileHeader",
   hunk_hdr = "GalleyHunkHeader",
   binary = "GalleyBinary",
-  del = "DiffDelete",
-  add = "DiffAdd",
+  -- Aliases make the canvas tunable without redefining the groups used by vimdiff.
+  del = "GalleyDel",
+  add = "GalleyAdd",
 }
 
 function R.section_lines(section)
@@ -21,8 +60,8 @@ function R.section_lines(section)
       -- "(+0 −0)" on a binary file would read as "nothing changed", which is
       -- the opposite of the truth -- it changed, we just won't show how.
       local counts = section.binary and "  (binary)"
-        or ("  (+%d −%d)"):format(section.adds, section.dels)
-      lines[i] = "▎ " .. e.content .. counts
+        or ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
+      lines[i] = GLYPHS.file .. " " .. e.content .. counts
     elseif e.kind == "hunk_hdr" then
       lines[i] = e.content
     elseif e.kind == "binary" then
@@ -37,9 +76,10 @@ end
 --- Single-line summary shown in place of a collapsed section's body.
 function R.placeholder(section)
   if section.binary then
-    return "▸ " .. section.path .. "  (binary)"
+    return GLYPHS.folded .. " " .. section.path .. "  (binary)"
   end
-  return "▸ " .. section.path .. ("  (%d hunks, +%d −%d)"):format(section.nhunks, section.adds, section.dels)
+  return GLYPHS.folded .. " " .. section.path
+    .. ("  (%d hunks, +%d " .. GLYPHS.minus .. "%d)"):format(section.nhunks, section.adds, section.dels)
 end
 
 --- `virt_lines` chunk spec for an entry's deleted lines, or nil when it has none.

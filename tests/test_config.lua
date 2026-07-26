@@ -76,4 +76,73 @@ T["config_ user_opts keeps the raw table for health to diff"] = function()
   end)
 end
 
+-- --- glyphs -----------------------------------------------------------------
+--
+-- Glyphs live on `render`, not in config.options, because render must stay requirable
+-- without config (it is pure, model and sidebar build lines with it, its tests call it
+-- directly). config only pushes overrides in. These pin that wiring, and the reset --
+-- without which two setup() calls layer their overrides on each other.
+
+T["config_ glyphs default to the shipped unicode set"] = function()
+  local render = require("galley.render")
+  config.setup({})
+  H.eq(render.glyphs.file, "▎")
+  H.eq(render.glyphs.folded, "▸")
+  H.eq(render.glyphs.scroll_bar, "❘")
+end
+
+T["config_ a glyph table overrides only the slots it names"] = function()
+  local render = require("galley.render")
+  config.setup({ glyphs = { file = "|", minus = "-" } })
+  H.eq(render.glyphs.file, "|")
+  H.eq(render.glyphs.minus, "-")
+  H.eq(render.glyphs.folded, "▸", "untouched slots keep their default")
+  config.setup({})
+  H.eq(render.glyphs.file, "▎", "and setup resets, rather than layering")
+end
+
+T["config_ glyphs = 'ascii' selects the preset"] = function()
+  local render = require("galley.render")
+  config.setup({ glyphs = "ascii" })
+  for name, want in pairs(config.ASCII_GLYPHS) do
+    H.eq(render.glyphs[name], want, name .. " must come from the preset")
+  end
+  -- The preset covers EVERY slot: a partial preset would leave unicode glyphs behind
+  -- on a font that cannot draw them, which is the whole reason to reach for it.
+  for name in pairs(render.glyphs) do
+    assert(config.ASCII_GLYPHS[name], "ASCII_GLYPHS is missing the '" .. name .. "' slot")
+  end
+  -- And every one is a single cell under BOTH ambiwidth settings, unlike the defaults.
+  local saved = vim.o.ambiwidth
+  for _, aw in ipairs({ "single", "double" }) do
+    vim.o.ambiwidth = aw
+    for name, g in pairs(config.ASCII_GLYPHS) do
+      local glyph = vim.trim(g)
+      if glyph ~= "" then
+        H.eq(vim.fn.strwidth(glyph), 1,
+          ("%s = %q must be 1 cell at ambiwidth=%s"):format(name, g, aw))
+      end
+    end
+  end
+  vim.o.ambiwidth = saved
+  config.setup({})
+end
+
+T["config_ a typo'd glyph name is reported, not silently ignored"] = function()
+  with_setup({ glyphs = { fyle = "|" } }, function(_, msgs)
+    local said = false
+    for _, m in ipairs(msgs) do
+      if tostring(m.msg):find("unknown glyph", 1, true) then said = true end
+    end
+    assert(said, "a misspelled glyph slot must be reported: " .. vim.inspect(msgs))
+  end)
+  with_setup({ glyphs = 42 }, function(_, msgs)
+    local said = false
+    for _, m in ipairs(msgs) do
+      if tostring(m.msg):find("glyphs must be", 1, true) then said = true end
+    end
+    assert(said, "a non-table, non-\"ascii\" value must be reported")
+  end)
+end
+
 return T

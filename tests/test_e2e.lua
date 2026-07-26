@@ -381,6 +381,83 @@ return {
 
     vim.fn.delete(root, "rf")
   end,
+  -- The file-boundary bar: a full-width tint on each expanded file's header row, so
+  -- crossing out of one file and into the next is visible while scrolling rather than
+  -- being one more line among diff lines.
+  ["e2e: a boundary bar marks each expanded file, and only those"] = function()
+    local function body(tag, marks)
+      local o = {}
+      for i = 1, 20 do
+        o[i] = tag .. " L" .. i .. ((marks and i % 5 == 0) and " ch" or "")
+      end
+      return table.concat(o, "\n") .. "\n"
+    end
+    local names = { "aaa.txt", "mmm.txt", "zzz.txt" }
+    local committed, worktree = {}, {}
+    for _, n in ipairs(names) do
+      committed[n] = body(n)
+      worktree[n] = body(n, true)
+    end
+    local root = H.git_fixture({ committed = committed, worktree = worktree })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+
+    local function bars()
+      local rows = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
+        if m[4] and m[4].line_hl_group == "GalleyFileBar" then
+          rows[#rows + 1] = m[2] + 1
+        end
+      end
+      table.sort(rows)
+      return rows
+    end
+    local function rows_matching(pat)
+      local r = {}
+      for i, l in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+        if l:match(pat) then r[#r + 1] = i end
+      end
+      return r
+    end
+
+    H.eq(bars(), rows_matching("^▎"), "exactly one bar per expanded file header")
+    H.eq(#bars(), 3, "sanity: three files")
+
+    local bar = vim.api.nvim_get_hl(0, { name = "GalleyFileBar", link = false })
+    local hdr = vim.api.nvim_get_hl(0, { name = "GalleyFileHeader", link = false })
+    assert(bar.bg, "the bar group must resolve to a real background to be visible")
+    assert(hdr.bg == nil,
+      "GalleyFileHeader must stay foreground-only so it composes with the bar")
+
+    -- Fold the middle file: its bar goes with its body.
+    vim.api.nvim_win_set_cursor(cwin, { rows_matching("^▎")[2], 0 })
+    vim.api.nvim_feedkeys(vim.keycode("c"), "x", false)
+    local placeholders = rows_matching("^▸")
+    H.eq(#placeholders, 1, "sanity: one folded placeholder")
+    H.eq(bars(), rows_matching("^▎"), "still one bar per EXPANDED header")
+    local ph = {}
+    for _, r in ipairs(placeholders) do ph[r] = true end
+    for _, r in ipairs(bars()) do
+      assert(not ph[r], "no bar may sit on a folded placeholder row (row " .. r .. ")")
+    end
+
+    vim.api.nvim_feedkeys(vim.keycode("c"), "x", false)
+    H.eq(bars(), rows_matching("^▎"), "unfolding brings its bar back")
+
+    -- And through a splice, which re-applies section highlights.
+    local f = assert(io.open(vim.fs.joinpath(root, "aaa.txt"), "w"))
+    f:write(body("aaa.txt", true) .. "tail\n")
+    f:close()
+    vim.api.nvim_set_current_win(cwin)
+    vim.api.nvim_feedkeys(vim.keycode("r"), "x", false)
+    H.eq(bars(), rows_matching("^▎"), "bars survive a refresh's splice")
+
+    fm.close()
+    vim.fn.delete(root, "rf")
+  end,
   -- The result view: the canvas shows the file as it WILL be. Deletions are drawn as
   -- virtual lines rather than buffer rows, so every remaining row maps 1:1 to a real
   -- file line.

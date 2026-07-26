@@ -2,6 +2,7 @@ local canvas = require("galley.canvas")
 local config = require("galley.config")
 local keys = require("galley.keys")
 local fold = require("galley.fold")
+local render = require("galley.render")
 
 local S = {}
 
@@ -74,10 +75,13 @@ function S.render_lines(entries)
   for i, e in ipairs(entries) do
     local indent = ("  "):rep(e.depth)
     if e.kind == "dir" then
-      lines[i] = indent .. (e.folded and "▸ " or "▾ ") .. e.name
+      lines[i] = indent
+        .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
+        .. e.name
     else
-      lines[i] = indent .. (e.aside and "▸ " or "  ")
-        .. e.name .. ("  +%d −%d"):format(e.adds, e.dels)
+      lines[i] = indent .. (e.aside and (render.glyphs.folded .. " ") or "  ")
+        .. e.name
+        .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
     end
   end
   return lines

@@ -165,9 +165,13 @@ function M.section_ts_marks(section)
   return marks
 end
 
+--- The intra-line marks emphasise the exact changed spans by attribute rather than by
+--- adding another background inside the GalleyAdd/GalleyDel row tint. Attributes
+--- compose over the row and syntax colours instead of competing with them, so this
+--- remains legible independently of which colourscheme is active.
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleyWordAdd", { link = "DiffText", default = true })
-  vim.api.nvim_set_hl(0, "GalleyWordDel", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "GalleyWordAdd", { bold = true, underline = true, default = true })
+  vim.api.nvim_set_hl(0, "GalleyWordDel", { bold = true, underline = true, default = true })
 end
 
 local live_state

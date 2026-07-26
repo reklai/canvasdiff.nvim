@@ -1,6 +1,14 @@
 local fold = require("galley.fold")
+local render = require("galley.render")
 
 local S = {}
+
+--- The minimap's two glyphs: a file boundary and a stretch of changed lines.
+---
+--- ‒ (U+2012 FIGURE DASH) and ❘ (U+2758 LIGHT VERTICAL BAR) rather than the
+--- box-drawing ─ and │ they replace, and the reason is width, not looks. This float is
+--- one column wide, while box-drawing characters become two cells under the legitimate
+--- `ambiwidth=double` setting. Keep replacements width-stable under both settings.
 
 --- One kind per canvas line, sections in render order. hunk_hdr counts as
 --- "ctx" (structural, uncolored); file_hdr becomes "hdr" (boundary rows). A
@@ -69,13 +77,13 @@ function S.column(kinds, height, top0, bot0)
 
     local char, hl = " ", nil
     if has_hdr then
-      char, hl = "─", "GalleyScrollFile"
+      char, hl = render.glyphs.scroll_file, "GalleyScrollFile"
     elseif has_add and has_del then
-      char, hl = "│", "GalleyScrollChanged"
+      char, hl = render.glyphs.scroll_bar, "GalleyScrollChanged"
     elseif has_add then
-      char, hl = "│", "GalleyScrollAdd"
+      char, hl = render.glyphs.scroll_bar, "GalleyScrollAdd"
     elseif has_del then
-      char, hl = "│", "GalleyScrollDel"
+      char, hl = render.glyphs.scroll_bar, "GalleyScrollDel"
     end
 
     -- Thumb: this row's non-empty bucket intersects the viewport line

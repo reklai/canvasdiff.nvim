@@ -162,7 +162,10 @@ return {
     local hl = render.section_hl(s)
     H.eq(hl[1], { row = 0, group = "GalleyFileHeader" })
     H.eq(hl[2], { row = 1, group = "GalleyHunkHeader" })
-    H.eq(hl[3], { row = 3, group = "DiffAdd" })
+    -- Galley* aliases, not DiffDelete/DiffAdd directly. Every other visual element
+    -- already went through an overridable group; these were the last two that did not,
+    -- so tuning the diff rows meant redefining the groups your ordinary vimdiff uses.
+    H.eq(hl[3], { row = 3, group = "GalleyAdd" })
     H.eq(hl[4], nil, "only one content row is highlighted now")
   end,
   ["model_section carries old_text and new_text"] = function()
