@@ -303,7 +303,7 @@ return {
       committed = { ["a.txt"] = lines("l", 20) },
       worktree = { ["a.txt"] = lines("L", 20) },
     })
-    local sidebar = require("canvasdiff.sidebar")
+    local sidebar = require("canvasdiff.ui").sidebar
     local lease = assert(sidebar.open(st, { width = 30 }))
 
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 })

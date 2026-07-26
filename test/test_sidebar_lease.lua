@@ -1,7 +1,7 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local sidebar = require("canvasdiff.sidebar")
+local sidebar = require("canvasdiff.ui").sidebar
 
 local T = {}
 
@@ -177,6 +177,98 @@ local function set_complex_foreign_mark(buf, id)
     invalidate = true,
     url = "https://example.invalid/sidebar-foreign-mark",
   })
+end
+
+T["sidebar_lease a forged shell cannot authenticate as a lease"] = function()
+  with_tab(function(remember)
+    local st = state({ "a/one.txt", "b/two.txt" })
+    local lease = remember(assert(sidebar.open(st, { width = 24 })))
+    local win = one_view(lease)
+    local buf = vim.api.nvim_win_get_buf(win)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+    -- Every public field a lease carries, copied verbatim. Authentication has
+    -- to rest on something a caller cannot reproduce.
+    local copy = {}
+    for k, v in pairs(lease) do
+      copy[k] = v
+    end
+    local forgeries = {
+      copy,
+      setmetatable({}, { __index = lease }),
+      { phase = "active", disposed = false, views_by_tab = lease.views_by_tab,
+        views_by_win = lease.views_by_win, state = st, callbacks = {} },
+      "not a table",
+      nil,
+    }
+    for i = 1, 5 do
+      local forged = forgeries[i]
+      H.eq(sidebar.close(forged), false, "a forged handle cannot close a real lease")
+      H.eq(sidebar.is_open(forged), false, "a forged handle owns no view")
+      H.eq(sidebar.is_sidebar_win(forged, win), false,
+        "a forged handle cannot claim a real view")
+      H.eq(sidebar.refresh(forged), false, "a forged handle cannot redraw")
+      H.eq(sidebar.reconcile(forged), false, "a forged handle cannot reconcile")
+      H.eq(sidebar.sync(forged, st.win), false, "a forged handle cannot move the cursor")
+      H.eq(sidebar.mark_path(forged, "a/one.txt", st.win), false,
+        "a forged handle cannot select a path")
+    end
+
+    assert(sidebar.is_open(lease), "the real lease is still open")
+    H.eq(one_view(lease), win, "the real view is untouched")
+    H.eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), lines,
+      "no forgery rewrote the real sidebar")
+    H.eq(sidebar.close(lease), true)
+  end)
+end
+
+T["sidebar_lease two simultaneous leases keep independent views and teardown"] = function()
+  with_tab(function(remember)
+    local st_a = state({ "a/one.txt", "a/two.txt" })
+    local owner_a = owner_for(st_a)
+    local lease_a = remember(assert(
+      sidebar.open(st_a, { width = 24 }, owner_callbacks(owner_a))))
+    local win_a = one_view(lease_a)
+    local buf_a = vim.api.nvim_win_get_buf(win_a)
+
+    -- A second review opens while the first is still live. Nothing in the
+    -- sidebar arbitrates between them.
+    local st_b = state({ "x/new.txt", "y/other.txt" })
+    local owner_b = owner_for(st_b)
+    local lease_b = remember(assert(
+      sidebar.open(st_b, { width = 26 }, owner_callbacks(owner_b))))
+    local win_b
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if sidebar.is_sidebar_win(lease_b, win) then
+        win_b = win
+      end
+    end
+    assert(win_b, "B opened its own view")
+    assert(win_a ~= win_b, "the two leases own distinct windows")
+    local buf_b = vim.api.nvim_win_get_buf(win_b)
+    assert(buf_a ~= buf_b, "the two leases own distinct buffers")
+    assert(lease_a.group_name ~= lease_b.group_name, "group names never collide")
+
+    H.eq(sidebar.is_sidebar_win(lease_a, win_b), false, "A does not claim B's view")
+    H.eq(sidebar.is_sidebar_win(lease_b, win_a), false, "B does not claim A's view")
+    assert(sidebar.is_open(lease_a), "opening B did not supersede A")
+    assert(sidebar.is_open(lease_b))
+    assert(sidebar.refresh(lease_a), "A still redraws alongside B")
+    assert(sidebar.refresh(lease_b))
+
+    local lines_b = vim.api.nvim_buf_get_lines(buf_b, 0, -1, false)
+    H.eq(sidebar.close(lease_a), true)
+    H.eq(owner_a.releases, 1, "A released exactly its own owner slot")
+    H.eq(owner_b.releases, 0, "A teardown never released B")
+    assert(not vim.api.nvim_win_is_valid(win_a), "A's window is gone")
+    assert(sidebar.is_open(lease_b), "B survives its peer's teardown")
+    H.eq(vim.api.nvim_buf_get_lines(buf_b, 0, -1, false), lines_b,
+      "A teardown never rewrote B's buffer")
+    assert(sidebar.refresh(lease_b), "B remains functional")
+
+    H.eq(sidebar.close(lease_b), true)
+    H.eq(owner_b.releases, 1)
+  end)
 end
 
 T["sidebar_lease throwing claim releases a partially published identity"] = function()

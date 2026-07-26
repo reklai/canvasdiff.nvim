@@ -20,7 +20,13 @@ end
 T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "err", "highlight", "notify", "scrollbar", "warn" })
+  H.eq(names, { "err", "highlight", "notify", "scrollbar", "sidebar", "warn" })
+end
+
+T["ui_sidebar legacy sidebar module path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.sidebar"] = nil
+  local loaded = pcall(require, "canvasdiff.sidebar")
+  assert(not loaded, "canvasdiff.sidebar must not remain as a forwarding module")
 end
 
 T["ui_highlight facade exposes the lease operations its owners call"] = function()

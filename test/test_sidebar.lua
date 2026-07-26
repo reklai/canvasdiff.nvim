@@ -1,5 +1,5 @@
 local H = require("helpers")
-local sidebar = require("canvasdiff.sidebar")
+local sidebar = require("canvasdiff.ui").sidebar
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
@@ -593,7 +593,7 @@ T["sidebar_win double-click selects, same as <CR>"] = function()
 
   -- a file row scrolls the canvas to that section
   local file_row
-  for i, e in ipairs(require("canvasdiff.sidebar").build_entries(st.sections, {})) do
+  for i, e in ipairs(require("canvasdiff.ui").sidebar.build_entries(st.sections, {})) do
     if e.kind == "file" and e.section_i == #st.sections then file_row = i end
   end
   assert(file_row, "a file row for the last section")
@@ -604,7 +604,7 @@ T["sidebar_win double-click selects, same as <CR>"] = function()
 
   -- a dir row folds instead, exactly as <CR> does there
   local dir_row
-  for i, e in ipairs(require("canvasdiff.sidebar").build_entries(st.sections, {})) do
+  for i, e in ipairs(require("canvasdiff.ui").sidebar.build_entries(st.sections, {})) do
     if e.kind == "dir" then dir_row = i break end
   end
   if dir_row then

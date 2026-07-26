@@ -12,6 +12,7 @@ local SESSION_CODEC_OWNER = "canvasdiff.session.codec"
 local UI_FACADE = "canvasdiff.ui"
 local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
 local HIGHLIGHT_OWNER = "canvasdiff.ui.highlight"
+local SIDEBAR_OWNER = "canvasdiff.ui.sidebar"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -98,7 +99,7 @@ T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.sidebar"] = true,
+    [SIDEBAR_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
   }
@@ -120,7 +121,7 @@ T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.sidebar"] = true,
+    [SIDEBAR_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [WATCH_OWNER] = true,
   }
@@ -188,6 +189,7 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   assert_inspected_module(inspection, UI_FACADE)
   assert_inspected_module(inspection, SCROLLBAR_OWNER)
   assert_inspected_module(inspection, HIGHLIGHT_OWNER)
+  assert_inspected_module(inspection, SIDEBAR_OWNER)
 
   local facade_edges = {}
   local violations = {}
@@ -196,6 +198,11 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
       if dependency.module:match("^canvasdiff%.ui%.") then
         if file.rel == "lua/canvasdiff/ui.lua" then
           facade_edges[dependency.module] = (facade_edges[dependency.module] or 0) + 1
+        elseif file.rel:match("^lua/canvasdiff/ui/") then
+          -- Owners inside the domain compose directly. Routing them through
+          -- the facade they are members of would be a require cycle, not a
+          -- boundary.
+          _ = dependency
         else
           violations[#violations + 1] = (
             "%s:%d -> %s"
@@ -207,6 +214,7 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
 
   H.eq(facade_edges[SCROLLBAR_OWNER], 1, "the UI facade owns the one scrollbar edge")
   H.eq(facade_edges[HIGHLIGHT_OWNER], 1, "the UI facade owns the one highlighter edge")
+  H.eq(facade_edges[SIDEBAR_OWNER], 1, "the UI facade owns the one sidebar edge")
   assert_no_errors(violations,
     "UI production and test consumers must enter through canvasdiff.ui")
 end
@@ -222,7 +230,7 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.sidebar"] = true,
+    [SIDEBAR_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -244,7 +252,7 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.sidebar"] = true,
+    [SIDEBAR_OWNER] = true,
     ["canvasdiff.statuscol"] = true,
   }
   local violations = {}
@@ -260,7 +268,7 @@ end
 T.architecture_sidebar_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.sidebar")
+  assert_inspected_module(inspection, SIDEBAR_OWNER)
 
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
@@ -274,7 +282,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.sidebar" and forbidden[edge.to] then
+    if edge.from == SIDEBAR_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
@@ -293,7 +301,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.sidebar"] = true,
+    [SIDEBAR_OWNER] = true,
     ["canvasdiff.statuscol"] = true,
   }
   local violations = {}

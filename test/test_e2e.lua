@@ -1,5 +1,5 @@
 local H = require("helpers")
-local sidebar = require("canvasdiff.sidebar")
+local sidebar = require("canvasdiff.ui").sidebar
 
 -- E2E cases deliberately change cwd and open real files from throwaway repos.
 -- Restore a path that outlives every fixture before removing one: deleting the

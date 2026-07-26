@@ -7,7 +7,7 @@ local config = require("canvasdiff.config")
 local system = require("canvasdiff.os")
 local scrollbar = require("canvasdiff.ui").scrollbar
 local fold = model.fold
-local sidebar = require("canvasdiff.sidebar")
+local sidebar = require("canvasdiff.ui").sidebar
 
 local T = {}
 
@@ -258,7 +258,7 @@ end
 T["session_folds persist with the sidebar closed"] = function()
   local root = H.tmpdir()
   local st = open_ab(root)
-  require("canvasdiff.sidebar").close() -- folds are state's, not the sidebar's
+  require("canvasdiff.ui").sidebar.close() -- folds are state's, not the sidebar's
   st.folded = { ["a/"] = true }
 
   session.save(st)
@@ -770,7 +770,7 @@ T["session_folds reveal works after reopening with the sidebar disabled"] = func
     vim.cmd("tabnew")
     fm.setup({ sidebar = { enabled = false } })
     fm.open()
-    H.eq(require("canvasdiff.sidebar").is_open(), false, "sanity: no sidebar this time")
+    H.eq(require("canvasdiff.ui").sidebar.is_open(), false, "sanity: no sidebar this time")
 
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     assert(lines[1]:match("^▸ a/one%.txt"),

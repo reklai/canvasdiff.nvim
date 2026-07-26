@@ -189,7 +189,7 @@ end
 
 T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   local root, st = open_fixture()
-  local sidebar = require("canvasdiff.sidebar")
+  local sidebar = require("canvasdiff.ui").sidebar
   local render = require("canvasdiff.canvas").format
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
@@ -242,7 +242,7 @@ end
 -- col-ranged and win on priority.
 T["stale_ the marker is highlighted, in the canvas and in the tree"] = function()
   local root, st = open_fixture()
-  local sidebar = require("canvasdiff.sidebar")
+  local sidebar = require("canvasdiff.ui").sidebar
   local render = require("canvasdiff.canvas").format
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)

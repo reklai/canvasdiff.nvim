@@ -6,7 +6,7 @@ local diff = require("canvasdiff.diff")
 local fold = diff.fold
 local model = diff
 local lens = diff.lens
-local ui = require("canvasdiff.ui")
+local notifications = require("canvasdiff.ui.notifications")
 
 local S = {}
 
@@ -165,8 +165,15 @@ local function normalize_tab(tab)
   return tab
 end
 
+-- Lookup-only authentication. Weak keys cannot keep a lease alive and, unlike
+-- trusting a handful of public table fields, cannot be copied onto a forged
+-- shell. It selects nothing: simultaneous Surfaces hold simultaneous sidebar
+-- leases, and every live view stays reachable only from its owning lease.
+local LEASE_AUTH = setmetatable({}, { __mode = "k" })
+
 local function exact(lease)
-  return lease ~= nil
+  return type(lease) == "table"
+    and LEASE_AUTH[lease] == true
     and not lease.disposed
     and (lease.phase == "attaching" or lease.phase == "active")
 end
@@ -188,9 +195,13 @@ local function active(lease)
   return exact(lease)
 end
 
+--- A view is authenticated through its own lease's private per-tab map, so a
+--- forged view table is unreachable even when it copies every public field of
+--- a real one. Deliberately independent of `exact`: terminal teardown flips
+--- the lease to "closing" before it disposes the views it still owns.
 local function view_exact(lease, view)
-  return lease ~= nil
-    and view ~= nil
+  return type(lease) == "table"
+    and type(view) == "table"
     and not view.disposed
     and view.lease == lease
     and lease.views_by_tab
@@ -1193,7 +1204,7 @@ function S.select(lease, side_win)
 
   local section_i = index_of_path(state, path)
   if not section_i then
-    ui.notify(path .. " has no changes any more")
+    notifications.notify(path .. " has no changes any more")
     return false
   end
   local win = view.canvas_win
@@ -1253,6 +1264,9 @@ function S.open(state, opts, callbacks)
     reconcile_ticket = 0,
     claimed = false,
   }
+  -- Publish exact identity before the first external call, so a reentrant
+  -- callback can dispose only this partial lease.
+  LEASE_AUTH[lease] = true
 
   local claim = lease.callbacks.claim
   if claim then
@@ -1267,6 +1281,7 @@ function S.open(state, opts, callbacks)
     end
     if not claimed then
       lease.claimed = false
+      LEASE_AUTH[lease] = nil
       lease.phase = "disposed"
       lease.disposed = true
       lease.state = nil
@@ -1309,6 +1324,7 @@ function S.close(lease)
   if not exact(lease) then
     return false
   end
+  LEASE_AUTH[lease] = nil
   lease.phase = "closing"
   lease.disposed = true
   lease.reconcile_ticket = lease.reconcile_ticket + 1
