@@ -1,6 +1,6 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local motions = require("canvasdiff.motions")
 local statuscol = require("canvasdiff.statuscol")
 local Surface = require("canvasdiff.Surface")

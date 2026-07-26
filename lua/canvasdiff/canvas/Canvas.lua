@@ -1,7 +1,7 @@
 local render = require("canvasdiff.render")
 local viewport = require("canvasdiff.viewport")
 local fold = require("canvasdiff.fold")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local lens = require("canvasdiff.lens")
 
 local M = {}
@@ -198,7 +198,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
 
   -- Deleted lines, drawn as virtual lines rather than buffer rows. They cost zero
   -- buffer lines, which is the whole reason the result view leaves every piece of row
-  -- arithmetic in this file untouched -- see the note in model.build_section's `push`.
+  -- arithmetic in this file untouched -- see the note in diff.build_section's `push`.
   --
   -- Attached here rather than at splice time because this function already runs per
   -- section on every render_all AND every replace_section, and returns its ids for
@@ -343,7 +343,7 @@ function M.open(sections, opts)
     -- is also one header row, so resplice needs this explicit discriminator.
     rendered_hidden = {},
     -- `folded_seen[path]` is what a section's content looked like when the user put
-    -- it away (model.fingerprint), or `false` for one that arrived already hidden.
+    -- it away (diff.fingerprint), or `false` for one that arrived already hidden.
     -- fold.stale compares it against the section's content now.
     folded_seen = {},
   }

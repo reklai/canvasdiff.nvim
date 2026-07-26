@@ -1,6 +1,6 @@
 local H = require("helpers")
 local collect = require("canvasdiff.collect")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local util = require("canvasdiff.util")
 
 local T = {}

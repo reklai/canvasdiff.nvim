@@ -1,6 +1,18 @@
 local H = require("helpers")
-local differ = require("canvasdiff.differ")
+local differ = require("canvasdiff.diff")
 return {
+  ["diff facade: exports only the curated public operations"] = function()
+    local names = vim.tbl_keys(differ)
+    table.sort(names)
+    H.eq(names, {
+      "build",
+      "build_section",
+      "fingerprint",
+      "hunks",
+      "is_binary",
+      "staged_then_changed",
+    })
+  end,
   ["differ: simple change"] = function()
     local h = differ.hunks("a\nb\nc\n", "a\nX\nc\n")
     H.eq(h, { { 2, 1, 2, 1 } })

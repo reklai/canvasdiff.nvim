@@ -1,6 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local viewport = require("canvasdiff.viewport")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local git = require("canvasdiff.git")
 local config = require("canvasdiff.config")
 local util = require("canvasdiff.util")

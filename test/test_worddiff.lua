@@ -1,5 +1,5 @@
 local H = require("helpers")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local worddiff = require("canvasdiff.worddiff")
 
 local T = {}

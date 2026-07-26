@@ -1,7 +1,7 @@
 local H = require("helpers")
 local sidebar = require("canvasdiff.sidebar")
 local canvas = require("canvasdiff.canvas")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local render = require("canvasdiff.render")
 local virt = require("canvasdiff.virt")
 local motions = require("canvasdiff.motions")
@@ -465,7 +465,7 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
     committed = { ["m/a.txt"] = bigtext(40, "a") },
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
   })
-  local st = canvas.open(require("canvasdiff.model").build(
+  local st = canvas.open(require("canvasdiff.diff").build(
     require("canvasdiff.collect").files(root), 3), {})
   st.root = root
   local lease = assert(sidebar.open(st, { width = 30 }))

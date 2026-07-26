@@ -364,7 +364,7 @@ end
 -- --- through the plugin ---------------------------------------------------
 
 local canvas = require("canvasdiff.canvas")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local jump = require("canvasdiff.jump")
 local session = require("canvasdiff.session")
 
@@ -534,7 +534,7 @@ T["lens_xy git.changed_files keeps both halves of the status"] = function()
 end
 
 T["lens_xy staged_then_changed reads it off the section"] = function()
-  local model_ = require("canvasdiff.model")
+  local model_ = require("canvasdiff.diff")
   H.eq(model_.staged_then_changed({ staged = "M", unstaged = "M" }), true)
   H.eq(model_.staged_then_changed({ staged = "M" }), false, "staged only")
   H.eq(model_.staged_then_changed({ unstaged = "M" }), false, "unstaged only")

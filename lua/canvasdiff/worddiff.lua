@@ -1,4 +1,4 @@
-local differ = require("canvasdiff.differ")
+local differ = require("canvasdiff.diff")
 
 local W = {}
 

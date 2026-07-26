@@ -189,7 +189,7 @@ function M.setup(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
 
   -- Glyphs live on `render`, not in M.options, and the reason is that render must stay
-  -- requirable without config: it is pure, model.lua and the sidebar build lines with
+  -- requirable without config: it is pure, the diff model and sidebar build lines with
   -- it, and its tests call it directly. So the defaults belong there and config only
   -- pushes overrides in. Reset first, or two setup() calls layer on each other.
   --

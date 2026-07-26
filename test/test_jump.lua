@@ -1,6 +1,6 @@
 local H = require("helpers")
 local git = require("canvasdiff.git")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local jump = require("canvasdiff.jump")
 local fold = require("canvasdiff.fold")

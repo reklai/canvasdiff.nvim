@@ -138,7 +138,7 @@ end
 
 --- True when `path` is folded AND its diff no longer looks like it did when the
 --- user put it away. `current_fp` is the section's fingerprint right now
---- (model.fingerprint) -- passed in rather than computed here so this module stays
+--- (diff.fingerprint) -- passed in rather than computed here so this module stays
 --- pure and dependency-free. `lens_id` scopes the comparison (see below).
 ---
 --- Detection is a COMPARISON, not a flag, and that is the point: canvas.render_all
@@ -197,7 +197,7 @@ end
 
 --- Indices of the sections under directory `dir` (a fold key, trailing
 --- slash). Ascending, and contiguous in practice because sections are
---- path-sorted (model.build) and a fold key is a path prefix.
+--- path-sorted (diff.build) and a fold key is a path prefix.
 function F.indices_under(sections, dir)
   local out = {}
   if not sections or not dir or dir == "" then

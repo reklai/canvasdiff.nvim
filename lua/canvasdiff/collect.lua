@@ -1,7 +1,7 @@
 local git = require("canvasdiff.git")
 local util = require("canvasdiff.util")
 local lens = require("canvasdiff.lens")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 
 local M = {}
 
@@ -78,7 +78,7 @@ local function read_worktree_content(root, rel_path, status)
   return content
 end
 
---- All changed files with both sides of the current lens, ready for model.build.
+--- All changed files with both sides of the current lens, ready for diff.build.
 ---
 --- Accepts a lens record or, for compatibility, the older `base` string
 --- ("HEAD" | "index") that only ever named the old side -- config.options.base and

@@ -9,7 +9,7 @@
 -- under a live fold.
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local collect = require("canvasdiff.collect")
 local watch = require("canvasdiff.watch")
 local virt = require("canvasdiff.virt")

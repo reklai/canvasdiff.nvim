@@ -1,7 +1,7 @@
 local H = require("helpers")
 local git = require("canvasdiff.git")
 local collect = require("canvasdiff.collect")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 
 --- Stage the current worktree content of `rel` (via `git add -A`), leaving

@@ -1,6 +1,5 @@
 local H = require("helpers")
-local util = require("canvasdiff.util")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local render = require("canvasdiff.render")
 
 local T = {}
@@ -11,19 +10,19 @@ local BIN_OLD = "PK\3\4\0\0\0\0garbage\0\1\2\3"
 local BIN_NEW = "PK\3\4\0\0\0\0GARBAGE\0\4\5\6"
 
 T["binary_ is_binary detects NUL and leaves text alone"] = function()
-  H.eq(util.is_binary("hello\nworld\n"), false)
-  H.eq(util.is_binary(""), false)
-  H.eq(util.is_binary(nil), false)
-  H.eq(util.is_binary("head\0tail"), true)
-  H.eq(util.is_binary(BIN_OLD), true)
+  H.eq(model.is_binary("hello\nworld\n"), false)
+  H.eq(model.is_binary(""), false)
+  H.eq(model.is_binary(nil), false)
+  H.eq(model.is_binary("head\0tail"), true)
+  H.eq(model.is_binary(BIN_OLD), true)
   -- UTF-8 text is not binary just because it has high bytes.
-  H.eq(util.is_binary("héllo — ünicode\n"), false)
+  H.eq(model.is_binary("héllo — ünicode\n"), false)
 end
 
 T["binary_ is_binary only sniffs the head, like git"] = function()
   local late = string.rep("a", 9000) .. "\0"
-  H.eq(util.is_binary(late), false, "a NUL past 8000 bytes is not sniffed")
-  H.eq(util.is_binary(string.rep("a", 100) .. "\0"), true, "an early NUL is")
+  H.eq(model.is_binary(late), false, "a NUL past 8000 bytes is not sniffed")
+  H.eq(model.is_binary(string.rep("a", 100) .. "\0"), true, "an early NUL is")
 end
 
 -- Regression: a binary file was diffed as text. vim.text.diff produced pages

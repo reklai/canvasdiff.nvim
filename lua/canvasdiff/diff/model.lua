@@ -1,5 +1,5 @@
-local differ = require("canvasdiff.differ")
-local util = require("canvasdiff.util")
+local algorithm = require("canvasdiff.diff.algorithm")
+local text = require("canvasdiff.diff.text")
 
 local M = {}
 
@@ -110,10 +110,10 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
   local new = new_text or ""
   local old_path = metadata and metadata.old_path or path
   local renamed = old_path ~= path
-  local binary = util.is_binary(old) or util.is_binary(new)
+  local binary = text.is_binary(old) or text.is_binary(new)
 
   -- Identity is itself a reviewable change. Git reports a pure rename with
-  -- byte-identical blobs, so differ.hunks quite correctly returns nothing;
+  -- byte-identical blobs, so algorithm.hunks quite correctly returns nothing;
   -- retain it as one header row instead of mistaking "no text delta" for "no
   -- change". This deliberately precedes the binary branch: an unchanged binary
   -- rename is safe to show because no blob content ever enters a buffer row.
@@ -143,7 +143,7 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
 
   local old_lines = split_lines(old)
   local new_lines = split_lines(new)
-  local raw_hunks = differ.hunks(old, new)
+  local raw_hunks = algorithm.hunks(old, new)
 
   -- Ghosting deletions needs something real for them to hang off, and a file with no
   -- new side has nothing: a result view of a wholly-deleted file is EMPTY. Every line

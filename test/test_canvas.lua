@@ -1,5 +1,5 @@
 local H = require("helpers")
-local model = require("canvasdiff.model")
+local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 
 -- Big generated fixture: the headless window is ~24 rows tall, so sections
