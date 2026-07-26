@@ -21,6 +21,7 @@ end
 local function group_alive(name)
   if name == "canvasdiff.hl"
       or name == "canvasdiff.sidebar"
+      or name == "canvasdiff.scrollbar"
       or name == "canvasdiff.virt"
       or name == "canvasdiff.watch" then
     for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
@@ -390,7 +391,8 @@ return {
     select_cr()
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.sidebar", "canvasdiff.session",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.sidebar",
+      "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
     end
@@ -401,7 +403,7 @@ return {
 
     for _, g in ipairs({
       "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.statuscol",
-      "canvasdiff.sidebar", "canvasdiff.session",
+      "canvasdiff.sidebar", "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")
     end

@@ -9,6 +9,8 @@ local VIRTUALIZER_OWNER = "canvasdiff.runtime.virtualizer"
 local WATCH_OWNER = "canvasdiff.runtime.watch"
 local SESSION_FACADE = "canvasdiff.session"
 local SESSION_CODEC_OWNER = "canvasdiff.session.codec"
+local UI_FACADE = "canvasdiff.ui"
+local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -94,7 +96,7 @@ T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
@@ -116,7 +118,7 @@ T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     [RUNTIME_FACADE] = true,
     [WATCH_OWNER] = true,
@@ -179,6 +181,33 @@ T.architecture_session_internal_is_reached_only_through_the_facade = function()
     "session production and test consumers must enter through canvasdiff.session")
 end
 
+T.architecture_scrollbar_internal_is_reached_only_through_the_ui_facade = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+  assert_inspected_module(inspection, UI_FACADE)
+  assert_inspected_module(inspection, SCROLLBAR_OWNER)
+
+  local facade_edges = 0
+  local violations = {}
+  for _, file in ipairs(inspection.files) do
+    for _, dependency in ipairs(literal_requires_in(file)) do
+      if dependency.module == SCROLLBAR_OWNER then
+        if file.rel == "lua/canvasdiff/ui.lua" then
+          facade_edges = facade_edges + 1
+        else
+          violations[#violations + 1] = (
+            "%s:%d -> %s"
+          ):format(file.rel, dependency.line, dependency.module)
+        end
+      end
+    end
+  end
+
+  H.eq(facade_edges, 1, "the UI facade must own the one internal scrollbar edge")
+  assert_no_errors(violations,
+    "scrollbar production and test consumers must enter through canvasdiff.ui")
+end
+
 T.architecture_status_column_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
@@ -189,7 +218,7 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
   }
   local violations = {}
@@ -211,7 +240,7 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     ["canvasdiff.statuscol"] = true,
   }
@@ -237,7 +266,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.statuscol"] = true,
   }
   local violations = {}
@@ -260,7 +289,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
-    ["canvasdiff.scrollbar"] = true,
+    [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     ["canvasdiff.statuscol"] = true,
   }

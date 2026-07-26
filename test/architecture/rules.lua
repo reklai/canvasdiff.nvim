@@ -28,7 +28,6 @@ R.legacy_paths = {
   "lua/canvasdiff/cmd.lua",
   "lua/canvasdiff/hl.lua",
   "lua/canvasdiff/jump.lua",
-  "lua/canvasdiff/scrollbar.lua",
   "lua/canvasdiff/sidebar.lua",
   "lua/canvasdiff/statuscol.lua",
   "lua/canvasdiff/util.lua",

@@ -2,7 +2,7 @@ local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
-local scrollbar = require("canvasdiff.scrollbar")
+local scrollbar = require("canvasdiff.ui").scrollbar
 local hl = require("canvasdiff.hl")
 local fold = model.fold
 

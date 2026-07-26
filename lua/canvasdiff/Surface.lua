@@ -1,9 +1,9 @@
 local config = require("canvasdiff.config")
 local hl = require("canvasdiff.hl")
-local scrollbar = require("canvasdiff.scrollbar")
 local session = require("canvasdiff.session")
 local sidebar = require("canvasdiff.sidebar")
 local statuscol = require("canvasdiff.statuscol")
+local scrollbar = require("canvasdiff.ui").scrollbar
 local runtime = require("canvasdiff.runtime")
 local virt = runtime.virtualizer
 local watch = runtime.watch
@@ -291,7 +291,13 @@ function Surface:dispose(reason)
       sidebar.close(lease)
     end
   end)
-  attempt("scrollbar.close", scrollbar.close)
+  attempt("scrollbar.close", function()
+    local lease = self.controllers.scrollbar
+    self.controllers.scrollbar = nil
+    if lease then
+      scrollbar.close(lease)
+    end
+  end)
   attempt("statuscol.detach", function()
     local lease = self.controllers.statuscol
     if lease then

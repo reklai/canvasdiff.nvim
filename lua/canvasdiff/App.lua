@@ -6,7 +6,6 @@ local config = require("canvasdiff.config")
 local hl = require("canvasdiff.hl")
 local runtime = require("canvasdiff.runtime")
 local sidebar = require("canvasdiff.sidebar")
-local scrollbar = require("canvasdiff.scrollbar")
 local input = require("canvasdiff.input")
 local motions = input.motions
 local virt = runtime.virtualizer
@@ -14,6 +13,7 @@ local watch = runtime.watch
 local statuscol = require("canvasdiff.statuscol")
 local session = require("canvasdiff.session")
 local ui = require("canvasdiff.ui")
+local scrollbar = ui.scrollbar
 local keys = input.keys
 local diff = require("canvasdiff.diff")
 local fold = diff.fold
@@ -178,7 +178,10 @@ local function sync_after_collapse(surface, st)
   if side then
     sidebar.refresh(side)
   end
-  scrollbar.update(st)
+  local scroll = surface and surface.controllers.scrollbar
+  if scroll then
+    scrollbar.update(scroll, st)
+  end
 end
 
 --- Watch changed the model rather than only its rendered shape, so every
@@ -601,7 +604,31 @@ function App:open(opts)
   end
 
   if config.options.scrollbar.enabled then
-    scrollbar.open(st, config.options.scrollbar)
+    local scroll_lease = scrollbar.open(st, config.options.scrollbar, {
+      claim = function(lease)
+        if not surface:guard(generation)
+            or surface.controllers.scrollbar ~= nil then
+          return false
+        end
+        surface.controllers.scrollbar = lease
+        return true
+      end,
+      alive = function(lease)
+        return surface:guard(generation)
+          and surface.controllers.scrollbar == lease
+      end,
+      release = function(lease)
+        if surface.controllers.scrollbar ~= lease then
+          return false
+        end
+        surface.controllers.scrollbar = nil
+        return true
+      end,
+    })
+    if scroll_lease then
+      assert(surface.controllers.scrollbar == scroll_lease,
+        "scrollbar claim must publish its returned exact lease")
+    end
   end
 
   -- Keep the winbar's sticky filename tracking the topline. Its own autocmd rather

@@ -1,6 +1,7 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local runtime = require("canvasdiff.runtime")
+local scrollbar = require("canvasdiff.ui").scrollbar
 local viewport = require("canvasdiff.diff").anchor
 
 local T = {}
@@ -52,6 +53,7 @@ end
 local function group_alive(name)
   if name == "canvasdiff.hl"
       or name == "canvasdiff.sidebar"
+      or name == "canvasdiff.scrollbar"
       or name == "canvasdiff.virt"
       or name == "canvasdiff.watch" then
     return #controller_groups(name) > 0
@@ -71,7 +73,6 @@ end
 --- use. Normalize those test-only leftovers before characterizing the root
 --- lifecycle, so this file observes only the review it opens itself.
 local function reset_auxiliary_owners()
-  require("canvasdiff.scrollbar").close()
   require("canvasdiff.statuscol").detach()
   for _, name in ipairs(controller_groups("canvasdiff.hl")) do
     pcall(vim.api.nvim_del_augroup_by_name, name)
@@ -469,6 +470,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
     local generation = surface.generation
     local hl_lease = assert(surface.controllers.hl)
     local sidebar_lease = assert(surface.controllers.sidebar)
+    local scrollbar_lease = assert(surface.controllers.scrollbar)
     local virt_lease = assert(surface.controllers.virt)
     local statuscol_lease = assert(surface.controllers.statuscol)
     local disposed_callbacks = 0
@@ -483,7 +485,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
       { name = "watch.stop", target = runtime.watch, method = "stop" },
       { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
-      { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
+      { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
       { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
@@ -525,6 +527,10 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
         "Surface teardown qualifies sidebar cleanup with one exact lease")
       assert(rawequal(calls["sidebar.close"][1][1], sidebar_lease),
         "Surface teardown passes the exact sidebar lease it acquired")
+      H.eq(calls["scrollbar.close"][1].n, 1,
+        "Surface teardown qualifies scrollbar cleanup with one exact lease")
+      assert(rawequal(calls["scrollbar.close"][1][1], scrollbar_lease),
+        "Surface teardown passes the exact scrollbar lease it acquired")
       H.eq(calls["statuscol.detach"][1].n, 1,
         "Surface teardown qualifies status-column cleanup with one exact lease")
       assert(rawequal(calls["statuscol.detach"][1][1], statuscol_lease),
@@ -546,6 +552,7 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local old_generation = old.generation
     local old_hl = assert(old.controllers.hl)
     local old_sidebar = assert(old.controllers.sidebar)
+    local old_scrollbar = assert(old.controllers.scrollbar)
     local old_shape_change = assert(ctx.state.hooks.on_shape_change)
     local old_virt = assert(old.controllers.virt)
     local old_statuscol = assert(old.controllers.statuscol)
@@ -561,6 +568,7 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       { name = "hl.apply_now", target = hl, method = "apply_now" },
       { name = "hl.detach", target = hl, method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
+      { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = virt, method = "detach" },
       { name = "statuscol.detach", target = statuscol, method = "detach" },
     }, function(counts, calls)
@@ -583,6 +591,9 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       local replacement_sidebar = assert(replacement.controllers.sidebar)
       assert(replacement_sidebar ~= old_sidebar,
         "a replacement Surface acquires a distinct sidebar lease")
+      local replacement_scrollbar = assert(replacement.controllers.scrollbar)
+      assert(replacement_scrollbar ~= old_scrollbar,
+        "a replacement Surface acquires a distinct scrollbar lease")
       local replacement_virt = assert(replacement.controllers.virt)
       assert(replacement_virt ~= old_virt,
         "a replacement Surface acquires a distinct virtualizer lease")
@@ -598,6 +609,9 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       H.eq(calls["sidebar.close"][1].n, 1)
       assert(rawequal(calls["sidebar.close"][1][1], old_sidebar),
         "replacement retires only the preceding Surface's sidebar")
+      H.eq(calls["scrollbar.close"][1].n, 1)
+      assert(rawequal(calls["scrollbar.close"][1][1], old_scrollbar),
+        "replacement retires only the preceding Surface's scrollbar")
       H.eq(calls["statuscol.detach"][1].n, 1)
       assert(rawequal(calls["statuscol.detach"][1][1], old_statuscol),
         "replacement retires only the preceding Surface's status-column controller")
@@ -605,6 +619,7 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       local stops_after_open = counts["watch.stop"]
       local hl_detaches_after_open = counts["hl.detach"]
       local sidebar_closes_after_open = counts["sidebar.close"]
+      local scrollbar_closes_after_open = counts["scrollbar.close"]
       local detaches_after_open = counts["virt.detach"]
       local statuscol_detaches_after_open = counts["statuscol.detach"]
 
@@ -624,6 +639,8 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
         "the old queued callback did not detach the replacement highlighter")
       H.eq(counts["sidebar.close"], sidebar_closes_after_open,
         "the old queued callback did not close the replacement sidebar")
+      H.eq(counts["scrollbar.close"], scrollbar_closes_after_open,
+        "the old queued callback did not close the replacement scrollbar")
       H.eq(counts["virt.detach"], detaches_after_open,
         "the old queued callback did not detach the replacement virtualizer")
       H.eq(counts["statuscol.detach"], statuscol_detaches_after_open,
@@ -655,6 +672,10 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       H.eq(calls["sidebar.close"][2].n, 1)
       assert(rawequal(calls["sidebar.close"][2][1], replacement_sidebar),
         "final close closes the replacement's own sidebar lease")
+      H.eq(counts["scrollbar.close"], scrollbar_closes_after_open + 1)
+      H.eq(calls["scrollbar.close"][2].n, 1)
+      assert(rawequal(calls["scrollbar.close"][2][1], replacement_scrollbar),
+        "final close closes the replacement's own scrollbar lease")
       H.eq(counts["virt.detach"], detaches_after_open + 1)
       H.eq(calls["virt.detach"][2].n, 1)
       assert(rawequal(calls["virt.detach"][2][1], replacement_virt),
@@ -670,12 +691,13 @@ end
 T["lifecycle_ one explicit close performs one complete teardown pass"] = function()
   with_canvas(function(ctx)
     local sidebar_lease = assert(ctx.surface.controllers.sidebar)
+    local scrollbar_lease = assert(ctx.surface.controllers.scrollbar)
     local specs = {
       { name = "session.save", target = require("canvasdiff.session"), method = "save" },
       { name = "watch.stop", target = runtime.watch, method = "stop" },
       { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
-      { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
+      { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
       { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
@@ -692,6 +714,10 @@ T["lifecycle_ one explicit close performs one complete teardown pass"] = functio
         "explicit close qualifies sidebar teardown")
       assert(rawequal(calls["sidebar.close"][1][1], sidebar_lease),
         "explicit close tears down only its Surface's sidebar")
+      H.eq(calls["scrollbar.close"][1].n, 1,
+        "explicit close qualifies scrollbar teardown")
+      assert(rawequal(calls["scrollbar.close"][1][1], scrollbar_lease),
+        "explicit close tears down only its Surface's scrollbar")
       assert_groups(false, "after explicit close")
       assert(vim.api.nvim_win_is_valid(ctx.owner),
         "explicit close restores rather than destroys the canvas window")

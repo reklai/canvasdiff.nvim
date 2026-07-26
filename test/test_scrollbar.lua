@@ -1,10 +1,18 @@
 local H = require("helpers")
 local render = require("canvasdiff.canvas").format
 local model = require("canvasdiff.diff")
-local scrollbar = require("canvasdiff.scrollbar")
+local scrollbar = require("canvasdiff.ui").scrollbar
 local canvas = require("canvasdiff.canvas")
 
 local T = {}
+
+T["scrollbar facade exposes the bounded API and no flat compatibility path"] = function()
+  local names = vim.tbl_keys(scrollbar)
+  table.sort(names)
+  H.eq(names, { "close", "column", "is_open", "line_kinds", "open", "update" })
+  H.eq(package.searchpath("canvasdiff.scrollbar", package.path), nil,
+    "consumers must enter through require('canvasdiff.ui').scrollbar")
+end
 
 T["scroll_kinds flattens sections in render order"] = function()
   -- one modified line, context 3. The del is no longer a row -- it rides on the add as
@@ -128,9 +136,8 @@ end
 
 local function open_with_bar()
   local st = canvas.open({ big_section("a.txt", "a"), big_section("b.txt", "b") }, {})
-  scrollbar.close()
-  scrollbar.open(st, {})
-  return st
+  local lease = assert(scrollbar.open(st, {}))
+  return st, lease
 end
 
 local function bar_win()
@@ -155,8 +162,8 @@ local function thumb_rows(bbuf)
 end
 
 T["scroll_win opens a 1-col non-focusable float on the canvas"] = function()
-  local st = open_with_bar()
-  assert(scrollbar.is_open())
+  local st, lease = open_with_bar()
+  assert(scrollbar.is_open(lease))
   local w = bar_win()
   assert(w, "float exists")
   local cfg = vim.api.nvim_win_get_config(w)
@@ -165,71 +172,71 @@ T["scroll_win opens a 1-col non-focusable float on the canvas"] = function()
   H.eq(cfg.focusable, false)
   H.eq(vim.api.nvim_win_get_height(w), vim.api.nvim_win_get_height(st.win))
   H.eq(vim.api.nvim_get_current_win(), st.win, "focus stays in canvas")
-  scrollbar.close()
-  H.eq(scrollbar.is_open(), false)
+  scrollbar.close(lease)
+  H.eq(scrollbar.is_open(lease), false)
 end
 
 T["scroll_win thumb tracks the viewport"] = function()
-  local st = open_with_bar()
+  local st, lease = open_with_bar()
   local w = bar_win()
   local bbuf = vim.api.nvim_win_get_buf(w)
   vim.api.nvim_win_call(st.win, function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
-  scrollbar.update(st)
+  scrollbar.update(lease, st)
   local top_thumbs = thumb_rows(bbuf)
   assert(#top_thumbs > 0, "thumb present")
   H.eq(top_thumbs[1], 0, "thumb starts at the top row when scrolled to top")
 
   vim.api.nvim_win_call(st.win, function() vim.cmd("normal! G") end)
-  scrollbar.update(st)
+  scrollbar.update(lease, st)
   local bot_thumbs = thumb_rows(bbuf)
   assert(#bot_thumbs > 0)
   local h = vim.api.nvim_win_get_height(w)
   H.eq(bot_thumbs[#bot_thumbs], h - 1, "thumb ends at the bottom row when scrolled to bottom")
   assert(bot_thumbs[1] > top_thumbs[1], "thumb moved down")
-  scrollbar.close()
+  scrollbar.close(lease)
 end
 
 T["scroll_win hides during an excursion and re-shows after"] = function()
-  local st = open_with_bar()
+  local st, lease = open_with_bar()
   local scratch = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(st.win, scratch) -- simulate jump.enter
-  scrollbar.update(st)
-  H.eq(scrollbar.is_open(), false, "float hidden while canvas not showing")
+  scrollbar.update(lease, st)
+  H.eq(scrollbar.is_open(lease), false, "float hidden while canvas not showing")
 
   vim.api.nvim_win_set_buf(st.win, st.buf) -- BufWinEnter fires
-  vim.wait(200, function() return scrollbar.is_open() end, 10)
-  H.eq(scrollbar.is_open(), true, "float re-shown on canvas re-show")
-  scrollbar.close()
+  vim.wait(200, function() return scrollbar.is_open(lease) end, 10)
+  H.eq(scrollbar.is_open(lease), true, "float re-shown on canvas re-show")
+  scrollbar.close(lease)
 end
 
 T["scroll_win hides on :edit excursion without manual update"] = function()
-  local st = open_with_bar()
+  local st, lease = open_with_bar()
   local tmp = vim.fn.tempname()
   local f = assert(io.open(tmp, "w")); f:write("hello\n"); f:close()
   vim.api.nvim_win_call(st.win, function()
     vim.cmd.edit({ tmp, mods = { keepalt = true } })
   end)
-  vim.wait(300, function() return not scrollbar.is_open() end, 10)
-  H.eq(scrollbar.is_open(), false, "float hidden after :edit with no manual update call")
+  vim.wait(300, function() return not scrollbar.is_open(lease) end, 10)
+  H.eq(scrollbar.is_open(lease), false, "float hidden after :edit with no manual update call")
   -- and the BufWinEnter re-show still works
   vim.api.nvim_win_set_buf(st.win, st.buf)
-  vim.wait(300, function() return scrollbar.is_open() end, 10)
-  H.eq(scrollbar.is_open(), true)
-  scrollbar.close()
+  vim.wait(300, function() return scrollbar.is_open(lease) end, 10)
+  H.eq(scrollbar.is_open(lease), true)
+  scrollbar.close(lease)
 end
 
 T["scroll_win canvas WinClosed tears the bar down"] = function()
-  local st = open_with_bar()
+  local st, lease = open_with_bar()
   vim.cmd("vsplit") -- ensure the canvas window isn't the last one
   vim.api.nvim_win_close(st.win, true)
-  vim.wait(300, function() return not scrollbar.is_open() end, 10)
-  H.eq(scrollbar.is_open(), false, "bar cleaned up after canvas window closed")
+  vim.wait(300, function() return not scrollbar.is_open(lease) end, 10)
+  H.eq(scrollbar.is_open(lease), false, "bar cleaned up after canvas window closed")
 end
 
 T["scroll_win file boundary rows are drawn"] = function()
-  open_with_bar()
+  local _, lease = open_with_bar()
   local w = bar_win()
   local bbuf = vim.api.nvim_win_get_buf(w)
   local lines = vim.api.nvim_buf_get_lines(bbuf, 0, -1, false)
@@ -238,22 +245,151 @@ T["scroll_win file boundary rows are drawn"] = function()
     if l == render.glyphs.scroll_file then dashes = dashes + 1 end
   end
   H.eq(dashes, 2, "two file-boundary rows for two sections")
-  scrollbar.close()
+  scrollbar.close(lease)
 end
 
 T["scroll_win zero-height canvas window hides instead of erroring"] = function()
-  local st = open_with_bar()
+  local st, lease = open_with_bar()
   vim.cmd("set winminheight=0")
   vim.cmd("split") -- need a second window so the canvas can be squashed
   vim.api.nvim_win_set_height(st.win, 0)
-  local ok, err = pcall(scrollbar.update, st)
+  local ok, err = pcall(scrollbar.update, lease, st)
   H.eq(ok, true, "update must not throw on zero-height window: " .. tostring(err))
-  H.eq(scrollbar.is_open(), false, "bar hidden while squashed")
+  H.eq(scrollbar.is_open(lease), false, "bar hidden while squashed")
   vim.api.nvim_win_set_height(st.win, 10)
-  scrollbar.update(st)
-  H.eq(scrollbar.is_open(), true, "bar re-shows once height returns")
+  scrollbar.update(lease, st)
+  H.eq(scrollbar.is_open(lease), true, "bar re-shows once height returns")
   vim.cmd("only")
-  scrollbar.close()
+  scrollbar.close(lease)
+end
+
+local function plain_state(win, label)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, "canvasdiff-test-scrollbar-" .. label)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { label, label .. " two" })
+  vim.api.nvim_win_set_buf(win, buf)
+  return {
+    win = win,
+    buf = buf,
+    sections = {},
+    collapsed = {},
+    folded = {},
+  }
+end
+
+local function with_two_bars(body)
+  vim.cmd("tabnew")
+  local tab = vim.api.nvim_get_current_tabpage()
+  local first = vim.api.nvim_get_current_win()
+  local state_a = plain_state(first, "a-" .. vim.uv.hrtime())
+  vim.cmd("vnew")
+  local second = vim.api.nvim_get_current_win()
+  local state_b = plain_state(second, "b-" .. vim.uv.hrtime())
+  local lease_a = assert(scrollbar.open(state_a, {}))
+  local lease_b = assert(scrollbar.open(state_b, {}))
+
+  local ok, err = xpcall(function()
+    body({
+      lease_a = lease_a,
+      lease_b = lease_b,
+      state_a = state_a,
+      state_b = state_b,
+    })
+  end, debug.traceback)
+  pcall(scrollbar.close, lease_a)
+  pcall(scrollbar.close, lease_b)
+  if vim.api.nvim_tabpage_is_valid(tab) then
+    pcall(vim.api.nvim_set_current_tabpage, tab)
+    pcall(vim.cmd, "tabclose!")
+  end
+  assert(ok, err)
+end
+
+T["scroll_lease two concurrent owners close independently"] = function()
+  with_two_bars(function(ctx)
+    assert(ctx.lease_a ~= ctx.lease_b)
+    assert(ctx.lease_a.group_name ~= ctx.lease_b.group_name,
+      "each lease owns a unique autocmd group")
+    H.eq(scrollbar.is_open(ctx.lease_a), true)
+    H.eq(scrollbar.is_open(ctx.lease_b), true)
+
+    H.eq(scrollbar.close(ctx.lease_a), true)
+    H.eq(scrollbar.close(ctx.lease_a), false, "exact close is idempotent")
+    H.eq(scrollbar.update(ctx.lease_a), false, "a disposed lease cannot redraw")
+    H.eq(scrollbar.is_open(ctx.lease_b), true,
+      "closing one lease cannot hide its peer")
+  end)
+end
+
+T["scroll_lease forged shells cannot update or tear down a peer"] = function()
+  with_two_bars(function(ctx)
+    local peer = ctx.lease_b
+    local forged = {
+      id = peer.id,
+      phase = peer.phase,
+      disposed = peer.disposed,
+      state = peer.state,
+      callbacks = peer.callbacks,
+      group_name = peer.group_name,
+      group_id = peer.group_id,
+      autocmd_ids = peer.autocmd_ids,
+      schedule_ticket = peer.schedule_ticket,
+      buf = peer.buf,
+      win = peer.win,
+    }
+
+    H.eq(scrollbar.is_open(forged), false)
+    H.eq(scrollbar.update(forged, ctx.state_a), false)
+    H.eq(scrollbar.close(forged), false)
+    H.eq(scrollbar.is_open(peer), true,
+      "copied resource fields do not authenticate a lease")
+  end)
+end
+
+T["scroll_lease stale scheduled work cannot reach a replacement"] = function()
+  with_two_bars(function(ctx)
+    local real_update = scrollbar.update
+    local stale_updates = 0
+    scrollbar.update = function(lease, ...)
+      if lease == ctx.lease_a then
+        stale_updates = stale_updates + 1
+      end
+      return real_update(lease, ...)
+    end
+
+    local ok, err = xpcall(function()
+      local scratch = vim.api.nvim_create_buf(false, true)
+      -- BufWinLeave queues a redraw while the old lease is still live.
+      vim.api.nvim_win_set_buf(ctx.state_a.win, scratch)
+      H.eq(scrollbar.close(ctx.lease_a), true)
+      local drained = false
+      vim.schedule(function() drained = true end)
+      assert(vim.wait(300, function() return drained end, 10))
+    end, debug.traceback)
+    scrollbar.update = real_update
+    assert(ok, err)
+
+    H.eq(stale_updates, 0, "the queued callback rejects its disposed identity")
+    H.eq(scrollbar.is_open(ctx.lease_b), true,
+      "stale work cannot redirect through module-global state to a peer")
+  end)
+end
+
+T["scroll_lease teardown invalidates before owner release reenters"] = function()
+  with_two_bars(function(ctx)
+    local reentered
+    local peer_was_open
+    ctx.lease_a.callbacks.release = function(lease)
+      reentered = scrollbar.close(lease)
+      peer_was_open = scrollbar.is_open(ctx.lease_b)
+    end
+
+    H.eq(scrollbar.close(ctx.lease_a), true)
+    H.eq(reentered, false,
+      "release observes the closing lease as already unauthenticated")
+    H.eq(peer_was_open, true,
+      "reentrant teardown cannot select or disturb another lease")
+  end)
 end
 
 return T

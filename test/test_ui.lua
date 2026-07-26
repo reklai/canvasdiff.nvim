@@ -17,10 +17,10 @@ local function capture(fn)
   return msgs
 end
 
-T["ui facade exports only notification operations"] = function()
+T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "err", "notify", "warn" })
+  H.eq(names, { "err", "notify", "scrollbar", "warn" })
 end
 
 T["ui_notify prefixes and defaults to INFO"] = function()

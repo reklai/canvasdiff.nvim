@@ -5,7 +5,7 @@ local virt = require("canvasdiff.runtime").virtualizer
 local session = require("canvasdiff.session")
 local config = require("canvasdiff.config")
 local system = require("canvasdiff.os")
-local scrollbar = require("canvasdiff.scrollbar")
+local scrollbar = require("canvasdiff.ui").scrollbar
 local fold = model.fold
 local sidebar = require("canvasdiff.sidebar")
 
@@ -718,9 +718,9 @@ T["session_ restored collapses reach the scrollbar"] = function()
     -- ends up being the same final table.
     local real_update = scrollbar.update
     local seen = {}
-    scrollbar.update = function(state, ...)
+    scrollbar.update = function(lease, state, ...)
       seen[#seen + 1] = vim.deepcopy((state and state.collapsed) or {})
-      return real_update(state, ...)
+      return real_update(lease, state, ...)
     end
     local ok_open, open_err = pcall(fm.open)
     scrollbar.update = real_update
