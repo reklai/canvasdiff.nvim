@@ -2,7 +2,7 @@
 
 Date: 2026-07-27
 
-Implementation checkpoint: `c7be8e3`
+Implementation checkpoint: `1d1ece1`
 
 This is a stopping-point handoff, not a completion claim. The original goal
 remains the full [CanvasDiff migration and million-line journey](2026-07-26-canvasdiff-migration.md),
@@ -34,35 +34,40 @@ Keep these decisions fixed unless the product direction is explicitly changed:
 
 ## Exact checkpoint state
 
-At `c7be8e3`, the implementation tree was clean and the full suite passed
-`630/630`. The final two implementation commits before this handoff are:
+At `1d1ece1`, the implementation tree was clean and the full suite passed
+`653/653`. Section 1 of the remaining implementation order below -- emptying
+the architecture ledger -- is **done**. `test/architecture/rules.lua` now has
+`R.legacy_paths = {}`, and that is a gate rather than a milestone: nothing
+classifies as legacy any more, so a new flat module under `lua/canvasdiff/`
+fails the scan for having no architectural owner.
 
-- `5534b90 refactor(canvas): make page-list layout fully opaque`
-- `c7be8e3 refactor(ui): give scrollbar an exact surface lease`
+Commits since the previous checkpoint:
 
-The recent boundary sequence also includes:
+- `dafa45a` -- highlighter leases are independent: weak-keyed identity, and a
+  hook chain that splices correctly on out-of-order teardown.
+- `24e5a5c` -- `canvasdiff.hl` becomes `canvasdiff.ui.highlight`.
+- `2d869a2` -- `canvasdiff.sidebar` becomes `canvasdiff.ui.sidebar`, with
+  unforgeable lease identity.
+- `801bb25` -- the status column dispatches per window and becomes
+  `canvasdiff.ui.status_column`. Three real concurrency defects fixed; the
+  commit message names them.
+- `8e3b1bd` -- `canvasdiff.cmd` becomes `canvasdiff.input.command`, returning
+  plans that App executes and presents.
+- `f41da90` -- `canvasdiff.jump` becomes `canvasdiff.input.jump` with
+  per-Surface excursion stores; `util.lua` deleted; ledger empty.
+- `1d1ece1` -- tests grouped by intent; `docs/architecture.md` written.
 
-- `21f18f3` — session persistence is private behind its facade.
-- `cb39923` — watch and virtualization use independent runtime leases.
-- `1b3aadb` — keys and motions are private behind the input facade.
-- `4ce5511` and `ce47f8b` — source collection and repository access are private
-  behind the source facade.
-- `a2bc4d0` — bounded idle compaction scheduling.
-- `2985487`, `56a9559`, and `73a5a0f` — lease-backed projection, bounded
-  resident cache, and effect-free provider callbacks.
-- `65b428f` — isolated eager small-canvas benchmark baseline.
+Identity migration is done. Every domain boundary is established and enforced,
+and `docs/architecture.md` is the contributor-facing statement of all of it.
 
-Identity migration is done. Config, diff, OS, source, canvas, runtime, and
-session boundaries are established. Input currently owns keys and motions. UI
-currently owns notifications and the scrollbar. The page engine, projection,
-raw/compact storage, cache, and scheduler have substantial coverage, but this
-does **not** certify every Phase 4/5 journey gate yet.
-
-Important interim constraints remain:
+Important interim constraints that REMAIN:
 
 - The root facade owns one App and App owns only `app.surface`.
 - Production still enters the eager `canvas.open` path. `Canvas.lua` owns one
-  module-global `canvas_buf` named `canvasdiff://canvas`.
+  module-global `canvas_buf` named `canvasdiff://canvas`. This is now the
+  single largest remaining bottleneck: two fault-suite files build a second
+  review by calling `canvas.render_all` on a buffer of their own, precisely
+  because `canvas.open` cannot express two.
 - The current lifecycle suite deliberately shares that buffer and Surface
   across tabs. This is useful interim coverage, not satisfaction of the final
   independent-buffer/independent-Surface contract.
@@ -70,73 +75,31 @@ Important interim constraints remain:
   but App/Surface do not yet own them in the production open path.
 - Source collection and model building still synchronously materialize whole
   section texts. Streaming patch ingestion is not yet the production path.
-
-The active flat-module debt ledger is exactly:
-
-```text
-lua/canvasdiff/cmd.lua
-lua/canvasdiff/hl.lua
-lua/canvasdiff/jump.lua
-lua/canvasdiff/sidebar.lua
-lua/canvasdiff/statuscol.lua
-lua/canvasdiff/util.lua
-```
+- `Surface` still deletes the fixed `canvasdiff.session`, `canvasdiff.close`
+  and `canvasdiff.winbar` groups by name. Every controller group is per-lease
+  now; these three are not.
 
 The executable source of truth is `test/architecture/rules.lua`. Never add to
-that list or broaden `legacy_ceiling`.
-
-## First safe continuation slice
-
-Start with the highlighter, because `lua/canvasdiff/hl.lua` still has a
-module-global `current` lease even though `Surface.controllers.hl` already
-holds the exact returned lease.
-
-1. Replace `current` with non-owning, unforgeable exact authentication so two
-   independent highlighter leases can remain active concurrently.
-2. Preserve per-lease timers, hooks, extmark ownership, unique augroups,
-   stale-callback fencing, and exact idempotent detach.
-3. Add concurrent-Surface, forged-shell, stale callback, reentrant replacement,
-   partial resource creation, and exact teardown tests. Existing hostile
-   extmark and deletion-failure tests must remain green.
-4. Then move the owner to `ui/highlight.lua`, expose only the curated
-   `require("canvasdiff.ui").highlight` surface, update all consumers, delete
-   `canvasdiff.hl`, assert the old import fails, and remove only that ledger
-   entry.
-
-Keeping lease independence and the path move as two green commits is reasonable
-if that makes review sharper. Do not merely relocate the existing singleton.
+`R.legacy_paths` or broaden `legacy_ceiling`.
 
 ## Remaining implementation order
 
-### 1. Empty the architecture ledger
+### 1. Empty the architecture ledger -- DONE at `1d1ece1`
 
-After the highlighter:
+Every module reached its owning domain, the ledger is empty, tests are grouped
+by intent, and `docs/architecture.md` states the boundary rules. Four findings
+from this section are worth carrying forward, because they are the shape of
+what the remaining sections will hit:
 
-1. Move the already lease-oriented sidebar behind `ui/sidebar.lua` and the UI
-   facade. Audit its per-tab views and callbacks for exact Surface isolation;
-   delete the flat path without a shim.
-2. Redesign the status-column singleton. Dispatch the status expression through
-   exact per-window ownership, permit concurrent Surfaces, restore only options
-   the exact lease still owns, then move it to `ui/status_column.lua`.
-3. Move command parsing/execution behind `input/command.lua`. Input must not
-   depend on UI or call the root facade cyclically; return outcomes for App to
-   execute/present. The plugin is allowed to import only the root facade, so
-   route plugin -> root/App -> input rather than plugin -> input.
-4. Move jump/excursion behavior behind `input/jump.lua`. Put `excursion` and
-   `last_buf` under the owning Surface, route live-buffer/disk reads through the
-   source/OS boundaries, and return user-facing outcomes to App instead of
-   importing UI.
-5. Delete `util.lua`. Its byte-exact buffer reconstruction overlaps
-   `source/buffer.lua`; `list_slice` and `clamp` have no production caller.
-
-For every owner, test simultaneous Surfaces, shared-buffer splits, exact
-teardown, disposal during resource creation, stale scheduled callbacks,
-reentrant replacement, forged handles, and resource-ID reuse. Run the
-architecture gate in the same commit as every path move.
-
-Before declaring Phase 2 complete, also group tests by unit, integration, e2e,
-architecture, performance, and fault intent as their owners settle, and add
-contributor-facing architecture/dependency documentation.
+- Removing a module-global selector does not merely relocate state; it exposes
+  the concurrency defects the selector was hiding. The status column had three.
+- Neovim remembers a window-local option per displayed buffer. Restoring after
+  the real buffer lands is too late; the write-back has to happen while the
+  canvas is still on screen.
+- A lease that loses a shared resource to a peer must release its own
+  bookkeeping for it, or its own teardown later restores over the new owner.
+- Attach reads one synchronous snapshot. When it runs inside another window's
+  creation event that snapshot can already be stale, and nothing will say so.
 
 ### 2. Make the production owner graph multi-Surface
 
@@ -240,8 +203,9 @@ Always redirect Neovim's log outside the checkout:
 
 ```sh
 NVIM_LOG_FILE=/tmp/canvasdiff-full.log make test
-NVIM_LOG_FILE=/tmp/canvasdiff-architecture.log make test FILTER='^architecture_'
-NVIM_LOG_FILE=/tmp/canvasdiff-highlight.log make test FILTER='^hl_'
+NVIM_LOG_FILE=/tmp/canvasdiff-architecture.log make architecture
+NVIM_LOG_FILE=/tmp/canvasdiff-fault.log make fault
+NVIM_LOG_FILE=/tmp/canvasdiff-highlight.log make test SUITE=fault FILTER='^hl_'
 git diff --check
 git status --short
 ```
@@ -293,8 +257,9 @@ fact here disagrees with executable tests or `test/architecture/rules.lua`,
 the executable contract wins and this handoff should be corrected in the same
 commit as the discovery.
 
-An independent prospective owner audited the repository and this handoff at
-the checkpoint and returned **READY**. Its chosen first command was the
-documented `^hl_` focused gate; its chosen first code slice was failure-first
-concurrent-Surface and forged-lease coverage followed by removal of
-`hl.lua`'s `current` selector, without moving the path in that first commit.
+The next slice is section 2: give App a Surface index keyed by exact canvas
+buffer, and make `Canvas.open` create distinct, uniquely named buffers instead
+of resolving one process-wide `canvasdiff://canvas`. The hand-built second
+canvas states in `test/fault/test_highlight.lua` and
+`test/fault/test_status_column.lua` exist only because the production path
+cannot express two reviews; they should collapse into it once it can.
