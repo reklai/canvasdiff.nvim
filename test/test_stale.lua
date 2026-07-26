@@ -209,7 +209,11 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
 
   write_file(root, "src/a.txt",
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
-  watch.reconcile(st)
+  watch.reconcile(st, {
+    on_change = function(state)
+      sidebar.refresh(state)
+    end,
+  })
 
   i = index_of(st, "src/a.txt")
   local row = canvas_row(i)
@@ -244,7 +248,12 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
 
   write_file(root, "src/a.txt",
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
-  watch.reconcile(st)
+  watch.reconcile(st, {
+    on_change = function(state)
+      require("galley.hl").apply_now(state)
+      sidebar.refresh(state)
+    end,
+  })
 
   --- The GalleyStale mark on `row0` of `buf` in `ns`, as {start_col, end_col}.
   local function stale_span(buf, ns, row0)

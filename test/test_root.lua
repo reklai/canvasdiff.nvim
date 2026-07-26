@@ -121,6 +121,29 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   assert(ok, err)
 end
 
+T["root_ Surface never issues an unqualified watch stop"] = function()
+  local watch = require("galley.watch")
+  local real_stop = watch.stop
+  local stops = 0
+  watch.stop = function(...)
+    stops = stops + 1
+    return real_stop(...)
+  end
+
+  local ok, err = xpcall(function()
+    local state = {}
+    local surface = require("galley.Surface").new(state)
+    surface.saved = true
+    H.eq(surface.controllers.watch, nil, "this Surface acquired no watch lease")
+    H.eq(surface:dispose("test"), true)
+    H.eq(stops, 0,
+      "a lease-less owner must not translate nil into stop-the-current-watch")
+  end, debug.traceback)
+
+  watch.stop = real_stop
+  assert(ok, err)
+end
+
 -- Regression: the root came only from getcwd(), so `nvim path/to/repo/file`
 -- from a parent directory refused to open with "not inside a git
 -- repository" -- while staring at a file that plainly was in one. It read as

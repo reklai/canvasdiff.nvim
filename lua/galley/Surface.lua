@@ -35,6 +35,7 @@ function Surface.new(state, callbacks, ownership)
     disposed = false,
     state = state,
     callbacks = callbacks or {},
+    controllers = {},
     windows = {},
     landings = {},
     baseline_windows = baseline_windows,
@@ -242,7 +243,12 @@ function Surface:dispose(reason)
   -- Producers first, then consumers. Each operation is attempted even when a
   -- sibling teardown is faulty; otherwise one extension error strands a
   -- half-dead Surface in the closing phase forever.
-  attempt("watch.stop", watch.stop)
+  attempt("watch.stop", function()
+    local lease = self.controllers.watch
+    if lease then
+      watch.stop(lease)
+    end
+  end)
   attempt("hl.detach", function() hl.detach(self.state) end)
   attempt("sidebar.close", sidebar.close)
   attempt("scrollbar.close", scrollbar.close)
@@ -266,13 +272,6 @@ function Surface:dispose(reason)
       self.state.surface = nil
     end
   end
-  if watch.on_empty == self.callbacks.watch_empty then
-    watch.on_empty = nil
-  end
-  if watch.on_error == self.callbacks.watch_error then
-    watch.on_error = nil
-  end
-
   self.phase = "disposed"
   self.disposed = true
   self.errors = errors

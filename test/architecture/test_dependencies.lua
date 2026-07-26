@@ -31,6 +31,26 @@ T.architecture_dependencies_new_domain_graph_is_acyclic = function()
   assert(not cycle, "architecture dependency cycle: " .. table.concat(cycle or {}, " -> "))
 end
 
+T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.hl"] = true,
+    ["galley.scrollbar"] = true,
+    ["galley.sidebar"] = true,
+    ["galley.virt"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.watch" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "watch must report model changes through its owner")
+end
+
 T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function()
   local nodes = {
     ["galley.canvas.Page"] = { rel = "lua/galley/canvas/Page.lua" },

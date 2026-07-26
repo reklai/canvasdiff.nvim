@@ -100,10 +100,16 @@ T["watch_reconcile deleted branch ref retains everything and recovers"] = functi
   }
 
   sh(root, { "git", "branch", "-D", "comparison-base" })
-  local ok, err = watch.reconcile(st)
+  local reported
+  local ok, err = watch.reconcile(st, {
+    on_error = function(value)
+      reported = value
+    end,
+  })
   H.eq(ok, nil)
   assert(type(err) == "string" and err:find("does not resolve", 1, true),
     "a deleted ref is an error, not an empty desired canvas: " .. tostring(err))
+  H.eq(reported, err, "direct reconciliation reports failures only through its explicit callback")
   H.eq(st.sections, before.sections)
   H.eq(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), before.lines)
   H.eq(vim.api.nvim_buf_get_changedtick(st.buf), before.tick,
@@ -148,8 +154,9 @@ T["watch_trigger deduplicates identical ref errors and resets after recovery"] =
   st.root, st.lens, st.base = root, l, nil
 
   local errors = {}
-  watch.on_error = function(err) errors[#errors + 1] = err end
-  watch.start(st, { debounce_ms = 10 })
+  local lease = watch.start(st, { debounce_ms = 10 }, {
+    on_error = function(err) errors[#errors + 1] = err end,
+  })
   sh(root, { "git", "branch", "-D", "comparison-base" })
 
   vim.api.nvim_exec_autocmds("FocusGained", {})
@@ -171,8 +178,8 @@ T["watch_trigger deduplicates identical ref errors and resets after recovery"] =
   assert(vim.wait(1000, function() return #errors == 2 end, 10),
     "after a success, the same later error is reportable again")
 
-  watch.stop()
-  watch.on_error = nil
+  H.eq(watch.stop(lease), true)
+  H.eq(watch.stop(lease), false, "stopping an already-disposed lease is a no-op")
   vim.fn.delete(root, "rf")
 end
 
@@ -231,19 +238,34 @@ T["watch_reconcile handles N to 0 and 0 to N via render_all"] = function()
   local root = fixture()
   local st = open_state(root)
   local empty_fired = false
-  watch.on_empty = function() empty_fired = true end
+  local changed_state, changed_result
+  local callbacks = {
+    on_empty = function() empty_fired = true end,
+    on_change = function(state, result)
+      changed_state, changed_result = state, result
+    end,
+  }
 
   write_file(root, "b.txt", bigtext(80, "b"))
   write_file(root, "d.txt", bigtext(80, "d"))
-  watch.reconcile(st)
+  local ok, result = watch.reconcile(st, callbacks)
+  H.eq(ok, true)
   H.eq(#st.sections, 0)
   H.eq(empty_fired, true, "on_empty fired")
+  H.eq(changed_state, st, "on_change receives the reconciled state")
+  H.eq(changed_result, result, "on_change receives the published result")
+  H.eq(result.full, true)
+  H.eq(result.empty, true)
+  H.eq(result.desired, {})
 
   write_file(root, "d.txt", (bigtext(80, "d"):gsub("d line 1\n", "d line 1 back\n")))
-  watch.reconcile(st)
+  ok, result = watch.reconcile(st, callbacks)
+  H.eq(ok, true)
   H.eq(#st.sections, 1)
   H.eq(st.sections[1].path, "d.txt")
-  watch.on_empty = nil
+  H.eq(result.full, true)
+  H.eq(result.empty, false)
+  H.eq(result.desired, st.sections)
 end
 
 T["watch_reconcile replaces the only section with a different file cleanly"] = function()
@@ -547,6 +569,180 @@ T["watch_trigger stop() really stops"] = function()
   vim.wait(300, function() return false end, 50) -- give any stray timer a chance
   H.eq(st.sections[1].new_text:find("b line 9 IGNORED", 1, true), nil,
     "no reconcile after stop")
+end
+
+T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = function()
+  local real_new_timer = vim.uv.new_timer
+  local real_new_fs_event = vim.uv.new_fs_event
+  local real_schedule_wrap = vim.schedule_wrap
+  local timers, events, scheduled = {}, {}, {}
+  local roots, states = {}, {}
+
+  local function fake_handle(bucket)
+    local handle = {
+      started = 0,
+      stopped = 0,
+      closed = 0,
+    }
+    function handle:start(_, _, callback)
+      self.started = self.started + 1
+      self.callback = callback
+      return true
+    end
+    function handle:stop()
+      self.stopped = self.stopped + 1
+      local callback = self.on_stop
+      self.on_stop = nil
+      if callback then
+        callback()
+      end
+      return true
+    end
+    function handle:close()
+      self.closed = self.closed + 1
+      return true
+    end
+    function handle:is_closing()
+      return self.closed > 0
+    end
+    bucket[#bucket + 1] = handle
+    return handle
+  end
+
+  vim.uv.new_timer = function()
+    return fake_handle(timers)
+  end
+  vim.uv.new_fs_event = function()
+    return fake_handle(events)
+  end
+  vim.schedule_wrap = function(callback)
+    return function()
+      scheduled[#scheduled + 1] = callback
+    end
+  end
+
+  local ok, err = xpcall(function()
+    roots[1], roots[2] = fixture(), fixture()
+    states[1], states[2] = open_state(roots[1]), open_state(roots[2])
+
+    local lease_a = watch.start(states[1], { debounce_ms = 1 }, {
+      alive = function() return true end,
+    })
+    local a_events = vim.list_slice(events)
+
+    -- Cross both asynchronous boundaries while A is current, but hold the
+    -- scheduled reconcile until after B replaces it.
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    H.eq(#timers, 1, "A owns one debounce timer")
+    local timer_a = timers[1]
+    timer_a.callback()
+    H.eq(#scheduled, 1, "A's main-loop reconcile is queued")
+
+    local b_changes = 0
+    local lease_b = watch.start(states[2], { debounce_ms = 1 }, {
+      alive = function() return true end,
+      on_change = function(state, result)
+        H.eq(state, states[2])
+        H.eq(result.desired, states[2].sections)
+        b_changes = b_changes + 1
+      end,
+    })
+
+    H.eq(timer_a.stopped, 1, "replacement stops A's timer exactly once")
+    H.eq(timer_a.closed, 1, "replacement closes A's timer exactly once")
+    for _, handle in ipairs(a_events) do
+      H.eq(handle.stopped, 1, "replacement stops every A fs handle")
+      H.eq(handle.closed, 1, "replacement closes every A fs handle")
+    end
+
+    H.eq(watch.stop(lease_a), false, "a stale owner cannot stop current lease B")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
+      "B's autocmd group survives stop(A)")
+
+    local timers_before_stale_fs = #timers
+    a_events[1].callback(nil, "b.txt", {})
+    H.eq(#timers, timers_before_stale_fs,
+      "a stale fs callback cannot arm B's timer")
+
+    scheduled[1]()
+    H.eq(b_changes, 0, "A's queued timer callback cannot reconcile B")
+
+    -- B remains fully functional after both stale attacks.
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    H.eq(#timers, 2, "the live B autocmd still arms its own timer")
+    local timer_b = timers[2]
+    timer_b.callback()
+    H.eq(#scheduled, 2)
+    scheduled[2]()
+    H.eq(b_changes, 1, "B's own queued callback reconciles B")
+
+    H.eq(watch.stop(lease_b), true)
+    H.eq(watch.stop(lease_b), false, "stop(B) is idempotent")
+
+    -- Break teardown deliberately: A handle method starts D while C is only
+    -- part-way through stop(). C must already have detached its augroup, or D
+    -- can reuse C's shared-name group ID and then lose it when C resumes.
+    local lease_c = watch.start(states[1], { debounce_ms = 1 }, {
+      alive = function() return true end,
+    })
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    local timer_c = timers[#timers]
+    local lease_d
+    timer_c.on_stop = function()
+      lease_d = watch.start(states[2], { debounce_ms = 1 }, {
+        alive = function() return true end,
+      })
+    end
+
+    H.eq(watch.stop(lease_c), true)
+    assert(lease_d, "the injected timer stop started replacement D")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }),
+      "C's resumed teardown cannot delete reentrant replacement D's group")
+
+    local timers_before_d = #timers
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    H.eq(#timers, timers_before_d + 1,
+      "replacement D's surviving autocmd can arm its own timer")
+    H.eq(watch.stop(lease_d), true)
+    H.eq(watch.stop(lease_d), false, "reentrant replacement teardown is idempotent")
+
+    for _, handle in ipairs(timers) do
+      H.eq(handle.stopped, 1, "each timer is stopped exactly once")
+      H.eq(handle.closed, 1, "each timer is closed exactly once")
+    end
+    for _, handle in ipairs(events) do
+      H.eq(handle.stopped, 1, "each fs handle is stopped exactly once")
+      H.eq(handle.closed, 1, "each fs handle is closed exactly once")
+    end
+  end, debug.traceback)
+
+  watch.stop()
+  vim.uv.new_timer = real_new_timer
+  vim.uv.new_fs_event = real_new_fs_event
+  vim.schedule_wrap = real_schedule_wrap
+  for _, state in ipairs(states) do
+    if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+      pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
+    end
+  end
+  for _, root in ipairs(roots) do
+    vim.fn.delete(root, "rf")
+  end
+  assert(ok, err)
+end
+
+T["watch_reconcile owner callback faults remain observable"] = function()
+  local root = fixture()
+  local st = open_state(root)
+  local ok, err = pcall(watch.reconcile, st, {
+    on_change = function()
+      error("injected owner refresh fault")
+    end,
+  })
+
+  H.eq(ok, false, "a broken owner callback cannot look like a successful refresh")
+  assert(tostring(err):find("injected owner refresh fault", 1, true), tostring(err))
+  vim.fn.delete(root, "rf")
 end
 
 return T

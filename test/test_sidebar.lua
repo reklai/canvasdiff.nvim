@@ -468,7 +468,13 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
 
   local abs = vim.fs.joinpath(root, "m", "b.txt")
   local f = assert(io.open(abs, "w")); f:write("new\n"); f:close()
-  watch.reconcile(st)
+  local ok, result = watch.reconcile(st, {
+    on_change = function(state)
+      sidebar.refresh(state)
+    end,
+  })
+  H.eq(ok, true)
+  H.eq(result.empty, false)
 
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(#lines, 3, "new file appears in the sidebar after reconcile")

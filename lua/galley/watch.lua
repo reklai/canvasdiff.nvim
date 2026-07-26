@@ -1,200 +1,323 @@
 local canvas = require("galley.canvas")
 local collect = require("galley.collect")
 local config = require("galley.config")
-local hl = require("galley.hl")
-local sidebar = require("galley.sidebar")
-local scrollbar = require("galley.scrollbar")
-local virt = require("galley.virt")
 local lens = require("galley.lens")
 
 local W = {}
 
---- Assignable callback: fired by reconcile when the canvas becomes empty
---- (all changes gone), so the owner can render its empty-state message.
-W.on_empty = nil
-
---- Assignable callback for a scheduled reconcile failure. The synchronous
---- W.reconcile API returns the error to its caller; the timer has no caller, so
---- this seam lets App report it without coupling watch to notification policy.
---- Identical consecutive failures are reported only once.
-W.on_error = nil
-
 local uv = vim.uv
+local current = nil
+local next_id = 0
 
--- Trigger state: one live watched canvas at a time. All handles are torn down
--- by stop().
-local live = nil
-local debounce_ms = 200
-local timer = nil
-local aug = nil
-local fs_handles = {}
-local last_error = nil
+--- Owner callbacks are part of the synchronous reconcile contract. Do not
+--- protect them here: a broken refresh must be observable to a direct caller
+--- and to Neovim's scheduled-callback error reporting, never converted into a
+--- false successful refresh.
+local function call(callback, ...)
+  if callback then
+    return callback(...)
+  end
+end
 
-local function close_fs_handles()
-  for _, h in ipairs(fs_handles) do
+--- An asynchronous producer may run only for the exact lease that installed
+--- it. `alive` lets the owner add its own lifetime/generation fence without
+--- teaching this low-level module about App or Surface.
+local function is_active(lease)
+  if current ~= lease or lease.disposed then
+    return false
+  end
+  local alive = lease.callbacks.alive
+  if not alive then
+    return true
+  end
+  local ok, result = pcall(alive)
+  return ok and result and true or false
+end
+
+local function close_handle(handle)
+  if not handle then
+    return
+  end
+  pcall(function()
+    handle:stop()
+  end)
+  local ok, closing = pcall(function()
+    return handle:is_closing()
+  end)
+  if not ok or not closing then
     pcall(function()
-      h:stop()
-      h:close()
+      handle:close()
     end)
   end
-  fs_handles = {}
 end
 
--- Forward-declared local (not global): mark_dirty's scheduled callback calls
--- this, but it's only defined below. Declaring the upvalue here lets both
--- functions close over the same local.
-local refresh_fs_watches
-
-local function mark_dirty()
-  if not live then
-    return
-  end
-  if not timer then
-    timer = uv.new_timer()
-  end
-  timer:stop()
-  timer:start(debounce_ms, 0, vim.schedule_wrap(function()
-    local state = live
-    if state then
-      local ok, err = W.reconcile(state)
-      if ok then
-        last_error = nil
-        -- refresh_fs_watches starts by closing the existing handles. Only do
-        -- that after a successful truth pass; on an invalid/deleted ref, the
-        -- prior canvas and its watcher coverage stay intact for recovery.
-        if live == state then
-          refresh_fs_watches(state)
-        end
-      elseif err ~= last_error then
-        last_error = err
-        if W.on_error then
-          pcall(W.on_error, err)
-        end
-      end
-    end
-  end))
-end
-
-local function watch_dir(path, filter)
-  local h = uv.new_fs_event()
-  if not h then
-    return
-  end
-  local ok = h:start(path, {}, function(_, filename, _)
-    if filter and filename and not filter(filename) then
-      return
-    end
-    mark_dirty()
-  end)
-  if not ok then
-    pcall(function() h:close() end)
-    return
-  end
-  fs_handles[#fs_handles + 1] = h
-end
-
---- (Re)build the fs_event watcher set: repo root (non-recursive -- Linux
---- inotify has no recursive watch), .git (index/HEAD flips; *.lock churn
---- filtered), and the parent dirs of currently-changed files. Subdir
---- changes with no watcher are covered by BufWritePost/FocusGained.
-refresh_fs_watches = function(state)
-  close_fs_handles()
-  if not live then
-    return
-  end
-  watch_dir(state.root)
-  watch_dir(vim.fs.joinpath(state.root, ".git"), function(name)
-    return not name:match("%.lock$")
-  end)
-  local seen = {}
-  for _, sec in ipairs(state.sections) do
-    local dir = vim.fs.dirname(vim.fs.joinpath(state.root, sec.path))
-    if dir ~= state.root and not seen[dir] then
-      seen[dir] = true
-      watch_dir(dir)
-    end
+local function close_fs_handles(lease)
+  local handles = lease.fs_handles
+  lease.fs_handles = {}
+  for _, handle in ipairs(handles) do
+    close_handle(handle)
   end
 end
 
---- Start live-watching for `state` (stopping any previous watch first).
-function W.start(state, opts)
-  W.stop()
-  live = state
-  last_error = nil
-  debounce_ms = (opts and opts.debounce_ms) or 200
-
-  aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
-  vim.api.nvim_create_autocmd("BufWritePost", {
-    group = aug,
-    callback = function(ev)
-      if not live then
-        return
-      end
-      local name = vim.api.nvim_buf_get_name(ev.buf)
-      if name ~= "" and vim.startswith(name, live.root .. "/") then
-        mark_dirty()
-      end
-    end,
-  })
-  vim.api.nvim_create_autocmd("FocusGained", {
-    group = aug,
-    callback = mark_dirty,
-  })
-  vim.api.nvim_create_autocmd("BufWipeout", {
-    group = aug,
-    buffer = state.buf,
-    callback = function()
-      W.stop()
-    end,
-  })
-
-  refresh_fs_watches(state)
-end
-
---- Tear everything down. Safe when never started.
-function W.stop()
-  if timer then
-    timer:stop()
+--- Tear down the current watch. When `expected` is supplied, it is an identity
+--- guard: a delayed owner of lease A cannot stop replacement lease B.
+function W.stop(expected)
+  local lease = current
+  if not lease or (expected and expected ~= lease) then
+    return false
   end
-  close_fs_handles()
+
+  -- Invalidate every queued callback before the first teardown side effect.
+  lease.disposed = true
+  current = nil
+
+  local timer = lease.timer
+  local aug = lease.aug
+  lease.timer = nil
+  lease.aug = nil
+  lease.last_error = nil
+
+  -- Delete the old event source before invoking handle methods: a fault-
+  -- injection handle may reentrantly start replacement B, reusing this shared
+  -- group ID. Deleting A's ID afterward would then tear down B's autocmds.
   if aug then
     pcall(vim.api.nvim_del_augroup_by_id, aug)
-    aug = nil
   end
-  live = nil
-  last_error = nil
+  close_handle(timer)
+  close_fs_handles(lease)
+
+  -- A queued closure retains the lease until it drains. Drop its potentially
+  -- large state and owner callback graph now; the identity/disposed check above
+  -- is all that stale closure is allowed to observe.
+  lease.state = nil
+  lease.callbacks = {}
+  return true
 end
 
---- Synchronous full reconcile of the live canvas against the working tree:
---- collect desired sections, then splice the difference section-by-section.
---- Sections whose old_text AND new_text are unchanged are never touched, so
---- their anchors, highlight marks, and rows stay exactly as they are -- the
---- niri invariant then rests entirely on the canvas splice primitives.
-function W.reconcile(state)
-  if not state or not vim.api.nvim_buf_is_valid(state.buf) then
-    return nil, "no valid canvas state to reconcile"
-  end
-  local desired, err = collect.sections(
-    state.root, lens.of(state), config.options.context)
-  if not desired then
-    -- Transactional failure: no canvas reconciliation and no follow-up UI
-    -- consumer gets to observe a half-refreshed or fabricated empty state.
+--- Synchronously collect truth and reconcile one canvas. This operation has no
+--- UI dependencies: its owner receives the result and decides which consumers
+--- to refresh.
+function W.reconcile(state, callbacks)
+  callbacks = callbacks or {}
+
+  local function fail(err)
+    call(callbacks.on_error, err)
     return nil, err
   end
 
-  -- The merge-walk itself lives in canvas, because a user-initiated LENS pivot
-  -- needs exactly the same "splice only what actually differs" behaviour and has
-  -- no business routing through the file-watch module to get it.
-  local full = canvas.reconcile_sections(state, desired)
-  if full and #desired == 0 and W.on_empty then
-    W.on_empty()
+  if not state or not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+    return fail("no valid canvas state to reconcile")
   end
 
-  hl.apply_now(state)
-  sidebar.refresh(state)
-  scrollbar.update(state)
-  virt.apply(state, config.options.virt)
-  return true
+  local desired, err = collect.sections(
+    state.root, lens.of(state), config.options.context)
+  if not desired then
+    -- Transactional failure: no canvas reconciliation and no success callback
+    -- gets to observe a fabricated or half-refreshed state.
+    return fail(err)
+  end
+
+  local full = canvas.reconcile_sections(state, desired)
+  local result = {
+    full = full and true or false,
+    empty = #desired == 0,
+    desired = desired,
+  }
+
+  if result.full and result.empty then
+    call(callbacks.on_empty)
+  end
+  call(callbacks.on_change, state, result)
+  return true, result
+end
+
+local refresh_fs_watches
+
+local function lease_callbacks(lease)
+  return {
+    on_empty = function()
+      if not is_active(lease) then
+        return
+      end
+      call(lease.callbacks.on_empty)
+    end,
+    on_error = function(err)
+      if not is_active(lease) then
+        return
+      end
+      if err == lease.last_error then
+        return
+      end
+      lease.last_error = err
+      call(lease.callbacks.on_error, err)
+    end,
+    on_change = function(state, result)
+      if not is_active(lease) then
+        return
+      end
+      lease.last_error = nil
+      call(lease.callbacks.on_change, state, result)
+    end,
+  }
+end
+
+local function mark_dirty(lease)
+  if not is_active(lease) then
+    return
+  end
+
+  local timer = lease.timer
+  if timer then
+    pcall(function()
+      timer:stop()
+    end)
+  else
+    lease.timer = uv.new_timer()
+    if not lease.timer then
+      return
+    end
+    timer = lease.timer
+  end
+
+  -- There are two asynchronous boundaries here. The libuv callback and the
+  -- scheduled main-loop callback each carry and validate the exact lease, so
+  -- replacement between those boundaries cannot redirect A's event into B.
+  local scheduled = vim.schedule_wrap(function()
+    if not is_active(lease) then
+      return
+    end
+    local ok = W.reconcile(lease.state, lease_callbacks(lease))
+    if ok and is_active(lease) then
+      -- Rebuild coverage only after a successful truth pass. On an invalid or
+      -- deleted ref, the prior watcher set remains intact for recovery.
+      refresh_fs_watches(lease)
+    end
+  end)
+
+  pcall(function()
+    timer:start(lease.debounce_ms, 0, function()
+      if not is_active(lease) then
+        return
+      end
+      scheduled()
+    end)
+  end)
+end
+
+local function watch_dir(lease, path, filter)
+  if not is_active(lease) then
+    return
+  end
+
+  local handle = uv.new_fs_event()
+  if not handle then
+    return
+  end
+
+  local ok, started = pcall(function()
+    return handle:start(path, {}, function(_, filename, _)
+      if not is_active(lease) then
+        return
+      end
+      if filter and filename and not filter(filename) then
+        return
+      end
+      mark_dirty(lease)
+    end)
+  end)
+  if not ok or not started then
+    close_handle(handle)
+    return
+  end
+  lease.fs_handles[#lease.fs_handles + 1] = handle
+end
+
+--- Rebuild fs_event coverage for this exact lease: repo root, .git (excluding
+--- lock churn), and parent directories of currently changed files.
+refresh_fs_watches = function(lease)
+  if not is_active(lease) then
+    return
+  end
+
+  close_fs_handles(lease)
+  if not is_active(lease) then
+    return
+  end
+
+  local state = lease.state
+  watch_dir(lease, state.root)
+  watch_dir(lease, vim.fs.joinpath(state.root, ".git"), function(name)
+    return not name:match("%.lock$")
+  end)
+
+  local seen = {}
+  for _, section in ipairs(state.sections) do
+    local dir = vim.fs.dirname(vim.fs.joinpath(state.root, section.path))
+    if dir ~= state.root and not seen[dir] then
+      seen[dir] = true
+      watch_dir(lease, dir)
+    end
+  end
+end
+
+--- Start watching `state`, replacing any previous singleton lease.
+function W.start(state, opts, callbacks)
+  W.stop()
+  next_id = next_id + 1
+
+  local lease = {
+    id = next_id,
+    state = state,
+    callbacks = callbacks or {},
+    debounce_ms = (opts and opts.debounce_ms) or 200,
+    timer = nil,
+    fs_handles = {},
+    aug = nil,
+    last_error = nil,
+    disposed = false,
+  }
+  current = lease
+
+  local ok, err = pcall(function()
+    lease.aug = vim.api.nvim_create_augroup("galley.watch", { clear = true })
+    vim.api.nvim_create_autocmd("BufWritePost", {
+      group = lease.aug,
+      callback = function(ev)
+        if not is_active(lease) then
+          return
+        end
+        local name = vim.api.nvim_buf_get_name(ev.buf)
+        if name ~= "" and vim.startswith(name, lease.state.root .. "/") then
+          mark_dirty(lease)
+        end
+      end,
+    })
+    vim.api.nvim_create_autocmd("FocusGained", {
+      group = lease.aug,
+      callback = function()
+        if not is_active(lease) then
+          return
+        end
+        mark_dirty(lease)
+      end,
+    })
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      group = lease.aug,
+      buffer = state.buf,
+      callback = function()
+        if not is_active(lease) then
+          return
+        end
+        W.stop(lease)
+      end,
+    })
+    refresh_fs_watches(lease)
+  end)
+  if not ok then
+    W.stop(lease)
+    error(err, 0)
+  end
+  return lease
 end
 
 return W

@@ -120,6 +120,13 @@ local function sync_after_collapse(st)
   scrollbar.update(st)
 end
 
+--- Watch changed the model rather than only its rendered shape, so every
+--- consumer refreshes and the virtualizer re-evaluates the new full size.
+local function sync_after_reconcile(st)
+  sync_after_collapse(st)
+  virt.apply(st, config.options.virt)
+end
+
 --- Set section i's collapse state on behalf of the USER (the <Tab>/za/<CR>
 --- keymaps). set_collapsed's default intent records exactly that, which is what
 --- stops the auto-virtualizer expanding it back on a later in-window pass and
@@ -398,19 +405,26 @@ function App:open(opts)
   end
 
   if config.options.watch.enabled then
-    surface.callbacks.watch_empty = function()
-      surface:guard(generation, function()
-        show_empty_message(st)
-      end)
-    end
-    surface.callbacks.watch_error = function(err)
-      surface:guard(generation, function()
-        util.warn(err)
-      end)
-    end
-    watch.on_empty = surface.callbacks.watch_empty
-    watch.on_error = surface.callbacks.watch_error
-    watch.start(st, config.options.watch)
+    surface.controllers.watch = watch.start(st, config.options.watch, {
+      alive = function()
+        return surface:guard(generation)
+      end,
+      on_empty = function()
+        surface:guard(generation, function()
+          show_empty_message(st)
+        end)
+      end,
+      on_error = function(err)
+        surface:guard(generation, function()
+          util.warn(err)
+        end)
+      end,
+      on_change = function()
+        surface:guard(generation, function()
+          sync_after_reconcile(st)
+        end)
+      end,
+    })
   end
 
   if config.options.sidebar.enabled then
