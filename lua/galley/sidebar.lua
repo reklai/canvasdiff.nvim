@@ -6,6 +6,9 @@ local render = require("galley.render")
 local model = require("galley.model")
 local lens = require("galley.lens")
 local util = require("galley.util")
+-- For S.cycle's stepping only. Safe: motions requires canvas/fold/config and
+-- nothing in that chain requires this module back.
+local motions = require("galley.motions")
 
 local S = {}
 
@@ -386,9 +389,7 @@ end
 --- viewport and is bound on the canvas buffer. It only sits in this module
 --- because the sidebar-selection sync does.
 function S.cycle(state, delta, count)
-  count = math.max(1, count or vim.v.count1)
-  local n = #state.sections
-  if n == 0 then
+  if #state.sections == 0 then
     return
   end
   if not (state.win and vim.api.nvim_win_is_valid(state.win)
@@ -400,7 +401,12 @@ function S.cycle(state, delta, count)
   end)
   local i = (canvas.locate(state, top0)) or 1
 
-  local target = ((i - 1 + delta * count) % n) + 1
+  -- Shared with ]f / [f, wrapping instead of clamping: the two must agree about
+  -- what is folded and about what a count means.
+  local target = motions.step(state, i, delta, count or vim.v.count1, true)
+  if not target then
+    return -- everything is folded; nowhere to cycle to
+  end
 
   local start0 = (canvas.section_rows(state, target))
   vim.api.nvim_win_call(state.win, function()
