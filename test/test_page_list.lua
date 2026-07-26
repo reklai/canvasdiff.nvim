@@ -50,8 +50,37 @@ local function load_isolated_pagelist(page_overrides)
 end
 
 local function page_rows(list, page_index0)
-  local node = assert(list:page_at(page_index0))
-  return assert(node.page:rows())
+  local page = assert(list:inspect_page(page_index0))
+  return assert(list:rows(page.start0, page.row_count))
+end
+
+local function list_pages(list)
+  local pages = {}
+  for page_index0 = 0, list:page_count() - 1 do
+    pages[#pages + 1] = assert(list:inspect_page(page_index0))
+  end
+  return pages
+end
+
+local function page_with_id(list, id)
+  for page_index0 = 0, list:page_count() - 1 do
+    local page = assert(list:inspect_page(page_index0))
+    if page.id == id then
+      return page
+    end
+  end
+  return nil
+end
+
+local function smallest_page_id_above(list, floor)
+  local smallest
+  for page_index0 = 0, list:page_count() - 1 do
+    local id = assert(list:inspect_page(page_index0)).id
+    if id > floor and (smallest == nil or id < smallest) then
+      smallest = id
+    end
+  end
+  return smallest
 end
 
 local function list_nodes(list)
@@ -115,8 +144,8 @@ T["page_list_ empty input owns no phantom page"] = function()
   H.eq(list:page_count(), 0)
   H.eq(list:rows(0, 0), {})
   H.eq(list:row(0), nil)
-  H.eq(list:locate(0), nil)
-  H.eq(list:page_at(0), nil)
+  H.eq(list:locate_page(0), nil)
+  H.eq(list:inspect_page(0), nil)
   H.eq(PageList.validate(list), true)
 end
 
@@ -128,15 +157,15 @@ T["page_list_ row target splits at 256 with stable monotonic ids"] = function()
   local list = PageList.new(rows)
 
   H.eq(list:page_count(), 2)
-  H.eq(assert(list:page_at(0)).id, 1)
-  H.eq(assert(list:page_at(1)).id, 2)
-  H.eq(assert(list:page_at(0)).page.row_count, 256)
-  H.eq(assert(list:page_at(1)).page.row_count, 1)
+  H.eq(assert(list:inspect_page(0)).id, 1)
+  H.eq(assert(list:inspect_page(1)).id, 2)
+  H.eq(assert(list:inspect_page(0)).row_count, 256)
+  H.eq(assert(list:inspect_page(1)).row_count, 1)
 
-  local first, first_local, first_page = list:locate(0)
-  H.eq({ first.id, first_local, first_page }, { 1, 0, 0 })
-  local boundary, boundary_local, boundary_page = list:locate(256)
-  H.eq({ boundary.id, boundary_local, boundary_page }, { 2, 0, 1 })
+  local first, first_local = list:locate_page(0)
+  H.eq({ first.id, first_local, first.page_index }, { 1, 0, 0 })
+  local boundary, boundary_local = list:locate_page(256)
+  H.eq({ boundary.id, boundary_local, boundary.page_index }, { 2, 0, 1 })
   H.eq(list:row(255), "row-256")
   H.eq(list:row(256), "row-257")
   H.eq(PageList.validate(list), true)
@@ -198,7 +227,7 @@ T["page_list_ page inspection returns detached scalar snapshots"] =
     snapshot.id = -1
     snapshot.start0 = 999
     snapshot.pin_count = 999
-    snapshot.page = assert(list:page_at(0)).page
+    snapshot.page = { forged = true }
     snapshot.offsets = {}
     setmetatable(snapshot, {
       __index = function()
@@ -315,18 +344,18 @@ T["page_list_ byte target is greedy at exact and over boundaries"] = function()
   H.eq(list:page_count(), 2)
   H.eq(page_rows(list, 0), { almost, "", "b" })
   H.eq(page_rows(list, 1), { "c" })
-  H.eq(assert(list:page_at(0)).page.decoded_bytes, 65536)
-  H.eq(assert(list:page_at(0)).page.offset_width, 4)
+  H.eq(assert(list:inspect_page(0)).decoded_bytes, 65536)
+  H.eq(assert(list:inspect_page(0)).offset_width, 4)
 
   local exact = PageList.new({ string.rep("x", 65536), "" })
   H.eq(exact:page_count(), 1)
-  H.eq(assert(exact:page_at(0)).page.row_count, 2)
+  H.eq(assert(exact:inspect_page(0)).row_count, 2)
   H.eq(exact:rows(0, 2), { string.rep("x", 65536), "" })
 
   local split = PageList.new({ string.rep("x", 40000), string.rep("y", 30000) })
   H.eq(split:page_count(), 2)
-  H.eq(assert(split:page_at(0)).page.decoded_bytes, 40000)
-  H.eq(assert(split:page_at(1)).page.decoded_bytes, 30000)
+  H.eq(assert(split:inspect_page(0)).decoded_bytes, 40000)
+  H.eq(assert(split:inspect_page(1)).decoded_bytes, 30000)
 end
 
 T["page_list_ oversized rows are isolated singleton pages"] = function()
@@ -337,7 +366,7 @@ T["page_list_ oversized rows are isolated singleton pages"] = function()
   H.eq(page_rows(list, 0), { "before" })
   H.eq(page_rows(list, 1), { huge })
   H.eq(page_rows(list, 2), { "", "after" })
-  H.eq(assert(list:page_at(1)).page.oversized, true)
+  H.eq(assert(list:inspect_page(1)).oversized, true)
   H.eq(list:stats().oversized_pages, 1)
   H.eq(list:rows(0, 4), { "before", huge, "", "after" })
   H.eq(PageList.validate(list), true)
@@ -386,9 +415,9 @@ T["page_list_ half-open ranges cross page boundaries exactly"] = function()
   end
   H.eq(list:row(-1), nil)
   H.eq(list:row(7), nil)
-  H.eq(list:locate(0.5), nil)
-  H.eq(list:page_at(-1), nil)
-  H.eq(list:page_at(3), nil)
+  H.eq(list:locate_page(0.5), nil)
+  H.eq(list:inspect_page(-1), nil)
+  H.eq(list:inspect_page(3), nil)
 end
 
 T["page_list_ rejects malformed sequences rows and options explicitly"] = function()
@@ -446,9 +475,9 @@ T["page_list_ binary lookup and range reads match a large oracle"] = function()
 
   local last_id = 0
   for page_index0 = 0, list:page_count() - 1 do
-    local node = assert(list:page_at(page_index0))
-    assert(node.id > last_id, "construction IDs must be monotonic")
-    last_id = node.id
+    local page = assert(list:inspect_page(page_index0))
+    assert(page.id > last_id, "construction IDs must be monotonic")
+    last_id = page.id
   end
   H.eq(PageList.validate(list), true)
 end
@@ -471,16 +500,12 @@ T["page_list_ splice no-ops and invalid requests are atomic"] = function()
     max_rows = 2,
     max_bytes = 8,
   })
-  local pages = list._pages
-  local starts = list._starts
-  local nodes = list_nodes(list)
+  local pages = list_pages(list)
   local stats = list:stats()
-  local next_page_id = list._next_page_id
 
   H.eq(list:splice(2, 0, {}), true)
   H.eq(list:generation(), 0)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
+  H.eq(list_pages(list), pages)
 
   local invalid_calls = {
     function() return list:splice(-1, 0, {}) end,
@@ -499,12 +524,7 @@ T["page_list_ splice no-ops and invalid requests are atomic"] = function()
     H.eq(result, nil, "invalid splice " .. index)
     assert(type(err) == "string", "invalid splice must return an error")
     H.eq(list:stats(), stats)
-    H.eq(list._next_page_id, next_page_id)
-    assert(list._pages == pages)
-    assert(list._starts == starts)
-    for node_index, node in ipairs(nodes) do
-      assert(list._pages[node_index] == node)
-    end
+    H.eq(list_pages(list), pages)
   end
 
   local insert_rows = {}
@@ -527,9 +547,11 @@ T["page_list_ splice no-ops and invalid requests are atomic"] = function()
   H.eq(allocations, 0,
     "insert rows must be completely preflighted before Page allocation")
   H.eq(list:stats(), stats)
-  H.eq(list._next_page_id, next_page_id)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
+  H.eq(list_pages(list), pages)
+
+  H.eq(list:splice(4, 0, { "after" }), true)
+  H.eq(smallest_page_id_above(list, pages[#pages].id), pages[#pages].id + 1)
+  H.eq(list:rows(0, 5), { "a", "b", "c", "d", "after" })
 end
 
 T["page_list_ every requested splice advances one generation"] = function()
@@ -537,8 +559,8 @@ T["page_list_ every requested splice advances one generation"] = function()
     max_rows = 2,
     max_bytes = 8,
   })
-  local first = assert(list:page_at(0))
-  local second = assert(list:page_at(1))
+  local first = assert(list:inspect_page(0))
+  local second = assert(list:inspect_page(1))
   H.eq(list:generation(), 0)
   H.eq(first.created_generation, 0)
   H.eq(second.created_generation, 0)
@@ -547,10 +569,11 @@ T["page_list_ every requested splice advances one generation"] = function()
   H.eq(list:generation(), 1)
   H.eq(list:stats().generation, 1)
   H.eq(list:rows(0, 4), { "a", "b", "c", "d" })
-  assert(assert(list:page_at(list:page_count() - 1)) == second,
+  assert(
+    assert(list:inspect_page(list:page_count() - 1)).id == second.id,
     "a byte-identical request is still a mutation, but untouched pages survive")
-  assert(assert(list:page_at(0)) ~= first)
-  H.eq(assert(list:page_at(0)).created_generation, 1)
+  assert(assert(list:inspect_page(0)).id ~= first.id)
+  H.eq(assert(list:inspect_page(0)).created_generation, 1)
 
   H.eq(list:splice(4, 0, { "" }), true)
   H.eq(list:generation(), 2)
@@ -568,26 +591,29 @@ T["page_list_ splice preserves identities outside exact touched pages"] = functi
     max_rows = 2,
     max_bytes = 32,
   })
-  local first = assert(list:page_at(0))
-  local second = assert(list:page_at(1))
-  local third = assert(list:page_at(2))
+  local first = assert(list:inspect_page(0))
+  local second = assert(list:inspect_page(1))
+  local third = assert(list:inspect_page(2))
 
   H.eq(list:splice(2, 0, { "x" }), true)
   H.eq(list:rows(0, 7), { "a", "b", "x", "c", "d", "e", "f" })
-  assert(assert(list:page_at(0)) == first)
-  assert(assert(list:page_at(2)) == second)
-  assert(assert(list:page_at(3)) == third)
-  local inserted = assert(list:page_at(1))
+  H.eq(assert(list:inspect_page(0)).id, first.id)
+  H.eq(assert(list:inspect_page(2)).id, second.id)
+  H.eq(assert(list:inspect_page(3)).id, third.id)
+  local inserted = assert(list:inspect_page(1))
   assert(inserted.id > third.id)
   H.eq(inserted.created_generation, 1)
 
   H.eq(list:splice(4, 0, { "y" }), true)
   H.eq(list:rows(0, 8), { "a", "b", "x", "c", "y", "d", "e", "f" })
-  assert(assert(list:page_at(0)) == first)
-  assert(assert(list:page_at(1)) == inserted)
-  assert(assert(list:page_at(list:page_count() - 1)) == third)
+  H.eq(assert(list:inspect_page(0)).id, first.id)
+  H.eq(assert(list:inspect_page(1)).id, inserted.id)
+  H.eq(
+    assert(list:inspect_page(list:page_count() - 1)).id,
+    third.id
+  )
   for page_index0 = 2, list:page_count() - 2 do
-    assert(assert(list:page_at(page_index0)).id > inserted.id)
+    assert(assert(list:inspect_page(page_index0)).id > inserted.id)
   end
   H.eq(PageList.validate(list), true)
 
@@ -595,15 +621,15 @@ T["page_list_ splice preserves identities outside exact touched pages"] = functi
     max_rows = 2,
     max_bytes = 32,
   })
-  local exact_first = assert(exact:page_at(0))
-  local exact_middle = assert(exact:page_at(1))
-  local exact_last = assert(exact:page_at(2))
+  local exact_first = assert(exact:inspect_page(0))
+  local exact_middle = assert(exact:inspect_page(1))
+  local exact_last = assert(exact:inspect_page(2))
   H.eq(exact:splice(2, 2, {}), true)
   H.eq(exact:rows(0, 4), { "a", "b", "e", "f" })
-  assert(exact_middle ~= assert(exact:page_at(0)))
-  assert(exact_middle ~= assert(exact:page_at(1)))
-  assert(assert(exact:page_at(0)) == exact_first)
-  assert(assert(exact:page_at(1)) == exact_last)
+  assert(exact_middle.id ~= assert(exact:inspect_page(0)).id)
+  assert(exact_middle.id ~= assert(exact:inspect_page(1)).id)
+  H.eq(assert(exact:inspect_page(0)).id, exact_first.id)
+  H.eq(assert(exact:inspect_page(1)).id, exact_last.id)
   H.eq(PageList.validate(exact), true)
 end
 
@@ -617,10 +643,10 @@ T["page_list_ splice handles empty transitions caps and non-reused ids"] = funct
   H.eq(list:rows(0, 3), { "a", "", huge })
   H.eq(list:page_count(), 2)
   H.eq(list:stats().oversized_pages, 1)
-  local old_nodes = list_nodes(list)
-  H.eq(old_nodes[1].created_generation, 1)
-  H.eq(old_nodes[2].created_generation, 1)
-  local greatest_old_id = math.max(old_nodes[1].id, old_nodes[2].id)
+  local old_pages = list_pages(list)
+  H.eq(old_pages[1].created_generation, 1)
+  H.eq(old_pages[2].created_generation, 1)
+  local greatest_old_id = math.max(old_pages[1].id, old_pages[2].id)
 
   assert(list:splice(0, 3, {}))
   H.eq(list:generation(), 2)
@@ -631,10 +657,10 @@ T["page_list_ splice handles empty transitions caps and non-reused ids"] = funct
 
   assert(list:splice(0, 0, { "again" }))
   H.eq(list:generation(), 3)
-  local new_node = assert(list:page_at(0))
-  assert(new_node.id > greatest_old_id, "deleted page ids must never be reused")
-  H.eq(new_node.created_generation, 3)
-  H.eq(new_node.page.oversized, true)
+  local new_page = assert(list:inspect_page(0))
+  assert(new_page.id > greatest_old_id, "deleted page ids must never be reused")
+  H.eq(new_page.created_generation, 3)
+  H.eq(new_page.oversized, true)
   H.eq(PageList.validate(list), true)
 end
 
@@ -643,12 +669,9 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
     max_rows = 2,
     max_bytes = 8,
   })
-  local pages = list._pages
-  local starts = list._starts
-  local nodes = list_nodes(list)
   local lease = assert(list:pin_range(2, 1))
+  local pages = list_pages(list)
   local stats = list:stats()
-  local next_page_id = list._next_page_id
 
   local original = Page.create
   local calls = 0
@@ -673,14 +696,9 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
   H.eq(err, "injected page failure")
   H.eq(calls, 2)
   H.eq(list:stats(), stats)
-  H.eq(list._next_page_id, next_page_id)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
-  for index, node in ipairs(nodes) do
-    assert(list._pages[index] == node)
-  end
+  H.eq(list_pages(list), pages)
   H.eq(list:pin_is_current(lease), true)
-  H.eq(list:pin_count(nodes[2]), 1)
+  H.eq(assert(list:inspect_page(1)).pin_count, 1)
   H.eq(PageList.validate(list), true)
 
   Page.create = function()
@@ -694,15 +712,14 @@ T["page_list_ Page creation failure leaves a splice wholly unpublished"] = funct
   assert(err:match("page creation threw"), err)
   assert(err:match("injected page throw"), err)
   H.eq(list:stats(), stats)
-  H.eq(list._next_page_id, next_page_id)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
-  for index, node in ipairs(nodes) do
-    assert(list._pages[index] == node)
-  end
+  H.eq(list_pages(list), pages)
   H.eq(list:pin_is_current(lease), true)
-  H.eq(list:pin_count(nodes[2]), 1)
+  H.eq(assert(list:inspect_page(1)).pin_count, 1)
   H.eq(list:release_pin(lease), true)
+
+  H.eq(list:splice(4, 0, { "after" }), true)
+  H.eq(smallest_page_id_above(list, pages[#pages].id), pages[#pages].id + 1)
+  H.eq(list:rows(0, 5), { "a", "b", "c", "d", "after" })
   H.eq(PageList.validate(list), true)
 end
 
@@ -711,11 +728,8 @@ T["page_list_ Page creation hostile successes cannot change requested rows"] = f
 
   local function exercise(replacement, start0, insert_rows, expected_error)
     local list = PageList.new({ "a", "b" }, { max_rows = 2, max_bytes = 8 })
-    local pages = list._pages
-    local starts = list._starts
-    local nodes = list_nodes(list)
+    local pages = list_pages(list)
     local stats = list:stats()
-    local next_page_id = list._next_page_id
 
     Page.create = function(rows, opts)
       return replacement(list, rows, opts, original)
@@ -733,14 +747,15 @@ T["page_list_ Page creation hostile successes cannot change requested rows"] = f
     H.eq(change, nil)
     assert(err:match(expected_error), err)
     H.eq(list:stats(), stats)
-    H.eq(list._next_page_id, next_page_id)
-    assert(list._pages == pages)
-    assert(list._starts == starts)
-    for index, node in ipairs(nodes) do
-      assert(list._pages[index] == node)
-    end
-    H.eq(rawget(list, "_splice_active"), nil)
+    H.eq(list_pages(list), pages)
     H.eq(list:rows(0, 2), { "a", "b" })
+
+    H.eq(list:splice(2, 0, { "after" }), true)
+    H.eq(
+      smallest_page_id_above(list, pages[#pages].id),
+      pages[#pages].id + 1
+    )
+    H.eq(list:rows(0, 3), { "a", "b", "after" })
     H.eq(PageList.validate(list), true)
   end
 
@@ -792,13 +807,14 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   assert(err:match("fresh Page"), err)
   H.eq(target:rows(0, 0), {})
   H.eq(owner:rows(0, 1), { "same" })
+  H.eq(target:splice(0, 0, { "fresh" }), true)
+  H.eq(target:rows(0, 1), { "fresh" })
   H.eq(PageList.validate(target), true)
   H.eq(PageList.validate(owner), true)
 
   local list = PageList.new({ "a", "b" }, { max_rows = 2 })
   local historical = assert(list:page_at(0)).page
-  local pages = list._pages
-  local starts = list._starts
+  local pages = list_pages(list)
   local stats = list:stats()
 
   Page.create = function()
@@ -816,11 +832,11 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   assert(called, change)
   H.eq(change, nil)
   assert(err:match("fresh Page"), err)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
+  H.eq(list_pages(list), pages)
   H.eq(list:stats(), stats)
   H.eq(list:rows(0, 2), { "a", "b" })
-  H.eq(rawget(list, "_splice_active"), nil)
+  H.eq(list:splice(2, 0, { "fresh" }), true)
+  H.eq(list:rows(0, 3), { "a", "b", "fresh" })
   H.eq(PageList.validate(list), true)
 
   local nested_owner = PageList.new({})
@@ -851,8 +867,8 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   assert(err:match("already claimed"), err)
   H.eq(nested_target:rows(0, 0), {})
   H.eq(nested_owner:rows(0, 1), { "nested" })
-  H.eq(rawget(nested_target, "_splice_active"), nil)
-  H.eq(rawget(nested_owner, "_splice_active"), nil)
+  H.eq(nested_target:splice(0, 0, { "fresh" }), true)
+  H.eq(nested_target:rows(0, 1), { "fresh" })
   H.eq(PageList.validate(nested_target), true)
   H.eq(PageList.validate(nested_owner), true)
 end
@@ -1013,16 +1029,14 @@ T["page_list_ pin ranges count exact overlapping concrete pages"] = function()
   local list = PageList.new({
     "a", "b", "c", "d", "e", "f", "g", "h",
   }, { max_rows = 2 })
-  local nodes = list_nodes(list)
-
   local wide = assert(list:pin_range(1, 4, 0))
   local narrow = assert(list:pin_range(2, 2, 0))
   local empty = assert(list:pin_range(8, 0, 0))
 
-  H.eq(list:pin_count(nodes[1]), 1)
-  H.eq(list:pin_count(nodes[2]), 2)
-  H.eq(list:pin_count(nodes[3]), 1)
-  H.eq(list:pin_count(nodes[4]), 0)
+  H.eq(assert(list:inspect_page(0)).pin_count, 1)
+  H.eq(assert(list:inspect_page(1)).pin_count, 2)
+  H.eq(assert(list:inspect_page(2)).pin_count, 1)
+  H.eq(assert(list:inspect_page(3)).pin_count, 0)
   H.eq(list:pin_stats(), {
     active_leases = 3,
     pin_references = 4,
@@ -1035,7 +1049,7 @@ T["page_list_ pin ranges count exact overlapping concrete pages"] = function()
   H.eq(PageList.validate(list), true)
 
   H.eq(list:release_pin(narrow), true)
-  H.eq(list:pin_count(nodes[2]), 1)
+  H.eq(assert(list:inspect_page(1)).pin_count, 1)
   H.eq(list:release_pin(empty), true)
   H.eq(list:release_pin(wide), true)
   H.eq(list:pin_stats(), {
@@ -1060,11 +1074,11 @@ T["page_list_ pin acquisition is generation fenced and atomic"] = function()
   H.eq(list:pin_range(0, 1, math.huge), nil)
   H.eq(list:pin_stats(), stats)
 
-  local node = assert(list:page_at(2))
+  local page = assert(list:inspect_page(2))
   lease = assert(list:pin_range(2, 1, list:generation()))
   H.eq(list:splice(0, 0, { "x" }), true)
   H.eq(list:pin_is_current(lease), false)
-  H.eq(list:pin_count(node), 1)
+  H.eq(assert(page_with_id(list, page.id)).pin_count, 1)
   H.eq(list:pin_stats().retired_pinned_pages, 0)
   H.eq(list:pin_range(0, 1, 0), nil)
   H.eq(list:release_pin(lease), true)
@@ -1257,13 +1271,12 @@ end
 T["page_list_ removed pinned pages retire until every lease releases"] =
   function()
     local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
-    local node = assert(list:page_at(1))
     local first = assert(list:pin_range(1, 1))
     local second = assert(list:pin_range(1, 1))
+    H.eq(assert(list:inspect_page(1)).pin_count, 2)
 
     H.eq(list:splice(1, 1, {}), true)
     H.eq(list:rows(0, 2), { "a", "c" })
-    H.eq(list:pin_count(node), 2)
     H.eq(list:pin_is_current(first), false)
     H.eq(list:pin_is_current(second), false)
     H.eq(list:pin_stats(), {
@@ -1275,10 +1288,13 @@ T["page_list_ removed pinned pages retire until every lease releases"] =
     H.eq(PageList.validate(list), true)
 
     H.eq(list:release_pin(first), true)
-    H.eq(list:pin_count(node), 1)
-    H.eq(list:pin_stats().retired_pinned_pages, 1)
+    H.eq(list:pin_stats(), {
+      active_leases = 1,
+      pin_references = 1,
+      current_pinned_pages = 0,
+      retired_pinned_pages = 1,
+    })
     H.eq(list:release_pin(second), true)
-    H.eq(list:pin_count(node), nil)
     H.eq(list:pin_stats(), {
       active_leases = 0,
       pin_references = 0,
@@ -1348,7 +1364,6 @@ T["page_list_ pin leases use exact private list identity and release once"] =
   function()
     local left = PageList.new({ "a", "b" }, { max_rows = 1 })
     local right = PageList.new({ "a", "b" }, { max_rows = 1 })
-    local node = assert(left:page_at(0))
     local lease = assert(left:pin_range(0, 1))
     local forged = setmetatable({}, {
       __eq = function()
@@ -1358,7 +1373,7 @@ T["page_list_ pin leases use exact private list identity and release once"] =
 
     H.eq(right:release_pin(lease), nil)
     H.eq(left:release_pin(forged), nil)
-    H.eq(left:pin_count(node), 1)
+    H.eq(assert(left:inspect_page(0)).pin_count, 1)
 
     lease.generation = -1
     setmetatable(lease, {
@@ -1371,7 +1386,7 @@ T["page_list_ pin leases use exact private list identity and release once"] =
     H.eq(left:release_pin(lease), true)
     H.eq(left:release_pin(lease), nil)
     H.eq(left:pin_is_current(lease), false)
-    H.eq(left:pin_count(node), 0)
+    H.eq(assert(left:inspect_page(0)).pin_count, 0)
     H.eq(PageList.validate(left), true)
     H.eq(PageList.validate(right), true)
   end
@@ -1379,7 +1394,7 @@ T["page_list_ pin leases use exact private list identity and release once"] =
 T["page_list_ private splice fence protects pin state from callbacks"] =
   function()
     local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
-    local pinned_node = assert(list:page_at(2))
+    local pinned_page = assert(list:inspect_page(2))
     local lease = assert(list:pin_range(2, 1))
     local original = Page.create
     local attempts = 0
@@ -1412,7 +1427,7 @@ T["page_list_ private splice fence protects pin state from callbacks"] =
     assert(change, err)
     H.eq(attempts, 1)
     H.eq(list:rows(0, 4), { "x", "a", "b", "c" })
-    H.eq(list:pin_count(pinned_node), 1)
+    H.eq(assert(page_with_id(list, pinned_page.id)).pin_count, 1)
     H.eq(list:pin_is_current(lease), false)
     H.eq(list:release_pin(lease), true)
     H.eq(rawget(list, "_splice_active"), nil)
@@ -1460,13 +1475,21 @@ T["page_list_ splice rollback restores retired pinned page graphs"] =
   end
 
 T["page_list_ retired pin lifetime ends on exact release"] = function()
-  local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-  local node = assert(list:page_at(0))
+  local weak = setmetatable({}, { __mode = "v" })
+  local original_claim = Page.claim
+  local Isolated = load_isolated_pagelist({
+    claim = function(page, owner)
+      local claimed, capability = original_claim(page, owner)
+      if claimed and weak[1] == nil then
+        weak[1] = owner
+      end
+      return claimed, capability
+    end,
+  })
+  local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
   local lease = assert(list:pin_range(0, 1))
-  local weak = setmetatable({ node }, { __mode = "v" })
 
   H.eq(list:splice(0, 1, {}), true)
-  node = nil
   collectgarbage("collect")
   collectgarbage("collect")
   assert(weak[1], "an active retired pin must retain its exact node")
@@ -1476,7 +1499,7 @@ T["page_list_ retired pin lifetime ends on exact release"] = function()
   collectgarbage("collect")
   collectgarbage("collect")
   H.eq(weak[1], nil, "release must drop the retired node lifetime")
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 end
 
 T["page_list_ a live node cannot lose its Page claim through GC"] = function()
@@ -1594,7 +1617,6 @@ T["page_list_ trusted dispatch rejects PageList method shadows"] = function()
   H.eq(change, nil)
   assert(err:match("shadows trusted method locate"), err)
   H.eq(PageList.rows(list, 0, 3), { "a", "b", "c" })
-  H.eq(rawget(list, "_splice_active"), nil)
 
   list.locate = nil
   H.eq(list:splice(1, 0, { "x" }), true)
@@ -1656,7 +1678,9 @@ T["page_list_ splice fences re-entry from Page creation"] = function()
   assert(inner_err:match("already active"), inner_err)
   H.eq(list:rows(0, 3), { "a", "outer", "b" })
   H.eq(list:generation(), 1)
-  H.eq(rawget(list, "_splice_active"), nil)
+  H.eq(list:splice(3, 0, { "after" }), true)
+  H.eq(list:rows(0, 4), { "a", "outer", "b", "after" })
+  H.eq(list:generation(), 2)
   H.eq(PageList.validate(list), true)
 end
 
@@ -1687,7 +1711,8 @@ T["page_list_ splice snapshots caller rows before Page callbacks"] = function()
   H.eq(err, nil)
   H.eq(insert_rows, { "outer", "mutated" })
   H.eq(list:rows(0, 4), { "a", "outer", "stable", "b" })
-  H.eq(rawget(list, "_splice_active"), nil)
+  H.eq(list:splice(4, 0, { "after" }), true)
+  H.eq(list:rows(0, 5), { "a", "outer", "stable", "b", "after" })
   H.eq(PageList.validate(list), true)
 end
 
@@ -1718,11 +1743,17 @@ T["page_list_fuzz_ splice matches an eager oracle and stable id registry"] = fun
   end
 
   local id_registry = {}
+  local live_ids = {}
   local greatest_id = 0
-  for _, node in ipairs(list_nodes(list)) do
-    id_registry[node.id] = node
-    greatest_id = math.max(greatest_id, node.id)
-    H.eq(node.created_generation, 0)
+  for page_index0 = 0, list:page_count() - 1 do
+    local page = assert(list:inspect_page(page_index0))
+    id_registry[page.id] = {
+      created_generation = page.created_generation,
+      rows = page_rows(list, page_index0),
+    }
+    live_ids[page.id] = true
+    greatest_id = math.max(greatest_id, page.id)
+    H.eq(page.created_generation, 0)
   end
 
   for iteration = 1, 1200 do
@@ -1760,27 +1791,36 @@ T["page_list_fuzz_ splice matches an eager oracle and stable id registry"] = fun
     H.eq(PageList.validate(list), true,
       "invariants at randomized splice " .. iteration)
 
-    for _, node in ipairs(list_nodes(list)) do
-      local registered = id_registry[node.id]
+    local next_live_ids = {}
+    for page_index0 = 0, list:page_count() - 1 do
+      local page = assert(list:inspect_page(page_index0))
+      local registered = id_registry[page.id]
       if registered then
-        assert(registered == node,
-          "a committed page id must always identify the same node")
+        assert(live_ids[page.id],
+          "a retired page id must never reappear")
+        H.eq(page.created_generation, registered.created_generation)
+        H.eq(page_rows(list, page_index0), registered.rows)
       else
-        assert(node.id > greatest_id,
+        assert(page.id > greatest_id,
           "new page ids must advance beyond every historical id")
-        greatest_id = node.id
-        id_registry[node.id] = node
-        H.eq(node.created_generation, expected_generation)
+        greatest_id = page.id
+        id_registry[page.id] = {
+          created_generation = page.created_generation,
+          rows = page_rows(list, page_index0),
+        }
+        H.eq(page.created_generation, expected_generation)
       end
-      assert(node.created_generation <= expected_generation)
-      if node.page.oversized then
-        H.eq(node.page.row_count, 1)
-        assert(node.page.decoded_bytes > 9)
+      next_live_ids[page.id] = true
+      assert(page.created_generation <= expected_generation)
+      if page.oversized then
+        H.eq(page.row_count, 1)
+        assert(page.decoded_bytes > 9)
       else
-        assert(node.page.row_count <= 4)
-        assert(node.page.decoded_bytes <= 9)
+        assert(page.row_count <= 4)
+        assert(page.decoded_bytes <= 9)
       end
     end
+    live_ids = next_live_ids
   end
 end
 
@@ -1793,17 +1833,19 @@ T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
     random_state = (random_state * 48271) % 2147483647
     return random_state % limit
   end
-  local function range_nodes(start0, count)
+  local function range_page_ids(start0, count)
     if count == 0 then
       return {}
     end
-    local _, _, first_page0 = assert(list:locate(start0))
-    local _, _, last_page0 = assert(list:locate(start0 + count - 1))
-    local nodes = {}
+    local first_page0 =
+      assert(list:locate_page(start0)).page_index
+    local last_page0 =
+      assert(list:locate_page(start0 + count - 1)).page_index
+    local ids = {}
     for page_index0 = first_page0, last_page0 do
-      nodes[#nodes + 1] = assert(list:page_at(page_index0))
+      ids[#ids + 1] = assert(list:inspect_page(page_index0)).id
     end
-    return nodes
+    return ids
   end
 
   for iteration = 1, 600 do
@@ -1815,7 +1857,7 @@ T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
       local generation = list:generation()
       leases[#leases + 1] = {
         lease = assert(list:pin_range(start0, count, generation)),
-        nodes = range_nodes(start0, count),
+        page_ids = range_page_ids(start0, count),
         generation = generation,
       }
     elseif action <= 5 and #leases > 0 then
@@ -1843,8 +1885,8 @@ T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
     end
 
     local current = {}
-    for _, node in ipairs(list_nodes(list)) do
-      current[node] = true
+    for _, page in ipairs(list_pages(list)) do
+      current[page.id] = page
     end
     local expected = {}
     local references = 0
@@ -1853,23 +1895,23 @@ T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
         list:pin_is_current(record.lease),
         record.generation == list:generation()
       )
-      for _, node in ipairs(record.nodes) do
-        expected[node] = (expected[node] or 0) + 1
+      for _, id in ipairs(record.page_ids) do
+        expected[id] = (expected[id] or 0) + 1
         references = references + 1
       end
     end
     local current_pinned = 0
     local retired_pinned = 0
-    for node, count in pairs(expected) do
-      H.eq(list:pin_count(node), count)
-      if current[node] then
+    for id, count in pairs(expected) do
+      if current[id] then
+        H.eq(current[id].pin_count, count)
         current_pinned = current_pinned + 1
       else
         retired_pinned = retired_pinned + 1
       end
     end
-    for node in pairs(current) do
-      H.eq(list:pin_count(node), expected[node] or 0)
+    for id, page in pairs(current) do
+      H.eq(page.pin_count, expected[id] or 0)
     end
     H.eq(list:pin_stats(), {
       active_leases = #leases,
@@ -2045,10 +2087,14 @@ T["page_list_ streaming and table construction have identical pages"] = function
   H.eq(streamed:stats(), tabled:stats())
   H.eq(streamed:page_count(), tabled:page_count())
   for page_index0 = 0, tabled:page_count() - 1 do
-    local streamed_node = assert(streamed:page_at(page_index0))
-    local tabled_node = assert(tabled:page_at(page_index0))
-    H.eq(streamed_node.id, tabled_node.id)
-    H.eq(streamed_node.page:encoded(), tabled_node.page:encoded())
+    H.eq(
+      streamed:inspect_page(page_index0),
+      tabled:inspect_page(page_index0)
+    )
+    H.eq(
+      page_rows(streamed, page_index0),
+      page_rows(tabled, page_index0)
+    )
   end
   H.eq(streamed:rows(0, #rows), rows)
   H.eq(PageList.validate(streamed), true)
@@ -2075,7 +2121,7 @@ T["page_list_ streaming preserves every packing boundary"] = function()
   H.eq(list:stats().oversized_pages, 1)
   local oversized
   for page_index0 = 0, list:page_count() - 1 do
-    local page = assert(list:page_at(page_index0)).page
+    local page = assert(list:inspect_page(page_index0))
     if page.oversized then
       oversized = page
       break
@@ -2083,7 +2129,7 @@ T["page_list_ streaming preserves every packing boundary"] = function()
   end
   assert(oversized)
   H.eq(oversized.row_count, 1)
-  H.eq(oversized:row(1), string.rep("z", 65537))
+  H.eq(list:row(oversized.start0), string.rep("z", 65537))
   H.eq(PageList.validate(list), true)
 end
 
@@ -2286,10 +2332,9 @@ T["page_list_ resident options are raw snapshotted and bounded"] = function()
   restore.codec = "mutated"
   resident.max_pages = 0
   H.eq(list:compact_page(0, 0), true)
-  H.eq(Page.metadata(assert(list:page_at(0)).page).codec,
-    "page-list-test-v1")
+  H.eq(assert(list:inspect_page(0)).codec, "page-list-test-v1")
   H.eq(callback_calls, 0)
-  H.eq(rawget(assert(list:page_at(0)), "capability"), nil)
+  H.eq(rawget(assert(list:inspect_page(0)), "capability"), nil)
   H.eq(PageList.validate(list), true)
 
   local raw_only = PageList.new({ "raw" }, {
@@ -2320,8 +2365,7 @@ T["page_list_ compact_page publishes one exact unpinned page"] = function()
       restore = adapter,
     },
   })
-  local first = assert(list:page_at(0))
-  local before_page = Page.metadata(first.page)
+  local before_page = assert(list:inspect_page(0))
   local before_stats = list:stats()
 
   H.eq(list:compact_page(3, 0), nil)
@@ -2344,7 +2388,8 @@ T["page_list_ compact_page publishes one exact unpinned page"] = function()
   H.eq(list:generation(), 0)
   H.eq(list:stats().storage_bytes,
     before_stats.storage_bytes - old_storage + new_storage)
-  local after = Page.metadata(first.page)
+  local after = assert(list:inspect_page(0))
+  H.eq(after.id, before_page.id)
   H.eq(after.kind, "cold")
   H.eq(after.revision, 1)
   H.eq(after.restore_bytes, before_page.restore_bytes)
@@ -2363,16 +2408,16 @@ T["page_list_ cold metadata caps and adapter survive an untouched splice"] =
       max_rows = 1,
       resident = { restore = adapter },
     })
-    local first = assert(list:page_at(0))
+    local first = assert(list:inspect_page(0))
     H.eq(list:compact_page(0, 0), true)
-    H.eq(Page.metadata(first.page).kind, "cold")
+    H.eq(assert(list:inspect_page(0)).kind, "cold")
 
     H.eq(list:splice(2, 0, { "third-third" }), true)
     H.eq(list:generation(), 1)
-    assert(list:page_at(0) == first)
-    H.eq(Page.metadata(first.page).kind, "cold")
+    H.eq(assert(list:inspect_page(0)).id, first.id)
+    H.eq(assert(list:inspect_page(0)).kind, "cold")
     H.eq(list:compact_page(2, 1), true)
-    H.eq(Page.metadata(assert(list:page_at(2)).page).kind, "cold")
+    H.eq(assert(list:inspect_page(2)).kind, "cold")
     H.eq(PageList.validate(list), true)
   end
 
@@ -2402,7 +2447,7 @@ T["page_list_ compact_page preflights resident capacity before encode"] =
       assert(err:find("cache limits", 1, true), err)
       H.eq(encode_calls, 0)
       H.eq(list:stats(), before)
-      H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+      H.eq(assert(list:inspect_page(0)).kind, "raw")
       H.eq(PageList.validate(list), true)
     end
   end
@@ -2432,7 +2477,7 @@ T["page_list_ compact_page faults and no-benefit stay atomic"] = function()
       assert(#err < 100, err)
     end
     H.eq(list:stats(), before)
-    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(assert(list:inspect_page(0)).kind, "raw")
     H.eq(PageList.validate(list), true)
   end
 end
@@ -2481,7 +2526,7 @@ T["page_list_ compact callbacks cannot reenter or mutate the list"] =
     H.eq(list:stats(), before)
     H.eq(crc_calls, 0, "encode-side reentry must stop before CRC")
     H.eq(list:pin_is_current(lease), true)
-    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(assert(list:inspect_page(0)).kind, "raw")
     H.eq(PageList.validate(list), true)
 
     reenter = false
@@ -2517,7 +2562,7 @@ T["page_list_ compact crc callback reentry discards its candidate"] =
     assert(err:find("changed during compaction", 1, true), err)
     H.eq(crc_calls, 1)
     H.eq(list:stats(), before)
-    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(assert(list:inspect_page(0)).kind, "raw")
     H.eq(PageList.validate(list), true)
 
     reenter = false
@@ -2755,8 +2800,9 @@ T["page_list_ streaming supports one million rows without an input table"] = fun
   H.eq(list:stats().decoded_bytes, 0)
   H.eq(PageList.validate(list), true)
 
-  local first_node = assert(list:page_at(0))
-  local last_node = assert(list:page_at(list:page_count() - 1))
+  local first_page = assert(list:inspect_page(0))
+  local last_page =
+    assert(list:inspect_page(list:page_count() - 1))
   local page_count = list:page_count()
   H.eq(list:splice(500000, 0, { "needle" }), true)
   H.eq(list:row_count(), logical_rows + 1)
@@ -2765,8 +2811,11 @@ T["page_list_ streaming supports one million rows without an input table"] = fun
   H.eq(list:row(499999), "")
   H.eq(list:row(500000), "needle")
   H.eq(list:row(500001), "")
-  assert(list:page_at(0) == first_node)
-  assert(list:page_at(list:page_count() - 1) == last_node)
+  H.eq(assert(list:inspect_page(0)).id, first_page.id)
+  H.eq(
+    assert(list:inspect_page(list:page_count() - 1)).id,
+    last_page.id
+  )
   H.eq(PageList.validate(list), true)
 end
 

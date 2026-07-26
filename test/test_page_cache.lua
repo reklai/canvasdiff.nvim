@@ -86,8 +86,7 @@ local function cold_fixture(rows, limits, Module)
 
   state.view_bytes = {}
   for page_index0 = 0, list:page_count() - 1 do
-    local node = assert(list:page_at(page_index0))
-    local metadata = assert(Page.metadata(node.page))
+    local metadata = assert(list:inspect_page(page_index0))
     H.eq(metadata.kind, "cold")
     state.view_bytes[page_index0 + 1] = metadata.view_bytes
   end
@@ -588,8 +587,7 @@ T["page_cache_ malformed restore quarantines without partial cache"] =
       assert_rejected(lease, err)
       assert_cache(list, 1, bytes)
       H.eq(list:pin_stats().active_leases, 0)
-      local metadata =
-        assert(Page.metadata(assert(list:page_at(0)).page))
+      local metadata = assert(list:inspect_page(0))
       H.eq(metadata.quarantined, true, case.name)
 
       local decode_calls = decode_count(state, 1)
@@ -684,12 +682,14 @@ T["page_cache_ invalid cache hit is purged and restored at same revision"] =
 T["page_cache_ quarantined hit is purged without a revision shortcut"] =
   function()
     local capabilities = setmetatable({}, { __mode = "k" })
+    local captured_page
     local original_claim = Page.claim
     local Isolated = load_isolated_pagelist({
       claim = function(page, node)
         local claimed, capability = original_claim(page, node)
         if claimed then
           capabilities[page] = capability
+          captured_page = page
         end
         return claimed, capability
       end,
@@ -700,8 +700,7 @@ T["page_cache_ quarantined hit is purged without a revision shortcut"] =
       max_pages = 1,
       max_bytes = bytes,
     }, Isolated)
-    local node = assert(list:page_at(0))
-    local page = node.page
+    local page = assert(captured_page)
     local before = assert(Page.metadata(page))
 
     local lease = assert(list:pin_range(0, 1, 0))
@@ -792,7 +791,7 @@ T["page_cache_ decode and crc reentry poison every lease operation"] =
         H.eq(state.crc_calls, before_crc + 1)
       end
       H.eq(
-        Page.metadata(assert(list:page_at(0)).page).quarantined,
+        assert(list:inspect_page(0)).quarantined,
         false,
         phase
       )
@@ -1006,7 +1005,6 @@ T["page_cache_ splice boundary restore reentry cancels outer mutation"] =
         restore = state.adapter,
       },
     })
-    local page = assert(list:page_at(0)).page
     assert(list:compact_page(0, 0))
     state.decode_calls = {}
     state.crc_calls = 0
@@ -1026,7 +1024,7 @@ T["page_cache_ splice boundary restore reentry cancels outer mutation"] =
       nested[2]
     )
     H.eq(state.crc_calls, 0)
-    H.eq(Page.metadata(page).quarantined, false)
+    H.eq(assert(list:inspect_page(0)).quarantined, false)
     H.eq(list:generation(), 0)
     assert_cache(list, 1, 1024)
     H.eq(PageList.validate(list), true)
