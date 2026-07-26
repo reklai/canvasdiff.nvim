@@ -1,4 +1,4 @@
-local differ = require("canvasdiff.diff")
+local algorithm = require("canvasdiff.diff.algorithm")
 
 local W = {}
 
@@ -26,7 +26,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
   -- byte columns (multibyte safe -- \zs splits between characters).
   local dc = vim.fn.split(del_content, "\\zs")
   local ac = vim.fn.split(add_content, "\\zs")
-  local hunks = differ.hunks(table.concat(dc, "\n"), table.concat(ac, "\n"))
+  local hunks = algorithm.hunks(table.concat(dc, "\n"), table.concat(ac, "\n"))
   local doff, aoff = byte_offsets(dc), byte_offsets(ac)
 
   for _, h in ipairs(hunks) do

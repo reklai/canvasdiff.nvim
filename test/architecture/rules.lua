@@ -36,7 +36,6 @@ R.legacy_paths = {
   "lua/canvasdiff/util.lua",
   "lua/canvasdiff/virt.lua",
   "lua/canvasdiff/watch.lua",
-  "lua/canvasdiff/worddiff.lua",
 }
 
 -- Immutable upper bound for the transition. Keeping this separate from the

@@ -14,6 +14,7 @@ return {
       "is_binary",
       "lens",
       "staged_then_changed",
+      "word_marks",
     })
   end,
   ["differ: simple change"] = function()

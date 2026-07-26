@@ -1,8 +1,8 @@
 local M = {}
 
 local canvas = require("canvasdiff.canvas")
-local worddiff = require("canvasdiff.worddiff")
-local fold = require("canvasdiff.diff").fold
+local diff = require("canvasdiff.diff")
+local fold = diff.fold
 
 local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 
@@ -516,7 +516,7 @@ local function apply_section(lease, i, epoch)
   if not active(lease) or lease.epoch ~= epoch then
     return false
   end
-  local word_marks = worddiff.section_marks(sec)
+  local word_marks = diff.word_marks(sec)
   if not active(lease) or lease.epoch ~= epoch then
     return false
   end
