@@ -137,6 +137,8 @@ local TRUSTED_INSTANCE_METHODS = {
   "generation",
   "page_at",
   "locate",
+  "inspect_page",
+  "locate_page",
   "row",
   "rows",
   "splice",
@@ -1385,6 +1387,179 @@ local function node_metadata(node)
     return nil, nil, metadata_err
   end
   return metadata, page
+end
+
+local function inspection_generation(self, state, expected_generation)
+  if not RAW_EQUAL(expected_generation, nil)
+      and (
+        not integer(expected_generation)
+        or expected_generation > MAX_SAFE_INTEGER
+      ) then
+    return nil, "expected generation must be a safe non-negative integer"
+  end
+
+  local generation = rawget(state, "generation")
+  local public_generation = rawget(self, "_generation")
+  if not integer(generation)
+      or generation > MAX_SAFE_INTEGER
+      or not integer(public_generation)
+      or public_generation > MAX_SAFE_INTEGER
+      or not RAW_EQUAL(public_generation, generation) then
+    return nil, "page list cannot inspect invalid metadata"
+  end
+  if not RAW_EQUAL(expected_generation, nil)
+      and not RAW_EQUAL(expected_generation, generation) then
+    return nil, "page-list generation changed before inspection"
+  end
+  return generation
+end
+
+local function page_snapshot_at(
+    self,
+    state,
+    lineage,
+    page_index0,
+    generation
+)
+  local pages = rawget(state, "trusted_pages")
+  local starts = rawget(state, "trusted_starts")
+  local public_pages = rawget(self, "_pages")
+  local public_starts = rawget(self, "_starts")
+  if type(pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(pages), nil)
+      or type(starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil)
+      or type(public_pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(public_pages), nil)
+      or type(public_starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(public_starts), nil)
+      or not RAW_EQUAL(public_pages, rawget(state, "public_pages"))
+      or not RAW_EQUAL(public_starts, rawget(state, "public_starts")) then
+    return nil, "page list cannot inspect invalid metadata"
+  end
+  if not integer(page_index0) or page_index0 >= #pages then
+    return nil, "page index is outside the list"
+  end
+
+  local page_index = page_index0 + 1
+  local node = rawget(pages, page_index)
+  local start0 = rawget(starts, page_index)
+  if type(node) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(node), nil)
+      or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
+      or not RAW_EQUAL(rawget(state.current, node), true)
+      or not integer(start0)
+      or not RAW_EQUAL(rawget(public_pages, page_index), node)
+      or not RAW_EQUAL(rawget(public_starts, page_index), start0) then
+    return nil, "page list cannot inspect invalid metadata"
+  end
+
+  local id = rawget(node, "id")
+  local created_generation = rawget(node, "created_generation")
+  local pin_count = rawget(state.counts, node)
+  if not positive_integer(id)
+      or not integer(created_generation)
+      or created_generation > generation
+      or (
+        not RAW_EQUAL(pin_count, nil)
+        and not positive_integer(pin_count)
+      ) then
+    return nil, "page list cannot inspect invalid metadata"
+  end
+
+  local metadata, _, metadata_err = node_metadata(node)
+  if not metadata then
+    return nil, metadata_err
+  end
+  return {
+    generation = generation,
+    page_index = page_index0,
+    id = id,
+    created_generation = created_generation,
+    start0 = start0,
+    end0 = start0 + metadata.row_count,
+    row_count = metadata.row_count,
+    kind = metadata.kind,
+    codec = metadata.codec,
+    revision = metadata.revision,
+    offset_width = metadata.offset_width,
+    decoded_bytes = metadata.decoded_bytes,
+    max_rows = metadata.max_rows,
+    max_bytes = metadata.max_bytes,
+    oversized = metadata.oversized,
+    storage_bytes = metadata.storage_bytes,
+    resident_bytes = metadata.resident_bytes,
+    restore_bytes = metadata.restore_bytes,
+    view_bytes = metadata.view_bytes,
+    quarantined = metadata.quarantined,
+    pin_count = pin_count or 0,
+  }
+end
+
+--- Return a detached scalar snapshot for one current zero-based page index.
+---
+--- The optional generation fence is checked before Page metadata is read.
+--- No Page, node, capability, payload, offsets, or internal table escapes.
+function PageList:inspect_page(page_index0, expected_generation)
+  local state, lineage, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  local generation, generation_err =
+    inspection_generation(self, state, expected_generation)
+  if not generation then
+    return nil, generation_err
+  end
+  return page_snapshot_at(
+    self,
+    state,
+    lineage,
+    page_index0,
+    generation
+  )
+end
+
+--- Locate a logical row and return detached page metadata plus local row.
+---
+--- The optional generation fence is checked before Page metadata is read.
+function PageList:locate_page(row0, expected_generation)
+  local state, lineage, state_err = pin_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  local generation, generation_err =
+    inspection_generation(self, state, expected_generation)
+  if not generation then
+    return nil, generation_err
+  end
+
+  local row_count = rawget(state, "row_count")
+  local public_row_count = rawget(self, "_row_count")
+  if not integer(row_count)
+      or not integer(public_row_count)
+      or not RAW_EQUAL(public_row_count, row_count) then
+    return nil, "page list cannot inspect invalid metadata"
+  end
+  local node, local_row0, page_index0 = locate_layout(
+    rawget(state, "trusted_pages"),
+    rawget(state, "trusted_starts"),
+    row_count,
+    row0
+  )
+  if not node then
+    return nil, local_row0
+  end
+  local snapshot, snapshot_err = page_snapshot_at(
+    self,
+    state,
+    lineage,
+    page_index0,
+    generation
+  )
+  if not snapshot then
+    return nil, snapshot_err
+  end
+  return snapshot, local_row0
 end
 
 local function compaction_is_active(list)

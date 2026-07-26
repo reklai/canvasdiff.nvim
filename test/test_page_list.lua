@@ -31,6 +31,24 @@ local function test_resident_adapter(overrides)
   }
 end
 
+local function load_isolated_pagelist(page_overrides)
+  local module_name = "canvasdiff.canvas.PageList"
+  local prior_module = package.loaded[module_name]
+  local originals = {}
+  for name, replacement in pairs(page_overrides) do
+    originals[name] = Page[name]
+    Page[name] = replacement
+  end
+  package.loaded[module_name] = nil
+  local called, isolated = pcall(require, module_name)
+  package.loaded[module_name] = prior_module
+  for name, original in pairs(originals) do
+    Page[name] = original
+  end
+  assert(called, isolated)
+  return isolated
+end
+
 local function page_rows(list, page_index0)
   local node = assert(list:page_at(page_index0))
   return assert(node.page:rows())
@@ -123,6 +141,172 @@ T["page_list_ row target splits at 256 with stable monotonic ids"] = function()
   H.eq(list:row(256), "row-257")
   H.eq(PageList.validate(list), true)
 end
+
+T["page_list_ page inspection returns detached scalar snapshots"] =
+  function()
+    local list = PageList.new({
+      "a",
+      "bb",
+      "ccc",
+      "dddd",
+      "",
+    }, {
+      max_rows = 2,
+      max_bytes = 16,
+    })
+    local lease = assert(list:pin_range(2, 1, 0))
+    local snapshot = assert(list:inspect_page(1, 0))
+    H.eq(snapshot.generation, 0)
+    H.eq(snapshot.page_index, 1)
+    H.eq(snapshot.id, 2)
+    H.eq(snapshot.created_generation, 0)
+    H.eq(snapshot.start0, 2)
+    H.eq(snapshot.end0, 4)
+    H.eq(snapshot.row_count, 2)
+    H.eq(snapshot.kind, "raw")
+    H.eq(snapshot.codec, "raw")
+    H.eq(snapshot.revision, 0)
+    H.eq(snapshot.decoded_bytes, 7)
+    H.eq(snapshot.max_rows, 2)
+    H.eq(snapshot.max_bytes, 16)
+    H.eq(snapshot.oversized, false)
+    H.eq(snapshot.view_bytes, 0)
+    H.eq(snapshot.quarantined, false)
+    H.eq(snapshot.pin_count, 1)
+
+    local scalar_types = {
+      boolean = true,
+      number = true,
+      string = true,
+    }
+    for key, value in pairs(snapshot) do
+      H.eq(type(key), "string")
+      assert(scalar_types[type(value)],
+        key .. " escaped a " .. type(value))
+    end
+    for _, forbidden in ipairs({
+      "node",
+      "page",
+      "capability",
+      "payload",
+      "offsets",
+    }) do
+      H.eq(rawget(snapshot, forbidden), nil)
+    end
+
+    local pristine = assert(list:inspect_page(1, 0))
+    snapshot.id = -1
+    snapshot.start0 = 999
+    snapshot.pin_count = 999
+    snapshot.page = assert(list:page_at(0)).page
+    snapshot.offsets = {}
+    setmetatable(snapshot, {
+      __index = function()
+        return "forged"
+      end,
+      __newindex = function()
+        error("snapshot is hostile", 0)
+      end,
+    })
+
+    H.eq(list:inspect_page(1, 0), pristine)
+    H.eq(list:rows(0, 5), { "a", "bb", "ccc", "dddd", "" })
+    H.eq(PageList.validate(list), true)
+    H.eq(list:release_pin(lease), true)
+    H.eq(assert(list:inspect_page(1, 0)).pin_count, 0)
+  end
+
+T["page_list_ locate_page returns exact detached page ranges"] = function()
+  local rows = {
+    "a",
+    "bb",
+    "ccc",
+    "dddd",
+    "eeeee",
+    "ffffff",
+    "ggggggg",
+  }
+  local list = PageList.new(rows, { max_rows = 2, max_bytes = 32 })
+
+  for row0 = 0, #rows - 1 do
+    local snapshot, local_row0 = assert(list:locate_page(row0, 0))
+    local expected_page0 = math.floor(row0 / 2)
+    H.eq(snapshot.page_index, expected_page0)
+    H.eq(local_row0, row0 % 2)
+    H.eq(snapshot.start0 + local_row0, row0)
+    assert(row0 < snapshot.end0)
+    H.eq(snapshot, list:inspect_page(expected_page0, 0))
+    H.eq(list:row(row0), rows[row0 + 1])
+  end
+
+  local snapshot, err = list:locate_page(-1, 0)
+  H.eq(snapshot, nil)
+  assert(err:find("outside the list", 1, true), err)
+  snapshot, err = list:locate_page(#rows, 0)
+  H.eq(snapshot, nil)
+  assert(err:find("outside the list", 1, true), err)
+  H.eq(PageList.new({}):locate_page(0, 0), nil)
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ inspection generations fence before Page metadata"] =
+  function()
+    local metadata_calls = 0
+    local original_metadata = Page.metadata
+    local Isolated = load_isolated_pagelist({
+      metadata = function(...)
+        metadata_calls = metadata_calls + 1
+        return original_metadata(...)
+      end,
+    })
+    local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
+    metadata_calls = 0
+
+    local invalid_generations = {
+      -1,
+      0.5,
+      math.huge,
+      "0",
+    }
+    for _, expected_generation in ipairs(invalid_generations) do
+      local snapshot, err =
+        list:inspect_page(0, expected_generation)
+      H.eq(snapshot, nil)
+      assert(err:find("expected generation", 1, true), err)
+      snapshot, err = list:locate_page(0, expected_generation)
+      H.eq(snapshot, nil)
+      assert(err:find("expected generation", 1, true), err)
+    end
+    H.eq(metadata_calls, 0)
+
+    local snapshot, err = list:inspect_page(99, 1)
+    H.eq(snapshot, nil)
+    assert(err:find("generation changed", 1, true), err)
+    snapshot, err = list:locate_page(99, 1)
+    H.eq(snapshot, nil)
+    assert(err:find("generation changed", 1, true), err)
+    H.eq(metadata_calls, 0,
+      "stale generations must fence before Page metadata")
+
+    snapshot = assert(list:inspect_page(0, 0))
+    H.eq(snapshot.generation, 0)
+    H.eq(metadata_calls, 1)
+    metadata_calls = 0
+    snapshot = assert(list:locate_page(0, 0))
+    H.eq(snapshot.page_index, 0)
+    H.eq(metadata_calls, 1)
+
+    assert(list:splice(0, 0, { "new" }))
+    metadata_calls = 0
+    snapshot, err = list:inspect_page(0, 0)
+    H.eq(snapshot, nil)
+    assert(err:find("generation changed", 1, true), err)
+    snapshot, err = list:locate_page(0, 0)
+    H.eq(snapshot, nil)
+    assert(err:find("generation changed", 1, true), err)
+    H.eq(metadata_calls, 0)
+    H.eq(Isolated.validate(list), true)
+  end
 
 T["page_list_ byte target is greedy at exact and over boundaries"] = function()
   local almost = string.rep("a", 65535)
@@ -1376,6 +1560,8 @@ T["page_list_ trusted dispatch rejects PageList method shadows"] = function()
     "generation",
     "page_at",
     "locate",
+    "inspect_page",
+    "locate_page",
     "row",
     "rows",
     "splice",
