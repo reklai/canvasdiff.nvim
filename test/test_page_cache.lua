@@ -153,11 +153,202 @@ end
 local function collect_until(predicate)
   for _ = 1, 20 do
     collectgarbage("collect")
-    if predicate() then
-      return true
-    end
   end
   return predicate()
+end
+
+local function launch_worker(run)
+  local result = {}
+  local function worker_body()
+    run(result)
+    result.done = true
+  end
+  if type(jit) == "table" and type(jit.off) == "function" then
+    jit.off(run, true)
+    jit.off(worker_body, true)
+  end
+  local worker = coroutine.create(worker_body)
+  local weak_worker = setmetatable({ worker }, { __mode = "v" })
+  local resumed, err = coroutine.resume(worker)
+  assert(resumed, err)
+  worker = nil
+  -- LuaJIT traces may retain dead coroutine slots after the weak thread
+  -- reference clears. Flush only after the exercised code has completed so
+  -- this probe measures the object graph rather than a stale trace snapshot.
+  if type(jit) == "table" and type(jit.flush) == "function" then
+    jit.flush()
+  end
+  H.eq(result.done, true)
+  return weak_worker, result
+end
+
+local function corrupt_handle_metatable(handle, mode)
+  local metatable = debug.getmetatable(handle)
+  local hostile_index = function()
+    error("corrupt owner index executed")
+  end
+  if mode == "replace" then
+    debug.setmetatable(handle, {
+      __index = hostile_index,
+      __metatable = false,
+    })
+  else
+    rawset(metatable, "__index", hostile_index)
+    rawset(metatable, "evil", true)
+  end
+end
+
+local function assert_handle_metatable(handle, metatable, index)
+  assert(debug.getmetatable(handle) == metatable)
+  assert(rawget(metatable, "__index") == index)
+  H.eq(rawget(metatable, "__metatable"), PageList)
+  local count = 0
+  local private_count = 0
+  for key, value in next, metatable do
+    if key ~= "__index" and key ~= "__metatable" then
+      assert(type(key) == "table", tostring(key))
+      assert(type(value) == "table")
+      assert(rawget(value, "_handle_metatable") == metatable)
+      private_count = private_count + 1
+    end
+    count = count + 1
+  end
+  H.eq(count, 3)
+  H.eq(private_count, 1)
+end
+
+local function debug_layout_for_test(handle)
+  local metatable = debug.getmetatable(handle)
+  for key, value in next, metatable do
+    if type(value) == "table"
+        and rawget(value, "_handle_metatable") == metatable
+        and type(rawget(value, "_handle_ref")) == "table" then
+      return value, key
+    end
+  end
+  error("opaque test handle has no private layout slot")
+end
+
+local function debug_layout_registry_for_test(handle, layout)
+  local wrapper_index = 1
+  while true do
+    local wrapper_name, wrapper_value =
+      debug.getupvalue(PageList.rows, wrapper_index)
+    if wrapper_name == nil then
+      break
+    end
+    if type(wrapper_value) == "function" then
+      local owner_index = 1
+      while true do
+        local owner_name, owner_value =
+          debug.getupvalue(wrapper_value, owner_index)
+        if owner_name == nil then
+          break
+        end
+        local metatable = type(owner_value) == "table"
+          and debug.getmetatable(owner_value)
+          or nil
+        if type(metatable) == "table"
+            and rawget(metatable, "__mode") == "kv"
+            and rawget(owner_value, handle) == layout then
+          return owner_value
+        end
+        owner_index = owner_index + 1
+      end
+    end
+    wrapper_index = wrapper_index + 1
+  end
+  error("opaque test handle has no private layout registry")
+end
+
+local function seed_handle_decoys(handle)
+  local layout, layout_key = debug_layout_for_test(handle)
+  local handle_ref = rawget(layout, "_handle_ref")
+  local snapshot = {
+    pages = { "intentional pages decoy" },
+    starts = "intentional starts decoy",
+    generation = 37,
+    layout = layout,
+    layout_key = layout_key,
+    layout_registry =
+      debug_layout_registry_for_test(handle, layout),
+    handle_ref = handle_ref,
+    handle_ref_metatable = debug.getmetatable(handle_ref),
+  }
+  rawset(handle, "pages", snapshot.pages)
+  rawset(handle, "starts", snapshot.starts)
+  rawset(handle, "generation", snapshot.generation)
+  return snapshot
+end
+
+local function corrupt_handle_entries(handle, registry_mode, layout_mode)
+  rawset(handle, "pages", { "replacement pages decoy" })
+  rawset(handle, "starts", nil)
+  rawset(handle, "rows", function()
+    error("hostile raw rows shadow executed")
+  end)
+  local layout, layout_key = debug_layout_for_test(handle)
+  local layout_registry =
+    debug_layout_registry_for_test(handle, layout)
+  local handle_ref = rawget(layout, "_handle_ref")
+  local handle_ref_metatable = debug.getmetatable(handle_ref)
+  rawset(handle_ref, 1, nil)
+  rawset(handle_ref, "evil", true)
+  rawset(handle_ref_metatable, "__mode", "k")
+  rawset(handle_ref_metatable, "evil", true)
+  debug.setmetatable(handle_ref, {})
+  rawset(
+    debug.getmetatable(handle),
+    layout_key,
+    layout_mode == "replace" and {} or nil
+  )
+  rawset(
+    layout_registry,
+    handle,
+    registry_mode == "replace" and {} or nil
+  )
+end
+
+local function assert_handle_decoys(handle, snapshot)
+  assert(rawget(handle, "pages") == snapshot.pages)
+  H.eq(rawget(handle, "starts"), snapshot.starts)
+  H.eq(rawget(handle, "generation"), snapshot.generation)
+  H.eq(rawget(handle, "rows"), nil)
+  local count = 0
+  for key in next, handle do
+    assert(
+      key == "pages" or key == "starts" or key == "generation",
+      tostring(key)
+    )
+    count = count + 1
+  end
+  H.eq(count, 3)
+  assert(
+    rawget(debug.getmetatable(handle), snapshot.layout_key)
+      == snapshot.layout
+  )
+  assert(
+    rawget(snapshot.layout_registry, handle) == snapshot.layout
+  )
+  local handle_ref = rawget(snapshot.layout, "_handle_ref")
+  assert(handle_ref == snapshot.handle_ref)
+  assert(rawget(handle_ref, 1) == handle)
+  H.eq(rawget(handle_ref, "evil"), nil)
+  assert(debug.getmetatable(handle_ref) == snapshot.handle_ref_metatable)
+  H.eq(rawget(snapshot.handle_ref_metatable, "__mode"), "v")
+  H.eq(rawget(snapshot.handle_ref_metatable, "evil"), nil)
+  local metatable_count = 0
+  for key in next, snapshot.handle_ref_metatable do
+    H.eq(key, "__mode")
+    metatable_count = metatable_count + 1
+  end
+  H.eq(metatable_count, 1)
+  count = 0
+  for key in next, handle_ref do
+    H.eq(key, 1)
+    count = count + 1
+  end
+  H.eq(count, 1)
 end
 
 local function load_isolated_pagelist(page_overrides)
@@ -176,6 +367,43 @@ local function load_isolated_pagelist(page_overrides)
   end
   assert(called, isolated)
   return isolated
+end
+
+local function isolated_pagelist_with_claims()
+  local claims = {}
+  local original_claim = Page.claim
+  local Isolated = load_isolated_pagelist({
+    claim = function(page, node)
+      local claimed, capability = original_claim(page, node)
+      if claimed then
+        claims[#claims + 1] = {
+          node = node,
+          page = page,
+        }
+      end
+      return claimed, capability
+    end,
+  })
+  return Isolated, claims
+end
+
+local function isolated_pagelist_with_weak_claims()
+  local nodes = setmetatable({}, { __mode = "v" })
+  local pages = setmetatable({}, { __mode = "v" })
+  local claim_count = 0
+  local original_claim = Page.claim
+  local Isolated = load_isolated_pagelist({
+    claim = function(page, node)
+      local claimed, capability = original_claim(page, node)
+      if claimed then
+        claim_count = claim_count + 1
+        nodes[claim_count] = node
+        pages[claim_count] = page
+      end
+      return claimed, capability
+    end,
+  })
+  return Isolated, nodes, pages
 end
 
 T["page_cache_ raw pages bypass zero-capacity cache"] = function()
@@ -481,38 +709,67 @@ T["page_cache_ stale and empty leases fence their absolute ranges"] =
     H.eq(PageList.validate(list), true)
   end
 
-T["page_cache_ retired final release purges view and lease references"] =
+T["page_cache_ retired final release purges view and hides lease internals"] =
   function()
-    local row = "retired-retired-retired"
-    local bytes = expected_view_bytes(row)
-    local list, lease, weak
-    do
-      local state
-      list, state = cold_fixture({ row }, {
+    local weak_worker, result = launch_worker(function(result)
+      local row = "retired-retired-retired"
+      local bytes = expected_view_bytes(row)
+      local Isolated, weak_nodes, weak_pages =
+        isolated_pagelist_with_weak_claims()
+      local list, state = cold_fixture({ row }, {
         max_pages = 1,
         max_bytes = bytes,
-      })
-      local node = assert(list:page_at(0))
-      local page = node.page
-      weak = setmetatable({ node, page }, { __mode = "v" })
-      lease = assert(list:pin_range(0, 1, 0))
+      }, Isolated)
+      local lease = assert(list:pin_range(0, 1, 0))
+      H.eq(next(lease), nil)
       H.eq(decode_count(state, 1), 1)
       assert(list:splice(0, 1, {}))
       H.eq(list:pin_is_current(lease), false)
+      H.eq(next(lease), nil)
       assert_cache(list, 1, bytes, 1, bytes, 1, 0)
       local value, err = list:pinned_row(lease, 0)
       assert_rejected(value, err)
-      node = nil
-      page = nil
-    end
+      collectgarbage("collect")
+      collectgarbage("collect")
 
-    H.eq(list:release_pin(lease), true)
-    assert_cache(list, 1, bytes)
+      H.eq(list:release_pin(lease), true)
+      assert_cache(list, 1, bytes)
+      H.eq(next(lease), nil)
+      H.eq(list:pin_stats().retired_pinned_pages, 0)
+      H.eq(rawget(assert(weak_nodes[1]), "page"), nil)
+      H.eq(Isolated.validate(list), true)
+
+      local scrub_row = "scrub-scrub-scrub"
+      local scrub_bytes = expected_view_bytes(scrub_row)
+      local scrub = cold_fixture({ scrub_row }, {
+        max_pages = 1,
+        max_bytes = scrub_bytes,
+      }, Isolated)
+      local scrub_lease = assert(scrub:pin_range(0, 1, 0))
+      H.eq(scrub:release_pin(scrub_lease), true)
+      H.eq(Isolated.validate(scrub), true)
+      result.Isolated = Isolated
+      result.list = list
+      result.weak_nodes = weak_nodes
+      result.weak_pages = weak_pages
+    end)
     assert(collect_until(function()
-      return weak[1] == nil and weak[2] == nil
-    end), "released retired lease/cache retained its node or Page")
-    H.eq(list:pin_stats().retired_pinned_pages, 0)
-    H.eq(PageList.validate(list), true)
+      return weak_worker[1] == nil
+    end), "retired cache setup worker was retained")
+    local Isolated = result.Isolated
+    local list = result.list
+    local weak_nodes = result.weak_nodes
+    local weak_pages = result.weak_pages
+    local collected = collect_until(function()
+      return weak_nodes[1] == nil and weak_pages[1] == nil
+    end)
+    if not collected then
+      error(("released retired lease/cache retained node=%s Page=%s"):format(
+        tostring(weak_nodes[1] ~= nil),
+        tostring(weak_pages[1] ~= nil)
+      ))
+    end
+    H.eq(Isolated.validate(list), true)
   end
 
 T["page_cache_ malformed restore quarantines without partial cache"] =
@@ -816,6 +1073,101 @@ T["page_cache_ decode and crc reentry poison every lease operation"] =
     end
   end
 
+T["page_cache_ restore callbacks restore the opaque owner metatable"] =
+  function()
+    for _, phase in ipairs({ "decode", "crc32" }) do
+      for _, mode in ipairs({ "mutate", "replace" }) do
+        local row = "owner-metatable-owner-metatable"
+        local bytes = expected_view_bytes(row)
+        local list, state = cold_fixture({ row }, {
+          max_pages = 1,
+          max_bytes = bytes,
+        })
+        local metatable = debug.getmetatable(list)
+        local index = rawget(metatable, "__index")
+        local page_before = assert(list:inspect_page(0))
+        local pins_before = list:pin_stats()
+        local function corrupt()
+          corrupt_handle_metatable(list, mode)
+        end
+        if phase == "decode" then
+          state.on_decode = function(_, _, body)
+            corrupt()
+            return body
+          end
+        else
+          state.on_crc32 = function(body)
+            corrupt()
+            return test_crc32(body)
+          end
+        end
+
+        local lease, err = PageList.pin_range(list, 0, 1, 0)
+        assert_rejected(lease, err)
+        assert(err:find("changed during resident restore", 1, true), err)
+        assert_handle_metatable(list, metatable, index)
+        H.eq(list:inspect_page(0), page_before)
+        H.eq(list:pin_stats(), pins_before)
+        assert_cache(list, 1, bytes)
+        H.eq(PageList.validate(list), true)
+
+        state.on_decode = nil
+        state.on_crc32 = nil
+        lease = assert(list:pin_range(0, 1, 0))
+        H.eq(list:pinned_row(lease, 0), row)
+        H.eq(list:release_pin(lease), true)
+        H.eq(PageList.validate(list), true)
+      end
+    end
+  end
+
+T["page_cache_ restore callbacks restore raw opaque owner entries"] =
+  function()
+    for _, phase in ipairs({ "decode", "crc32" }) do
+      local row = "owner-entries-owner-entries"
+      local bytes = expected_view_bytes(row)
+      local list, state = cold_fixture({ row }, {
+        max_pages = 1,
+        max_bytes = bytes,
+      })
+      local decoys = seed_handle_decoys(list)
+      local page_before = assert(list:inspect_page(0))
+      local pins_before = list:pin_stats()
+      local function corrupt()
+        local mode = phase == "decode" and "delete" or "replace"
+        corrupt_handle_entries(list, mode, mode)
+      end
+      if phase == "decode" then
+        state.on_decode = function(_, _, body)
+          corrupt()
+          return body
+        end
+      else
+        state.on_crc32 = function(body)
+          corrupt()
+          return test_crc32(body)
+        end
+      end
+
+      local lease, err = PageList.pin_range(list, 0, 1, 0)
+      assert_rejected(lease, err)
+      assert(err:find("changed during resident restore", 1, true), err)
+      assert_handle_decoys(list, decoys)
+      H.eq(list:inspect_page(0), page_before)
+      H.eq(list:pin_stats(), pins_before)
+      assert_cache(list, 1, bytes)
+      H.eq(PageList.validate(list), true)
+
+      state.on_decode = nil
+      state.on_crc32 = nil
+      lease = assert(list:pin_range(0, 1, 0))
+      H.eq(list:pinned_row(lease, 0), row)
+      H.eq(list:release_pin(lease), true)
+      assert_handle_decoys(list, decoys)
+      H.eq(PageList.validate(list), true)
+    end
+  end
+
 T["page_cache_ callback target graph mutation cancels without quarantine"] =
   function()
     for _, phase in ipairs({ "decode", "crc32" }) do
@@ -825,32 +1177,24 @@ T["page_cache_ callback target graph mutation cancels without quarantine"] =
       }
       local bytes =
         expected_view_bytes(rows[1]) + expected_view_bytes(rows[2])
+      local Isolated, claims = isolated_pagelist_with_claims()
       local list, state = cold_fixture(rows, {
         max_pages = 2,
         max_bytes = bytes,
-      })
-      local node = assert(list:page_at(0))
-      local page = node.page
-      local pages = list._pages
-      local starts = list._starts
+      }, Isolated)
+      local node = assert(claims[1]).node
+      local page = assert(claims[1]).page
       local mutate = true
       local function mutate_target()
         if not mutate then
           return
         end
-        list.evil = true
         node.evil = true
         page.evil = true
         page.payload = "forged"
-        list._generation = 99
-        pages[1] = list._pages[2]
-        starts[1] = 99
         node.page = Page.new({ "forged" }, { max_rows = 1 })
-        setmetatable(list, {})
         setmetatable(node, {})
         setmetatable(page, {})
-        setmetatable(pages, { __len = function() return 0 end })
-        setmetatable(starts, { __len = function() return 0 end })
         _G.error = function()
           return nil
         end
@@ -874,18 +1218,11 @@ T["page_cache_ callback target graph mutation cancels without quarantine"] =
       assert(called, lease)
       assert_rejected(lease, err)
       assert(err:find("changed during resident restore", 1, true), err)
-      H.eq(rawget(list, "evil"), nil)
       H.eq(rawget(node, "evil"), nil)
       H.eq(rawget(page, "evil"), nil)
-      assert(list._pages == pages)
-      assert(list._starts == starts)
-      assert(list:page_at(0) == node)
       assert(node.page == page)
-      H.eq(getmetatable(list), PageList)
       H.eq(getmetatable(node), nil)
       H.eq(getmetatable(page), Page)
-      H.eq(getmetatable(pages), nil)
-      H.eq(getmetatable(starts), nil)
       H.eq(Page.metadata(page).quarantined, false)
       if phase == "decode" then
         H.eq(state.crc_calls, 0,
@@ -894,7 +1231,7 @@ T["page_cache_ callback target graph mutation cancels without quarantine"] =
         H.eq(state.crc_calls, 1)
       end
       assert_cache(list, 2, bytes)
-      H.eq(PageList.validate(list), true)
+      H.eq(Isolated.validate(list), true)
 
       mutate = false
       state.on_decode = nil
@@ -902,7 +1239,7 @@ T["page_cache_ callback target graph mutation cancels without quarantine"] =
       lease = assert(list:pin_range(0, 1, 0))
       H.eq(list:pinned_row(lease, 0), rows[1])
       H.eq(list:release_pin(lease), true)
-      H.eq(PageList.validate(list), true)
+      H.eq(Isolated.validate(list), true)
     end
   end
 

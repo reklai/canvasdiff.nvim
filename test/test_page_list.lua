@@ -49,6 +49,245 @@ local function load_isolated_pagelist(page_overrides)
   return isolated
 end
 
+local function isolated_pagelist_with_claims()
+  local claims = {}
+  local original_claim = Page.claim
+  local Isolated = load_isolated_pagelist({
+    claim = function(page, node)
+      local claimed, capability = original_claim(page, node)
+      if claimed then
+        claims[#claims + 1] = {
+          node = node,
+          page = page,
+          capability = capability,
+        }
+      end
+      return claimed, capability
+    end,
+  })
+  return Isolated, claims
+end
+
+local function isolated_pagelist_with_weak_claims()
+  local nodes = setmetatable({}, { __mode = "v" })
+  local pages = setmetatable({}, { __mode = "v" })
+  local claim_count = 0
+  local original_claim = Page.claim
+  local Isolated = load_isolated_pagelist({
+    claim = function(page, node)
+      local claimed, capability = original_claim(page, node)
+      if claimed then
+        claim_count = claim_count + 1
+        nodes[claim_count] = node
+        pages[claim_count] = page
+      end
+      return claimed, capability
+    end,
+  })
+  return Isolated, nodes, pages
+end
+
+local function collect_until(predicate)
+  for _ = 1, 20 do
+    collectgarbage("collect")
+  end
+  return predicate()
+end
+
+local function launch_worker(run)
+  local result = {}
+  local function worker_body()
+    run(result)
+    result.done = true
+  end
+  if type(jit) == "table" and type(jit.off) == "function" then
+    jit.off(run, true)
+    jit.off(worker_body, true)
+  end
+  local worker = coroutine.create(worker_body)
+  local weak_worker = setmetatable({ worker }, { __mode = "v" })
+  local resumed, err = coroutine.resume(worker)
+  assert(resumed, err)
+  worker = nil
+  -- LuaJIT traces may retain dead coroutine slots after the weak thread
+  -- reference clears. Flush only after the exercised code has completed so
+  -- this probe measures the object graph rather than a stale trace snapshot.
+  if type(jit) == "table" and type(jit.flush) == "function" then
+    jit.flush()
+  end
+  H.eq(result.done, true)
+  return weak_worker, result
+end
+
+local function corrupt_handle_metatable(handle, mode)
+  local metatable = debug.getmetatable(handle)
+  local hostile_index = function()
+    error("corrupt owner index executed")
+  end
+  if mode == "replace" then
+    debug.setmetatable(handle, {
+      __index = hostile_index,
+      __metatable = false,
+    })
+  else
+    rawset(metatable, "__index", hostile_index)
+    rawset(metatable, "evil", true)
+  end
+end
+
+local function assert_handle_metatable(handle, metatable, index)
+  assert(debug.getmetatable(handle) == metatable)
+  assert(rawget(metatable, "__index") == index)
+  H.eq(rawget(metatable, "__metatable"), PageList)
+  local count = 0
+  local private_count = 0
+  for key, value in next, metatable do
+    if key ~= "__index" and key ~= "__metatable" then
+      assert(type(key) == "table", tostring(key))
+      assert(type(value) == "table")
+      assert(rawget(value, "_handle_metatable") == metatable)
+      private_count = private_count + 1
+    end
+    count = count + 1
+  end
+  H.eq(count, 3)
+  H.eq(private_count, 1)
+end
+
+local function debug_layout_for_test(handle)
+  local metatable = debug.getmetatable(handle)
+  for key, value in next, metatable do
+    if type(value) == "table"
+        and rawget(value, "_handle_metatable") == metatable
+        and type(rawget(value, "_handle_ref")) == "table" then
+      return value, key
+    end
+  end
+  error("opaque test handle has no private layout slot")
+end
+
+local function debug_layout_registry_for_test(handle, layout)
+  local wrapper_index = 1
+  while true do
+    local wrapper_name, wrapper_value =
+      debug.getupvalue(PageList.rows, wrapper_index)
+    if wrapper_name == nil then
+      break
+    end
+    if type(wrapper_value) == "function" then
+      local owner_index = 1
+      while true do
+        local owner_name, owner_value =
+          debug.getupvalue(wrapper_value, owner_index)
+        if owner_name == nil then
+          break
+        end
+        local metatable = type(owner_value) == "table"
+          and debug.getmetatable(owner_value)
+          or nil
+        if type(metatable) == "table"
+            and rawget(metatable, "__mode") == "kv"
+            and rawget(owner_value, handle) == layout then
+          return owner_value
+        end
+        owner_index = owner_index + 1
+      end
+    end
+    wrapper_index = wrapper_index + 1
+  end
+  error("opaque test handle has no private layout registry")
+end
+
+local function seed_handle_decoys(handle)
+  local layout, layout_key = debug_layout_for_test(handle)
+  local handle_ref = rawget(layout, "_handle_ref")
+  local snapshot = {
+    pages = { "intentional pages decoy" },
+    starts = "intentional starts decoy",
+    generation = 37,
+    layout = layout,
+    layout_key = layout_key,
+    layout_registry =
+      debug_layout_registry_for_test(handle, layout),
+    handle_ref = handle_ref,
+    handle_ref_metatable = debug.getmetatable(handle_ref),
+  }
+  rawset(handle, "pages", snapshot.pages)
+  rawset(handle, "starts", snapshot.starts)
+  rawset(handle, "generation", snapshot.generation)
+  return snapshot
+end
+
+local function corrupt_handle_entries(handle, registry_mode, layout_mode)
+  rawset(handle, "pages", { "replacement pages decoy" })
+  rawset(handle, "starts", nil)
+  rawset(handle, "rows", function()
+    error("hostile raw rows shadow executed")
+  end)
+  local layout, layout_key = debug_layout_for_test(handle)
+  local layout_registry =
+    debug_layout_registry_for_test(handle, layout)
+  local handle_ref = rawget(layout, "_handle_ref")
+  local handle_ref_metatable = debug.getmetatable(handle_ref)
+  rawset(handle_ref, 1, nil)
+  rawset(handle_ref, "evil", true)
+  rawset(handle_ref_metatable, "__mode", "k")
+  rawset(handle_ref_metatable, "evil", true)
+  debug.setmetatable(handle_ref, {})
+  rawset(
+    debug.getmetatable(handle),
+    layout_key,
+    layout_mode == "replace" and {} or nil
+  )
+  rawset(
+    layout_registry,
+    handle,
+    registry_mode == "replace" and {} or nil
+  )
+end
+
+local function assert_handle_decoys(handle, snapshot)
+  assert(rawget(handle, "pages") == snapshot.pages)
+  H.eq(rawget(handle, "starts"), snapshot.starts)
+  H.eq(rawget(handle, "generation"), snapshot.generation)
+  H.eq(rawget(handle, "rows"), nil)
+  local count = 0
+  for key in next, handle do
+    assert(
+      key == "pages" or key == "starts" or key == "generation",
+      tostring(key)
+    )
+    count = count + 1
+  end
+  H.eq(count, 3)
+  assert(
+    rawget(debug.getmetatable(handle), snapshot.layout_key)
+      == snapshot.layout
+  )
+  assert(
+    rawget(snapshot.layout_registry, handle) == snapshot.layout
+  )
+  local handle_ref = rawget(snapshot.layout, "_handle_ref")
+  assert(handle_ref == snapshot.handle_ref)
+  assert(rawget(handle_ref, 1) == handle)
+  H.eq(rawget(handle_ref, "evil"), nil)
+  assert(debug.getmetatable(handle_ref) == snapshot.handle_ref_metatable)
+  H.eq(rawget(snapshot.handle_ref_metatable, "__mode"), "v")
+  H.eq(rawget(snapshot.handle_ref_metatable, "evil"), nil)
+  local metatable_count = 0
+  for key in next, snapshot.handle_ref_metatable do
+    H.eq(key, "__mode")
+    metatable_count = metatable_count + 1
+  end
+  H.eq(metatable_count, 1)
+  count = 0
+  for key in next, handle_ref do
+    H.eq(key, 1)
+    count = count + 1
+  end
+  H.eq(count, 1)
+end
+
 local function page_rows(list, page_index0)
   local page = assert(list:inspect_page(page_index0))
   return assert(list:rows(page.start0, page.row_count))
@@ -83,14 +322,6 @@ local function smallest_page_id_above(list, floor)
   return smallest
 end
 
-local function list_nodes(list)
-  local nodes = {}
-  for page_index0 = 0, list:page_count() - 1 do
-    nodes[#nodes + 1] = assert(list:page_at(page_index0))
-  end
-  return nodes
-end
-
 local function oracle_splice(rows, start0, delete_count, insert_rows)
   local result = {}
   for index = 1, start0 do
@@ -122,6 +353,265 @@ T["page_list_ loads without an editor runtime"] = function()
   H.eq(type(loaded.compact_page), "function")
   H.eq(loaded.DEFAULT_RESIDENT_MAX_PAGES, 8)
   H.eq(loaded.DEFAULT_RESIDENT_MAX_BYTES, 532512)
+end
+
+T["page_list_ opaque handles ignore every retired layout decoy"] = function()
+  local list = PageList.new({ "a", "b" }, {
+    max_rows = 1,
+    resident = { restore = test_resident_adapter() },
+  })
+  local retired = {
+    "_pages",
+    "_starts",
+    "_row_count",
+    "_decoded_bytes",
+    "_storage_bytes",
+    "_oversized_pages",
+    "_next_page_id",
+    "_generation",
+    "_max_rows",
+    "_max_bytes",
+    "_splice_active",
+  }
+  H.eq(next(list), nil)
+  for _, field in ipairs(retired) do
+    H.eq(rawget(list, field), nil, field)
+    rawset(list, field, setmetatable({}, {
+      __eq = function()
+        error("decoy equality executed")
+      end,
+      __len = function()
+        error("decoy length executed")
+      end,
+    }))
+  end
+
+  H.eq(PageList.page_at, nil)
+  H.eq(PageList.locate, nil)
+  H.eq(PageList.pin_count, nil)
+
+  H.eq(PageList.rows(list, 0, 2), { "a", "b" })
+  H.eq(assert(PageList.locate_page(list, 1, 0)).id, 2)
+  local lease = assert(PageList.pin_range(list, 0, 1, 0))
+  H.eq(next(lease), nil)
+  H.eq(PageList.release_pin(list, lease), true)
+  H.eq(PageList.splice(list, 1, 0, { "x" }), true)
+  H.eq(PageList.rows(list, 0, 3), { "a", "x", "b" })
+  H.eq(PageList.compact_page(list, 0, 1), true)
+  H.eq(PageList.validate(list), true)
+
+  H.eq(getmetatable(list), PageList)
+  local replaced = pcall(setmetatable, list, {})
+  H.eq(replaced, false, "ordinary callers cannot replace the protected owner")
+  local original_metatable = debug.getmetatable(list)
+  local hostile_calls = 0
+  debug.setmetatable(list, {
+    __index = function()
+      hostile_calls = hostile_calls + 1
+      error("decoy index executed")
+    end,
+    __eq = function()
+      hostile_calls = hostile_calls + 1
+      error("decoy equality executed")
+    end,
+  })
+  local probes = {
+    function()
+      return PageList.rows(list, 0, 3)
+    end,
+    function()
+      return PageList.locate_page(list, 0, 1)
+    end,
+    function()
+      return PageList.pin_range(list, 0, 1, 1)
+    end,
+    function()
+      return PageList.release_pin(list, lease)
+    end,
+    function()
+      return PageList.splice(list, 0, 0, {})
+    end,
+    function()
+      return PageList.compact_page(list, 0, 1)
+    end,
+    function()
+      return PageList.validate(list)
+    end,
+  }
+  for _, probe in ipairs(probes) do
+    local value, err = probe()
+    H.eq(value, nil)
+    assert(err:find("not an owned PageList", 1, true), err)
+  end
+  H.eq(hostile_calls, 0)
+  debug.setmetatable(list, original_metatable)
+
+  local original_index = rawget(original_metatable, "__index")
+  rawset(original_metatable, "__index", function()
+    hostile_calls = hostile_calls + 1
+    error("mutated private index executed")
+  end)
+  local value, err = PageList.rows(list, 0, 3)
+  H.eq(value, nil)
+  assert(err:find("not an owned PageList", 1, true), err)
+  H.eq(hostile_calls, 0)
+  rawset(original_metatable, "__index", original_index)
+  rawset(original_metatable, "__metatable", false)
+  value, err = PageList.rows(list, 0, 3)
+  H.eq(value, nil)
+  assert(err:find("not an owned PageList", 1, true), err)
+  rawset(original_metatable, "__metatable", PageList)
+  rawset(original_metatable, "__eq", function()
+    hostile_calls = hostile_calls + 1
+    error("injected private equality executed")
+  end)
+  value, err = PageList.rows(list, 0, 3)
+  H.eq(value, nil)
+  assert(err:find("not an owned PageList", 1, true), err)
+  H.eq(hostile_calls, 0)
+  rawset(original_metatable, "__eq", nil)
+
+  H.eq(PageList.rows(list, 0, 3), { "a", "x", "b" })
+  local restored_lease = assert(PageList.pin_range(list, 0, 1, 1))
+  H.eq(PageList.release_pin(list, restored_lease), true)
+  H.eq(PageList.splice(list, 3, 0, { "tail" }), true)
+  H.eq(PageList.compact_page(list, 1, 2), true)
+  H.eq(PageList.rows(list, 0, 4), { "a", "x", "b", "tail" })
+  H.eq(PageList.validate(list), true)
+
+  for _, field in ipairs(retired) do
+    assert(type(rawget(list, field)) == "table", field)
+  end
+end
+
+T["page_list_ callback cycles never retain opaque handles"] = function()
+  local weak_handles = setmetatable({}, { __mode = "v" })
+  local weak_worker = launch_worker(function()
+    local function no_capture()
+    end
+
+    local function build(capture, lifetime, slot)
+      local list
+      local bodies = {}
+      local block_id = 0
+      local function capture_owner()
+        if list == false then
+          error("unreachable owner marker")
+        end
+      end
+      local encode_owner =
+        (capture == "encode" or capture == "all")
+          and capture_owner
+          or no_capture
+      local decode_owner =
+        (capture == "decode" or capture == "all")
+          and capture_owner
+          or no_capture
+      local crc_owner =
+        (capture == "crc32" or capture == "all")
+          and capture_owner
+          or no_capture
+      local adapter = {
+        codec = "page-list-gc-v1",
+        encode = function(body)
+          encode_owner()
+          block_id = block_id + 1
+          local block = string.char(block_id)
+          bodies[block] = body
+          return block
+        end,
+        decode = function(block)
+          decode_owner()
+          return bodies[block]
+        end,
+        crc32 = function(body)
+          crc_owner()
+          return test_crc32(body)
+        end,
+      }
+      list = PageList.new({ string.rep(capture .. lifetime, 16) }, {
+        max_rows = 1,
+        resident = {
+          max_pages = 1,
+          max_bytes = 1024,
+          restore = adapter,
+        },
+      })
+      weak_handles[slot] = list
+
+      if lifetime ~= "stored" then
+        H.eq(list:compact_page(0, 0), true)
+      end
+      if lifetime == "active" or lifetime == "released" then
+        local lease = assert(list:pin_range(0, 1, 0))
+        if lifetime == "released" then
+          H.eq(list:release_pin(lease), true)
+        end
+      end
+    end
+
+    build("encode", "cold", 1)
+    build("decode", "released", 2)
+    build("crc32", "released", 3)
+    build("all", "active", 4)
+    build("all", "released", 5)
+  end)
+  assert(collect_until(function()
+    return weak_worker[1] == nil
+  end), "callback-cycle setup worker was retained")
+  local collected = collect_until(function()
+    for slot = 1, 5 do
+      if weak_handles[slot] ~= nil then
+        return false
+      end
+    end
+    return true
+  end)
+  if not collected then
+    local live = {}
+    for slot = 1, 5 do
+      if weak_handles[slot] ~= nil then
+        live[#live + 1] = slot
+      end
+    end
+    error("callback cycles retained handle slots "
+      .. table.concat(live, ","))
+  end
+end
+
+T["page_list_ temporary handles survive callback collections"] = function()
+  local adapter = test_resident_adapter({
+    encode = function()
+      for _ = 1, 20 do
+        collectgarbage("collect")
+      end
+      return "\1"
+    end,
+  })
+  local compacted, compact_err =
+    PageList.new({ "temporary-temporary-temporary" }, {
+      resident = { restore = adapter },
+    }):compact_page(0, 0)
+  assert(compacted, compact_err)
+
+  local original_create = Page.create
+  local calls = 0
+  Page.create = function(...)
+    calls = calls + 1
+    if calls > 1 then
+      for _ = 1, 20 do
+        collectgarbage("collect")
+      end
+    end
+    return original_create(...)
+  end
+  local called, changed, splice_err = pcall(function()
+    return PageList.new({ "a" }):splice(1, 0, { "b" })
+  end)
+  Page.create = original_create
+  assert(called, changed)
+  assert(changed, splice_err)
+  H.eq(calls, 2)
 end
 
 T["page_list_ empty input owns no phantom page"] = function()
@@ -288,7 +778,10 @@ T["page_list_ inspection generations fence before Page metadata"] =
         return original_metadata(...)
       end,
     })
-    local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
+    local list = Isolated.new({ "a", "b" }, {
+      max_rows = 1,
+      resident = { restore = test_resident_adapter() },
+    })
     metadata_calls = 0
 
     local invalid_generations = {
@@ -314,8 +807,16 @@ T["page_list_ inspection generations fence before Page metadata"] =
     snapshot, err = list:locate_page(99, 1)
     H.eq(snapshot, nil)
     assert(err:find("generation changed", 1, true), err)
+    local lease
+    lease, err = list:pin_range(0, 1, 1)
+    H.eq(lease, nil)
+    assert(err:find("generation changed", 1, true), err)
+    local compacted
+    compacted, err = list:compact_page(0, 1)
+    H.eq(compacted, nil)
+    assert(err:find("generation changed", 1, true), err)
     H.eq(metadata_calls, 0,
-      "stale generations must fence before Page metadata")
+      "stale generations must fence before Page metadata or codecs")
 
     snapshot = assert(list:inspect_page(0, 0))
     H.eq(snapshot.generation, 0)
@@ -727,15 +1228,19 @@ T["page_list_ Page creation hostile successes cannot change requested rows"] = f
   local original = Page.create
 
   local function exercise(replacement, start0, insert_rows, expected_error)
-    local list = PageList.new({ "a", "b" }, { max_rows = 2, max_bytes = 8 })
+    local Isolated, claims = isolated_pagelist_with_claims()
+    local list = Isolated.new({ "a", "b" }, {
+      max_rows = 2,
+      max_bytes = 8,
+    })
     local pages = list_pages(list)
     local stats = list:stats()
 
     Page.create = function(rows, opts)
-      return replacement(list, rows, opts, original)
+      return replacement(list, rows, opts, original, claims)
     end
     local called, change, err = pcall(
-      PageList.splice,
+      Isolated.splice,
       list,
       start0,
       0,
@@ -756,7 +1261,7 @@ T["page_list_ Page creation hostile successes cannot change requested rows"] = f
       pages[#pages].id + 1
     )
     H.eq(list:rows(0, 3), { "a", "b", "after" })
-    H.eq(PageList.validate(list), true)
+    H.eq(Isolated.validate(list), true)
   end
 
   exercise(function(_, _, opts, create)
@@ -768,8 +1273,8 @@ T["page_list_ Page creation hostile successes cannot change requested rows"] = f
     return create(rows, opts)
   end, 1, { "wanted" }, "changed row 1")
 
-  exercise(function(list)
-    return assert(list:page_at(0)).page
+  exercise(function(_, _, _, _, claims)
+    return assert(claims[1]).page
   end, 0, { "a", "b" }, "fresh Page")
 
   exercise(function(_, rows, opts, create)
@@ -786,15 +1291,16 @@ end
 
 T["page_list_ Page creation rejects cross-list and historical aliases"] = function()
   local original = Page.create
-  local owner = PageList.new({ "same" })
-  local borrowed = assert(owner:page_at(0)).page
-  local target = PageList.new({})
+  local Isolated, claims = isolated_pagelist_with_claims()
+  local owner = Isolated.new({ "same" })
+  local borrowed = assert(claims[1]).page
+  local target = Isolated.new({})
 
   Page.create = function()
     return borrowed
   end
   local called, change, err = pcall(
-    PageList.splice,
+    Isolated.splice,
     target,
     0,
     0,
@@ -809,11 +1315,12 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   H.eq(owner:rows(0, 1), { "same" })
   H.eq(target:splice(0, 0, { "fresh" }), true)
   H.eq(target:rows(0, 1), { "fresh" })
-  H.eq(PageList.validate(target), true)
-  H.eq(PageList.validate(owner), true)
+  H.eq(Isolated.validate(target), true)
+  H.eq(Isolated.validate(owner), true)
 
-  local list = PageList.new({ "a", "b" }, { max_rows = 2 })
-  local historical = assert(list:page_at(0)).page
+  local claim_count = #claims
+  local list = Isolated.new({ "a", "b" }, { max_rows = 2 })
+  local historical = assert(claims[claim_count + 1]).page
   local pages = list_pages(list)
   local stats = list:stats()
 
@@ -821,7 +1328,7 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
     return historical
   end
   called, change, err = pcall(
-    PageList.splice,
+    Isolated.splice,
     list,
     0,
     2,
@@ -837,10 +1344,10 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   H.eq(list:rows(0, 2), { "a", "b" })
   H.eq(list:splice(2, 0, { "fresh" }), true)
   H.eq(list:rows(0, 3), { "a", "b", "fresh" })
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 
-  local nested_owner = PageList.new({})
-  local nested_target = PageList.new({})
+  local nested_owner = Isolated.new({})
+  local nested_target = Isolated.new({})
   local recursing = false
   Page.create = function(rows, opts)
     if recursing then
@@ -851,10 +1358,10 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
       nested_owner:splice(0, 0, { rows[1] })
     recursing = false
     assert(nested_change, nested_err)
-    return assert(nested_owner:page_at(0)).page
+    return assert(claims[#claims]).page
   end
   called, change, err = pcall(
-    PageList.splice,
+    Isolated.splice,
     nested_target,
     0,
     0,
@@ -869,8 +1376,8 @@ T["page_list_ Page creation rejects cross-list and historical aliases"] = functi
   H.eq(nested_owner:rows(0, 1), { "nested" })
   H.eq(nested_target:splice(0, 0, { "fresh" }), true)
   H.eq(nested_target:rows(0, 1), { "fresh" })
-  H.eq(PageList.validate(nested_target), true)
-  H.eq(PageList.validate(nested_owner), true)
+  H.eq(Isolated.validate(nested_target), true)
+  H.eq(Isolated.validate(nested_owner), true)
 end
 
 T["page_list_ build rejects mutation of a previously returned Page"] = function()
@@ -927,13 +1434,16 @@ end
 
 T["page_list_ splice restores direct source graph mutation by Page callbacks"] =
   function()
-    local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
+    local Isolated, claims = isolated_pagelist_with_claims()
+    local list = Isolated.new({ "a", "b", "c" }, { max_rows = 1 })
     local original = Page.create
-    local pages = list._pages
-    local starts = list._starts
-    local nodes = list_nodes(list)
+    local nodes = {
+      assert(claims[1]).node,
+      assert(claims[2]).node,
+      assert(claims[3]).node,
+    }
     local stats = list:stats()
-    local first_page = nodes[1].page
+    local first_page = assert(claims[1]).page
     local evil_page = Page.new({ "z" }, { max_rows = 1 })
     local original_eq = Page.__eq
 
@@ -941,13 +1451,12 @@ T["page_list_ splice restores direct source graph mutation by Page callbacks"] =
       Page.__eq = function()
         return true
       end
-      list._pages[1], list._pages[3] = list._pages[3], list._pages[1]
       nodes[1].page = evil_page
       first_page.payload = "z"
       return original(...)
     end
     local called, change, err = pcall(
-      PageList.splice,
+      Isolated.splice,
       list,
       1,
       0,
@@ -959,41 +1468,100 @@ T["page_list_ splice restores direct source graph mutation by Page callbacks"] =
     assert(called, change)
     H.eq(change, nil)
     assert(err:match("mutated the source PageList"), err)
-    assert(list._pages == pages)
-    assert(list._starts == starts)
-    for index, node in ipairs(nodes) do
-      assert(list._pages[index] == node)
-    end
     assert(nodes[1].page == first_page)
     H.eq(first_page.payload, "a")
     H.eq(list:stats(), stats)
     H.eq(list:rows(0, 3), { "a", "b", "c" })
-    H.eq(rawget(list, "_splice_active"), nil)
+    H.eq(Isolated.validate(list), true)
+  end
+
+T["page_list_ splice callbacks restore the opaque owner metatable"] =
+  function()
+    for _, mode in ipairs({ "mutate", "replace" }) do
+      local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+      local metatable = debug.getmetatable(list)
+      local index = rawget(metatable, "__index")
+      local stats = list:stats()
+      local original_create = Page.create
+
+      Page.create = function(...)
+        corrupt_handle_metatable(list, mode)
+        return original_create(...)
+      end
+      local called, change, err = pcall(
+        PageList.splice,
+        list,
+        1,
+        0,
+        { "x" }
+      )
+      Page.create = original_create
+
+      assert(called, change)
+      H.eq(change, nil, mode)
+      assert(err:find("mutated the source PageList", 1, true), err)
+      assert_handle_metatable(list, metatable, index)
+      H.eq(list:stats(), stats)
+      H.eq(list:rows(0, 2), { "a", "b" })
+      H.eq(PageList.validate(list), true)
+
+      H.eq(list:splice(1, 0, { "x" }), true)
+      H.eq(list:rows(0, 3), { "a", "x", "b" })
+      H.eq(PageList.validate(list), true)
+    end
+  end
+
+T["page_list_ splice callbacks restore raw opaque owner entries"] =
+  function()
+    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
+    local decoys = seed_handle_decoys(list)
+    local stats = list:stats()
+    local original_create = Page.create
+
+    Page.create = function(...)
+      corrupt_handle_entries(list, "delete", "delete")
+      return original_create(...)
+    end
+    local called, change, err = pcall(
+      PageList.splice,
+      list,
+      1,
+      0,
+      { "x" }
+    )
+    Page.create = original_create
+
+    assert(called, change)
+    H.eq(change, nil)
+    assert(err:find("mutated the source PageList", 1, true), err)
+    assert_handle_decoys(list, decoys)
+    H.eq(list:stats(), stats)
+    H.eq(list:rows(0, 2), { "a", "b" })
+    H.eq(PageList.validate(list), true)
+
+    H.eq(list:splice(1, 0, { "x" }), true)
+    H.eq(list:rows(0, 3), { "a", "x", "b" })
+    assert_handle_decoys(list, decoys)
     H.eq(PageList.validate(list), true)
   end
 
 T["page_list_ splice rollback survives poisoned standard formatting"] =
   function()
-    local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
+    local Isolated, claims = isolated_pagelist_with_claims()
+    local list = Isolated.new({ "a", "b", "c" }, { max_rows = 1 })
     local original_create = Page.create
     local original_format = string.format
-    local pages = list._pages
-    local starts = list._starts
-    local nodes = list_nodes(list)
+    local source_page = assert(claims[1]).page
     local stats = list:stats()
-    local first_candidate
     local calls = 0
 
     Page.create = function(rows, opts)
       calls = calls + 1
       local page = assert(original_create(rows, opts))
-      if calls == 1 then
-        first_candidate = page
-      elseif calls == 2 then
-        first_candidate.row = function()
+      if calls == 2 then
+        source_page.row = function()
           return "forged"
         end
-        list._row_count = 999
         string.format = function()
           error("poisoned string.format", 0)
         end
@@ -1001,7 +1569,7 @@ T["page_list_ splice rollback survives poisoned standard formatting"] =
       return page
     end
     local called, change, err = pcall(
-      PageList.splice,
+      Isolated.splice,
       list,
       1,
       0,
@@ -1014,15 +1582,10 @@ T["page_list_ splice rollback survives poisoned standard formatting"] =
     H.eq(change, nil)
     assert(err:match("mutated the source PageList"), err)
     assert(calls >= 2)
-    assert(list._pages == pages)
-    assert(list._starts == starts)
-    for index, node in ipairs(nodes) do
-      assert(list._pages[index] == node)
-    end
+    H.eq(rawget(source_page, "row"), nil)
     H.eq(list:stats(), stats)
     H.eq(list:rows(0, 3), { "a", "b", "c" })
-    H.eq(rawget(list, "_splice_active"), nil)
-    H.eq(PageList.validate(list), true)
+    H.eq(Isolated.validate(list), true)
   end
 
 T["page_list_ pin ranges count exact overlapping concrete pages"] = function()
@@ -1088,32 +1651,15 @@ end
 T["page_list_ pin generation authorization is private"] = function()
   local list = PageList.new({ "a" }, { max_rows = 1 })
   H.eq(list:splice(1, 0, { "b" }), true)
-  local lease = assert(list:pin_range(0, 1, 1))
-  local stats = list:pin_stats()
-
   list._generation = 0
-  local acquired, acquire_err = list:pin_range(0, 1, 0)
-  H.eq(acquired, nil)
-  assert(acquire_err:match("invalid metadata"), acquire_err)
-  local current, current_err = list:pin_is_current(lease)
-  H.eq(current, nil)
-  assert(current_err:match("generation metadata is inconsistent"), current_err)
-  H.eq(list:pin_stats(), stats)
-
+  local lease = assert(list:pin_range(0, 1, 1))
+  H.eq(list:pin_is_current(lease), true)
+  local rejected, err = list:pin_range(0, 1, 0)
+  H.eq(rejected, nil)
+  assert(err:match("generation changed"), err)
   H.eq(list:release_pin(lease), true)
-  H.eq(list:pin_stats(), {
-    active_leases = 0,
-    pin_references = 0,
-    current_pinned_pages = 0,
-    retired_pinned_pages = 0,
-  })
-
-  list._generation = 2
-  local ok, validate_err = PageList.validate(list)
-  H.eq(ok, nil)
-  assert(validate_err:match("pin generation is inconsistent"), validate_err)
-
-  list._generation = 1
+  H.eq(list:generation(), 1)
+  H.eq(rawget(list, "_generation"), 0)
   H.eq(PageList.validate(list), true)
 end
 
@@ -1127,77 +1673,53 @@ T["page_list_ generation fences never invoke cdata equality"] = function()
 
   local list = PageList.new({ "a" })
   local old = assert(list:pin_range(0, 1, 0))
-  local stats = list:pin_stats()
   local calls = 0
   local Probe = ffi.metatype("canvasdiff_pin_generation_probe", {
     __eq = function()
       calls = calls + 1
-      if calls == 2 then
-        list._generation = 0
-        assert(list:release_pin(old))
-      end
       return true
     end,
   })
   list._generation = Probe(0)
 
-  local lease, err = list:pin_range(0, 1, 0)
-  H.eq(lease, nil)
-  assert(err:match("invalid metadata"), err)
+  local lease = assert(list:pin_range(0, 1, 0))
   H.eq(calls, 0)
-  H.eq(list:pin_stats(), stats)
-
-  local current, current_err = list:pin_is_current(old)
-  H.eq(current, nil)
-  assert(current_err:match("generation metadata is inconsistent"), current_err)
+  H.eq(list:pin_is_current(old), true)
+  H.eq(list:pin_is_current(lease), true)
   H.eq(calls, 0)
-  H.eq(list:pin_stats(), stats)
-
-  list._generation = 0
+  H.eq(list:release_pin(lease), true)
   H.eq(list:release_pin(old), true)
   H.eq(PageList.validate(list), true)
 end
 
-T["page_list_ pin acquisition rejects public page reordering atomically"] =
+T["page_list_ pin acquisition ignores decoy page reordering"] =
   function()
     local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-    local first = assert(list:page_at(0))
-    local second = assert(list:page_at(1))
-    local stats = list:pin_stats()
-
-    list._pages[1], list._pages[2] = second, first
-    local lease, err = list:pin_range(0, 1)
-    H.eq(lease, nil)
-    assert(err:match("disagrees with public page metadata"), err)
-    H.eq(list:pin_stats(), stats)
-    H.eq(list:pin_count(first), 0)
-    H.eq(list:pin_count(second), 0)
-
-    local ok, validate_err = PageList.validate(list)
-    H.eq(ok, nil)
-    assert(validate_err:match("trusted pin layout is inconsistent"), validate_err)
-
-    list._pages[1], list._pages[2] = first, second
+    list._pages = { "second", "first" }
+    local lease = assert(list:pin_range(0, 1))
+    H.eq(assert(list:inspect_page(0)).pin_count, 1)
+    H.eq(assert(list:inspect_page(1)).pin_count, 0)
+    H.eq(list:pinned_row(lease, 0), "a")
+    H.eq(list:release_pin(lease), true)
+    H.eq(list._pages, { "second", "first" })
     H.eq(PageList.validate(list), true)
   end
 
-T["page_list_ pin lookup cannot execute hostile public prefixes"] = function()
+T["page_list_ pin lookup cannot execute hostile decoy prefixes"] = function()
   local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-  local original = list._starts[1]
   local called = false
-  list._starts[1] = setmetatable({}, {
+  list._starts = { setmetatable({}, {
     __le = function()
       called = true
-      list._starts[1] = original
       assert(list:splice(2, 0, { "c" }))
       return true
     end,
-  })
+  }) }
 
-  local lease, err = list:pin_range(0, 1, 0)
-  H.eq(lease, nil)
-  assert(err:match("disagrees with public page metadata"), err)
+  local lease = assert(list:pin_range(0, 1, 0))
   H.eq(called, false)
+  H.eq(list:pinned_row(lease, 0), "a")
+  H.eq(list:release_pin(lease), true)
   H.eq(list:generation(), 0)
   H.eq(list:pin_stats(), {
     active_leases = 0,
@@ -1206,7 +1728,6 @@ T["page_list_ pin lookup cannot execute hostile public prefixes"] = function()
     retired_pinned_pages = 0,
   })
 
-  list._starts[1] = original
   H.eq(PageList.validate(list), true)
 end
 
@@ -1219,44 +1740,33 @@ T["page_list_ pin lookup does not invoke cdata prefix equality"] = function()
   ]])
 
   local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-  local first = assert(list:page_at(0))
-  local second = assert(list:page_at(1))
   local called = false
   local Probe = ffi.metatype("canvasdiff_pin_prefix_probe", {
     __eq = function()
       called = true
-      list._starts[1] = 0
-      list._pages[1] = second
       return true
     end,
   })
-  list._starts[1] = Probe(0)
+  list._starts = { Probe(0) }
 
-  local lease, err = list:pin_range(0, 1, 0)
-  H.eq(lease, nil)
-  assert(err:match("disagrees with public page metadata"), err)
+  local lease = assert(list:pin_range(0, 1, 0))
   H.eq(called, false)
-  H.eq(list:pin_count(first), 0)
-  H.eq(list:pin_count(second), 0)
-
-  list._starts[1] = 0
+  H.eq(assert(list:inspect_page(0)).pin_count, 1)
+  H.eq(assert(list:inspect_page(1)).pin_count, 0)
+  H.eq(list:release_pin(lease), true)
   H.eq(PageList.validate(list), true)
 end
 
 T["page_list_ private prefixes prevent wrong-node pin routing"] = function()
   local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-  local first = assert(list:page_at(0))
-  local second = assert(list:page_at(1))
-  list._starts[2] = 0
+  list._starts = { 0, 0 }
+  list._pages = { "wrong" }
 
-  local lease = assert(list:pin_range(0, 1, 0))
-  H.eq(list:pin_count(first), 1)
-  H.eq(list:pin_count(second), 0)
+  local lease = assert(list:pin_range(1, 1, 0))
+  H.eq(assert(list:inspect_page(0)).pin_count, 0)
+  H.eq(assert(list:inspect_page(1)).pin_count, 1)
+  H.eq(list:pinned_row(lease, 1), "b")
   H.eq(list:release_pin(lease), true)
-
-  local rejected, err = list:pin_range(1, 1, 0)
-  H.eq(rejected, nil)
-  assert(err:match("disagrees with public page metadata"), err)
   H.eq(list:pin_stats(), {
     active_leases = 0,
     pin_references = 0,
@@ -1264,7 +1774,6 @@ T["page_list_ private prefixes prevent wrong-node pin routing"] = function()
     retired_pinned_pages = 0,
   })
 
-  list._starts[2] = 1
   H.eq(PageList.validate(list), true)
 end
 
@@ -1345,18 +1854,19 @@ T["page_list_ validation fully checks retired pinned nodes"] = function()
   }
 
   for _, case in ipairs(cases) do
-    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-    local node = assert(list:page_at(0))
+    local Isolated, claims = isolated_pagelist_with_claims()
+    local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
+    local node = assert(claims[1]).node
     local lease = assert(list:pin_range(0, 1))
     H.eq(list:splice(0, 1, {}), true)
     case.mutate(node)
 
-    local ok, err = PageList.validate(list)
+    local ok, err = Isolated.validate(list)
     H.eq(ok, nil)
     assert(err:match(case.error), err)
 
     H.eq(list:release_pin(lease), true)
-    H.eq(PageList.validate(list), true)
+    H.eq(Isolated.validate(list), true)
   end
 end
 
@@ -1401,7 +1911,6 @@ T["page_list_ private splice fence protects pin state from callbacks"] =
 
     Page.create = function(...)
       attempts = attempts + 1
-      rawset(list, "_splice_active", nil)
       local acquired, acquire_err = list:pin_range(0, 1)
       H.eq(acquired, nil)
       assert(acquire_err:match("splice is already active"), acquire_err)
@@ -1411,7 +1920,6 @@ T["page_list_ private splice fence protects pin state from callbacks"] =
       local nested, nested_err = list:splice(0, 0, { "nested" })
       H.eq(nested, nil)
       assert(nested_err:match("splice is already active"), nested_err)
-      rawset(list, "_splice_active", true)
       return original(...)
     end
     local called, change, err = pcall(
@@ -1431,14 +1939,17 @@ T["page_list_ private splice fence protects pin state from callbacks"] =
     H.eq(list:pin_is_current(lease), false)
     H.eq(list:release_pin(lease), true)
     H.eq(rawget(list, "_splice_active"), nil)
+    H.eq(list:splice(4, 0, { "after" }), true)
+    H.eq(list:rows(0, 5), { "x", "a", "b", "c", "after" })
     H.eq(PageList.validate(list), true)
   end
 
 T["page_list_ splice rollback restores retired pinned page graphs"] =
   function()
-    local list = PageList.new({ "a", "b" }, { max_rows = 1 })
-    local node = assert(list:page_at(0))
-    local page = node.page
+    local Isolated, claims = isolated_pagelist_with_claims()
+    local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
+    local node = assert(claims[1]).node
+    local page = assert(claims[1]).page
     local node_id = node.id
     local lease = assert(list:pin_range(0, 1))
     H.eq(list:splice(0, 1, {}), true)
@@ -1452,7 +1963,7 @@ T["page_list_ splice rollback restores retired pinned page graphs"] =
       return original(...)
     end
     local called, change, err = pcall(
-      PageList.splice,
+      Isolated.splice,
       list,
       1,
       0,
@@ -1469,42 +1980,106 @@ T["page_list_ splice rollback restores retired pinned page graphs"] =
     assert(node.page == page)
     H.eq(page.payload, "a")
     H.eq(getmetatable(node), nil)
-    H.eq(list:pin_count(node), 1)
+    H.eq(list:pin_stats().pin_references, 1)
+    H.eq(list:pin_stats().retired_pinned_pages, 1)
     H.eq(list:release_pin(lease), true)
-    H.eq(PageList.validate(list), true)
+    H.eq(Isolated.validate(list), true)
   end
 
-T["page_list_ retired pin lifetime ends on exact release"] = function()
-  local weak = setmetatable({}, { __mode = "v" })
-  local original_claim = Page.claim
-  local Isolated = load_isolated_pagelist({
-    claim = function(page, owner)
-      local claimed, capability = original_claim(page, owner)
-      if claimed and weak[1] == nil then
-        weak[1] = owner
-      end
-      return claimed, capability
-    end,
-  })
-  local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
-  local lease = assert(list:pin_range(0, 1))
+T["page_list_ retired pin lifetime remains private until exact release"] =
+function()
+  local weak_worker, result = launch_worker(function(result)
+    local Isolated, weak_nodes, weak_pages =
+      isolated_pagelist_with_weak_claims()
+    local list = Isolated.new({ "a", "b" }, { max_rows = 1 })
+    local lease = assert(list:pin_range(0, 1))
+    H.eq(next(lease), nil)
 
-  H.eq(list:splice(0, 1, {}), true)
-  collectgarbage("collect")
-  collectgarbage("collect")
-  assert(weak[1], "an active retired pin must retain its exact node")
+    H.eq(list:splice(0, 1, {}), true)
+    H.eq(next(lease), nil)
+    H.eq(list:pin_stats().retired_pinned_pages, 1)
+    H.eq(list:pin_stats().pin_references, 1)
+    collectgarbage("collect")
+    collectgarbage("collect")
 
-  H.eq(list:release_pin(lease), true)
-  lease = nil
-  collectgarbage("collect")
-  collectgarbage("collect")
-  H.eq(weak[1], nil, "release must drop the retired node lifetime")
+    H.eq(list:release_pin(lease), true)
+    H.eq(next(lease), nil)
+    H.eq(list:pin_stats().retired_pinned_pages, 0)
+    H.eq(list:pin_stats().pin_references, 0)
+    H.eq(rawget(assert(weak_nodes[1]), "page"), nil)
+    H.eq(Isolated.validate(list), true)
+
+    local scrub = Isolated.new({ "scrub" })
+    local scrub_lease = assert(scrub:pin_range(0, 1))
+    H.eq(scrub:release_pin(scrub_lease), true)
+    H.eq(Isolated.validate(scrub), true)
+    result.Isolated = Isolated
+    result.list = list
+    result.weak_nodes = weak_nodes
+    result.weak_pages = weak_pages
+  end)
+  assert(collect_until(function()
+    return weak_worker[1] == nil
+  end), "retired pin setup worker was retained")
+  local Isolated = result.Isolated
+  local list = result.list
+  local weak_nodes = result.weak_nodes
+  local weak_pages = result.weak_pages
+  local collected = collect_until(function()
+    return weak_nodes[1] == nil and weak_pages[1] == nil
+  end)
+  if not collected then
+    error(("released retired pin retained node=%s Page=%s"):format(
+      tostring(weak_nodes[1] ~= nil),
+      tostring(weak_pages[1] ~= nil)
+    ))
+  end
+  H.eq(Isolated.validate(list), true)
+end
+
+T["page_list_ unpinned splice discard severs private Page storage"] =
+function()
+  local weak_worker, result = launch_worker(function(result)
+    local Isolated, weak_nodes, weak_pages =
+      isolated_pagelist_with_weak_claims()
+    local list = Isolated.new({ "discard", "keep" }, { max_rows = 1 })
+    local discarded_node = assert(weak_nodes[1])
+    local discarded_page = assert(weak_pages[1])
+
+    H.eq(list:splice(0, 1, {}), true)
+    H.eq(rawget(discarded_node, "page"), nil)
+    assert(discarded_page ~= nil)
+    H.eq(list:rows(0, 1), { "keep" })
+    H.eq(Isolated.validate(list), true)
+
+    result.Isolated = Isolated
+    result.list = list
+    result.weak_nodes = weak_nodes
+    result.weak_pages = weak_pages
+  end)
+  assert(collect_until(function()
+    return weak_worker[1] == nil
+  end), "immediate-discard setup worker was retained")
+  local Isolated = result.Isolated
+  local list = result.list
+  local weak_nodes = result.weak_nodes
+  local weak_pages = result.weak_pages
+  local collected = collect_until(function()
+    return weak_nodes[1] == nil and weak_pages[1] == nil
+  end)
+  if not collected then
+    error(("unpinned splice discard retained node=%s Page=%s"):format(
+      tostring(weak_nodes[1] ~= nil),
+      tostring(weak_pages[1] ~= nil)
+    ))
+  end
   H.eq(Isolated.validate(list), true)
 end
 
 T["page_list_ a live node cannot lose its Page claim through GC"] = function()
-  local list = PageList.new({ "a" })
-  local node = assert(list:page_at(0))
+  local Isolated, claims = isolated_pagelist_with_claims()
+  local list = Isolated.new({ "a" })
+  local node = assert(claims[1]).node
   node.page = nil
   collectgarbage("collect")
   collectgarbage("collect")
@@ -1516,35 +2091,30 @@ T["page_list_ a live node cannot lose its Page claim through GC"] = function()
 end
 
 T["page_list_ splice rejects a Page method-shadow forgery"] = function()
-  local list = PageList.new({ "a", "b", "c" })
-  local pages = list._pages
-  local starts = list._starts
+  local Isolated, claims = isolated_pagelist_with_claims()
+  local list = Isolated.new({ "a", "b", "c" })
   local stats = list:stats()
-  local node = assert(list:page_at(0))
+  local page = assert(claims[1]).page
 
-  node.page.row = function(_, index)
+  page.row = function(_, index)
     return "forged-" .. index
   end
   local change, err = list:splice(1, 0, { "x" })
   H.eq(change, nil)
   assert(err:match("shadows trusted method row"), err)
   H.eq(list:stats(), stats)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
-  assert(list._pages[1] == node)
 
-  node.page.row = nil
+  page.row = nil
   H.eq(list:rows(0, 3), { "a", "b", "c" })
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 end
 
 T["page_list_ splice rejects stateful node page substitution"] = function()
-  local list = PageList.new({ "a", "b", "c" })
-  local pages = list._pages
-  local starts = list._starts
+  local Isolated, claims = isolated_pagelist_with_claims()
+  local list = Isolated.new({ "a", "b", "c" })
   local stats = list:stats()
-  local node = assert(list:page_at(0))
-  local original_page = node.page
+  local node = assert(claims[1]).node
+  local original_page = assert(claims[1]).page
   local evil_page = Page.new({ "evil-a", "evil-b", "evil-c" })
   local reads = 0
 
@@ -1566,17 +2136,14 @@ T["page_list_ splice rejects stateful node page substitution"] = function()
   assert(err:match("page node 1 must be a plain table"), err)
   H.eq(reads, 0, "validation must not consult a node metatable")
   H.eq(list:stats(), stats)
-  assert(list._pages == pages)
-  assert(list._starts == starts)
-  H.eq(rawget(list, "_splice_active"), nil)
 
   setmetatable(node, nil)
   node.page = original_page
   H.eq(list:rows(0, 3), { "a", "b", "c" })
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 end
 
-T["page_list_ trusted dispatch rejects PageList method shadows"] = function()
+T["page_list_ trusted dispatch ignores handle method decoys"] = function()
   local methods = {
     "row_count",
     "page_count",
@@ -1594,43 +2161,38 @@ T["page_list_ trusted dispatch rejects PageList method shadows"] = function()
     "pin_is_current",
     "pin_count",
     "pin_stats",
+    "compact_page",
+    "validate",
   }
   for _, method in ipairs(methods) do
     local list = PageList.new({ "a", "b", "c" })
     list[method] = function()
       return "forged"
     end
-    local ok, err = PageList.validate(list)
-    H.eq(ok, nil)
-    assert(err:match("shadows trusted method " .. method), err)
+    H.eq(PageList.rows(list, 0, 3), { "a", "b", "c" })
+    H.eq(PageList.validate(list), true)
   end
 
   local list = PageList.new({ "a", "b", "c" })
-  local node = assert(list:page_at(0))
   list.locate = function()
-    return node, 0, 0
+    return "forged"
   end
 
-  H.eq(list:row(1), "b")
-  H.eq(list:rows(1, 2), { "b", "c" })
+  H.eq(PageList.row(list, 1), "b")
+  H.eq(PageList.rows(list, 1, 2), { "b", "c" })
   local change, err = PageList.splice(list, 1, 0, { "x" })
-  H.eq(change, nil)
-  assert(err:match("shadows trusted method locate"), err)
-  H.eq(PageList.rows(list, 0, 3), { "a", "b", "c" })
-
-  list.locate = nil
-  H.eq(list:splice(1, 0, { "x" }), true)
+  H.eq(change, true)
+  H.eq(err, nil)
   H.eq(list:rows(0, 4), { "a", "x", "b", "c" })
   H.eq(PageList.validate(list), true)
 end
 
 T["page_list_ trusted splice bypasses a monkeypatched class locator"] = function()
   local list = PageList.new({ "a", "b", "c" }, { max_rows = 1 })
-  local original = PageList.locate
-  local first = assert(list:page_at(0))
+  local original = PageList.locate_page
 
-  PageList.locate = function()
-    return first, 0, 0
+  PageList.locate_page = function()
+    return { id = -1, page_index = 0 }, 0
   end
   local called, change, err = pcall(
     PageList.splice,
@@ -1639,7 +2201,7 @@ T["page_list_ trusted splice bypasses a monkeypatched class locator"] = function
     1,
     { "x" }
   )
-  PageList.locate = original
+  PageList.locate_page = original
 
   assert(called, change)
   H.eq(change, true)
@@ -1939,123 +2501,53 @@ T["page_list_fuzz_ pins remain exact across randomized splices"] = function()
   H.eq(PageList.validate(list), true)
 end
 
-T["page_list_ validate rejects corrupt prefixes ids pages and totals"] = function()
+T["page_list_ validate ignores decoys and rejects captured collaborator corruption"] =
+function()
   H.eq(PageList.validate(false), nil)
 
-  local duplicate = PageList.new({ "a", "b" }, { max_rows = 1 })
-  duplicate._pages[2].id = duplicate._pages[1].id
-  local ok, err = PageList.validate(duplicate)
+  local decoy = PageList.new({ "a", "b" }, { max_rows = 1 })
+  decoy._pages = setmetatable({ false }, {
+    __index = function()
+      error("decoy page index executed")
+    end,
+  })
+  decoy._starts = setmetatable({ -1 }, {
+    __len = function()
+      error("decoy prefix length executed")
+    end,
+  })
+  decoy._row_count = math.huge
+  decoy._generation = -1
+  decoy._next_page_id = math.huge
+  H.eq(PageList.validate(decoy), true)
+  H.eq(PageList.rows(decoy, 0, 2), { "a", "b" })
+
+  local Isolated, claims = isolated_pagelist_with_claims()
+  local duplicate = Isolated.new({ "a", "b" }, { max_rows = 1 })
+  claims[2].node.id = claims[1].node.id
+  local ok, err = Isolated.validate(duplicate)
   H.eq(ok, nil)
   assert(err:match("duplicated"), err)
 
-  local prefix = PageList.new({ "a", "b" }, { max_rows = 1 })
-  prefix._starts[2] = 0
-  ok, err = PageList.validate(prefix)
-  H.eq(ok, nil)
-  assert(err:match("prefix"), err)
-
-  local totals = PageList.new({ "a" })
-  totals._row_count = 2
-  ok, err = PageList.validate(totals)
-  H.eq(ok, nil)
-  assert(err:match("row_count"), err)
-
-  local page = PageList.new({ "a" })
-  page._pages[1].page.oversized = true
-  ok, err = PageList.validate(page)
+  Isolated, claims = isolated_pagelist_with_claims()
+  local corrupt_page = Isolated.new({ "a" })
+  claims[1].page.oversized = true
+  ok, err = Isolated.validate(corrupt_page)
   H.eq(ok, nil)
   assert(err:match("page 1 is invalid"), err)
 
-  local encoded = PageList.new({ "a" })
-  encoded._pages[1].page = encoded._pages[1].page:encoded()
-  local call_ok, validation_ok, ownership_err = pcall(PageList.validate, encoded)
-  H.eq(call_ok, true, "validation must reject a plain encoded table without throwing")
-  H.eq(validation_ok, nil)
-  assert(ownership_err:match("owned Page"), ownership_err)
-
-  local forged = PageList.new({ "a" })
-  forged._pages[1].page.storage_bytes = function()
-    return 999
-  end
-  forged._storage_bytes = 999
-  ok, err = PageList.validate(forged)
-  H.eq(ok, nil)
-  assert(err:match("storage_bytes"), err)
-
-  local generation = PageList.new({ "a" })
-  generation._generation = -1
-  ok, err = PageList.validate(generation)
-  H.eq(ok, nil)
-  assert(err:match("generation"), err)
-
-  local creation_generation = PageList.new({ "a" })
-  creation_generation._pages[1].created_generation = 1
-  ok, err = PageList.validate(creation_generation)
-  H.eq(ok, nil)
-  assert(err:match("creation generation"), err)
-
-  local allocator = PageList.new({ "a" })
-  allocator._next_page_id = math.huge
-  ok, err = PageList.validate(allocator)
-  H.eq(ok, nil)
-  assert(err:match("next page id"), err)
-
-  local shared = PageList.new({ "a", "b" }, { max_rows = 1 })
-  shared._pages[2].page = shared._pages[1].page
-  ok, err = PageList.validate(shared)
-  H.eq(ok, nil)
-  assert(err:match("shares a Page object"), err)
-
-  local unclaimed = PageList.new({ "a" })
-  local original_page = unclaimed._pages[1].page
-  local replacement_page = Page.new({ "a" })
-  local claim_ok, claim_err =
-    Page.claim(replacement_page, unclaimed._pages[1])
-  H.eq(claim_ok, nil)
-  assert(claim_err:match("node already has a Page"), claim_err)
-  unclaimed._pages[1].page = replacement_page
-  ok, err = PageList.validate(unclaimed)
-  H.eq(ok, nil)
-  assert(err:match("not owned by its PageList node"), err)
-  unclaimed._pages[1].page = original_page
-  H.eq(PageList.validate(unclaimed), true)
-
-  local left = PageList.new({ "a" })
-  local right = PageList.new({ "a" })
-  right._pages[1].page = left._pages[1].page
-  ok, err = PageList.validate(right)
+  Isolated, claims = isolated_pagelist_with_claims()
+  local substituted = Isolated.new({ "a" })
+  claims[1].node.page = Page.new({ "a" })
+  ok, err = Isolated.validate(substituted)
   H.eq(ok, nil)
   assert(err:match("not owned by its PageList node"), err)
 
-  local copied_node = PageList.new({ "a" })
-  copied_node._pages[1] = left._pages[1]
-  ok, err = PageList.validate(copied_node)
-  H.eq(ok, nil)
-  assert(err:match("belongs to another PageList"), err)
-
-  local indexed = PageList.new({ "a" })
-  setmetatable(indexed._pages, {
-    __index = function()
-      error("page index metatable must never run", 0)
-    end,
-  })
-  call_ok, validation_ok, ownership_err = pcall(PageList.validate, indexed)
-  H.eq(call_ok, true)
-  H.eq(validation_ok, nil)
-  assert(ownership_err:match("plain dense sequence"), ownership_err)
-
-  local source = PageList.new({ "a" })
   local fake = {
-    _pages = source._pages,
-    _starts = source._starts,
-    _row_count = source._row_count,
-    _decoded_bytes = source._decoded_bytes,
-    _storage_bytes = source._storage_bytes,
-    _oversized_pages = source._oversized_pages,
-    _next_page_id = source._next_page_id,
-    _generation = source._generation,
-    _max_rows = source._max_rows,
-    _max_bytes = source._max_bytes,
+    _pages = {},
+    _starts = {},
+    _row_count = 0,
+    _generation = 0,
   }
   setmetatable(fake, {
     __metatable = PageList,
@@ -2571,16 +3063,87 @@ T["page_list_ compact crc callback reentry discards its candidate"] =
     H.eq(PageList.validate(list), true)
   end
 
+T["page_list_ compact callbacks restore the opaque owner metatable"] =
+  function()
+    for _, mode in ipairs({ "mutate", "replace" }) do
+      local list
+      local corrupt = true
+      local adapter = test_resident_adapter({
+        encode = function()
+          if corrupt then
+            corrupt_handle_metatable(list, mode)
+          end
+          return "\1"
+        end,
+      })
+      list = PageList.new({ "owner-metatable-owner-metatable" }, {
+        resident = { restore = adapter },
+      })
+      local metatable = debug.getmetatable(list)
+      local index = rawget(metatable, "__index")
+      local before = list:stats()
+      local page_before = assert(list:inspect_page(0))
+
+      local compacted, err = PageList.compact_page(list, 0, 0)
+      H.eq(compacted, nil, mode)
+      assert(err:find("changed during compaction", 1, true)
+        or err:find("mutated the source", 1, true), err)
+      assert_handle_metatable(list, metatable, index)
+      H.eq(list:stats(), before)
+      H.eq(list:inspect_page(0), page_before)
+      H.eq(PageList.validate(list), true)
+
+      corrupt = false
+      H.eq(list:compact_page(0, 0), true)
+      H.eq(PageList.validate(list), true)
+    end
+  end
+
+T["page_list_ compact callbacks restore raw opaque owner entries"] =
+  function()
+    local list
+    local corrupt = true
+    local adapter = test_resident_adapter({
+      encode = function()
+        if corrupt then
+          corrupt_handle_entries(list, "replace", "replace")
+        end
+        return "\1"
+      end,
+    })
+    list = PageList.new({ "owner-entries-owner-entries" }, {
+      resident = { restore = adapter },
+    })
+    local decoys = seed_handle_decoys(list)
+    local before = list:stats()
+    local page_before = assert(list:inspect_page(0))
+
+    local compacted, err = PageList.compact_page(list, 0, 0)
+    H.eq(compacted, nil)
+    assert(err:find("changed during compaction", 1, true)
+      or err:find("mutated the source", 1, true), err)
+    assert_handle_decoys(list, decoys)
+    H.eq(list:stats(), before)
+    H.eq(list:inspect_page(0), page_before)
+    H.eq(PageList.validate(list), true)
+
+    corrupt = false
+    H.eq(list:compact_page(0, 0), true)
+    assert_handle_decoys(list, decoys)
+    H.eq(PageList.validate(list), true)
+  end
+
 T["page_list_ compact callback graph mutation is rolled back"] = function()
   local list
+  local node
+  local page
   local mutate = true
   local crc_calls = 0
   local adapter = test_resident_adapter({
     encode = function()
       if mutate then
-        list._generation = 99
-        list._storage_bytes = 0
-        list._pages[1].page = Page.new({ "forged" })
+        node.page = Page.new({ "forged" })
+        page.payload = "forged"
       end
       return "\1"
     end,
@@ -2589,31 +3152,32 @@ T["page_list_ compact callback graph mutation is rolled back"] = function()
       return test_crc32(raw)
     end,
   })
-  list = PageList.new({ "graph-graph-graph" }, {
+  local Isolated, claims = isolated_pagelist_with_claims()
+  list = Isolated.new({ "graph-graph-graph" }, {
     resident = { restore = adapter },
   })
-  local node = assert(list:page_at(0))
-  local page = node.page
+  node = assert(claims[1]).node
+  page = assert(claims[1]).page
   local before = list:stats()
   local compacted, err = list:compact_page(0, 0)
   H.eq(compacted, nil)
   assert(err:find("mutated the source", 1, true), err)
   H.eq(list:stats(), before)
   H.eq(crc_calls, 0, "encode-side mutation must stop before CRC")
-  assert(list:page_at(0) == node)
   assert(node.page == page)
+  H.eq(page.payload, "graph-graph-graph")
   H.eq(Page.metadata(page).kind, "raw")
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 
   mutate = false
   H.eq(list:compact_page(0, 0), true)
   H.eq(crc_calls, 1)
-  H.eq(PageList.validate(list), true)
+  H.eq(Isolated.validate(list), true)
 end
 
-T["page_list_ compact callback shell additions are exactly rolled back"] =
+T["page_list_ compact collaborator shell additions are exactly rolled back"] =
   function()
-    for _, target in ipairs({ "page", "node", "list" }) do
+    for _, target in ipairs({ "page", "node" }) do
       local list
       local node
       local mutate = true
@@ -2623,15 +3187,11 @@ T["page_list_ compact callback shell additions are exactly rolled back"] =
           if mutate then
             if target == "page" then
               node.page.evil = true
-            elseif target == "node" then
-              node.evil = true
             else
-              list.row = function()
-                return "evil"
-              end
-              _G.error = function()
-                return nil
-              end
+              node.evil = true
+            end
+            _G.error = function()
+              return nil
             end
           end
           return "\1"
@@ -2641,10 +3201,11 @@ T["page_list_ compact callback shell additions are exactly rolled back"] =
           return test_crc32(raw)
         end,
       })
-      list = PageList.new({ "shell-shell-shell" }, {
+      local Isolated, claims = isolated_pagelist_with_claims()
+      list = Isolated.new({ "shell-shell-shell" }, {
         resident = { restore = adapter },
       })
-      node = assert(list:page_at(0))
+      node = assert(claims[1]).node
       local before = list:stats()
       local original_error = _G.error
       local called, compacted, err = pcall(
@@ -2661,16 +3222,15 @@ T["page_list_ compact callback shell additions are exactly rolled back"] =
         or err:find("changed during compaction", 1, true), err)
       H.eq(rawget(node.page, "evil"), nil)
       H.eq(rawget(node, "evil"), nil)
-      H.eq(rawget(list, "row"), nil)
       H.eq(crc_calls, 0,
         "a poisoned global error must not let a doomed encode reach CRC")
       H.eq(list:stats(), before)
-      H.eq(PageList.validate(list), true)
+      H.eq(Isolated.validate(list), true)
 
       mutate = false
       H.eq(list:compact_page(0, 0), true)
       H.eq(crc_calls, 1)
-      H.eq(PageList.validate(list), true)
+      H.eq(Isolated.validate(list), true)
     end
   end
 
@@ -2694,38 +3254,31 @@ T["page_list_ compact fences avoid hostile equality and length hooks"] =
       local list = PageList.new({ "public-scalar-probe" }, {
         resident = { restore = test_resident_adapter() },
       })
-      local original = rawget(list, field)
-      rawset(list, field, Probe(original))
-      local compacted, err = list:compact_page(0, 0)
-      H.eq(compacted, nil)
-      assert(err:find("invalid metadata", 1, true), err)
+      rawset(list, field, Probe(0))
+      H.eq(list:compact_page(0, 0), true)
       H.eq(equality_calls, 0)
-      rawset(list, field, original)
       H.eq(PageList.validate(list), true)
     end
 
-    for _, target in ipairs({ "id", "created_generation", "start" }) do
+    for _, target in ipairs({ "id", "created_generation" }) do
       local list
       local node
       local adapter = test_resident_adapter({
         encode = function()
-          if target == "start" then
-            list._starts[1] = Probe(0)
-          else
-            node[target] = Probe(rawget(node, target))
-          end
+          node[target] = Probe(rawget(node, target))
           return "\1"
         end,
       })
-      list = PageList.new({ "target-scalar-probe" }, {
+      local Isolated, claims = isolated_pagelist_with_claims()
+      list = Isolated.new({ "target-scalar-probe" }, {
         resident = { restore = adapter },
       })
-      node = assert(list:page_at(0))
+      node = assert(claims[1]).node
       local compacted, err = list:compact_page(0, 0)
       H.eq(compacted, nil)
       assert(err:find("mutated the source", 1, true), err)
       H.eq(equality_calls, 0)
-      H.eq(PageList.validate(list), true)
+      H.eq(Isolated.validate(list), true)
     end
 
     local list
@@ -2738,46 +3291,53 @@ T["page_list_ compact fences avoid hostile equality and length hooks"] =
     }
     local adapter = test_resident_adapter({
       encode = function()
-        setmetatable(list._pages, hostile_metatable)
-        setmetatable(list._starts, hostile_metatable)
         return "\1"
       end,
     })
     list = PageList.new({ "layout-metatable-probe" }, {
       resident = { restore = adapter },
     })
-    local compacted, err = list:compact_page(0, 0)
-    H.eq(compacted, nil)
-    assert(err:find("mutated the source", 1, true), err)
+    local decoy_pages = setmetatable({}, hostile_metatable)
+    local decoy_starts =
+      setmetatable({ Probe(0) }, hostile_metatable)
+    rawset(list, "_pages", decoy_pages)
+    rawset(list, "_starts", decoy_starts)
+    H.eq(list:compact_page(0, 0), true)
     H.eq(length_calls, 0)
-    H.eq(getmetatable(list._pages), nil)
-    H.eq(getmetatable(list._starts), nil)
+    H.eq(equality_calls, 0)
+    assert(rawget(list, "_pages") == decoy_pages)
+    assert(rawget(list, "_starts") == decoy_starts)
     H.eq(PageList.validate(list), true)
   end
 
-T["page_list_ compact treats unrelated raw layout writes as corruption"] =
+T["page_list_ compact ignores unrelated raw layout decoys"] =
   function()
     local list
+    local encoded
     local adapter = test_resident_adapter({
-      encode = function()
-        list._pages[2], list._pages[3] =
-          list._pages[3], list._pages[2]
+      encode = function(body)
+        encoded = body
         return "\1"
+      end,
+      decode = function()
+        return encoded
       end,
     })
     list = PageList.new({ "first", "second", "third" }, {
       max_rows = 1,
       resident = { restore = adapter },
     })
+    local decoy_pages = { "third", "second", "first" }
+    local decoy_starts = { 99, 0 }
+    rawset(list, "_pages", decoy_pages)
+    rawset(list, "_starts", decoy_starts)
 
-    -- compact_page intentionally fences only the target slot in O(1).
     H.eq(list:compact_page(0, 0), true)
-    local valid, validate_err = PageList.validate(list)
-    H.eq(valid, nil)
-    assert(validate_err:find("trusted pin layout", 1, true), validate_err)
-
-    list._pages[2], list._pages[3] =
-      list._pages[3], list._pages[2]
+    local rows, rows_err = list:rows(0, 3)
+    assert(rows, rows_err)
+    H.eq(rows, { "first", "second", "third" })
+    assert(rawget(list, "_pages") == decoy_pages)
+    assert(rawget(list, "_starts") == decoy_starts)
     H.eq(PageList.validate(list), true)
   end
 
@@ -2793,6 +3353,8 @@ T["page_list_ streaming supports one million rows without an input table"] = fun
   end))
 
   H.eq(emitted, logical_rows)
+  H.eq(next(list), nil,
+    "the million-row handle must retain no public layout mirror")
   H.eq(list:row_count(), logical_rows)
   H.eq(list:page_count(), math.ceil(logical_rows / 256))
   H.eq(list:row(0), "")

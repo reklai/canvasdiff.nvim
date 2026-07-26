@@ -1,5 +1,4 @@
 local H = require("helpers")
-local Page = require("canvasdiff.canvas.Page")
 local PageList = require("canvasdiff.canvas.PageList")
 local Projection = require("canvasdiff.canvas.Projection")
 local canvas = require("canvasdiff.canvas")
@@ -533,8 +532,7 @@ T["projection_ restore reentry is contained and a forced redraw recovers"] =
         diagnostic
       )
       assert(#diagnostic <= 512)
-      local page = assert(list:page_at(0)).page
-      H.eq(Page.metadata(page).quarantined, false)
+      H.eq(assert(list:inspect_page(0)).quarantined, false)
       local resident = assert(list:resident_stats())
       H.eq(resident.pages, 0)
       H.eq(resident.reserved_pages, 0)

@@ -26,16 +26,11 @@ local STRING_SUB = string.sub
 local RAW_METATABLE = debug.getmetatable
 local RAW_SET_METATABLE = debug.setmetatable
 local RAW_EQUAL = rawequal
-local OWNED_LISTS = setmetatable({}, { __mode = "k" })
+local LAYOUT_STATES = setmetatable({}, { __mode = "kv" })
 local NODE_LINEAGES = setmetatable({}, { __mode = "k" })
-local PIN_STATES = setmetatable({}, { __mode = "k" })
 local PIN_LEASES = setmetatable({}, { __mode = "k" })
-local SPLICE_ACTIVE = setmetatable({}, { __mode = "k" })
-local COMPACT_ACTIVE = setmetatable({}, { __mode = "k" })
-local RESIDENT_ACTIVE = setmetatable({}, { __mode = "k" })
-local RESIDENT_CONFIGS = setmetatable({}, { __mode = "k" })
-local RESIDENT_STATES = setmetatable({}, { __mode = "k" })
 local NODE_CAPABILITIES = setmetatable({}, { __mode = "k" })
+local HANDLE_LAYOUT_ACCESS = {}
 local PAGE_VALIDATE = Page.validate
 local PAGE_ROW = Page.row
 local PAGE_ROWS = Page.rows
@@ -76,9 +71,9 @@ end
 local function own(fields, lineage, resident_config)
   lineage = lineage or {}
   local list = setmetatable(fields, PageList)
-  OWNED_LISTS[list] = lineage
-  RESIDENT_CONFIGS[list] = copy_resident_config(resident_config)
-  RESIDENT_STATES[list] = {
+  rawset(list, "_lineage", lineage)
+  rawset(list, "_resident_config", copy_resident_config(resident_config))
+  rawset(list, "_resident_state", {
     token = {},
     entries = {},
     pages = 0,
@@ -88,32 +83,17 @@ local function own(fields, lineage, resident_config)
     lru_head = nil,
     lru_tail = nil,
     lru_pages = 0,
-  }
+  })
   local current = {}
-  local trusted_pages = {}
-  local trusted_starts = {}
   local pages = rawget(fields, "_pages")
   if type(pages) == "table" then
     for index = 1, #pages do
       local node = rawget(pages, index)
       current[node] = true
-      trusted_pages[index] = node
     end
   end
-  local starts = rawget(fields, "_starts")
-  if type(starts) == "table" then
-    for index = 1, #starts do
-      trusted_starts[index] = rawget(starts, index)
-    end
-  end
-  PIN_STATES[list] = {
+  rawset(list, "_pin_state", {
     token = {},
-    generation = rawget(fields, "_generation"),
-    row_count = rawget(fields, "_row_count"),
-    public_pages = pages,
-    public_starts = starts,
-    trusted_pages = trusted_pages,
-    trusted_starts = trusted_starts,
     active = {},
     counts = {},
     current = current,
@@ -122,8 +102,26 @@ local function own(fields, lineage, resident_config)
     pin_references = 0,
     current_pinned_pages = 0,
     retired_pinned_pages = 0,
-  }
+  })
   return list
+end
+
+local function publish_layout(layout)
+  -- The private metatable slot gives the otherwise empty handle one ordinary
+  -- strong ownership edge to its layout. The weak-kv registry is lookup-only,
+  -- so callback -> handle cycles remain collectible under LuaJIT.
+  local handle_metatable = {
+    [HANDLE_LAYOUT_ACCESS] = layout,
+    __index = PageList,
+    __metatable = PageList,
+  }
+  rawset(layout, "_handle_metatable", handle_metatable)
+  local handle = setmetatable({}, handle_metatable)
+  rawset(layout, "_handle_ref", setmetatable({ handle }, {
+    __mode = "v",
+  }))
+  LAYOUT_STATES[handle] = layout
+  return handle
 end
 
 PageList.DEFAULT_MAX_ROWS = Page.DEFAULT_MAX_ROWS
@@ -135,8 +133,6 @@ local TRUSTED_INSTANCE_METHODS = {
   "row_count",
   "page_count",
   "generation",
-  "page_at",
-  "locate",
   "inspect_page",
   "locate_page",
   "row",
@@ -146,12 +142,12 @@ local TRUSTED_INSTANCE_METHODS = {
   "pin_range",
   "release_pin",
   "pin_is_current",
-  "pin_count",
   "pin_stats",
   "compact_page",
   "pinned_row",
   "pinned_rows",
   "resident_stats",
+  "validate",
 }
 local PAGE_REPRESENTATION_FIELDS = {
   "codec",
@@ -382,11 +378,11 @@ local function pin_state_for(list)
   if type(list) ~= "table" then
     return nil, nil, "page list must be a table"
   end
-  local lineage = OWNED_LISTS[list]
+  local lineage = rawget(list, "_lineage")
   if not lineage or not RAW_EQUAL(RAW_METATABLE(list), PageList) then
     return nil, nil, "page list is not an owned PageList"
   end
-  local state = PIN_STATES[list]
+  local state = rawget(list, "_pin_state")
   if type(state) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(state), nil) then
     return nil, nil, "page-list pin state is invalid"
@@ -417,19 +413,13 @@ local function validate_pin_state(
     seen_ids,
     seen_pages
 )
-  local state = PIN_STATES[list]
+  local state = rawget(list, "_pin_state")
   if type(state) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(state), nil) then
     return nil, "page-list pin state is invalid"
   end
 
   local token = rawget(state, "token")
-  local pin_generation = rawget(state, "generation")
-  local pin_row_count = rawget(state, "row_count")
-  local public_pages = rawget(state, "public_pages")
-  local public_starts = rawget(state, "public_starts")
-  local trusted_pages = rawget(state, "trusted_pages")
-  local trusted_starts = rawget(state, "trusted_starts")
   local active = rawget(state, "active")
   local counts = rawget(state, "counts")
   local current = rawget(state, "current")
@@ -446,42 +436,9 @@ local function validate_pin_state(
       or not RAW_EQUAL(RAW_METATABLE(retired), nil) then
     return nil, "page-list pin tables are invalid"
   end
-  if not integer(pin_generation)
-      or pin_generation > MAX_SAFE_INTEGER
-      or pin_generation ~= generation then
-    return nil, "page-list pin generation is inconsistent"
-  end
-  if pin_row_count ~= row_count
-      or not RAW_EQUAL(public_pages, pages)
-      or not RAW_EQUAL(public_starts, starts) then
-    return nil, "page-list pin layout source is inconsistent"
-  end
-  local trusted_page_count, trusted_pages_err =
-    dense_table(trusted_pages, "trusted pin pages")
-  if trusted_page_count == nil then
-    return nil, trusted_pages_err
-  end
-  local trusted_start_count, trusted_starts_err =
-    dense_table(trusted_starts, "trusted pin starts")
-  if trusted_start_count == nil then
-    return nil, trusted_starts_err
-  end
-  if trusted_page_count ~= page_count
-      or trusted_start_count ~= page_count then
-    return nil, "page-list trusted pin layout has the wrong length"
-  end
-  for index = 1, page_count do
-    if not RAW_EQUAL(
-      rawget(trusted_pages, index),
-      rawget(pages, index)
-    ) or rawget(trusted_starts, index) ~= rawget(starts, index) then
-      return nil, "page-list trusted pin layout is inconsistent"
-    end
-  end
-
   local expected_current = {}
-  for index = 1, trusted_page_count do
-    expected_current[rawget(trusted_pages, index)] = true
+  for index = 1, page_count do
+    expected_current[rawget(pages, index)] = true
   end
   local current_count = 0
   for node, present in next, current do
@@ -712,6 +669,49 @@ local function restore_table(snapshot)
   RAW_SET_METATABLE(value, snapshot.metatable)
 end
 
+local function snapshot_handle_owner(list)
+  local handle_ref = rawget(list, "_handle_ref")
+  local handle = rawget(handle_ref, 1)
+  local handle_metatable = RAW_METATABLE(handle)
+  return {
+    ref = handle_ref,
+    handle = handle,
+    layout = list,
+    registry = LAYOUT_STATES,
+    metatable = handle_metatable,
+    handle_snapshot = snapshot_table(handle),
+    metatable_snapshot = snapshot_table(handle_metatable),
+    ref_snapshot = snapshot_table(handle_ref),
+    ref_metatable_snapshot =
+      snapshot_table(RAW_METATABLE(handle_ref)),
+  }
+end
+
+local function handle_owner_matches(list, snapshot)
+  return RAW_EQUAL(rawget(list, "_handle_ref"), snapshot.ref)
+    and RAW_EQUAL(rawget(snapshot.ref, 1), snapshot.handle)
+    and RAW_EQUAL(
+      RAW_METATABLE(snapshot.handle),
+      snapshot.metatable
+    )
+    and RAW_EQUAL(
+      rawget(snapshot.registry, snapshot.handle),
+      snapshot.layout
+    )
+    and table_matches_snapshot(snapshot.handle_snapshot)
+    and table_matches_snapshot(snapshot.metatable_snapshot)
+    and table_matches_snapshot(snapshot.ref_snapshot)
+    and table_matches_snapshot(snapshot.ref_metatable_snapshot)
+end
+
+local function restore_handle_owner(snapshot)
+  restore_table(snapshot.metatable_snapshot)
+  restore_table(snapshot.handle_snapshot)
+  restore_table(snapshot.ref_metatable_snapshot)
+  restore_table(snapshot.ref_snapshot)
+  rawset(snapshot.registry, snapshot.handle, snapshot.layout)
+end
+
 local function snapshot_list_graph(list)
   local snapshots = {}
   local seen = {}
@@ -732,7 +732,7 @@ local function snapshot_list_graph(list)
     capture(node)
     capture(rawget(node, "page"))
   end
-  local pin_state = PIN_STATES[list]
+  local pin_state = rawget(list, "_pin_state")
   local retired = pin_state and rawget(pin_state, "retired") or nil
   if type(retired) == "table" then
     for node in next, retired do
@@ -740,11 +740,17 @@ local function snapshot_list_graph(list)
       capture(rawget(node, "page"))
     end
   end
-  return snapshots
+  return {
+    tables = snapshots,
+    owner = snapshot_handle_owner(list),
+  }
 end
 
-local function graph_matches_snapshots(snapshots)
-  for _, snapshot in ipairs(snapshots) do
+local function graph_matches_snapshots(list_graph)
+  if not handle_owner_matches(list_graph.tables[1].value, list_graph.owner) then
+    return false
+  end
+  for _, snapshot in ipairs(list_graph.tables) do
     if not table_matches_snapshot(snapshot) then
       return false
     end
@@ -752,14 +758,15 @@ local function graph_matches_snapshots(snapshots)
   return true
 end
 
-local function restore_graph(snapshots)
-  for index = #snapshots, 1, -1 do
-    restore_table(snapshots[index])
+local function restore_graph(list_graph)
+  for index = #list_graph.tables, 1, -1 do
+    restore_table(list_graph.tables[index])
   end
+  restore_handle_owner(list_graph.owner)
 end
 
 local function resident_state_for(list)
-  local state = RESIDENT_STATES[list]
+  local state = rawget(list, "_resident_state")
   if type(state) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(state), nil)
       or type(rawget(state, "token")) ~= "table"
@@ -772,7 +779,7 @@ local function resident_state_for(list)
 end
 
 local function resident_is_active(list)
-  local active = rawget(RESIDENT_ACTIVE, list)
+  local active = rawget(list, "_resident_active")
   if active then
     rawset(active, "reentered", true)
     return true
@@ -854,7 +861,7 @@ local function resident_drop_entry(state, entry)
 end
 
 local function resident_stats_snapshot(list, state)
-  local config = RESIDENT_CONFIGS[list]
+  local config = rawget(list, "_resident_config")
   local pages = rawget(state, "pages")
   local unpinned_pages = rawget(state, "lru_pages")
   return {
@@ -874,7 +881,7 @@ local function validate_resident_state(list, lineage, pin_state)
   if not state then
     return nil, state_err
   end
-  local config = RESIDENT_CONFIGS[list]
+  local config = rawget(list, "_resident_config")
   local pages = rawget(state, "pages")
   local bytes = rawget(state, "bytes")
   local reserved_pages = rawget(state, "reserved_pages")
@@ -890,7 +897,7 @@ local function validate_resident_state(list, lineage, pin_state)
       or bytes + reserved_bytes > rawget(config, "max_bytes") then
     return nil, "page-list resident totals are invalid"
   end
-  local active = RESIDENT_ACTIVE[list]
+  local active = rawget(list, "_resident_active")
   if (reserved_pages > 0 or reserved_bytes > 0) and not active then
     return nil, "page-list resident reservation has no owner"
   end
@@ -1070,7 +1077,7 @@ local function append_page(state, rows, manifest)
     page = page,
     created_generation = state._generation,
   }
-  local lineage = OWNED_LISTS[state]
+  local lineage = rawget(state, "_lineage")
   NODE_LINEAGES[node] = lineage
   local claimed, capability_or_err = PAGE_CLAIM(page, node)
   if not claimed then
@@ -1086,12 +1093,9 @@ local function append_page(state, rows, manifest)
   local start0 = state._row_count
   state._starts[#state._starts + 1] = start0
   state._pages[#state._pages + 1] = node
-  local pin_state = PIN_STATES[state]
-  pin_state.trusted_starts[#pin_state.trusted_starts + 1] = start0
-  pin_state.trusted_pages[#pin_state.trusted_pages + 1] = node
+  local pin_state = rawget(state, "_pin_state")
   pin_state.current[node] = true
   state._row_count = state._row_count + page_metadata.row_count
-  pin_state.row_count = state._row_count
   state._decoded_bytes =
     state._decoded_bytes + page_metadata.decoded_bytes
   state._storage_bytes =
@@ -1274,13 +1278,17 @@ function PageList.create(rows, opts)
   end
 
   local index = 0
-  return build(function()
+  local layout, build_err = build(function()
     index = index + 1
     if index > count then
       return nil
     end
     return rawget(snapshot, index)
   end, limits)
+  if not layout then
+    return nil, build_err
+  end
+  return publish_layout(layout)
 end
 
 --- Build from a pull source without materializing every logical row first.
@@ -1295,7 +1303,11 @@ function PageList.from_iterator(next_row, opts)
   if not limits then
     return nil, limits_err
   end
-  return build(next_row, limits)
+  local layout, build_err = build(next_row, limits)
+  if not layout then
+    return nil, build_err
+  end
+  return publish_layout(layout)
 end
 
 function PageList.new(rows, opts)
@@ -1314,14 +1326,6 @@ end
 
 function PageList:generation()
   return self._generation
-end
-
---- Return page metadata at a zero-based page index.
-function PageList:page_at(page_index0)
-  if not integer(page_index0) or page_index0 >= #self._pages then
-    return nil, "page index is outside the list"
-  end
-  return self._pages[page_index0 + 1]
 end
 
 --- Locate one zero-based logical row in O(log page_count).
@@ -1369,7 +1373,6 @@ local function locate(self, row0)
     row0
   )
 end
-PageList.locate = locate
 
 local function node_metadata(node)
   if type(node) ~= "table" then
@@ -1389,7 +1392,7 @@ local function node_metadata(node)
   return metadata, page
 end
 
-local function inspection_generation(self, state, expected_generation)
+local function inspection_generation(self, expected_generation)
   if not RAW_EQUAL(expected_generation, nil)
       and (
         not integer(expected_generation)
@@ -1398,13 +1401,9 @@ local function inspection_generation(self, state, expected_generation)
     return nil, "expected generation must be a safe non-negative integer"
   end
 
-  local generation = rawget(state, "generation")
-  local public_generation = rawget(self, "_generation")
+  local generation = rawget(self, "_generation")
   if not integer(generation)
-      or generation > MAX_SAFE_INTEGER
-      or not integer(public_generation)
-      or public_generation > MAX_SAFE_INTEGER
-      or not RAW_EQUAL(public_generation, generation) then
+      or generation > MAX_SAFE_INTEGER then
     return nil, "page list cannot inspect invalid metadata"
   end
   if not RAW_EQUAL(expected_generation, nil)
@@ -1421,20 +1420,12 @@ local function page_snapshot_at(
     page_index0,
     generation
 )
-  local pages = rawget(state, "trusted_pages")
-  local starts = rawget(state, "trusted_starts")
-  local public_pages = rawget(self, "_pages")
-  local public_starts = rawget(self, "_starts")
+  local pages = rawget(self, "_pages")
+  local starts = rawget(self, "_starts")
   if type(pages) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(pages), nil)
       or type(starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(starts), nil)
-      or type(public_pages) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_pages), nil)
-      or type(public_starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_starts), nil)
-      or not RAW_EQUAL(public_pages, rawget(state, "public_pages"))
-      or not RAW_EQUAL(public_starts, rawget(state, "public_starts")) then
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil) then
     return nil, "page list cannot inspect invalid metadata"
   end
   if not integer(page_index0) or page_index0 >= #pages then
@@ -1448,9 +1439,7 @@ local function page_snapshot_at(
       or not RAW_EQUAL(RAW_METATABLE(node), nil)
       or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
       or not RAW_EQUAL(rawget(state.current, node), true)
-      or not integer(start0)
-      or not RAW_EQUAL(rawget(public_pages, page_index), node)
-      or not RAW_EQUAL(rawget(public_starts, page_index), start0) then
+      or not integer(start0) then
     return nil, "page list cannot inspect invalid metadata"
   end
 
@@ -1506,7 +1495,7 @@ function PageList:inspect_page(page_index0, expected_generation)
     return nil, state_err
   end
   local generation, generation_err =
-    inspection_generation(self, state, expected_generation)
+    inspection_generation(self, expected_generation)
   if not generation then
     return nil, generation_err
   end
@@ -1528,21 +1517,18 @@ function PageList:locate_page(row0, expected_generation)
     return nil, state_err
   end
   local generation, generation_err =
-    inspection_generation(self, state, expected_generation)
+    inspection_generation(self, expected_generation)
   if not generation then
     return nil, generation_err
   end
 
-  local row_count = rawget(state, "row_count")
-  local public_row_count = rawget(self, "_row_count")
-  if not integer(row_count)
-      or not integer(public_row_count)
-      or not RAW_EQUAL(public_row_count, row_count) then
+  local row_count = rawget(self, "_row_count")
+  if not integer(row_count) then
     return nil, "page list cannot inspect invalid metadata"
   end
   local node, local_row0, page_index0 = locate_layout(
-    rawget(state, "trusted_pages"),
-    rawget(state, "trusted_starts"),
+    rawget(self, "_pages"),
+    rawget(self, "_starts"),
     row_count,
     row0
   )
@@ -1563,7 +1549,7 @@ function PageList:locate_page(row0, expected_generation)
 end
 
 local function compaction_is_active(list)
-  local active = rawget(COMPACT_ACTIVE, list)
+  local active = rawget(list, "_compact_active")
   if active then
     rawset(active, "reentered", true)
     return true
@@ -1571,41 +1557,46 @@ local function compaction_is_active(list)
   return false
 end
 
--- Resident restores snapshot only the bounded PageList shell and every exact
--- target node/Page/slot. As with compact_page, unrelated raw writes to
--- non-target layout slots are out-of-band corruption for PageList.validate.
+-- Resident restore snapshots only a target-bounded internal graph: the layout
+-- shell plus every exact target node/Page/slot, never non-target pages.
+-- Exact public-handle rollback additionally scales with caller-inserted raw
+-- decoys (normally none).
+-- Unrelated private writes to non-target layout slots remain out-of-band
+-- corruption for PageList.validate.
 local function snapshot_resident_source(self, targets)
-  local public_pages = rawget(self, "_pages")
-  local public_starts = rawget(self, "_starts")
+  local layout_pages = rawget(self, "_pages")
+  local layout_starts = rawget(self, "_starts")
   local target_snapshots = {}
   for index, target in ipairs(targets) do
     target_snapshots[index] = {
       node = snapshot_table(target.node),
       page = snapshot_table(target.page),
       page_index = target.page_index,
-      public_page = rawget(public_pages, target.page_index),
-      public_start = rawget(public_starts, target.page_index),
+      layout_page = rawget(layout_pages, target.page_index),
+      layout_start = rawget(layout_starts, target.page_index),
     }
   end
   return {
     list = snapshot_table(self),
-    public_pages = public_pages,
-    public_pages_metatable = RAW_METATABLE(public_pages),
-    public_starts = public_starts,
-    public_starts_metatable = RAW_METATABLE(public_starts),
+    owner = snapshot_handle_owner(self),
+    layout_pages = layout_pages,
+    layout_pages_metatable = RAW_METATABLE(layout_pages),
+    layout_starts = layout_starts,
+    layout_starts_metatable = RAW_METATABLE(layout_starts),
     targets = target_snapshots,
   }
 end
 
 local function resident_source_matches(source)
   if not table_matches_snapshot(source.list)
+      or not handle_owner_matches(source.list.value, source.owner)
       or not RAW_EQUAL(
-        RAW_METATABLE(source.public_pages),
-        source.public_pages_metatable
+        RAW_METATABLE(source.layout_pages),
+        source.layout_pages_metatable
       )
       or not RAW_EQUAL(
-        RAW_METATABLE(source.public_starts),
-        source.public_starts_metatable
+        RAW_METATABLE(source.layout_starts),
+        source.layout_starts_metatable
       ) then
     return false
   end
@@ -1613,12 +1604,12 @@ local function resident_source_matches(source)
     if not table_matches_snapshot(target.node)
         or not table_matches_snapshot(target.page)
         or not RAW_EQUAL(
-          rawget(source.public_pages, target.page_index),
-          target.public_page
+          rawget(source.layout_pages, target.page_index),
+          target.layout_page
         )
         or not RAW_EQUAL(
-          rawget(source.public_starts, target.page_index),
-          target.public_start
+          rawget(source.layout_starts, target.page_index),
+          target.layout_start
         ) then
       return false
     end
@@ -1627,24 +1618,25 @@ local function resident_source_matches(source)
 end
 
 local function restore_resident_source(source)
+  restore_handle_owner(source.owner)
   RAW_SET_METATABLE(
-    source.public_pages,
-    source.public_pages_metatable
+    source.layout_pages,
+    source.layout_pages_metatable
   )
   RAW_SET_METATABLE(
-    source.public_starts,
-    source.public_starts_metatable
+    source.layout_starts,
+    source.layout_starts_metatable
   )
   for _, target in ipairs(source.targets) do
     rawset(
-      source.public_pages,
+      source.layout_pages,
       target.page_index,
-      target.public_page
+      target.layout_page
     )
     rawset(
-      source.public_starts,
+      source.layout_starts,
       target.page_index,
-      target.public_start
+      target.layout_start
     )
     restore_table(target.page)
     restore_table(target.node)
@@ -1685,9 +1677,9 @@ local function resident_fence(transaction)
   local self = transaction.list
   local state = transaction.state
   local active = transaction.active
-  if not RAW_EQUAL(rawget(RESIDENT_ACTIVE, self), active)
+  if not RAW_EQUAL(rawget(self, "_resident_active"), active)
       or rawget(active, "reentered")
-      or not RAW_EQUAL(RESIDENT_STATES[self], state)
+      or not RAW_EQUAL(rawget(self, "_resident_state"), state)
       or not RAW_EQUAL(
         rawget(state, "reserved_pages"),
         transaction.reserved_pages
@@ -1698,9 +1690,9 @@ local function resident_fence(transaction)
       )
       or not RAW_EQUAL(rawget(state, "pages"), transaction.pages)
       or not RAW_EQUAL(rawget(state, "bytes"), transaction.bytes)
-      or not RAW_EQUAL(PIN_STATES[self], transaction.pin_state)
+      or not RAW_EQUAL(rawget(self, "_pin_state"), transaction.pin_state)
       or not RAW_EQUAL(
-        RESIDENT_CONFIGS[self],
+        rawget(self, "_resident_config"),
         transaction.config
       )
       or not resident_source_matches(transaction.source) then
@@ -1708,30 +1700,30 @@ local function resident_fence(transaction)
   end
   local pin_state = transaction.pin_state
   if not RAW_EQUAL(
-        rawget(pin_state, "generation"),
+        rawget(self, "_generation"),
         transaction.generation
       )
       or not RAW_EQUAL(
-        rawget(pin_state, "row_count"),
+        rawget(self, "_row_count"),
         transaction.row_count
       )
       or not RAW_EQUAL(
-        rawget(pin_state, "trusted_pages"),
-        transaction.trusted_pages
+        rawget(self, "_pages"),
+        transaction.pages_layout
       )
       or not RAW_EQUAL(
-        rawget(pin_state, "trusted_starts"),
-        transaction.trusted_starts
+        rawget(self, "_starts"),
+        transaction.starts_layout
       ) then
     return nil, "page-list changed during resident restore"
   end
   for _, target in ipairs(transaction.targets) do
     if not RAW_EQUAL(
-          rawget(transaction.trusted_pages, target.page_index),
+          rawget(transaction.pages_layout, target.page_index),
           target.node
         )
         or not RAW_EQUAL(
-          rawget(transaction.trusted_starts, target.page_index),
+          rawget(transaction.starts_layout, target.page_index),
           target.start
         )
         or not RAW_EQUAL(rawget(target.node, "page"), target.page)
@@ -1888,7 +1880,7 @@ local function prepare_resident_targets(
   end
   if not RAW_EQUAL(rawget(state, "reserved_pages"), 0)
       or not RAW_EQUAL(rawget(state, "reserved_bytes"), 0)
-      or RESIDENT_ACTIVE[self] then
+      or rawget(self, "_resident_active") then
     return nil, "page-list resident state is busy"
   end
   local entries = rawget(state, "entries")
@@ -1952,6 +1944,11 @@ local function prepare_resident_targets(
     planned_bytes = planned_bytes - rawget(victim, "bytes")
   end
 
+  local active
+  if #misses > 0 then
+    active = { reentered = false }
+    rawset(self, "_resident_active", active)
+  end
   local source = snapshot_resident_source(self, targets)
   for _, entry in ipairs(purges) do
     resident_drop_entry(state, entry)
@@ -1971,17 +1968,16 @@ local function prepare_resident_targets(
 
   rawset(state, "reserved_pages", #misses)
   rawset(state, "reserved_bytes", reserved_bytes)
-  local active = { reentered = false }
   local transaction = {
     list = self,
     state = state,
     pin_state = pin_state,
     config = config,
     active = active,
-    generation = rawget(pin_state, "generation"),
-    row_count = rawget(pin_state, "row_count"),
-    trusted_pages = rawget(pin_state, "trusted_pages"),
-    trusted_starts = rawget(pin_state, "trusted_starts"),
+    generation = rawget(self, "_generation"),
+    row_count = rawget(self, "_row_count"),
+    pages_layout = rawget(self, "_pages"),
+    starts_layout = rawget(self, "_starts"),
     pages = rawget(state, "pages"),
     bytes = rawget(state, "bytes"),
     reserved_pages = #misses,
@@ -1990,12 +1986,11 @@ local function prepare_resident_targets(
     misses = misses,
     source = source,
   }
-  RESIDENT_ACTIVE[self] = active
   local called, restored, restore_err =
     pcall(restore_resident_misses, transaction)
-  RESIDENT_ACTIVE[self] = nil
   if not called or not restored then
     abort_resident_preparation(transaction)
+    rawset(self, "_resident_active", nil)
     if not called then
       return nil,
         "page-list resident restore threw: " .. diagnostic(restored)
@@ -2027,6 +2022,7 @@ local function commit_resident_preparation(transaction)
   rawset(state, "reserved_pages", 0)
   rawset(state, "reserved_bytes", 0)
   transaction.committed = true
+  rawset(transaction.list, "_resident_active", nil)
 end
 
 local pin_range_trusted
@@ -2176,8 +2172,7 @@ pin_range_impl = function(
   if resident_is_active(self) then
     return nil, "page-list resident restore is already active"
   end
-  if SPLICE_ACTIVE[self]
-      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+  if not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
     if not RAW_EQUAL(internal_access, SPLICE_PIN_ACCESS) then
       return nil, "page-list splice is already active"
     end
@@ -2192,30 +2187,16 @@ pin_range_impl = function(
     return nil, "page-list splice is already active"
   end
 
-  local pin_generation = rawget(state, "generation")
-  local row_count = rawget(state, "row_count")
-  local pages = rawget(state, "trusted_pages")
-  local starts = rawget(state, "trusted_starts")
-  local public_pages = rawget(self, "_pages")
-  local public_starts = rawget(self, "_starts")
-  local public_generation = rawget(self, "_generation")
-  local public_row_count = rawget(self, "_row_count")
+  local pin_generation = rawget(self, "_generation")
+  local row_count = rawget(self, "_row_count")
+  local pages = rawget(self, "_pages")
+  local starts = rawget(self, "_starts")
   if not integer(pin_generation) or pin_generation > MAX_SAFE_INTEGER
-      or not integer(public_generation)
-      or public_generation ~= pin_generation
       or not integer(row_count)
-      or not integer(public_row_count)
-      or public_row_count ~= row_count
       or type(pages) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(pages), nil)
       or type(starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(starts), nil)
-      or type(public_pages) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_pages), nil)
-      or type(public_starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_starts), nil)
-      or not RAW_EQUAL(public_pages, rawget(state, "public_pages"))
-      or not RAW_EQUAL(public_starts, rawget(state, "public_starts")) then
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil) then
     return nil, "page list cannot acquire pins from invalid metadata"
   end
   if not RAW_EQUAL(expected_generation, nil) then
@@ -2258,11 +2239,9 @@ pin_range_impl = function(
           ) then
         return nil, "pin range resolved an invalid page node"
       end
-      local public_prefix = rawget(public_starts, page_index0 + 1)
-      if not RAW_EQUAL(rawget(public_pages, page_index0 + 1), node)
-          or not integer(public_prefix)
-          or public_prefix ~= rawget(starts, page_index0 + 1) then
-        return nil, "pin range disagrees with public page metadata"
+      local prefix = rawget(starts, page_index0 + 1)
+      if not integer(prefix) then
+        return nil, "pin range resolved invalid page metadata"
       end
       if seen[node] then
         return nil, "pin range repeats a concrete page node"
@@ -2307,7 +2286,7 @@ pin_range_impl = function(
     end
   end
 
-  local config = RESIDENT_CONFIGS[self]
+  local config = rawget(self, "_resident_config")
   local prepared, resident_err =
     prepare_resident_targets(self, state, targets, config)
   if not prepared then
@@ -2316,16 +2295,15 @@ pin_range_impl = function(
 
   local final_generation = rawget(self, "_generation")
   local final_row_count = rawget(self, "_row_count")
-  if rawget(state, "generation") ~= pin_generation
-      or not integer(final_generation)
+  if not integer(final_generation)
       or final_generation ~= pin_generation
-      or rawget(state, "row_count") ~= row_count
       or not integer(final_row_count)
       or final_row_count ~= row_count
-      or not RAW_EQUAL(rawget(self, "_pages"), public_pages)
-      or not RAW_EQUAL(rawget(self, "_starts"), public_starts)
+      or not RAW_EQUAL(rawget(self, "_pages"), pages)
+      or not RAW_EQUAL(rawget(self, "_starts"), starts)
       or not resident_source_matches(prepared.source) then
     abort_resident_preparation(prepared)
+    rawset(self, "_resident_active", nil)
     return nil, "page-list generation changed before pin publication"
   end
 
@@ -2395,12 +2373,10 @@ local function current_pin_read_record(self, lease)
     return nil, nil, "pin lease is not active"
   end
   local generation = rawget(self, "_generation")
-  local pin_generation = rawget(state, "generation")
   local lease_generation = rawget(record, "generation")
   if not integer(generation)
       or generation > MAX_SAFE_INTEGER
-      or not RAW_EQUAL(generation, pin_generation)
-      or not RAW_EQUAL(lease_generation, pin_generation) then
+      or not RAW_EQUAL(lease_generation, generation) then
     return nil, nil, "pin lease generation is stale"
   end
   local node_set = rawget(record, "node_set")
@@ -2483,9 +2459,9 @@ pinned_rows_trusted = function(self, lease, start0, count)
     return {}
   end
 
-  local pages = rawget(state, "trusted_pages")
-  local starts = rawget(state, "trusted_starts")
-  local row_count = rawget(state, "row_count")
+  local pages = rawget(self, "_pages")
+  local starts = rawget(self, "_starts")
+  local row_count = rawget(self, "_row_count")
   local node, local_row0, page_index0 =
     locate_layout(pages, starts, row_count, start0)
   if not node then
@@ -2555,8 +2531,7 @@ release_pin_impl = function(self, lease, internal_access)
   if resident_is_active(self) then
     return nil, "page-list resident restore is already active"
   end
-  if SPLICE_ACTIVE[self]
-      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+  if not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
     if not RAW_EQUAL(internal_access, SPLICE_PIN_ACCESS) then
       return nil, "page-list splice is already active"
     end
@@ -2617,6 +2592,7 @@ release_pin_impl = function(self, lease, internal_access)
         end
         state.retired[node] = nil
         NODE_CAPABILITIES[node] = nil
+        rawset(node, "page", nil)
         state.retired_pinned_pages = state.retired_pinned_pages - 1
       else
         if resident_entry then
@@ -2656,26 +2632,11 @@ function PageList:pin_is_current(lease)
     return nil, "pin lease is not active"
   end
   local generation = rawget(self, "_generation")
-  local pin_generation = rawget(state, "generation")
   if not integer(generation)
-      or generation > MAX_SAFE_INTEGER
-      or generation ~= pin_generation then
+      or generation > MAX_SAFE_INTEGER then
     return nil, "page-list generation metadata is inconsistent"
   end
-  return rawget(record, "generation") == pin_generation
-end
-
-function PageList:pin_count(node)
-  local state, lineage, state_err = pin_state_for(self)
-  if not state then
-    return nil, state_err
-  end
-  if type(node) ~= "table"
-      or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
-      or (not state.current[node] and not state.retired[node]) then
-    return nil, "page node does not belong to this PageList"
-  end
-  return rawget(state.counts, node) or 0
+  return rawget(record, "generation") == generation
 end
 
 function PageList:pin_stats()
@@ -2696,76 +2657,80 @@ function PageList:resident_stats()
     return nil, state_err
   end
   local config_ok, config_err =
-    validate_resident_config(RESIDENT_CONFIGS[self])
+    validate_resident_config(rawget(self, "_resident_config"))
   if not config_ok then
     return nil, config_err
   end
   return resident_stats_snapshot(self, state)
 end
 
--- Compact-one is a scheduler primitive, so its source snapshot is deliberately
--- constant-size for a valid list: the bounded list/node/Page shells plus the
--- exact target layout slots. Unrelated raw writes into non-target layout slots
--- are out-of-band corruption for PageList.validate to diagnose; only sanctioned
--- PageList calls and top-level/target mutation are transactional seams here.
+-- Compact-one is a scheduler primitive, so its internal source snapshot is
+-- deliberately bounded independently of page count: the layout/node/Page
+-- shells plus the exact target slots. Exact public-handle rollback additionally
+-- scales with caller-inserted raw decoys (normally none). Unrelated private
+-- writes into non-target layout slots are out-of-band corruption for validate;
+-- sanctioned PageList calls and top-level/target mutation are transactional.
 local function snapshot_compact_source(self, node, page, page_index)
-  local public_pages = rawget(self, "_pages")
-  local public_starts = rawget(self, "_starts")
+  local layout_pages = rawget(self, "_pages")
+  local layout_starts = rawget(self, "_starts")
   return {
     list = snapshot_table(self),
+    owner = snapshot_handle_owner(self),
     node = snapshot_table(node),
     page = snapshot_table(page),
     page_index = page_index,
-    public_pages = public_pages,
-    public_pages_metatable = RAW_METATABLE(public_pages),
-    public_page = rawget(public_pages, page_index),
-    public_starts = public_starts,
-    public_starts_metatable = RAW_METATABLE(public_starts),
-    public_start = rawget(public_starts, page_index),
+    layout_pages = layout_pages,
+    layout_pages_metatable = RAW_METATABLE(layout_pages),
+    layout_page = rawget(layout_pages, page_index),
+    layout_starts = layout_starts,
+    layout_starts_metatable = RAW_METATABLE(layout_starts),
+    layout_start = rawget(layout_starts, page_index),
   }
 end
 
 local function compact_source_matches(source)
   if not table_matches_snapshot(source.list)
+      or not handle_owner_matches(source.list.value, source.owner)
       or not table_matches_snapshot(source.node)
       or not table_matches_snapshot(source.page)
       or not RAW_EQUAL(
-        RAW_METATABLE(source.public_pages),
-        source.public_pages_metatable
+        RAW_METATABLE(source.layout_pages),
+        source.layout_pages_metatable
       )
       or not RAW_EQUAL(
-        RAW_METATABLE(source.public_starts),
-        source.public_starts_metatable
+        RAW_METATABLE(source.layout_starts),
+        source.layout_starts_metatable
       ) then
     return false
   end
   return RAW_EQUAL(
-    rawget(source.public_pages, source.page_index),
-    source.public_page
+    rawget(source.layout_pages, source.page_index),
+    source.layout_page
   ) and RAW_EQUAL(
-    rawget(source.public_starts, source.page_index),
-    source.public_start
+    rawget(source.layout_starts, source.page_index),
+    source.layout_start
   )
 end
 
 local function restore_compact_source(source)
+  restore_handle_owner(source.owner)
   RAW_SET_METATABLE(
-    source.public_pages,
-    source.public_pages_metatable
+    source.layout_pages,
+    source.layout_pages_metatable
   )
   RAW_SET_METATABLE(
-    source.public_starts,
-    source.public_starts_metatable
+    source.layout_starts,
+    source.layout_starts_metatable
   )
   rawset(
-    source.public_pages,
+    source.layout_pages,
     source.page_index,
-    source.public_page
+    source.layout_page
   )
   rawset(
-    source.public_starts,
+    source.layout_starts,
     source.page_index,
-    source.public_start
+    source.layout_start
   )
   restore_table(source.page)
   restore_table(source.node)
@@ -2773,57 +2738,32 @@ local function restore_compact_source(source)
 end
 
 local function compact_fence(self, snapshot)
-  local active = rawget(COMPACT_ACTIVE, self)
+  local active = rawget(self, "_compact_active")
   if not RAW_EQUAL(active, snapshot.active)
       or rawget(snapshot.active, "reentered")
       or not compact_source_matches(snapshot.source) then
     return nil, "page-list changed during compaction"
   end
-  if SPLICE_ACTIVE[self]
-      or not RAW_EQUAL(rawget(self, "_splice_active"), nil)
-      or not RAW_EQUAL(PIN_STATES[self], snapshot.pin_state)
-      or not RAW_EQUAL(RESIDENT_CONFIGS[self], snapshot.config)
-      or not RAW_EQUAL(
-        rawget(snapshot.pin_state, "generation"),
-        snapshot.generation
-      )
-      or not RAW_EQUAL(
-        rawget(snapshot.pin_state, "row_count"),
-        snapshot.row_count
-      )
-      or not RAW_EQUAL(
-        rawget(snapshot.pin_state, "trusted_pages"),
-        snapshot.trusted_pages
-      )
-      or not RAW_EQUAL(
-        rawget(snapshot.pin_state, "trusted_starts"),
-        snapshot.trusted_starts
-      )
-      or not RAW_EQUAL(rawget(self, "_pages"), snapshot.public_pages)
-      or not RAW_EQUAL(rawget(self, "_starts"), snapshot.public_starts)
+  if not RAW_EQUAL(rawget(self, "_splice_active"), nil)
+      or not RAW_EQUAL(rawget(self, "_pin_state"), snapshot.pin_state)
+      or not RAW_EQUAL(rawget(self, "_resident_config"), snapshot.config)
       or not RAW_EQUAL(
         rawget(self, "_generation"),
         snapshot.generation
       )
+      or not RAW_EQUAL(rawget(self, "_pages"), snapshot.pages)
+      or not RAW_EQUAL(rawget(self, "_starts"), snapshot.starts)
       or not RAW_EQUAL(rawget(self, "_row_count"), snapshot.row_count)
       or not RAW_EQUAL(
         rawget(self, "_storage_bytes"),
         snapshot.storage_bytes
       )
       or not RAW_EQUAL(
-        rawget(snapshot.trusted_pages, snapshot.page_index),
+        rawget(snapshot.pages, snapshot.page_index),
         snapshot.node
       )
       or not RAW_EQUAL(
-        rawget(snapshot.trusted_starts, snapshot.page_index),
-        snapshot.page_start
-      )
-      or not RAW_EQUAL(
-        rawget(snapshot.public_pages, snapshot.page_index),
-        snapshot.node
-      )
-      or not RAW_EQUAL(
-        rawget(snapshot.public_starts, snapshot.page_index),
+        rawget(snapshot.starts, snapshot.page_index),
         snapshot.page_start
       )
       or not RAW_EQUAL(rawget(snapshot.node, "page"), snapshot.page)
@@ -2882,7 +2822,7 @@ local function compact_page_transaction(
   if not pin_state then
     return nil, state_err
   end
-  local config = RESIDENT_CONFIGS[self]
+  local config = rawget(self, "_resident_config")
   local config_ok, config_err = validate_resident_config(config)
   if not config_ok then
     return nil, config_err
@@ -2895,30 +2835,21 @@ local function compact_page_transaction(
       return nil, "page list cannot compact from invalid metadata"
     end
   end
-  local trusted_pages = rawget(pin_state, "trusted_pages")
-  local trusted_starts = rawget(pin_state, "trusted_starts")
-  local public_pages = rawget(self, "_pages")
-  local public_starts = rawget(self, "_starts")
-  local generation = rawget(pin_state, "generation")
-  local row_count = rawget(pin_state, "row_count")
-  local public_generation = rawget(self, "_generation")
-  local public_row_count = rawget(self, "_row_count")
+  local pages = rawget(self, "_pages")
+  local starts = rawget(self, "_starts")
+  local generation = rawget(self, "_generation")
+  local row_count = rawget(self, "_row_count")
   local current = rawget(pin_state, "current")
   local counts = rawget(pin_state, "counts")
   local storage_bytes = rawget(self, "_storage_bytes")
   local max_rows = rawget(self, "_max_rows")
   local max_bytes = rawget(self, "_max_bytes")
   local next_page_id = rawget(self, "_next_page_id")
-  if not RAW_EQUAL(rawget(COMPACT_ACTIVE, self), active)
+  if not RAW_EQUAL(rawget(self, "_compact_active"), active)
       or rawget(active, "reentered")
       or not integer(generation)
       or generation > MAX_SAFE_INTEGER
-      or not integer(public_generation)
-      or public_generation > MAX_SAFE_INTEGER
-      or not RAW_EQUAL(public_generation, generation)
       or not integer(row_count)
-      or not integer(public_row_count)
-      or not RAW_EQUAL(public_row_count, row_count)
       or not integer(storage_bytes)
       or not positive_integer(max_rows)
       or not positive_integer(max_bytes)
@@ -2929,20 +2860,14 @@ local function compact_page_transaction(
       or not RAW_EQUAL(RAW_METATABLE(current), nil)
       or type(counts) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(counts), nil)
-      or type(trusted_pages) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(trusted_pages), nil)
-      or type(trusted_starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(trusted_starts), nil)
-      or type(public_pages) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_pages), nil)
-      or type(public_starts) ~= "table"
-      or not RAW_EQUAL(RAW_METATABLE(public_starts), nil)
-      or not RAW_EQUAL(public_pages, rawget(pin_state, "public_pages"))
-      or not RAW_EQUAL(public_starts, rawget(pin_state, "public_starts")) then
+      or type(pages) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(pages), nil)
+      or type(starts) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(starts), nil) then
     return nil, "page list cannot compact from invalid metadata"
   end
-  local page_count = #trusted_pages
-  if #trusted_starts ~= page_count then
+  local page_count = #pages
+  if #starts ~= page_count then
     return nil, "page list cannot compact from invalid metadata"
   end
   if not integer(page_index0)
@@ -2960,12 +2885,11 @@ local function compact_page_transaction(
   end
 
   local page_index = page_index0 + 1
-  local node = rawget(trusted_pages, page_index)
+  local node = rawget(pages, page_index)
   local node_id = type(node) == "table" and rawget(node, "id") or nil
   local node_generation =
     type(node) == "table" and rawget(node, "created_generation") or nil
-  local trusted_start = rawget(trusted_starts, page_index)
-  local public_start = rawget(public_starts, page_index)
+  local page_start = rawget(starts, page_index)
   if type(node) ~= "table"
       or not RAW_EQUAL(RAW_METATABLE(node), nil)
       or not RAW_EQUAL(NODE_LINEAGES[node], lineage)
@@ -2975,10 +2899,7 @@ local function compact_page_transaction(
       or node_generation > generation
       or not RAW_EQUAL(rawget(current, node), true)
       or not RAW_EQUAL(rawget(counts, node), nil)
-      or not RAW_EQUAL(rawget(public_pages, page_index), node)
-      or not integer(trusted_start)
-      or not integer(public_start)
-      or not RAW_EQUAL(public_start, trusted_start) then
+      or not integer(page_start) then
     return nil, "page is not an unpinned current PageList node"
   end
   local page = rawget(node, "page")
@@ -3009,12 +2930,10 @@ local function compact_page_transaction(
     generation = generation,
     row_count = row_count,
     storage_bytes = storage_bytes,
-    trusted_pages = trusted_pages,
-    trusted_starts = trusted_starts,
-    public_pages = public_pages,
-    public_starts = public_starts,
+    pages = pages,
+    starts = starts,
     page_index = page_index,
-    page_start = trusted_start,
+    page_start = page_start,
     node = node,
     page = page,
     capability = NODE_CAPABILITIES[node],
@@ -3133,8 +3052,7 @@ function PageList:compact_page(page_index0, expected_generation)
   if resident_is_active(self) then
     return nil, "page-list resident restore is already active"
   end
-  if SPLICE_ACTIVE[self]
-      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+  if not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
     return nil, "page-list splice is already active"
   end
   if compaction_is_active(self) then
@@ -3142,7 +3060,7 @@ function PageList:compact_page(page_index0, expected_generation)
   end
 
   local active = { reentered = false }
-  COMPACT_ACTIVE[self] = active
+  rawset(self, "_compact_active", active)
   local context = {}
   local called, compacted, second, third, fourth = pcall(
     compact_page_transaction,
@@ -3159,7 +3077,7 @@ function PageList:compact_page(page_index0, expected_generation)
   if context.candidate then
     PAGE_DISCARD_CANDIDATE(context.candidate)
   end
-  COMPACT_ACTIVE[self] = nil
+  rawset(self, "_compact_active", nil)
   if not called then
     return nil, "page-list compaction threw: " .. diagnostic(compacted)
   end
@@ -3381,8 +3299,8 @@ local function splice_transaction(
   }, {
     generation = generation,
     next_page_id = self._next_page_id,
-    lineage = OWNED_LISTS[self],
-    resident = RESIDENT_CONFIGS[self],
+    lineage = rawget(self, "_lineage"),
+    resident = rawget(self, "_resident_config"),
   })
   if not graph_matches_snapshots(source_graph) then
     restore_graph(source_graph)
@@ -3421,14 +3339,13 @@ local function splice_transaction(
     _generation = generation,
     _max_rows = self._max_rows,
     _max_bytes = self._max_bytes,
-  }, OWNED_LISTS[self], RESIDENT_CONFIGS[self])
+  }, rawget(self, "_lineage"), rawget(self, "_resident_config"))
   local candidate_ok, candidate_err = validate_list(candidate)
   if not candidate_ok then
     return nil, candidate_err
   end
 
-  local pin_state = PIN_STATES[self]
-  local candidate_pin_state = PIN_STATES[candidate]
+  local pin_state = rawget(self, "_pin_state")
   local resident_state, resident_state_err = resident_state_for(self)
   if not resident_state then
     return nil, resident_state_err
@@ -3458,12 +3375,6 @@ local function splice_transaction(
   rawset(self, "_next_page_id", candidate._next_page_id)
   rawset(self, "_generation", candidate._generation)
   pin_state.current = next_current
-  pin_state.generation = candidate._generation
-  pin_state.row_count = candidate_pin_state.row_count
-  pin_state.public_pages = candidate._pages
-  pin_state.public_starts = candidate._starts
-  pin_state.trusted_pages = candidate_pin_state.trusted_pages
-  pin_state.trusted_starts = candidate_pin_state.trusted_starts
   for _, node in ipairs(retiring) do
     local entry = rawget(rawget(resident_state, "entries"), node)
     if entry then
@@ -3481,6 +3392,7 @@ local function splice_transaction(
       resident_drop_entry(resident_state, entry)
     end
     NODE_CAPABILITIES[node] = nil
+    rawset(node, "page", nil)
   end
 
   return true
@@ -3496,15 +3408,13 @@ function PageList:splice(start0, delete_count, insert_rows)
   if resident_is_active(self) then
     return nil, "page-list resident restore is already active"
   end
-  if SPLICE_ACTIVE[self]
-      or not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
+  if not RAW_EQUAL(rawget(self, "_splice_active"), nil) then
     return nil, "page-list splice is already active"
   end
   if compaction_is_active(self) then
     return nil, "page-list compaction is already active"
   end
 
-  SPLICE_ACTIVE[self] = {}
   rawset(self, "_splice_active", true)
   local context = {}
   local called, change, err = pcall(
@@ -3522,7 +3432,6 @@ function PageList:splice(start0, delete_count, insert_rows)
     source_restored = true
   end
   rawset(self, "_splice_active", nil)
-  SPLICE_ACTIVE[self] = nil
 
   if source_restored then
     return nil, "page creation mutated the source PageList"
@@ -3544,7 +3453,7 @@ function PageList:stats()
     max_rows = self._max_rows,
     max_bytes = self._max_bytes,
   }
-  local pin_stats = pin_stats_snapshot(PIN_STATES[self])
+  local pin_stats = pin_stats_snapshot(rawget(self, "_pin_state"))
   for name, value in next, pin_stats do
     result[name] = value
   end
@@ -3557,7 +3466,7 @@ validate_list = function(list)
   if type(list) ~= "table" then
     return nil, "page list must be a table"
   end
-  local lineage = OWNED_LISTS[list]
+  local lineage = rawget(list, "_lineage")
   if not lineage or not RAW_EQUAL(RAW_METATABLE(list), PageList) then
     return nil, "page list is not an owned PageList"
   end
@@ -3567,7 +3476,7 @@ validate_list = function(list)
     end
   end
   local resident_ok, resident_err =
-    validate_resident_config(RESIDENT_CONFIGS[list])
+    validate_resident_config(rawget(list, "_resident_config"))
   if not resident_ok then
     return nil, resident_err
   end
@@ -3747,12 +3656,92 @@ validate_list = function(list)
     return nil, pins_err
   end
   local resident_state_ok, resident_state_err =
-    validate_resident_state(list, lineage, PIN_STATES[list])
+    validate_resident_state(
+      list,
+      lineage,
+      rawget(list, "_pin_state")
+    )
   if not resident_state_ok then
     return nil, resident_state_err
   end
   return true
 end
 PageList.validate = validate_list
+
+local function public_layout(self)
+  if type(self) ~= "table" then
+    return nil, "page list must be a table"
+  end
+  local layout = LAYOUT_STATES[self]
+  local handle_metatable =
+    type(layout) == "table"
+      and rawget(layout, "_handle_metatable")
+      or nil
+  local handle_ref =
+    type(layout) == "table"
+      and rawget(layout, "_handle_ref")
+      or nil
+  local handle_ref_metatable =
+    type(handle_ref) == "table"
+      and RAW_METATABLE(handle_ref)
+      or nil
+  if type(layout) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(layout), PageList)
+      or type(handle_metatable) ~= "table"
+      or type(handle_ref) ~= "table"
+      or type(handle_ref_metatable) ~= "table"
+      or not RAW_EQUAL(rawget(handle_ref_metatable, "__mode"), "v")
+      or not RAW_EQUAL(rawget(handle_ref, 1), self)
+      or not RAW_EQUAL(RAW_METATABLE(self), handle_metatable)
+      or not RAW_EQUAL(
+        rawget(handle_metatable, "__index"),
+        PageList
+      )
+      or not RAW_EQUAL(
+        rawget(handle_metatable, HANDLE_LAYOUT_ACCESS),
+        layout
+      )
+      or not RAW_EQUAL(
+        rawget(handle_metatable, "__metatable"),
+        PageList
+      ) then
+    return nil, "page list is not an owned PageList"
+  end
+  for key in next, handle_metatable do
+    if not RAW_EQUAL(key, "__index")
+        and not RAW_EQUAL(key, "__metatable")
+        and not RAW_EQUAL(key, HANDLE_LAYOUT_ACCESS) then
+      return nil, "page list is not an owned PageList"
+    end
+  end
+  for key in next, handle_ref do
+    if not RAW_EQUAL(key, 1) then
+      return nil, "page list is not an owned PageList"
+    end
+  end
+  for key in next, handle_ref_metatable do
+    if not RAW_EQUAL(key, "__mode") then
+      return nil, "page list is not an owned PageList"
+    end
+  end
+  return layout
+end
+
+local function wrap_instance_method(implementation)
+  local function retain_handle(_, ...)
+    return ...
+  end
+  return function(self, ...)
+    local layout, layout_err = public_layout(self)
+    if not layout then
+      return nil, layout_err
+    end
+    return retain_handle(self, implementation(layout, ...))
+  end
+end
+
+for _, method in ipairs(TRUSTED_INSTANCE_METHODS) do
+  PageList[method] = wrap_instance_method(PageList[method])
+end
 
 return PageList
