@@ -66,6 +66,9 @@ local function sequence_length(rows)
   return count
 end
 
+--- Validate table-backed construction completely before allocating any Page.
+--- Unlike an iterator, a table is already resident and can be preflighted:
+--- rejecting a malformed late row must not duplicate its entire valid prefix.
 local function validate_rows(rows)
   local count, count_err = sequence_length(rows)
   if count == nil then
@@ -84,6 +87,18 @@ local function validate_rows(rows)
     end
   end
   return count
+end
+
+local function diagnostic(value)
+  local ok, message = pcall(tostring, value)
+  if not ok then
+    return "<unprintable error>"
+  end
+  local limit = 256
+  if #message > limit then
+    return message:sub(1, limit) .. "…"
+  end
+  return message
 end
 
 local function dense_table(value, label)
@@ -130,21 +145,9 @@ local function append_page(state, rows)
   return true
 end
 
---- Build a checked, read-only logical row store.
----
---- Pages are greedily filled up to both limits. A row larger than max_bytes is
---- represented by one oversized singleton page; it is never combined with a
---- neighbour. The input sequence is not retained.
-function PageList.create(rows, opts)
-  local limits, limits_err = options(opts)
-  if not limits then
-    return nil, limits_err
-  end
-  local count, rows_err = validate_rows(rows)
-  if count == nil then
-    return nil, rows_err
-  end
-
+--- Consume a row source into a private candidate. Nothing returns the
+--- candidate before EOF, the final flush, and the invariant check succeed.
+local function build(next_row, limits)
   local state = setmetatable({
     _pages = {},
     _starts = {},
@@ -159,6 +162,7 @@ function PageList.create(rows, opts)
 
   local pending = {}
   local pending_bytes = 0
+  local row_number = 0
 
   local function flush()
     if #pending == 0 then
@@ -173,8 +177,38 @@ function PageList.create(rows, opts)
     return true
   end
 
-  for index = 1, count do
-    local row = rawget(rows, index)
+  while true do
+    local called, row, source_err = pcall(next_row)
+    if not called then
+      return nil, ("row iterator threw at row %d: %s"):format(
+        row_number + 1,
+        diagnostic(row)
+      )
+    end
+    if row == nil then
+      if source_err ~= nil then
+        return nil, ("row iterator failed at row %d: %s"):format(
+          row_number + 1,
+          diagnostic(source_err)
+        )
+      end
+      break
+    end
+
+    row_number = row_number + 1
+    if source_err ~= nil then
+      return nil, ("row iterator returned a row and error at row %d"):format(row_number)
+    end
+    if type(row) ~= "string" then
+      return nil, ("row %d must be a string"):format(row_number)
+    end
+    if row:find("\n", 1, true) then
+      return nil, ("row %d contains a line-feed delimiter"):format(row_number)
+    end
+    if #row > U32_MAX then
+      return nil, ("row %d exceeds the 32-bit page limit"):format(row_number)
+    end
+
     local row_bytes = #row
 
     if row_bytes > limits.max_bytes then
@@ -217,6 +251,46 @@ function PageList.create(rows, opts)
     return nil, flush_err
   end
   return state
+end
+
+--- Build a checked, read-only logical row store from a dense sequence.
+---
+--- Pages are greedily filled up to both limits. A row larger than max_bytes is
+--- represented by one oversized singleton page; it is never combined with a
+--- neighbour. The input sequence is not retained.
+function PageList.create(rows, opts)
+  local limits, limits_err = options(opts)
+  if not limits then
+    return nil, limits_err
+  end
+  local count, rows_err = validate_rows(rows)
+  if count == nil then
+    return nil, rows_err
+  end
+
+  local index = 0
+  return build(function()
+    index = index + 1
+    if index > count then
+      return nil
+    end
+    return rawget(rows, index)
+  end, limits)
+end
+
+--- Build from a pull source without materializing every logical row first.
+---
+--- `next_row` returns one row string, nil for EOF, or nil plus an error for a
+--- source failure. Iterator throws are contained and become ordinary errors.
+function PageList.from_iterator(next_row, opts)
+  if type(next_row) ~= "function" then
+    return nil, "row iterator must be a function"
+  end
+  local limits, limits_err = options(opts)
+  if not limits then
+    return nil, limits_err
+  end
+  return build(next_row, limits)
 end
 
 function PageList.new(rows, opts)

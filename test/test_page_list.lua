@@ -1,4 +1,5 @@
 local H = require("helpers")
+local Page = require("canvasdiff.canvas.Page")
 local PageList = require("canvasdiff.canvas.PageList")
 
 local T = {}
@@ -20,6 +21,7 @@ T["page_list_ loads without an editor runtime"] = function()
   _G.vim = runtime
   assert(ok, loaded)
   H.eq(type(loaded.new), "function")
+  H.eq(type(loaded.from_iterator), "function")
 end
 
 T["page_list_ empty input owns no phantom page"] = function()
@@ -264,6 +266,208 @@ T["page_list_ validate rejects corrupt prefixes ids pages and totals"] = functio
   ok, err = PageList.validate(forged)
   H.eq(ok, nil)
   assert(err:match("storage_bytes"), err)
+end
+
+T["page_list_ streaming and table construction have identical pages"] = function()
+  local rows = {
+    "aa",
+    "",
+    "bbb",
+    string.rep("h", 7),
+    "nul\0",
+    string.char(0xFF),
+    "last",
+  }
+  local index = 0
+  local streamed = assert(PageList.from_iterator(function()
+    index = index + 1
+    return rows[index]
+  end, { max_rows = 3, max_bytes = 6 }))
+  local tabled = PageList.new(rows, { max_rows = 3, max_bytes = 6 })
+
+  H.eq(streamed:stats(), tabled:stats())
+  H.eq(streamed:page_count(), tabled:page_count())
+  for page_index0 = 0, tabled:page_count() - 1 do
+    local streamed_node = assert(streamed:page_at(page_index0))
+    local tabled_node = assert(tabled:page_at(page_index0))
+    H.eq(streamed_node.id, tabled_node.id)
+    H.eq(streamed_node.page:encoded(), tabled_node.page:encoded())
+  end
+  H.eq(streamed:rows(0, #rows), rows)
+  H.eq(PageList.validate(streamed), true)
+end
+
+T["page_list_ streaming preserves every packing boundary"] = function()
+  local rows = {}
+  for index = 1, 257 do
+    rows[index] = "r"
+  end
+  rows[#rows + 1] = string.rep("x", 65535)
+  rows[#rows + 1] = ""
+  rows[#rows + 1] = "y"
+  rows[#rows + 1] = string.rep("z", 65537)
+  rows[#rows + 1] = "after"
+
+  local index = 0
+  local list = assert(PageList.from_iterator(function()
+    index = index + 1
+    return rows[index]
+  end))
+
+  H.eq(list:rows(0, #rows), rows)
+  H.eq(list:stats().oversized_pages, 1)
+  local oversized
+  for page_index0 = 0, list:page_count() - 1 do
+    local page = assert(list:page_at(page_index0)).page
+    if page.oversized then
+      oversized = page
+      break
+    end
+  end
+  assert(oversized)
+  H.eq(oversized.row_count, 1)
+  H.eq(oversized:row(1), string.rep("z", 65537))
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ streaming late failures never publish a partial list"] = function()
+  local calls = 0
+  local list, err = PageList.from_iterator(function()
+    calls = calls + 1
+    if calls <= 513 then
+      return "row-" .. calls
+    end
+    return nil, "source vanished"
+  end, { max_rows = 2 })
+  H.eq(list, nil)
+  assert(err:match("row 514"), err)
+  assert(err:match("source vanished"), err)
+
+  calls = 0
+  list, err = PageList.from_iterator(function()
+    calls = calls + 1
+    if calls <= 300 then
+      return ""
+    end
+    error("iterator exploded", 0)
+  end, { max_rows = 3 })
+  H.eq(list, nil)
+  assert(err:match("threw at row 301"), err)
+  assert(err:match("iterator exploded"), err)
+
+  calls = 0
+  list, err = PageList.from_iterator(function()
+    calls = calls + 1
+    if calls <= 260 then
+      return "ok"
+    end
+    return "bad\nrow"
+  end)
+  H.eq(list, nil)
+  assert(err:match("row 261"), err)
+  assert(err:match("line%-feed"), err)
+end
+
+T["page_list_ table preflight rejects late corruption before allocating pages"] = function()
+  local rows = {}
+  for index = 1, 513 do
+    rows[index] = "row-" .. index
+  end
+  rows[514] = false
+
+  local original = Page.create
+  local allocations = 0
+  Page.create = function(...)
+    allocations = allocations + 1
+    return original(...)
+  end
+  local called, list, err = pcall(PageList.create, rows, { max_rows = 2 })
+  Page.create = original
+
+  assert(called, list)
+  H.eq(list, nil)
+  assert(err:match("row 514"), err)
+  H.eq(allocations, 0,
+    "table-backed construction must preflight before allocating any Page")
+end
+
+T["page_list_ streaming contains adversarial iterator results"] = function()
+  local list, err = PageList.from_iterator(false)
+  H.eq(list, nil)
+  assert(err:match("function"), err)
+
+  list, err = PageList.from_iterator(function()
+    return nil, false
+  end)
+  H.eq(list, nil)
+  assert(err:match("failed at row 1"), err)
+  assert(err:match("false"), err)
+
+  list, err = PageList.from_iterator(function()
+    return "row", "also an error"
+  end)
+  H.eq(list, nil)
+  assert(err:match("row and error"), err)
+
+  local unprintable = setmetatable({}, {
+    __tostring = function()
+      error("tostring failed")
+    end,
+  })
+  list, err = PageList.from_iterator(function()
+    error(unprintable, 0)
+  end)
+  H.eq(list, nil)
+  assert(err:find("<unprintable error>", 1, true), err)
+
+  list, err = PageList.from_iterator(function()
+    return nil
+  end, false)
+  H.eq(list, nil)
+  assert(err:match("options"), err)
+end
+
+T["page_list_ streaming supports one million rows without an input table"] = function()
+  local logical_rows = 1000000
+  local emitted = 0
+  local list = assert(PageList.from_iterator(function()
+    if emitted == logical_rows then
+      return nil
+    end
+    emitted = emitted + 1
+    return ""
+  end))
+
+  H.eq(emitted, logical_rows)
+  H.eq(list:row_count(), logical_rows)
+  H.eq(list:page_count(), math.ceil(logical_rows / 256))
+  H.eq(list:row(0), "")
+  H.eq(list:row(logical_rows - 1), "")
+  H.eq(list:stats().decoded_bytes, 0)
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ streaming does not retain its iterator closure"] = function()
+  local weak = setmetatable({}, { __mode = "v" })
+
+  local function build_with_token()
+    local token = {}
+    weak[1] = token
+    local count = 0
+    return assert(PageList.from_iterator(function()
+      if token and count < 4 then
+        count = count + 1
+        return tostring(count)
+      end
+      return nil
+    end))
+  end
+
+  local list = build_with_token()
+  collectgarbage("collect")
+  collectgarbage("collect")
+  H.eq(weak[1], nil, "the completed list must not retain the source closure")
+  H.eq(list:rows(0, 4), { "1", "2", "3", "4" })
 end
 
 return T
