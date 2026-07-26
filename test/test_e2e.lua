@@ -19,7 +19,10 @@ local function sidebar_view(st, tab)
 end
 
 local function group_alive(name)
-  if name == "canvasdiff.hl" or name == "canvasdiff.sidebar" then
+  if name == "canvasdiff.hl"
+      or name == "canvasdiff.sidebar"
+      or name == "canvasdiff.virt"
+      or name == "canvasdiff.watch" then
     for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
       local group = autocmd.group_name
       if group and (group == name or group:sub(1, #name + 1) == name .. ".") then
@@ -54,7 +57,7 @@ local function wipe_buffer(buf)
 end
 
 local function remove_fixture(root)
-  H.eq(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }), false,
+  H.eq(group_alive("canvasdiff.watch"), false,
     "the canvas watch is stopped before its fixture is removed")
   vim.api.nvim_set_current_dir(PROJECT_ROOT)
   H.eq(vim.fn.delete(root, "rf"), 0, "fixture directory was removed")
@@ -432,7 +435,7 @@ return {
     vim.api.nvim_win_close(second, false)
     vim.wait(120, function() return false end)
 
-    assert((pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" })),
+    assert(group_alive("canvasdiff.watch"),
       "the canvas is still on screen in the other window, so nothing may tear down")
     fm.close()
     os.remove(session.path_for(root))

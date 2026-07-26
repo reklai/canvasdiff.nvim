@@ -1,7 +1,9 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local virt = require("canvasdiff.virt")
+local runtime_domain = require("canvasdiff.runtime")
+local virt = runtime_domain.virtualizer
+local system = require("canvasdiff.os")
 local hl = require("canvasdiff.hl")
 
 local T = {}
@@ -39,8 +41,6 @@ local function six_sections()
 end
 
 local function open_six(callbacks)
-  -- No-argument detach is the supported test/reset form.
-  virt.detach()
   local state = canvas.open(six_sections(), {})
   local lease = virt.attach(state, { enabled = false }, callbacks)
   return state, lease
@@ -67,8 +67,10 @@ local function with_fake_runtime(callback)
   local real_create_group = vim.api.nvim_create_augroup
   local real_delete_group = vim.api.nvim_del_augroup_by_id
   local real_create_autocmd = vim.api.nvim_create_autocmd
-  local real_new_timer = vim.uv.new_timer
+  local real_new_timer = system.new_timer
   local real_schedule_wrap = vim.schedule_wrap
+  local real_attach = virt.attach
+  local real_detach = virt.detach
   local runtime = {
     groups = {},
     group_order = {},
@@ -76,6 +78,7 @@ local function with_fake_runtime(callback)
     timers = {},
     scheduled = {},
     free_groups = {},
+    leases = {},
     next_group = 0,
   }
 
@@ -99,7 +102,7 @@ local function with_fake_runtime(callback)
     runtime.autocmds[#runtime.autocmds + 1] = item
     return #runtime.autocmds
   end
-  vim.uv.new_timer = function()
+  system.new_timer = function()
     local timer = { started = 0, stopped = 0, closed = 0 }
     function timer:start(_, _, fn)
       self.started = self.started + 1
@@ -130,6 +133,11 @@ local function with_fake_runtime(callback)
       runtime.scheduled[#runtime.scheduled + 1] = fn
     end
   end
+  virt.attach = function(...)
+    local lease = real_attach(...)
+    runtime.leases[#runtime.leases + 1] = lease
+    return lease
+  end
 
   local ok, err = xpcall(function()
     callback(runtime)
@@ -138,20 +146,60 @@ local function with_fake_runtime(callback)
   for _, timer in ipairs(runtime.timers) do
     timer.on_stop = nil
   end
-  local cleanup_ok, cleanup_err = pcall(virt.detach)
+  for i = #runtime.leases, 1, -1 do
+    local cleanup_ok, cleanup_err = pcall(real_detach, runtime.leases[i])
+    if ok and not cleanup_ok then
+      ok, err = false, cleanup_err
+    end
+  end
+  virt.attach = real_attach
   vim.api.nvim_create_augroup = real_create_group
   vim.api.nvim_del_augroup_by_id = real_delete_group
   vim.api.nvim_create_autocmd = real_create_autocmd
-  vim.uv.new_timer = real_new_timer
+  system.new_timer = real_new_timer
   vim.schedule_wrap = real_schedule_wrap
-  if ok and not cleanup_ok then
-    ok, err = false, cleanup_err
-  end
   assert(ok, err)
 end
 
-T["virt_ stale async work cannot cross lease replacement"] = function()
-  virt.detach()
+T["virt_ debounce allocation uses the os facade and retries an unavailable handle"] =
+  function()
+    local state = canvas.open(six_sections(), {})
+    reset_view(state)
+
+    with_fake_runtime(function(fake)
+      local adapter_factory = system.new_timer
+      local adapter_calls = 0
+      system.new_timer = function()
+        adapter_calls = adapter_calls + 1
+        if adapter_calls == 1 then
+          return nil
+        end
+        return adapter_factory()
+      end
+
+      local lease = virt.attach(state, { enabled = false })
+      local on_scroll = fake.autocmds[1].callback
+
+      on_scroll({ match = tostring(state.win) })
+      H.eq(adapter_calls, 1, "the first debounce allocation reaches canvasdiff.os")
+      H.eq(lease.timer, nil,
+        "an unavailable adapter handle is not published into the lease")
+      H.eq(#fake.timers, 0, "no raw libuv timer bypassed the adapter")
+
+      on_scroll({ match = tostring(state.win) })
+      H.eq(adapter_calls, 2, "a transient unavailable handle is retried")
+      H.eq(#fake.timers, 1)
+      assert(rawequal(lease.timer, fake.timers[1]),
+        "the exact adapter result becomes the lease-owned timer")
+      H.eq(fake.timers[1].started, 1)
+
+      H.eq(virt.detach(lease), true)
+      H.eq(fake.timers[1].stopped, 1)
+      H.eq(fake.timers[1].closed, 1)
+    end)
+  end
+
+T["virt_ concurrent owners and stale async work remain isolated"] = function()
   local state_a = canvas.open(six_sections(), {})
   reset_view(state_a)
 
@@ -164,7 +212,7 @@ T["virt_ stale async work cannot cross lease replacement"] = function()
     local autocmd_a = runtime.autocmds[1].callback
 
     -- Cross the raw timer boundary while A is live, but hold the scheduled
-    -- main-loop callback until after replacement.
+    -- main-loop callback across creation and teardown of peer B.
     autocmd_a({ match = tostring(state_a.win) })
     H.eq(#runtime.timers, 1)
     local timer_a = runtime.timers[1]
@@ -192,19 +240,50 @@ T["virt_ stale async work cannot cross lease replacement"] = function()
     b_changes = 0
     local b_before = vim.deepcopy(state_b.collapsed)
     local autocmd_b = runtime.autocmds[2].callback
+    local group_a = runtime.group_order[1]
     local group_b = runtime.group_order[2]
 
-    H.eq(timer_a.stopped, 1, "replacement stops A's timer")
-    H.eq(timer_a.closed, 1, "replacement closes A's timer")
+    assert(lease_a.group_name ~= lease_b.group_name,
+      "concurrent virtualizers own distinct augroup names")
+    assert(lease_a.aug ~= lease_b.aug,
+      "concurrent virtualizers own distinct augroup ids")
+    assert(runtime.groups[lease_a.aug], "starting B keeps A's group installed")
+    assert(runtime.groups[group_b], "B's own group is installed")
+    H.eq(lease_a.disposed, false, "starting B does not implicitly dispose A")
+    H.eq(timer_a.stopped, 0, "starting B does not stop A's timer")
+    H.eq(timer_a.closed, 0, "starting B does not close A's timer")
+
+    local forged = {
+      disposed = false,
+      aug = lease_b.aug,
+      timer = timer_a,
+      callbacks = {},
+      tick_of = {},
+    }
+    H.eq(virt.detach(forged), false,
+      "a field-shaped table is not an authenticated virtualizer lease")
+    H.eq(forged.disposed, false, "rejected forgery is not mutated")
+    assert(runtime.groups[group_b],
+      "forged teardown cannot delete a live lease's augroup")
+    H.eq(timer_a.stopped, 0,
+      "forged teardown cannot stop another lease's timer")
+    H.eq(timer_a.closed, 0,
+      "forged teardown cannot close another lease's timer")
+
+    H.eq(virt.detach(lease_a), true, "A's owner detaches only A")
+    H.eq(virt.detach(lease_a), false, "stale exact detach(A) is idempotent")
+    H.eq(virt.detach(nil), false, "there is no unqualified global detach")
+    H.eq(runtime.groups[group_a], nil,
+      "A's exact group is deleted independently")
+    assert(runtime.groups[group_b], "B's group survives detach(A)")
+    H.eq(timer_a.stopped, 1)
+    H.eq(timer_a.closed, 1)
     H.eq(lease_a.disposed, true)
     H.eq(lease_a.state, nil, "disposed lease releases its canvas graph")
     H.eq(lease_a.opts, nil, "disposed lease releases its options")
     H.eq(next(lease_a.callbacks), nil, "disposed lease releases owner callbacks")
     H.eq(lease_a.timer, nil)
     H.eq(lease_a.aug, nil)
-    H.eq(virt.detach(lease_a), false, "stale detach(A) cannot stop B")
-    assert(runtime.groups[group_b], "B's reused augroup survives stale detach(A)")
-
     autocmd_a({ match = tostring(state_a.win) })
     H.eq(#runtime.timers, 1, "held A autocmd cannot arm a timer for B")
     timer_a.callback()
@@ -214,7 +293,7 @@ T["virt_ stale async work cannot cross lease replacement"] = function()
     H.eq(b_changes, 0, "A's queued callback cannot notify B")
     H.eq(a_changes, 0, "disposed A receives no late notification")
 
-    -- The replacement still operates through its own exact callback.
+    -- The peer remains fully operational through its own exact callback.
     vim.api.nvim_win_call(state_b.win, function()
       vim.cmd("normal! G")
     end)
@@ -236,7 +315,6 @@ T["virt_ stale async work cannot cross lease replacement"] = function()
 end
 
 T["virt_ teardown deletes C group before reentrant D attach"] = function()
-  virt.detach()
   local state_c = canvas.open(six_sections(), {})
   local state_d = canvas.open(six_sections(), {})
 
@@ -250,7 +328,7 @@ T["virt_ teardown deletes C group before reentrant D attach"] = function()
     end
 
     H.eq(virt.detach(lease_c), true)
-    assert(lease_d, "timer stop reentrantly installed D")
+    assert(lease_d, "timer stop reentrantly installed independent D")
     local group_d = runtime.group_order[2]
     assert(runtime.groups[group_d],
       "D's reused group survives the remainder of C teardown")
@@ -258,12 +336,11 @@ T["virt_ teardown deletes C group before reentrant D attach"] = function()
     H.eq(timer_c.closed, 1)
     H.eq(virt.apply(lease_c, { enabled = true, max_files = 0 }), false,
       "disposed C can never apply")
-    H.eq(virt.detach(lease_d), true, "D remains the live exact lease")
+    H.eq(virt.detach(lease_d), true, "D remains an independent live exact lease")
   end)
 end
 
-T["virt_ outer attach aborts when predecessor teardown installs a winner"] = function()
-  virt.detach()
+T["virt_ attaching a peer never invokes predecessor teardown"] = function()
   local state_a = canvas.open(six_sections(), {})
   local state_b = canvas.open(six_sections(), {})
   local state_c = canvas.open(six_sections(), {})
@@ -277,47 +354,109 @@ T["virt_ outer attach aborts when predecessor teardown installs a winner"] = fun
       lease_b = virt.attach(state_b, { enabled = false })
     end
 
-    local ok, err = pcall(virt.attach, state_c, { enabled = false })
-    H.eq(ok, false, "outer C attach cannot overwrite reentrant winner B")
-    assert(tostring(err):find("superseded", 1, true), tostring(err))
-    assert(lease_b, "B was installed during A teardown")
-    H.eq(virt.apply(lease_a, { enabled = true, max_files = 0 }), false)
-    H.eq(virt.apply(lease_b, { enabled = false }), false,
-      "B is still the current lease after C aborts")
-    local group_b = runtime.group_order[2]
-    assert(runtime.groups[group_b], "B's group remains installed")
+    local lease_c = virt.attach(state_c, { enabled = false })
+    H.eq(lease_b, nil, "attaching C never stops A or enters its timer teardown")
+    H.eq(lease_a.disposed, false)
+    H.eq(timer_a.stopped, 0)
+    assert(runtime.groups[lease_a.aug], "A's group remains installed")
+    assert(runtime.groups[lease_c.aug], "C's independent group is installed")
+
+    H.eq(virt.detach(lease_a), true)
+    assert(lease_b, "only A's explicit detach entered its timer teardown")
+    assert(runtime.groups[lease_c.aug], "C survives A's reentrant teardown")
+    assert(runtime.groups[lease_b.aug], "reentrant B is independently installed")
+    H.eq(virt.detach(lease_c), true)
     H.eq(virt.detach(lease_b), true)
   end)
 end
 
-T["virt_ alive reentrancy cannot authorize a replaced lease"] = function()
-  virt.detach()
+T["virt_ alive reentrancy can create a peer without revoking either lease"] = function()
   local state_a = canvas.open(six_sections(), {})
   local state_b = canvas.open(six_sections(), {})
-  local replace = false
+  local create_peer = false
   local lease_b
   local lease_a = virt.attach(state_a, { enabled = false }, {
     alive = function()
-      if replace then
-        replace = false
+      if create_peer then
+        create_peer = false
         lease_b = virt.attach(state_b, { enabled = false })
       end
       return true
     end,
   })
 
-  replace = true
+  create_peer = true
   H.eq(virt.apply(lease_a, {
-    enabled = true,
-    max_files = 0,
-    max_lines = 0,
+    enabled = false,
     margin = 0,
-    max_expanded = 0,
-  }), false, "post-alive identity check rejects replaced A")
-  H.eq(next(H.auto_set(state_a)), nil, "A performed no stale mutation")
-  H.eq(virt.detach(lease_a), false)
-  assert(lease_b, "alive installed B")
+  }), false, "A remains authorized after its callback creates peer B")
+  assert(lease_b, "alive installed independent B")
+  H.eq(lease_a.disposed, false)
+  H.eq(lease_b.disposed, false)
+  assert(lease_a.group_name ~= lease_b.group_name)
+  H.eq(virt.detach(lease_a), true)
+  H.eq(virt.apply(lease_b, { enabled = false }), false,
+    "B remains usable after exact detach(A)")
   H.eq(virt.detach(lease_b), true)
+end
+
+T["virt_ owner invalidation after viewport read prevents stale mutation"] = function()
+  local owner_alive = true
+  local st, lease = open_six({
+    alive = function() return owner_alive end,
+  })
+  reset_view(st)
+  local real_win_call = vim.api.nvim_win_call
+  vim.api.nvim_win_call = function(...)
+    local result = real_win_call(...)
+    owner_alive = false
+    return result
+  end
+
+  local ok, changed = pcall(virt.apply, lease, {
+    enabled = true,
+    max_files = 3,
+    max_lines = 1000000,
+    margin = 10,
+    max_expanded = 2,
+  })
+  vim.api.nvim_win_call = real_win_call
+
+  assert(ok, changed)
+  H.eq(changed, false)
+  H.eq(next(H.auto_set(st)), nil,
+    "an owner invalidated at the viewport boundary performs no mutation")
+  H.eq(lease.disposed, false,
+    "owner invalidation and exact resource teardown remain separate")
+  H.eq(virt.detach(lease), true)
+end
+
+T["virt_ owner invalidation during a splice stops the remaining pass"] = function()
+  local owner_alive = true
+  local notifications = 0
+  local st, lease = open_six({
+    alive = function() return owner_alive end,
+    on_change = function() notifications = notifications + 1 end,
+  })
+  reset_view(st)
+  st.hooks = {
+    on_section_replaced = function()
+      owner_alive = false
+    end,
+  }
+
+  H.eq(virt.apply(lease, {
+    enabled = true,
+    max_files = 3,
+    max_lines = 1000000,
+    margin = 10,
+    max_expanded = 2,
+  }), true, "the first splice happened before owner invalidation")
+  H.eq(vim.tbl_count(H.auto_set(st)), 1,
+    "the invalidated owner performs no later collapse")
+  H.eq(notifications, 0,
+    "an invalidated owner does not publish the partial pass")
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ owner callback faults are observable and attach is transactional"] = function()
@@ -350,12 +489,11 @@ T["virt_ owner callback faults are observable and attach is transactional"] = fu
   })
   H.eq(ok, false)
   assert(tostring(err):find("immediate virt callback fault", 1, true), tostring(err))
-  H.eq(virt.detach(), false,
-    "failed immediate attach leaves no unpublished current lease or resources")
+  H.eq(virt.detach(nil), false,
+    "failed immediate attach leaves no unqualified teardown capability")
 end
 
-T["virt_ attach never returns a lease replaced by its immediate callback"] = function()
-  virt.detach()
+T["virt_ immediate callback may attach an independent peer"] = function()
   local state_a = canvas.open(six_sections(), {})
   reset_view(state_a)
   local state_b = canvas.open(six_sections(), {})
@@ -368,21 +506,24 @@ T["virt_ attach never returns a lease replaced by its immediate callback"] = fun
     max_expanded = 2,
   }
 
-  local ok, err = pcall(virt.attach, state_a, opts, {
+  local ok, lease_a = pcall(virt.attach, state_a, opts, {
     on_change = function()
       lease_b = virt.attach(state_b, { enabled = false })
     end,
   })
-  H.eq(ok, false)
-  assert(tostring(err):find("superseded during initial apply", 1, true), tostring(err))
-  assert(lease_b, "the callback's replacement was installed")
+  H.eq(ok, true, lease_a)
+  assert(lease_a, "the outer attach returns its own lease")
+  assert(lease_b, "the callback's peer was installed")
+  H.eq(lease_a.disposed, false)
+  H.eq(lease_b.disposed, false)
+  assert(lease_a.group_name ~= lease_b.group_name)
   H.eq(virt.apply(lease_b, { enabled = false }), false,
-    "the replacement remains current after outer attach aborts")
+    "the peer remains independently usable")
+  H.eq(virt.detach(lease_a), true)
   H.eq(virt.detach(lease_b), true)
 end
 
 T["virt_ queued work resolves the latest rebound canvas window"] = function()
-  virt.detach()
   local state = canvas.open(six_sections(), {})
   reset_view(state)
   local original = state.win
@@ -506,6 +647,7 @@ T["virt_ inactive under thresholds leaves everything expanded"] = function()
     local s, e = canvas.section_rows(st, i)
     assert(e - s > 1, "section " .. i .. " is not a 1-row placeholder")
   end
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ active collapses far sections beyond max_expanded and keeps near ones"] = function()
@@ -536,6 +678,7 @@ T["virt_ active collapses far sections beyond max_expanded and keeps near ones"]
     if not st.collapsed[st.sections[i].path] then n_expanded = n_expanded + 1 end
   end
   H.eq(n_expanded, opts.max_expanded)
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ scroll then apply expands newly-near and collapses newly-far"] = function()
@@ -564,6 +707,7 @@ T["virt_ scroll then apply expands newly-near and collapses newly-far"] = functi
 
   H.eq(st.collapsed[st.sections[6].path], nil, "last section expanded once near")
   assert(st.collapsed[st.sections[1].path], "first section collapsed once far")
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ never auto-expands a user-collapsed section"] = function()
@@ -579,6 +723,7 @@ T["virt_ never auto-expands a user-collapsed section"] = function()
 
   assert(st.collapsed[st.sections[1].path], "user-collapsed section stays collapsed")
   H.eq(H.auto_set(st)[st.sections[1].path], nil, "auto-set never claims a user-collapsed path")
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ deactivation auto-expands only the auto set"] = function()
@@ -602,6 +747,7 @@ T["virt_ deactivation auto-expands only the auto set"] = function()
   end
   assert(st.collapsed[st.sections[1].path], "user-collapsed section 1 stays collapsed")
   H.eq(next(H.auto_set(st)), nil, "auto-set cleared")
+  H.eq(virt.detach(lease), true)
 end
 
 -- The max_lines threshold must describe the CHANGESET, not the current
@@ -628,6 +774,7 @@ T["virt_ stays active while its own collapses shrink the buffer"] = function()
   H.eq(count_collapsed(st), collapsed_after_first,
     "a second apply keeps the same sections collapsed")
   assert(next(H.auto_set(st)) ~= nil, "auto-set survives the second apply")
+  H.eq(virt.detach(lease), true)
 end
 
 T["virt_ on_change fires once per mutating apply"] = function()
@@ -647,6 +794,7 @@ T["virt_ on_change fires once per mutating apply"] = function()
 
   H.eq(virt.apply(lease, opts), false)
   H.eq(n, 1, "an apply that changes nothing stays silent")
+  H.eq(virt.detach(lease), true)
 end
 
 -- hl's WinScrolled debounce (30ms) beats virt's (50ms), so a section virt
@@ -688,6 +836,7 @@ T["virt_ expanded sections get their highlights back"] = function()
   assert(hl_lease.ids_by_path[path] ~= nil, "the expanded section got its highlights back")
 
   hl.detach(hl_lease)
+  H.eq(virt.detach(lease), true)
 end
 
 -- The LRU belongs to a lease, not a path or canvas state. Reattaching even the
@@ -705,9 +854,10 @@ T["virt_ a fresh lease on the same canvas forgets predecessor history"] = functi
   virt.apply(lease1, opts)
   assert(H.auto_set(st)["a/one.txt"], "sanity: the predecessor collapsed its far top")
 
-  -- Expand its auto set, look at the top, then replace the lease without
-  -- changing the state identity.
+  -- Expand its auto set, explicitly retire it, then attach a fresh lease
+  -- without changing the state identity.
   virt.apply(lease1, { enabled = false })
+  H.eq(virt.detach(lease1), true)
   reset_view(st)
   local lease2 = virt.attach(st, opts)
 
@@ -716,7 +866,7 @@ T["virt_ a fresh lease on the same canvas forgets predecessor history"] = functi
   assert(st.collapsed[st.sections[6].path],
     "the farthest section is collapsed, not protected by predecessor ticks")
 
-  virt.detach(lease2)
+  H.eq(virt.detach(lease2), true)
 end
 
 return T

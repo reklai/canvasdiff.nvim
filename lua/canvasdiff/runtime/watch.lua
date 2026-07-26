@@ -6,8 +6,18 @@ local source = require("canvasdiff.source")
 
 local W = {}
 
-local current = nil
+-- Filesystem/autocmd production belongs to the runtime domain. This internal
+-- owner is exposed only through the curated canvasdiff.runtime facade.
 local next_id = 0
+-- Authentication is lookup-only: weak keys cannot retain or select a lease,
+-- and ownership/lifetime still belongs exclusively to the Surface holding it.
+local lease_auth = setmetatable({}, { __mode = "k" })
+
+local function exact(lease)
+  return type(lease) == "table"
+    and lease_auth[lease] == true
+    and not lease.disposed
+end
 
 --- Owner callbacks are part of the synchronous reconcile contract. Do not
 --- protect them here: a broken refresh must be observable to a direct caller
@@ -23,7 +33,7 @@ end
 --- it. `alive` lets the owner add its own lifetime/generation fence without
 --- teaching this low-level module about App or Surface.
 local function is_active(lease)
-  if current ~= lease or lease.disposed then
+  if not exact(lease) then
     return false
   end
   local alive = lease.callbacks.alive
@@ -31,7 +41,7 @@ local function is_active(lease)
     return true
   end
   local ok, result = pcall(alive)
-  return ok and result and true or false
+  return ok and result and exact(lease) or false
 end
 
 local function close_handle(handle)
@@ -59,17 +69,16 @@ local function close_fs_handles(lease)
   end
 end
 
---- Tear down the current watch. When `expected` is supplied, it is an identity
---- guard: a delayed owner of lease A cannot stop replacement lease B.
-function W.stop(expected)
-  local lease = current
-  if not lease or (expected and expected ~= lease) then
+--- Tear down one exact watch lease. There is deliberately no unqualified
+--- process-global stop: each Surface owns and releases only its own producer.
+function W.stop(lease)
+  if not exact(lease) then
     return false
   end
 
   -- Invalidate every queued callback before the first teardown side effect.
+  lease_auth[lease] = nil
   lease.disposed = true
-  current = nil
 
   local timer = lease.timer
   local aug = lease.aug
@@ -77,9 +86,8 @@ function W.stop(expected)
   lease.aug = nil
   lease.last_error = nil
 
-  -- Delete the old event source before invoking handle methods: a fault-
-  -- injection handle may reentrantly start replacement B, reusing this shared
-  -- group ID. Deleting A's ID afterward would then tear down B's autocmds.
+  -- Delete the event source before invoking handle methods. A fault-injection
+  -- handle may reentrantly start another lease, which must remain independent.
   if aug then
     pcall(vim.api.nvim_del_augroup_by_id, aug)
   end
@@ -97,7 +105,7 @@ end
 --- Synchronously collect truth and reconcile one canvas. This operation has no
 --- UI dependencies: its owner receives the result and decides which consumers
 --- to refresh.
-function W.reconcile(state, callbacks)
+local function reconcile(state, callbacks, lease)
   callbacks = callbacks or {}
 
   local function fail(err)
@@ -111,6 +119,12 @@ function W.reconcile(state, callbacks)
 
   local desired, err = source.sections(
     state.root, lens.of(state), config.options.context)
+  -- Collection is an I/O boundary. The owner may die or explicitly stop this
+  -- exact lease while source.sections is running; never commit that stale
+  -- snapshot into its former canvas.
+  if lease and not is_active(lease) then
+    return false
+  end
   if not desired then
     -- Transactional failure: no canvas reconciliation and no success callback
     -- gets to observe a fabricated or half-refreshed state.
@@ -129,6 +143,10 @@ function W.reconcile(state, callbacks)
   end
   call(callbacks.on_change, state, result)
   return true, result
+end
+
+function W.reconcile(state, callbacks)
+  return reconcile(state, callbacks)
 end
 
 local refresh_fs_watches
@@ -171,28 +189,38 @@ local function mark_dirty(lease)
     pcall(function()
       timer:stop()
     end)
-  else
-    lease.timer = system.new_timer()
-    if not lease.timer then
+    if not is_active(lease) then
       return
     end
-    timer = lease.timer
+  else
+    timer = system.new_timer()
+    if not timer then
+      return
+    end
+    if not is_active(lease) then
+      close_handle(timer)
+      return
+    end
+    lease.timer = timer
   end
 
   -- There are two asynchronous boundaries here. The libuv callback and the
   -- scheduled main-loop callback each carry and validate the exact lease, so
-  -- replacement between those boundaries cannot redirect A's event into B.
+  -- owner invalidation between them cannot redirect A's event into peer B.
   local scheduled = vim.schedule_wrap(function()
     if not is_active(lease) then
       return
     end
-    local ok = W.reconcile(lease.state, lease_callbacks(lease))
+    local ok = reconcile(lease.state, lease_callbacks(lease), lease)
     if ok and is_active(lease) then
       -- Rebuild coverage only after a successful truth pass. On an invalid or
       -- deleted ref, the prior watcher set remains intact for recovery.
       refresh_fs_watches(lease)
     end
   end)
+  if not is_active(lease) then
+    return
+  end
 
   pcall(function()
     timer:start(lease.debounce_ms, 0, function()
@@ -213,6 +241,10 @@ local function watch_dir(lease, path, filter)
   if not handle then
     return
   end
+  if not is_active(lease) then
+    close_handle(handle)
+    return
+  end
 
   local ok, started = pcall(function()
     return handle:start(path, {}, function(_, filename, _)
@@ -225,7 +257,7 @@ local function watch_dir(lease, path, filter)
       mark_dirty(lease)
     end)
   end)
-  if not ok or not started then
+  if not ok or not started or not is_active(lease) then
     close_handle(handle)
     return
   end
@@ -260,13 +292,13 @@ refresh_fs_watches = function(lease)
   end
 end
 
---- Start watching `state`, replacing any previous singleton lease.
+--- Start one independent watch lease. The caller owns its exact teardown.
 function W.start(state, opts, callbacks)
-  W.stop()
   next_id = next_id + 1
 
   local lease = {
     id = next_id,
+    group_name = ("canvasdiff.watch.%d"):format(next_id),
     state = state,
     callbacks = callbacks or {},
     debounce_ms = (opts and opts.debounce_ms) or 200,
@@ -276,10 +308,15 @@ function W.start(state, opts, callbacks)
     last_error = nil,
     disposed = false,
   }
-  current = lease
+  lease_auth[lease] = true
 
   local ok, err = pcall(function()
-    lease.aug = vim.api.nvim_create_augroup("canvasdiff.watch", { clear = true })
+    local aug = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
+    if not is_active(lease) then
+      pcall(vim.api.nvim_del_augroup_by_id, aug)
+      error("watch owner became inactive during augroup creation", 0)
+    end
+    lease.aug = aug
     vim.api.nvim_create_autocmd("BufWritePost", {
       group = lease.aug,
       callback = function(ev)
@@ -312,6 +349,9 @@ function W.start(state, opts, callbacks)
       end,
     })
     refresh_fs_watches(lease)
+    if not is_active(lease) then
+      error("watch owner became inactive during start", 0)
+    end
   end)
   if not ok then
     W.stop(lease)

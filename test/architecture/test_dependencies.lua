@@ -4,6 +4,10 @@ local policy = require("architecture.policy")
 
 local T = {}
 
+local RUNTIME_FACADE = "canvasdiff.runtime"
+local VIRTUALIZER_OWNER = "canvasdiff.runtime.virtualizer"
+local WATCH_OWNER = "canvasdiff.runtime.watch"
+
 local function inspect_repo()
   return graph.inspect(graph.root)
 end
@@ -41,17 +45,18 @@ end
 T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.watch")
+  assert_inspected_module(inspection, WATCH_OWNER)
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.sidebar"] = true,
-    ["canvasdiff.virt"] = true,
+    [RUNTIME_FACADE] = true,
+    [VIRTUALIZER_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.watch" and forbidden[edge.to] then
+    if edge.from == WATCH_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
@@ -62,22 +67,44 @@ end
 T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.virt")
+  assert_inspected_module(inspection, VIRTUALIZER_OWNER)
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.sidebar"] = true,
-    ["canvasdiff.watch"] = true,
+    [RUNTIME_FACADE] = true,
+    [WATCH_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.virt" and forbidden[edge.to] then
+    if edge.from == VIRTUALIZER_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
 
   assert_no_errors(violations, "virtualizer must report shape changes through its owner")
+end
+
+T.architecture_runtime_internals_are_reached_only_through_the_facade = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+  assert_inspected_module(inspection, RUNTIME_FACADE)
+  assert_inspected_module(inspection, WATCH_OWNER)
+  assert_inspected_module(inspection, VIRTUALIZER_OWNER)
+
+  local internal = {
+    [WATCH_OWNER] = true,
+    [VIRTUALIZER_OWNER] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if internal[edge.to] and edge.from ~= RUNTIME_FACADE then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "runtime consumers must enter through canvasdiff.runtime")
 end
 
 T.architecture_status_column_has_no_peer_controller_edges = function()
@@ -87,10 +114,11 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
+    [RUNTIME_FACADE] = true,
+    [VIRTUALIZER_OWNER] = true,
+    [WATCH_OWNER] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.sidebar"] = true,
-    ["canvasdiff.virt"] = true,
-    ["canvasdiff.watch"] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -108,11 +136,12 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, "canvasdiff.hl")
 
   local forbidden = {
+    [RUNTIME_FACADE] = true,
+    [VIRTUALIZER_OWNER] = true,
+    [WATCH_OWNER] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.sidebar"] = true,
     ["canvasdiff.statuscol"] = true,
-    ["canvasdiff.virt"] = true,
-    ["canvasdiff.watch"] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -133,10 +162,11 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
     ["canvasdiff.hl"] = true,
     ["canvasdiff.jump"] = true,
     ["canvasdiff.input.motions"] = true,
+    [RUNTIME_FACADE] = true,
+    [VIRTUALIZER_OWNER] = true,
+    [WATCH_OWNER] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.statuscol"] = true,
-    ["canvasdiff.virt"] = true,
-    ["canvasdiff.watch"] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -155,11 +185,12 @@ T.architecture_jump_has_no_peer_controller_edges = function()
 
   local forbidden = {
     ["canvasdiff.hl"] = true,
+    [RUNTIME_FACADE] = true,
+    [VIRTUALIZER_OWNER] = true,
+    [WATCH_OWNER] = true,
     ["canvasdiff.scrollbar"] = true,
     ["canvasdiff.sidebar"] = true,
     ["canvasdiff.statuscol"] = true,
-    ["canvasdiff.virt"] = true,
-    ["canvasdiff.watch"] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do

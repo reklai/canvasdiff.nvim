@@ -4,7 +4,7 @@ local model = require("canvasdiff.diff")
 local motions = require("canvasdiff.input").motions
 local statuscol = require("canvasdiff.statuscol")
 local Surface = require("canvasdiff.Surface")
-local virt = require("canvasdiff.virt")
+local virt = require("canvasdiff.runtime").virtualizer
 local config = require("canvasdiff.config")
 
 local T = {}
@@ -94,7 +94,6 @@ end
 -- on. Navigation used to step over folded files, which quietly made folding mean
 -- "I am done with this" rather than just "collapsed".
 T["motions_ ]f [f land ON a folded-away section"] = function()
-  virt.detach()
   local st = canvas.open(three_sections(), {})
   set_folds(st, { ["b/"] = true })
 
@@ -117,7 +116,6 @@ end
 -- far-away section is bookkeeping, not the user putting it away, so navigation
 -- must still be able to land there.
 T["motions_ ]f stops at an auto-collapsed section"] = function()
-  virt.detach()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
   local lease = virt.attach(st, { enabled = false })
@@ -132,7 +130,6 @@ T["motions_ ]f stops at an auto-collapsed section"] = function()
 end
 
 T["motions_ ]f [f still move with every section folded"] = function()
-  virt.detach()
   local st = canvas.open(three_sections(), {})
   set_folds(st, { ["a/"] = true, ["b/"] = true, ["c/"] = true })
 
@@ -145,7 +142,6 @@ T["motions_ ]f [f still move with every section folded"] = function()
 end
 
 T["motions_ ]f counts every section, folded or not"] = function()
-  virt.detach()
   local st = canvas.open({
     big_section("a/one.txt", "a"),
     big_section("b/two.txt", "b"),
@@ -165,7 +161,6 @@ end
 -- "stay put", and it must mean the same in both of them. It briefly did not: the
 -- old stepping helpers clamped while the plain-index path used the count raw.
 T["motions_ count = 0 clamps to 1 in both goto_file and cycle"] = function()
-  virt.detach()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
 

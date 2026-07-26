@@ -1,5 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local fold = require("canvasdiff.diff").fold
+local system = require("canvasdiff.os")
 
 local M = {}
 
@@ -10,16 +11,19 @@ local M = {}
 -- `"user"` must survive virtualization and is the only kind session persists.
 -- The LRU's `tick`/`tick_of`, by contrast, describe one producer lifetime and
 -- therefore live on its opaque lease.
-local current = nil
 local next_id = 0
+-- Authentication is lookup-only: weak keys cannot retain or select a lease,
+-- and ownership/lifetime still belongs exclusively to the Surface holding it.
+local lease_auth = setmetatable({}, { __mode = "k" })
 
 local function exact(lease)
-  return lease ~= nil and current == lease and not lease.disposed
+  return type(lease) == "table"
+    and lease_auth[lease] == true
+    and not lease.disposed
 end
 
---- Add the owner's generation fence to the module's exact-lease check.
---- Recheck after `alive`: it is user code and may replace this lease
---- reentrantly before returning true.
+--- Add the owner's generation fence to the lease's disposed check. Recheck
+--- after `alive`: owner code may invalidate or detach this lease reentrantly.
 local function active(lease)
   if not exact(lease) then
     return false
@@ -49,19 +53,17 @@ local function close_timer(timer)
   end
 end
 
---- Exact, idempotent teardown. The optional no-argument form exists for test
---- resets and attach replacement; owners should pass their stored lease.
-function M.detach(expected)
-  local lease = current
-  if not lease or (expected and expected ~= lease) then
+--- Exact, idempotent teardown for one Surface-owned lease. There is no
+--- unqualified process-global detach and no peer lease can be affected.
+function M.detach(lease)
+  if not exact(lease) then
     return false
   end
 
   -- Invalidate first. Delete this exact group before handle methods: stop/close
-  -- are external calls and may reentrantly attach a replacement whose group
-  -- must not then be deleted by the old teardown.
+  -- are external calls and may reentrantly attach another independent lease.
+  lease_auth[lease] = nil
   lease.disposed = true
-  current = nil
   local aug = lease.aug
   local timer = lease.timer
   lease.aug = nil
@@ -119,7 +121,7 @@ local function publish(lease, state, changed)
   return changed
 end
 
---- Apply the auto-virtualization policy once. Only the exact current lease may
+--- Apply the auto-virtualization policy once. Only a live exact lease may
 --- mutate. Returns true exactly when canvas collapse state changed.
 function M.apply(lease, opts)
   if not active(lease) then
@@ -158,7 +160,7 @@ function M.apply(lease, opts)
       end
     end
     for _, path in ipairs(mine) do
-      if not exact(lease) then
+      if not active(lease) then
         return changed
       end
       local index = index_of_path(state, path)
@@ -171,7 +173,7 @@ function M.apply(lease, opts)
         state.collapsed[path] = nil
       end
       -- set_collapsed invokes state hooks synchronously; one can replace us.
-      if not exact(lease) then
+      if not active(lease) then
         return changed
       end
     end
@@ -188,6 +190,9 @@ function M.apply(lease, opts)
       bot0 = vim.fn.line("w$") - 1,
     }
   end)
+  if not active(lease) then
+    return changed
+  end
   local win_lo, win_hi = info.top0 - margin, info.bot0 + margin
 
   -- Classify on the original pre-splice rows so this pass's mutations cannot
@@ -210,13 +215,13 @@ function M.apply(lease, opts)
   -- Expand only this module's own in-window collapses. A user's collapse reads
   -- "user" and is never touched.
   for i, section in ipairs(state.sections) do
-    if not exact(lease) then
+    if not active(lease) then
       return changed
     end
     if in_window[i] and state.collapsed[section.path] == "auto" then
       canvas.set_collapsed(state, i, false)
       changed = true
-      if not exact(lease) then
+      if not active(lease) then
         return changed
       end
     end
@@ -237,7 +242,7 @@ function M.apply(lease, opts)
 
   local count = count_expanded()
   while count > max_expanded do
-    if not exact(lease) then
+    if not active(lease) then
       return changed
     end
     local best_i, best_tick, best_distance
@@ -259,7 +264,7 @@ function M.apply(lease, opts)
     canvas.set_collapsed(state, best_i, true, "auto")
     changed = true
     count = count - 1
-    if not exact(lease) then
+    if not active(lease) then
       return changed
     end
   end
@@ -281,8 +286,12 @@ local function mark_dirty(lease)
       return
     end
   else
-    timer = vim.uv.new_timer()
+    timer = system.new_timer()
     if not timer then
+      return
+    end
+    if not active(lease) then
+      close_timer(timer)
       return
     end
     lease.timer = timer
@@ -294,6 +303,9 @@ local function mark_dirty(lease)
     end
     M.apply(lease)
   end)
+  if not active(lease) then
+    return
+  end
   pcall(function()
     timer:start(50, 0, function()
       if not active(lease) then
@@ -306,17 +318,10 @@ end
 
 --- Install the scroll producer and run one immediate policy pass.
 function M.attach(state, opts, callbacks)
-  if current then
-    local predecessor = current
-    M.detach(predecessor)
-    if current then
-      error("virtualizer attach was superseded during predecessor teardown", 0)
-    end
-  end
-
   next_id = next_id + 1
   local lease = {
     id = next_id,
+    group_name = ("canvasdiff.virt.%d"):format(next_id),
     state = state,
     opts = opts or {},
     callbacks = callbacks or {},
@@ -326,10 +331,15 @@ function M.attach(state, opts, callbacks)
     tick_of = {},
     disposed = false,
   }
-  current = lease
+  lease_auth[lease] = true
 
   local ok, err = pcall(function()
-    lease.aug = vim.api.nvim_create_augroup("canvasdiff.virt", { clear = true })
+    local aug = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
+    if not active(lease) then
+      pcall(vim.api.nvim_del_augroup_by_id, aug)
+      error("virtualizer owner became inactive during augroup creation", 0)
+    end
+    lease.aug = aug
     vim.api.nvim_create_autocmd("WinScrolled", {
       group = lease.aug,
       callback = function(ev)
@@ -346,13 +356,13 @@ function M.attach(state, opts, callbacks)
       end,
     })
     M.apply(lease)
-    if not exact(lease) then
-      error("virtualizer attach was superseded during initial apply", 0)
+    if not active(lease) then
+      error("virtualizer owner became inactive during initial apply", 0)
     end
   end)
   if not ok then
-    -- Exact cleanup cannot tear down a replacement installed reentrantly by a
-    -- failing owner callback.
+    -- Exact cleanup cannot tear down a peer installed reentrantly by a failing
+    -- owner callback.
     M.detach(lease)
     error(err, 0)
   end

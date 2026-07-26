@@ -4,8 +4,9 @@ local scrollbar = require("canvasdiff.scrollbar")
 local session = require("canvasdiff.session")
 local sidebar = require("canvasdiff.sidebar")
 local statuscol = require("canvasdiff.statuscol")
-local virt = require("canvasdiff.virt")
-local watch = require("canvasdiff.watch")
+local runtime = require("canvasdiff.runtime")
+local virt = runtime.virtualizer
+local watch = runtime.watch
 
 local Surface = {}
 Surface.__index = Surface
@@ -266,12 +267,14 @@ function Surface:dispose(reason)
   -- half-dead Surface in the closing phase forever.
   attempt("watch.stop", function()
     local lease = self.controllers.watch
+    self.controllers.watch = nil
     if lease then
       watch.stop(lease)
     end
   end)
   attempt("virt.detach", function()
     local lease = self.controllers.virt
+    self.controllers.virt = nil
     if lease then
       virt.detach(lease)
     end

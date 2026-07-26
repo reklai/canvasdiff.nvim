@@ -1,5 +1,6 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
+local runtime = require("canvasdiff.runtime")
 local viewport = require("canvasdiff.diff").anchor
 
 local T = {}
@@ -49,7 +50,10 @@ local function controller_groups(prefix)
 end
 
 local function group_alive(name)
-  if name == "canvasdiff.hl" or name == "canvasdiff.sidebar" then
+  if name == "canvasdiff.hl"
+      or name == "canvasdiff.sidebar"
+      or name == "canvasdiff.virt"
+      or name == "canvasdiff.watch" then
     return #controller_groups(name) > 0
   end
   return pcall(vim.api.nvim_get_autocmds, { group = name })
@@ -67,9 +71,7 @@ end
 --- use. Normalize those test-only leftovers before characterizing the root
 --- lifecycle, so this file observes only the review it opens itself.
 local function reset_auxiliary_owners()
-  require("canvasdiff.watch").stop()
   require("canvasdiff.scrollbar").close()
-  require("canvasdiff.virt").detach()
   require("canvasdiff.statuscol").detach()
   for _, name in ipairs(controller_groups("canvasdiff.hl")) do
     pcall(vim.api.nvim_del_augroup_by_name, name)
@@ -478,11 +480,11 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
 
     local specs = {
       { name = "session.save", target = require("canvasdiff.session"), method = "save" },
-      { name = "watch.stop", target = require("canvasdiff.watch"), method = "stop" },
+      { name = "watch.stop", target = runtime.watch, method = "stop" },
       { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
       { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
-      { name = "virt.detach", target = require("canvasdiff.virt"), method = "detach" },
+      { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
       { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
 
@@ -548,9 +550,9 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local old_virt = assert(old.controllers.virt)
     local old_statuscol = assert(old.controllers.statuscol)
     local session = require("canvasdiff.session")
-    local watch = require("canvasdiff.watch")
+    local watch = runtime.watch
     local hl = require("canvasdiff.hl")
-    local virt = require("canvasdiff.virt")
+    local virt = runtime.virtualizer
     local statuscol = require("canvasdiff.statuscol")
 
     with_spies({
@@ -670,11 +672,11 @@ T["lifecycle_ one explicit close performs one complete teardown pass"] = functio
     local sidebar_lease = assert(ctx.surface.controllers.sidebar)
     local specs = {
       { name = "session.save", target = require("canvasdiff.session"), method = "save" },
-      { name = "watch.stop", target = require("canvasdiff.watch"), method = "stop" },
+      { name = "watch.stop", target = runtime.watch, method = "stop" },
       { name = "hl.detach", target = require("canvasdiff.hl"), method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.sidebar"), method = "close" },
       { name = "scrollbar.close", target = require("canvasdiff.scrollbar"), method = "close" },
-      { name = "virt.detach", target = require("canvasdiff.virt"), method = "detach" },
+      { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
       { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
     }
 

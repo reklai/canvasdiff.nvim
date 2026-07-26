@@ -2,7 +2,8 @@ local H = require("helpers")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local source = require("canvasdiff.source")
-local watch = require("canvasdiff.watch")
+local runtime = require("canvasdiff.runtime")
+local watch = runtime.watch
 local system = require("canvasdiff.os")
 local lens = model.lens
 
@@ -318,7 +319,7 @@ end
 T["watch_trigger BufWritePost reconciles after debounce"] = function()
   local root = fixture()
   local st = open_state(root)
-  watch.start(st, { debounce_ms = 20 })
+  local lease = watch.start(st, { debounce_ms = 20 })
 
   -- edit b.txt through a real buffer + :write, firing BufWritePost
   local abs = vim.fs.joinpath(root, "b.txt")
@@ -331,13 +332,13 @@ T["watch_trigger BufWritePost reconciles after debounce"] = function()
     return st.sections[1] and st.sections[1].new_text:find("b line 5 WRITTEN", 1, true) ~= nil
   end, 10)
   H.eq(ok, true, "debounced reconcile picked up the written change")
-  watch.stop()
+  H.eq(watch.stop(lease), true)
 end
 
 T["watch_trigger fs_event catches external writes at repo root"] = function()
   local root = fixture()
   local st = open_state(root)
-  watch.start(st, { debounce_ms = 20 })
+  local lease = watch.start(st, { debounce_ms = 20 })
 
   -- external write: no nvim buffer involved
   write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 7", "b line 7 EXTERNAL")))
@@ -346,7 +347,7 @@ T["watch_trigger fs_event catches external writes at repo root"] = function()
     return st.sections[1] and st.sections[1].new_text:find("b line 7 EXTERNAL", 1, true) ~= nil
   end, 10)
   H.eq(ok, true, "fs_event triggered a reconcile")
-  watch.stop()
+  H.eq(watch.stop(lease), true)
 end
 
 T["watch_reconcile composite ops above viewport keep visible text pinned"] = function()
@@ -550,21 +551,26 @@ end
 T["watch_start stops itself when the canvas buffer is wiped"] = function()
   local root = fixture()
   local st = open_state(root)
-  watch.start(st, { debounce_ms = 20 })
-  assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
+  local lease = watch.start(st, { debounce_ms = 20 })
+  assert(pcall(vim.api.nvim_get_autocmds, { group = lease.group_name }),
     "augroup exists while watching")
 
   vim.api.nvim_buf_delete(st.buf, { force = true })
 
-  local group_gone = not pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" })
+  local group_gone = not pcall(
+    vim.api.nvim_get_autocmds, { group = lease.group_name })
   H.eq(group_gone, true, "BufWipeout stopped the watch (augroup torn down)")
+  H.eq(lease.disposed, true)
+  H.eq(watch.stop(lease), false, "buffer teardown is exact and idempotent")
 end
 
 T["watch_trigger stop() really stops"] = function()
   local root = fixture()
   local st = open_state(root)
-  watch.start(st, { debounce_ms = 20 })
-  watch.stop()
+  local lease = watch.start(st, { debounce_ms = 20 })
+  H.eq(watch.stop(lease), true)
+  H.eq(watch.stop(nil), false, "unqualified teardown is not supported")
+  H.eq(watch.stop(lease), false, "stale exact teardown is idempotent")
 
   write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 9", "b line 9 IGNORED")))
   vim.wait(300, function() return false end, 50) -- give any stray timer a chance
@@ -572,12 +578,55 @@ T["watch_trigger stop() really stops"] = function()
     "no reconcile after stop")
 end
 
-T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = function()
+T["watch_lease alive callback cannot resurrect a stopped producer"] = function()
+  local root, st, lease
+  local ok, err = xpcall(function()
+    root = fixture()
+    st = open_state(root)
+    local armed = false
+    lease = watch.start(st, { debounce_ms = 1 }, {
+      alive = function()
+        if armed then
+          armed = false
+          H.eq(watch.stop(lease), true)
+          -- Deliberately forge the public flag after exact authentication was
+          -- revoked. A post-callback check must not mistake this shell for a
+          -- live producer and arm fresh resources on it.
+          lease.disposed = false
+        end
+        return true
+      end,
+    })
+
+    armed = true
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    H.eq(lease.timer, nil)
+    H.eq(lease.state, nil)
+    H.eq(watch.stop(lease), false)
+    H.eq(pcall(
+      vim.api.nvim_get_autocmds,
+      { group = lease.group_name }
+    ), false)
+  end, debug.traceback)
+
+  if lease then
+    pcall(watch.stop, lease)
+  end
+  if st and st.buf and vim.api.nvim_buf_is_valid(st.buf) then
+    pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
+  end
+  if root then
+    vim.fn.delete(root, "rf")
+  end
+  assert(ok, err)
+end
+
+T["watch_lease concurrent owners and stale callbacks remain isolated"] = function()
   local real_new_timer = system.new_timer
   local real_new_fs_event = system.new_fs_event
   local real_schedule_wrap = vim.schedule_wrap
   local timers, events, scheduled = {}, {}, {}
-  local roots, states = {}, {}
+  local roots, states, leases = {}, {}, {}
 
   local function fake_handle(bucket)
     local handle = {
@@ -629,10 +678,11 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     local lease_a = watch.start(states[1], { debounce_ms = 1 }, {
       alive = function() return true end,
     })
+    leases[#leases + 1] = lease_a
     local a_events = vim.list_slice(events)
 
-    -- Cross both asynchronous boundaries while A is current, but hold the
-    -- scheduled reconcile until after B replaces it.
+    -- Cross both asynchronous boundaries while A is live, but hold the
+    -- scheduled reconcile across the creation and teardown of a peer B.
     vim.api.nvim_exec_autocmds("FocusGained", {})
     H.eq(#timers, 1, "A owns one debounce timer")
     local timer_a = timers[1]
@@ -648,17 +698,59 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
         b_changes = b_changes + 1
       end,
     })
+    leases[#leases + 1] = lease_b
 
-    H.eq(timer_a.stopped, 1, "replacement stops A's timer exactly once")
-    H.eq(timer_a.closed, 1, "replacement closes A's timer exactly once")
+    assert(lease_a.group_name ~= lease_b.group_name,
+      "concurrent watches own distinct augroup names")
+    assert(lease_a.aug ~= lease_b.aug,
+      "concurrent watches own distinct augroup ids")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = lease_a.group_name }),
+      "starting B does not delete A's augroup")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = lease_b.group_name }),
+      "B's own augroup is installed")
+    H.eq(lease_a.disposed, false, "starting B does not implicitly dispose A")
+    H.eq(timer_a.stopped, 0, "starting B does not stop A's timer")
+    H.eq(timer_a.closed, 0, "starting B does not close A's timer")
     for _, handle in ipairs(a_events) do
-      H.eq(handle.stopped, 1, "replacement stops every A fs handle")
-      H.eq(handle.closed, 1, "replacement closes every A fs handle")
+      H.eq(handle.stopped, 0, "starting B leaves every A fs handle live")
+      H.eq(handle.closed, 0, "starting B leaves every A fs handle open")
     end
 
-    H.eq(watch.stop(lease_a), false, "a stale owner cannot stop current lease B")
-    assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
-      "B's autocmd group survives stop(A)")
+    local forged = {
+      disposed = false,
+      aug = lease_b.aug,
+      timer = timer_a,
+      fs_handles = a_events,
+      callbacks = {},
+      state = states[2],
+    }
+    H.eq(watch.stop(forged), false,
+      "a field-shaped table is not an authenticated watch lease")
+    H.eq(forged.disposed, false, "rejected forgery is not mutated")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = lease_b.group_name }),
+      "forged teardown cannot delete a live lease's augroup")
+    H.eq(timer_a.stopped, 0, "forged teardown cannot stop another lease's timer")
+    H.eq(timer_a.closed, 0, "forged teardown cannot close another lease's timer")
+    for _, handle in ipairs(a_events) do
+      H.eq(handle.stopped, 0,
+        "forged teardown cannot stop another lease's fs handles")
+      H.eq(handle.closed, 0,
+        "forged teardown cannot close another lease's fs handles")
+    end
+
+    H.eq(watch.stop(lease_a), true, "A's owner tears down only A")
+    H.eq(watch.stop(lease_a), false, "stale exact stop(A) is idempotent")
+    H.eq(watch.stop(nil), false, "there is no unqualified global stop")
+    H.eq(pcall(vim.api.nvim_get_autocmds, { group = lease_a.group_name }), false,
+      "A's exact augroup is deleted")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = lease_b.group_name }),
+      "B's augroup survives stop(A)")
+    H.eq(timer_a.stopped, 1)
+    H.eq(timer_a.closed, 1)
+    for _, handle in ipairs(a_events) do
+      H.eq(handle.stopped, 1, "stop(A) stops every A fs handle")
+      H.eq(handle.closed, 1, "stop(A) closes every A fs handle")
+    end
 
     local timers_before_stale_fs = #timers
     a_events[1].callback(nil, "b.txt", {})
@@ -668,7 +760,7 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     scheduled[1]()
     H.eq(b_changes, 0, "A's queued timer callback cannot reconcile B")
 
-    -- B remains fully functional after both stale attacks.
+    -- B remains fully functional after every stale-A attack.
     vim.api.nvim_exec_autocmds("FocusGained", {})
     H.eq(#timers, 2, "the live B autocmd still arms its own timer")
     local timer_b = timers[2]
@@ -680,12 +772,13 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     H.eq(watch.stop(lease_b), true)
     H.eq(watch.stop(lease_b), false, "stop(B) is idempotent")
 
-    -- Break teardown deliberately: A handle method starts D while C is only
-    -- part-way through stop(). C must already have detached its augroup, or D
-    -- can reuse C's shared-name group ID and then lose it when C resumes.
+    -- Break teardown deliberately: a C handle method starts independent D
+    -- while C is only part-way through stop(). C must already have detached
+    -- its exact augroup, and its resumed cleanup must not touch D.
     local lease_c = watch.start(states[1], { debounce_ms = 1 }, {
       alive = function() return true end,
     })
+    leases[#leases + 1] = lease_c
     vim.api.nvim_exec_autocmds("FocusGained", {})
     local timer_c = timers[#timers]
     local lease_d
@@ -693,11 +786,14 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
       lease_d = watch.start(states[2], { debounce_ms = 1 }, {
         alive = function() return true end,
       })
+      leases[#leases + 1] = lease_d
     end
 
     H.eq(watch.stop(lease_c), true)
-    assert(lease_d, "the injected timer stop started replacement D")
-    assert(pcall(vim.api.nvim_get_autocmds, { group = "canvasdiff.watch" }),
+    assert(lease_d, "the injected timer stop started independent D")
+    H.eq(pcall(vim.api.nvim_get_autocmds, { group = lease_c.group_name }), false,
+      "C's group was deleted before handle teardown")
+    assert(pcall(vim.api.nvim_get_autocmds, { group = lease_d.group_name }),
       "C's resumed teardown cannot delete reentrant replacement D's group")
 
     local timers_before_d = #timers
@@ -717,7 +813,9 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     end
   end, debug.traceback)
 
-  watch.stop()
+  for _, lease in ipairs(leases) do
+    pcall(watch.stop, lease)
+  end
   system.new_timer = real_new_timer
   system.new_fs_event = real_new_fs_event
   vim.schedule_wrap = real_schedule_wrap
@@ -727,6 +825,57 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     end
   end
   for _, root in ipairs(roots) do
+    vim.fn.delete(root, "rf")
+  end
+  assert(ok, err)
+end
+
+T["watch_lease invalidation during collection prevents stale reconcile"] = function()
+  local real_sections = source.sections
+  local root, st, lease
+
+  local ok, err = xpcall(function()
+    root = fixture()
+    st = open_state(root)
+    local before = st.sections[1].new_text
+    write_file(root, "b.txt",
+      bigtext(80, "b"):gsub("b line 12", "b line 12 STALE"))
+
+    local alive = true
+    local collected = false
+    local changes = 0
+    lease = watch.start(st, { debounce_ms = 1 }, {
+      alive = function() return alive end,
+      on_change = function() changes = changes + 1 end,
+    })
+
+    source.sections = function(...)
+      local desired, collect_err = real_sections(...)
+      -- Simulate the Surface generation changing while collection is outside
+      -- the controller. The returned snapshot must not cross back into canvas.
+      alive = false
+      collected = true
+      return desired, collect_err
+    end
+
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    assert(vim.wait(1000, function() return collected end, 10),
+      "the injected collection boundary ran")
+    H.eq(changes, 0, "an invalidated lease publishes no owner change")
+    H.eq(st.sections[1].new_text, before,
+      "a snapshot collected after owner invalidation is never reconciled")
+    H.eq(lease.disposed, false,
+      "owner invalidation fences work without process-global teardown")
+  end, debug.traceback)
+
+  source.sections = real_sections
+  if lease then
+    pcall(watch.stop, lease)
+  end
+  if st and st.buf and vim.api.nvim_buf_is_valid(st.buf) then
+    pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
+  end
+  if root then
     vim.fn.delete(root, "rf")
   end
   assert(ok, err)

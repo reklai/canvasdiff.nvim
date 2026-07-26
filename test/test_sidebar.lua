@@ -3,7 +3,8 @@ local sidebar = require("canvasdiff.sidebar")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
-local virt = require("canvasdiff.virt")
+local runtime = require("canvasdiff.runtime")
+local virt = runtime.virtualizer
 local motions = require("canvasdiff.input").motions
 
 local T = {}
@@ -460,7 +461,7 @@ T["sidebar_cycle works without a sidebar open"] = function()
 end
 
 T["sidebar_integration reconcile refreshes the tree"] = function()
-  local watch = require("canvasdiff.watch")
+  local watch = runtime.watch
   local root = H.git_fixture({
     committed = { ["m/a.txt"] = bigtext(40, "a") },
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
@@ -764,7 +765,6 @@ T["sidebar_fold folding the section you are reading lands on its placeholder"] =
 end
 
 T["sidebar_fold the tree marks what you folded, but not virt's own work"] = function()
-  virt.detach()
   local st, side_lease = open_ab()
 
   -- Collapse b/three.txt by hand: its tree row should say so, otherwise ]f

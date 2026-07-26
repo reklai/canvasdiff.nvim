@@ -1,7 +1,7 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local virt = require("canvasdiff.virt")
+local virt = require("canvasdiff.runtime").virtualizer
 local session = require("canvasdiff.session")
 local config = require("canvasdiff.config")
 local system = require("canvasdiff.os")
@@ -111,7 +111,6 @@ local function in_repo(root, opts, fn)
   end)
   vim.api.nvim_set_current_dir(orig_cwd)
   config.setup({})
-  virt.detach()
   cleanup(root)
   assert(ok, err)
   assert(close_ok, close_err)
@@ -156,7 +155,6 @@ end
 -- --- folds ---------------------------------------------------------------
 
 local function open_ab(root)
-  virt.detach()
   local st = canvas.open({
     big_section("a/one.txt", "a"),
     big_section("a/two.txt", "b"),
@@ -344,7 +342,6 @@ end
 
 T["session_ save and load round-trip the payload"] = function()
   local root = H.tmpdir()
-  virt.detach() -- reset any current lease before this isolated session state
 
   local st = canvas.open({
     big_section("a/one.txt", "a"),
@@ -417,7 +414,6 @@ end
 
 T["session_ restore reapplies collapse and view semantically"] = function()
   local root = H.tmpdir()
-  virt.detach()
 
   local function three_sections()
     return {
@@ -463,7 +459,6 @@ end
 
 T["session_ restore survives a changed diff"] = function()
   local root = H.tmpdir()
-  virt.detach()
 
   local old = bigtext(60, "z")
   local function new_text(prefix_count)
@@ -526,7 +521,6 @@ end
 
 T["session_ auto-collapsed sections are not persisted"] = function()
   local root = H.tmpdir()
-  virt.detach()
 
   local st = canvas.open({
     big_section("a/one.txt", "a"),
@@ -560,7 +554,6 @@ end
 
 T["session_ restored user collapse survives virt's auto-set and persists"] = function()
   local root = H.tmpdir()
-  virt.detach()
 
   local st = canvas.open({
     big_section("a/one.txt", "a"),

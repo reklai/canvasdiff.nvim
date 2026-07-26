@@ -146,10 +146,11 @@ T["root_ setup presents config diagnostics as errors"] = function()
 end
 
 T["root_ Surface never issues unqualified controller teardown"] = function()
-  local watch = require("canvasdiff.watch")
+  local runtime = require("canvasdiff.runtime")
+  local watch = runtime.watch
   local hl = require("canvasdiff.hl")
   local sidebar = require("canvasdiff.sidebar")
-  local virt = require("canvasdiff.virt")
+  local virt = runtime.virtualizer
   local statuscol = require("canvasdiff.statuscol")
   local real_stop = watch.stop
   local real_hl_detach = hl.detach
@@ -190,13 +191,13 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
       "this Surface acquired no status-column lease")
     H.eq(surface:dispose("test"), true)
     H.eq(stops, 0,
-      "a lease-less owner must not translate nil into stop-the-current-watch")
+      "a lease-less owner must not attempt an unqualified watch teardown")
     H.eq(hl_detaches, 0,
       "a lease-less owner must not detach the current highlighter")
     H.eq(sidebar_closes, 0,
       "a lease-less owner must not close the current sidebar")
     H.eq(detaches, 0,
-      "a lease-less owner must not translate nil into detach-the-current-virtualizer")
+      "a lease-less owner must not attempt an unqualified virtualizer teardown")
     H.eq(statuscol_detaches, 0,
       "a lease-less owner must not detach the current status-column controller")
   end, debug.traceback)

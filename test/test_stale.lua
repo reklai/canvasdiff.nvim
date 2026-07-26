@@ -11,8 +11,9 @@ local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local source = require("canvasdiff.source")
-local watch = require("canvasdiff.watch")
-local virt = require("canvasdiff.virt")
+local runtime = require("canvasdiff.runtime")
+local watch = runtime.watch
+local virt = runtime.virtualizer
 local fold = model.fold
 
 local T = {}
@@ -33,7 +34,6 @@ end
 
 --- Repo with src/a.txt and top.txt committed and both modified in the worktree.
 local function open_fixture()
-  virt.detach()
   local root = H.git_fixture({
     committed = { ["src/a.txt"] = bigtext(40, "a"), ["top.txt"] = bigtext(40, "t") },
     worktree = {
@@ -50,7 +50,6 @@ end
 --- the ~22-row headless window, so virt's collapse pass actually has a fully
 --- out-of-window section to evict.
 local function open_tall_fixture()
-  virt.detach()
   local function tall(tag)
     local lines = vim.split(bigtext(80, tag), "\n", { plain = true })
     for i = 10, 70, 10 do

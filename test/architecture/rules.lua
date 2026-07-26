@@ -33,8 +33,6 @@ R.legacy_paths = {
   "lua/canvasdiff/sidebar.lua",
   "lua/canvasdiff/statuscol.lua",
   "lua/canvasdiff/util.lua",
-  "lua/canvasdiff/virt.lua",
-  "lua/canvasdiff/watch.lua",
 }
 
 -- Immutable upper bound for the transition. Keeping this separate from the
