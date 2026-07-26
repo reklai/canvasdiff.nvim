@@ -57,9 +57,6 @@ function M.text_for(lnum)
     if entry.new_lnum then
       return ("%4d "):format(entry.new_lnum)
     end
-    if entry.kind == "del" then
-      return "   · "
-    end
     return "     "
   end)
   if not ok then

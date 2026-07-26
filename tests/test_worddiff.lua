@@ -11,7 +11,10 @@ local function section(old_lines, new_lines)
 end
 
 T["word_marks highlight only the changed span of a paired line"] = function()
-  -- entries: file_hdr(1) hunk_hdr(2) ctx(3) del(4) add(5) ctx(6..8)
+  -- entries: file_hdr(1) hunk_hdr(2) ctx(3) add(4, ghosting the deleted line) ctx(5..7).
+  -- Deletions are no longer rows, so only the ADD side gets marks: extmarks cannot be
+  -- placed inside virtual text, so the ghost renders whole and the add side carries the
+  -- "what it became" detail. See the note in worddiff.section_marks.
   local s = section(
     { "local a = 1", "local b = 2", "local c = 3", "local d = 4", "local e = 5" },
     { "local a = 1", "local b = 20 -- changed", "local c = 3", "local d = 4", "local e = 5" }
@@ -21,10 +24,12 @@ T["word_marks highlight only the changed span of a paired line"] = function()
   -- and produces hunks for "2"→"2" (row 3 and 4, cols 11-12) and insertion of
   -- "0 -- changed" (row 4, cols 12-24). Together they cover bytes 10-23.
   H.eq(marks, {
-    { row = 3, col = 11, end_col = 12, group = "GalleyWordDel", priority = 105 },
-    { row = 4, col = 11, end_col = 12, group = "GalleyWordAdd", priority = 105 },
-    { row = 4, col = 12, end_col = 24, group = "GalleyWordAdd", priority = 105 },
+    { row = 3, col = 11, end_col = 12, group = "GalleyWordAdd", priority = 105 },
+    { row = 3, col = 12, end_col = 24, group = "GalleyWordAdd", priority = 105 },
   })
+  for _, m in ipairs(marks) do
+    H.eq(m.group, "GalleyWordAdd", "no GalleyWordDel marks: there is no del row to put one on")
+  end
 end
 
 T["word_marks are byte-correct on multibyte lines"] = function()
@@ -33,13 +38,9 @@ T["word_marks are byte-correct on multibyte lines"] = function()
   -- chars: x,' ',=,' ',',h,é,l,l,o,' — the change is char 7 (é -> á), whose
   -- 0-based source byte offset is 6. Mark contract: col = source byte + 1
   -- (the rendered prefix), so col = 7; é/á are 2 UTF-8 bytes, so end_col = 9.
-  H.eq(#marks, 2)
-  local del, add = marks[1], marks[2]
-  if del.group == "GalleyWordAdd" then del, add = add, del end
-  H.eq(del.group, "GalleyWordDel")
+  H.eq(#marks, 1, "add side only -- the deleted line is virtual and cannot hold a mark")
+  local add = marks[1]
   H.eq(add.group, "GalleyWordAdd")
-  H.eq(del.col, 7)
-  H.eq(del.end_col, 9)  -- é is 2 bytes
   H.eq(add.col, 7)
   H.eq(add.end_col, 9)  -- á is 2 bytes
 end

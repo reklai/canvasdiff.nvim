@@ -381,6 +381,74 @@ return {
 
     vim.fn.delete(root, "rf")
   end,
+  -- The result view: the canvas shows the file as it WILL be. Deletions are drawn as
+  -- virtual lines rather than buffer rows, so every remaining row maps 1:1 to a real
+  -- file line.
+  --
+  -- The payoff assertion is the last one. jump.enter's target_lnum walks FORWARD off a
+  -- row with no new_lnum to find a line it can use -- so with deletions as rows,
+  -- pressing Enter on one silently landed you on a different line than the one under
+  -- your cursor. Measured on this repo: 897 of 6999 rows behaved that way. Here Enter
+  -- lands exactly where you pointed, and that is checked against the real file's
+  -- content rather than just a line number.
+  ["e2e: deletions are ghosts, and Enter lands on the row you pointed at"] = function()
+    local root = H.git_fixture({
+      committed = {
+        ["a.lua"] = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+        ["gone.txt"] = "bye1\nbye2\n",
+      },
+      worktree = {
+        ["a.lua"] = "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\n",
+        ["gone.txt"] = false, -- deleted outright
+      },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+    local text = table.concat(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false), "\n")
+
+    assert(not text:find("-three", 1, true),
+      "the replaced line must not be a buffer row any more")
+    assert(text:find("+THREE", 1, true), "its replacement is a real row")
+
+    -- It is rendered, as a virt_lines ghost above the row that replaced it.
+    local ghosts = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
+      if m[4] and m[4].virt_lines then
+        for _, vl in ipairs(m[4].virt_lines) do
+          ghosts[#ghosts + 1] = { row = m[2] + 1, text = vl[1][1], hl = vl[1][2] }
+        end
+      end
+    end
+    H.eq(#ghosts, 1, "exactly one ghost, for the one replaced line")
+    H.eq(ghosts[1].text, "-three", "carrying the old content, still prefixed")
+    H.eq(ghosts[1].hl, "GalleyGhost", "in its own group, so it can be dimmed alone")
+
+    -- A file with no new side keeps deletions as REAL rows: a result view of it would
+    -- be empty, and its whole content would become unyankable virtual text.
+    assert(text:find("-bye1", 1, true) and text:find("-bye2", 1, true),
+      "a wholly-deleted file still renders its lines as rows")
+
+    -- The payoff.
+    local trow
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+      if l == "+THREE" then trow = i end
+    end
+    assert(trow, "sanity: the replacement row is on the canvas")
+    vim.api.nvim_win_set_cursor(cwin, { trow, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    assert(vim.api.nvim_buf_get_name(0):match("a%.lua"), "Enter opened the file")
+    H.eq(vim.api.nvim_win_get_cursor(0)[1], 3, "on the line the cursor was on")
+    H.eq(vim.api.nvim_buf_get_lines(0, 2, 3, false)[1], "THREE",
+      "and that line really is the one we pointed at in the canvas")
+
+    vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
+    H.eq(vim.api.nvim_get_current_buf(), cbuf, "and the round trip still works")
+    fm.close()
+    vim.fn.delete(root, "rf")
+  end,
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh module instance so its module-level `state` is nil,
     -- regardless of what earlier test cases in this process did.

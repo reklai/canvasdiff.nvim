@@ -6,14 +6,16 @@ local canvas = require("galley.canvas")
 local T = {}
 
 T["scroll_kinds flattens sections in render order"] = function()
-  -- one modified line, context 3: file_hdr, hunk_hdr, ctx, del, add, ctx, ctx, ctx
+  -- one modified line, context 3. The del is no longer a row -- it rides on the add as
+  -- a ghost -- so that row reports "mod", which the density pass counts as add AND del.
+  -- Without that the minimap would lose every trace of deletion.
   local s = model.build_section("a.txt",
     "l1\nl2\nl3\nl4\nl5\n", "l1\nl2x\nl3\nl4\nl5\n", "M")
   local kinds = scrollbar.line_kinds({ s, s })
-  H.eq(#kinds, 16)
-  H.eq(vim.list_slice(kinds, 1, 8),
-    { "hdr", "ctx", "ctx", "del", "add", "ctx", "ctx", "ctx" })
-  H.eq(kinds[9], "hdr")
+  H.eq(#kinds, 14)
+  H.eq(vim.list_slice(kinds, 1, 7),
+    { "hdr", "ctx", "ctx", "mod", "ctx", "ctx", "ctx" })
+  H.eq(kinds[8], "hdr")
 end
 
 T["scroll_column buckets density and file boundaries"] = function()

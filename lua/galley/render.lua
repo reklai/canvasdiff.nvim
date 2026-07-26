@@ -42,6 +42,32 @@ function R.placeholder(section)
   return "▸ " .. section.path .. ("  (%d hunks, +%d −%d)"):format(section.nhunks, section.adds, section.dels)
 end
 
+--- `virt_lines` chunk spec for an entry's deleted lines, or nil when it has none.
+---
+--- `which` is "ghosts" (deletions that came BEFORE this row) or "ghosts_after" (ones
+--- with no row after them at all -- a delete-only hunk, or end of file).
+---
+--- Shape is what nvim_buf_set_extmark wants: a list of lines, each a list of
+--- `{ text, hl }` chunks. One chunk per line here, so a deleted line renders whole.
+--- Intra-line word-diff on the ghost side is deliberately NOT attempted: extmarks
+--- cannot reach into virtual text, so it would mean splitting each ghost into
+--- unchanged/changed/unchanged chunks at render time. The ADD side keeps its
+--- word-diff marks, which is the half that says what the code became.
+---
+--- Keeps the `-` prefix so a ghost still reads as a deletion at a glance, and so the
+--- column of content lines up with the ` `/`+` rows around it.
+function R.ghost_lines(entry, which)
+  local ghosts = entry and entry[which or "ghosts"]
+  if not ghosts or #ghosts == 0 then
+    return nil
+  end
+  local lines = {}
+  for i, g in ipairs(ghosts) do
+    lines[i] = { { PREFIX.del .. (g.content or ""), "GalleyGhost" } }
+  end
+  return lines
+end
+
 function R.section_hl(section)
   local marks = {}
   for i, e in ipairs(section.entries) do

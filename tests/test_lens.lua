@@ -179,6 +179,27 @@ local function open_lens(root, l)
   st.base = lens.to_base(l)
   return st
 end
+
+T["lens_staged the canvas renders index vs HEAD, which it never could before"] = function()
+  local root = partly_staged()
+  local st = open_lens(root, lens.get("staged"))
+  H.eq(#st.sections, 1)
+  H.eq(st.sections[1].old_text, "one\n")
+  H.eq(st.sections[1].new_text, "two\n")
+  local lines = vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)
+  local body = table.concat(lines, "\n")
+  assert(body:find("+two", 1, true), "the staged line arrives as a real row: " .. body)
+  -- HEAD's line going away is a GHOST now, not a buffer row, so it is not in the text.
+  -- Assert it on the model instead, which is where it lives.
+  local ghosted = {}
+  for _, e in ipairs(st.sections[1].entries) do
+    for _, g in ipairs(e.ghosts or {}) do ghosted[#ghosted + 1] = g.content end
+    for _, g in ipairs(e.ghosts_after or {}) do ghosted[#ghosted + 1] = g.content end
+  end
+  H.eq(ghosted, { "one" }, "and HEAD's line is carried as a ghost")
+  vim.fn.delete(root, "rf")
+end
+
 -- The index is not a file, so <CR> must decline rather than drop you into a buffer
 -- whose content is NOT what the canvas is showing.
 T["lens_staged jump declines and names the way out"] = function()

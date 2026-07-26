@@ -26,6 +26,7 @@ local canvas_buf = nil
 
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyFileHeader", { link = "Title", default = true })
+  vim.api.nvim_set_hl(0, "GalleyGhost", { link = "DiffDelete", default = true })
   vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
   vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
 end
@@ -105,6 +106,33 @@ local function apply_section_hl(buf, start_row, section, collapsed)
       hl_eol = true,
       priority = 100,
     })
+  end
+
+  -- Deleted lines, drawn as virtual lines rather than buffer rows. They cost zero
+  -- buffer lines, which is the whole reason the result view leaves every piece of row
+  -- arithmetic in this file untouched -- see the note in model.build_section's `push`.
+  --
+  -- Attached here rather than at splice time because this function already runs per
+  -- section on every render_all AND every replace_section, and returns its ids for
+  -- precise deletion. A ghost created anywhere else would survive the section it
+  -- belongs to and end up floating over the next file's diff.
+  for idx, e in ipairs(section.entries) do
+    local row = start_row + idx - 1
+    local above = render.ghost_lines(e, "ghosts")
+    if above then
+      ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
+        virt_lines = above,
+        virt_lines_above = true,
+        priority = 100,
+      })
+    end
+    local below = render.ghost_lines(e, "ghosts_after")
+    if below then
+      ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
+        virt_lines = below,
+        priority = 100,
+      })
+    end
   end
   return ids
 end

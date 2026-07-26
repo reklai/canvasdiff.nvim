@@ -18,6 +18,13 @@ function S.line_kinds(sections, hidden)
       for _, e in ipairs(section.entries) do
         if e.kind == "file_hdr" then
           kinds[#kinds + 1] = "hdr"
+        elseif e.ghosts or e.ghosts_after then
+          -- Deletions are not rows any more -- they ride on the row that follows them
+          -- as virtual lines. Without this branch the minimap would lose every trace
+          -- of deletion density, because there is no "del" row left to count. "mod"
+          -- means this row carries both: a replaced line reads as add AND del, which
+          -- is what it actually is.
+          kinds[#kinds + 1] = "mod"
         elseif e.kind == "add" or e.kind == "del" then
           kinds[#kinds + 1] = e.kind
         else
@@ -52,6 +59,11 @@ function S.column(kinds, height, top0, bot0)
         has_add = true
       elseif k == "del" then
         has_del = true
+      elseif k == "mod" then
+        -- One row carrying both facts: an added line with deleted lines ghosted above
+        -- it. Counting it as add-only would make every modification look like pure
+        -- growth on the minimap.
+        has_add, has_del = true, true
       end
     end
 
