@@ -31,6 +31,45 @@ T.architecture_layout_uses_only_the_singular_test_root = function()
   assert_no_errors(errors)
 end
 
+-- Tests are grouped by INTENT, because intent is what tells you how to read a
+-- failure: a unit failure is a logic bug, an integration failure is a wiring
+-- bug, a fault failure is an invariant lost under injected hostility. A file
+-- sitting loose at the test root has no such answer, so the layout refuses it.
+T.architecture_layout_every_test_declares_its_intent = function()
+  local SUITES = {
+    architecture = true,
+    e2e = true,
+    fault = true,
+    integration = true,
+    performance = true,
+    unit = true,
+  }
+  local errors = {}
+  local seen = {}
+
+  for _, file in ipairs(graph.source_files(graph.root)) do
+    local rel = file.rel
+    if rel:match("^test/") and rel:match("/test_[^/]+%.lua$") then
+      local suite, basename = rel:match("^test/([^/]+)/(test_[^/]+%.lua)$")
+      if not suite or not SUITES[suite] then
+        errors[#errors + 1] = "test file outside an intent group: " .. rel
+      else
+        local previous = seen[basename]
+        if previous then
+          errors[#errors + 1] = ("two intent groups claim %s: %s and %s")
+            :format(basename, previous, suite)
+        end
+        seen[basename] = suite
+      end
+    elseif rel:match("^test/test_[^/]+%.lua$") then
+      errors[#errors + 1] = "test file left at the test root: " .. rel
+    end
+  end
+
+  assert(next(seen) ~= nil, "sanity: some grouped test files exist")
+  assert_no_errors(errors)
+end
+
 T.architecture_layout_legacy_ledger_is_sorted_unique_and_exact = function()
   local files = source_set()
   local actual = {}

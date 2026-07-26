@@ -38,7 +38,7 @@ T["identity_ clean runtime exposes only CanvasDiff"] = function()
   local retired = "gal" .. "ley"
   local retired_title = "Gal" .. "ley"
   local plugin = vim.fs.joinpath(
-    vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2))),
+    H.project_root,
     "plugin",
     "canvasdiff.lua"
   )

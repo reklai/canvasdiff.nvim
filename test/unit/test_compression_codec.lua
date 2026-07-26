@@ -36,10 +36,8 @@ local function injected(driver)
 end
 
 T["compression_codec_ module load is editor-free and does not probe FFI"] = function()
-  local root = vim.fs.dirname(vim.fs.dirname(
-    vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
   local path = vim.fs.joinpath(
-    root,
+    H.project_root,
     "lua",
     "canvasdiff",
     "canvas",

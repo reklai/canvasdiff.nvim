@@ -1,5 +1,14 @@
 local H = {}
 
+--- Absolute path of the repository checkout.
+---
+--- Derived from this file rather than from each caller, because helpers.lua
+--- stays at the test root while test files live in intent-named subdirectories:
+--- a caller computing `dirname(dirname(self))` would silently resolve to
+--- `test/` the moment it moved one level deeper.
+H.project_root = vim.fs.dirname(vim.fs.dirname(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
+
 function H.tmpdir()
   local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_" .. vim.uv.hrtime())
   vim.fn.mkdir(dir, "p")

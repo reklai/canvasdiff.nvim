@@ -4,8 +4,7 @@ local sidebar = require("canvasdiff.ui").sidebar
 -- E2E cases deliberately change cwd and open real files from throwaway repos.
 -- Restore a path that outlives every fixture before removing one: deleting the
 -- process cwd makes later vim.fs calls order-dependent.
-local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
-  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
+local PROJECT_ROOT = H.project_root
 
 local cleanup_buf
 

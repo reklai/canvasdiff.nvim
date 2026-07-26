@@ -189,9 +189,7 @@ end
 
 T["cmd_plan the input domain reaches neither UI nor the root facade"] = function()
   local source = assert(io.open(
-    vim.fs.joinpath(vim.fs.dirname(vim.fs.dirname(
-      vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))),
-      "lua/canvasdiff/input/command.lua"), "rb"))
+    vim.fs.joinpath(H.project_root, "lua/canvasdiff/input/command.lua"), "rb"))
   local text = source:read("*a")
   source:close()
   assert(not text:find('require("canvasdiff.ui")', 1, true),

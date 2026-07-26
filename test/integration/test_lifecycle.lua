@@ -6,8 +6,7 @@ local viewport = require("canvasdiff.diff").anchor
 
 local T = {}
 
-local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
-  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
+local PROJECT_ROOT = H.project_root
 
 local RESOURCE_GROUPS = {
   "canvasdiff.watch",

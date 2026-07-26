@@ -655,7 +655,15 @@ What's here today:
 - Session persistence: which files and directories you folded, and
   semantic scroll/cursor position are remembered per repo across restarts.
 
-## Roadmap
+## Contributing
 
-All phases from the original plan (virtualization, session persistence) are
-now implemented; there's no pending roadmap.
+[`docs/architecture.md`](docs/architecture.md) is the map: which module may
+call which, who owns live state, and which gate refuses a change that breaks
+either rule. Tests are grouped by intent, and every boundary rule has an
+executable counterpart:
+
+```sh
+NVIM_LOG_FILE=/tmp/canvasdiff.log make test   # everything
+make unit                                     # one intent group
+make architecture                             # the boundary rules alone
+```

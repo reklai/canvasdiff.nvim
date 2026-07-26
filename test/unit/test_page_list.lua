@@ -337,10 +337,8 @@ local function oracle_splice(rows, start0, delete_count, insert_rows)
 end
 
 T["page_list_ loads without an editor runtime"] = function()
-  local root = vim.fs.dirname(vim.fs.dirname(
-    vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
   local chunk = assert(loadfile(
-    vim.fs.joinpath(root, "lua", "canvasdiff", "canvas", "PageList.lua")
+    vim.fs.joinpath(H.project_root, "lua", "canvasdiff", "canvas", "PageList.lua")
   ))
   local runtime = _G.vim
   _G.vim = nil
