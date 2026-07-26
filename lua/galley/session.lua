@@ -63,6 +63,22 @@ function M.save(state)
     table.sort(folds)
     data.folds = folds
 
+    -- What each folded file looked like when it went away. Folds persist, so
+    -- this has to as well, or reopening would silently declare everything fresh --
+    -- and a shut editor is exactly when files change behind your back. Sorted, like
+    -- the arrays above, so the on-disk payload diffs cleanly.
+    --
+    -- `fp = false` (arrived sight-unseen) is preserved as JSON `false`; vim.json
+    -- keeps the distinction from a hash string, which is all fold.stale needs. The
+    -- lens id rides along because a fingerprint is only comparable within the lens
+    -- that captured it.
+    local seen = {}
+    for path, e in pairs(state.folded_seen or {}) do
+      seen[#seen + 1] = { path = path, lens = e.lens, fp = e.fp }
+    end
+    table.sort(seen, function(a, b) return a.path < b.path end)
+    data.folded_seen = seen
+
     if win_showing_canvas(state) then
       local top0 = vim.api.nvim_win_call(state.win, function()
         return vim.fn.line("w0") - 1
@@ -74,9 +90,17 @@ function M.save(state)
         view.path = sec.path
         data.view = view
 
+        -- Same refusal as the view above, for the same reason: a section
+        -- rendered as one row has no offset to capture. cursor_offset is
+        -- always 1 there, so the anchor would come out as that section's
+        -- file_hdr -- an entry the user never sat on -- and restore would
+        -- dutifully put the cursor on a file header. `]f` deliberately still
+        -- stops on the virtualizer's own placeholders, so the cursor really
+        -- can be resting on one. Recording nothing leaves restore to fall
+        -- back to the topline, which is the honest answer.
         local cursor_row0 = vim.api.nvim_win_get_cursor(state.win)[1] - 1
         local ci, cursor_offset = canvas.locate(state, cursor_row0)
-        if ci then
+        if ci and not fold.hidden(state, state.sections[ci].path) then
           local centry = state.sections[ci].entries[cursor_offset]
           data.cursor = {
             path = state.sections[ci].path,
@@ -131,9 +155,15 @@ function M.restore(state, data)
     for _, dir in ipairs(data.folds or {}) do
       set[dir] = true
     end
-    state.folded = set
+    -- Pruned on the way in as well as on the way out: a payload written before
+    -- the directory's last change was committed would otherwise reintroduce a
+    -- fold over files that only appear in it now.
+    state.folded = fold.prune(state.sections, set)
   end)
 
+  -- A restored collapse is the user's own -- set_collapsed's default intent --
+  -- so the virtualizer will neither expand it back on a later pass nor discard
+  -- it from the next save.
   pcall(function()
     for _, path in ipairs(data.collapsed or {}) do
       local idx = index_of_path(state, path)
@@ -150,6 +180,23 @@ function M.restore(state, data)
     canvas.resync_visibility(state)
   end)
 
+  -- AFTER the collapse and fold steps, and the ordering is load-bearing -- do not
+  -- move it above them. Restoring those goes through resplice, which records a
+  -- fingerprint of whatever each file looks like NOW. If the file changed while
+  -- Neovim was shut, those resplices have just recorded the new content as "what
+  -- you saw", losing the staleness at the exact moment it matters most. The saved
+  -- fingerprints have to land last and overwrite them.
+  --
+  -- Filtered to paths still folded, so a payload whose folds have since been
+  -- pruned doesn't leave fingerprints behind for visible files.
+  pcall(function()
+    for _, e in ipairs(data.folded_seen or {}) do
+      if e.path and fold.user_folded(state, e.path) then
+        state.folded_seen[e.path] = { lens = e.lens, fp = e.fp }
+      end
+    end
+  end)
+
   pcall(function()
     local v = data.view
     if not v or not v.path then
@@ -159,7 +206,7 @@ function M.restore(state, data)
     if not idx then
       return
     end
-    -- A set-aside section is just its placeholder row -- its entries don't
+    -- A folded section is just its placeholder row -- its entries don't
     -- map to buffer rows, so there is nothing to resolve. save() never
     -- records a view onto one, so this only fires on a stale or hand-written
     -- payload whose collapse/fold set covers its own view path.

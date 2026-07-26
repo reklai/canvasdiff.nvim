@@ -238,6 +238,19 @@ function M.build_section(path, old_text, new_text, status, context)
   }
 end
 
+--- Identity of a section's CONTENT, for "has this changed since I last looked at
+--- it" comparisons (fold.stale). Cheap to store per path and stable across
+--- rebuilds of the same content.
+---
+--- Deliberately over new_text alone, not old_text too: toggling the diff base
+--- (worktree vs HEAD / vs index) rewrites every section's old_text without anyone
+--- having edited anything, and marking the whole changeset as changed for that
+--- would be noise. The question is "did the file change", not "did the comparison
+--- change".
+function M.fingerprint(section)
+  return vim.fn.sha256(section and section.new_text or "")
+end
+
 --- True when `sec` was staged and then modified again -- git's own durable version of
 --- "you said you were done with this, then changed it". Independent of the lens, and
 --- of our session file's fingerprints, because git tracks it whether or not this

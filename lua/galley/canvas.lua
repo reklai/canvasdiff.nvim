@@ -1,6 +1,8 @@
 local render = require("galley.render")
 local viewport = require("galley.viewport")
 local fold = require("galley.fold")
+local model = require("galley.model")
+local lens = require("galley.lens")
 
 local M = {}
 
@@ -43,6 +45,7 @@ local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyGhost", { link = "GalleyDel", default = true })
   vim.api.nvim_set_hl(0, "GalleyHunkHeader", { link = "Comment", default = true })
   vim.api.nvim_set_hl(0, "GalleyBinary", { link = "Comment", default = true })
+  render.ensure_marker_hl()
 end
 
 local function set_modifiable(buf, val)
@@ -101,13 +104,30 @@ end
 --- as its single placeholder row instead, with one file-header-styled mark.
 local function apply_section_hl(buf, start_row, section, collapsed)
   if collapsed then
-    return { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
+    local ids = { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
       end_row = start_row + 1,
       end_col = 0,
       hl_group = "GalleyFileHeader",
       hl_eol = true,
       priority = 100,
     }) }
+    -- A stale marker is appended to the placeholder text. Give it a colour and a
+    -- shape cue above the full-line header mark so it remains distinguishable from
+    -- the identically-shaped staged marker under any colourscheme.
+    local line = vim.api.nvim_buf_get_lines(buf, start_row, start_row + 1, false)[1] or ""
+    if #line >= #render.glyphs.stale
+      and line:sub(-#render.glyphs.stale) == render.glyphs.stale then
+      for group, prio in pairs({ GalleyStale = 101, GalleyStaleEmphasis = 102 }) do
+        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(
+          buf, HL_NS, start_row, #line - #render.glyphs.stale, {
+            end_row = start_row,
+            end_col = #line,
+            hl_group = group,
+            priority = prio,
+          })
+      end
+    end
+    return ids
   end
   local marks = render.section_hl(section)
   local ids = {}
@@ -169,7 +189,9 @@ end
 --- directory -- else its full body.
 local function section_lines_for(state, sec)
   if fold.hidden(state, sec.path) then
-    return { render.placeholder(sec) }
+    local l = lens.of(state)
+    return { render.placeholder(sec,
+      fold.stale(state, sec.path, model.fingerprint(sec), l.id)) }
   end
   return render.section_lines(sec)
 end
@@ -203,6 +225,9 @@ end
 --- line-tier highlights. Populates state.sections/anchor_ids/hl_ids.
 function M.render_all(state, sections)
   local buf = state.buf
+  -- A fold key whose directory no longer has changes must not hide a file that
+  -- appears there later.
+  state.folded = fold.prune(sections, state.folded)
   set_modifiable(buf, true)
   vim.api.nvim_buf_clear_namespace(buf, ANCHOR_NS, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, HL_NS, 0, -1)
@@ -256,6 +281,7 @@ function M.open(sections, opts)
   -- here because rendering, navigation and session all derive from it.
   state.collapsed = state.collapsed or {}
   state.folded = state.folded or {}
+  state.folded_seen = state.folded_seen or {}
   M.render_all(state, sections)
   return state
 end
@@ -392,6 +418,9 @@ function M.replace_section(state, i, new_section)
     if replaced_path and state.collapsed then
       state.collapsed[replaced_path] = nil
     end
+    if replaced_path and state.folded_seen then
+      state.folded_seen[replaced_path] = nil
+    end
   end
 
   set_modifiable(state.buf, false)
@@ -462,6 +491,11 @@ end
 --- (#state.sections >= 1) -- the 0 -> N transition goes through render_all.
 function M.insert_section(state, i, section)
   local row = get_row(state, state.anchor_ids[i])
+  -- A file born under a live user fold was never seen; the false fingerprint is a
+  -- durable sight-unseen sentinel that compares unequal to real content.
+  if fold.user_folded(state, section.path) then
+    state.folded_seen[section.path] = { lens = lens.of(state).id, fp = false }
+  end
   local new_lines = section_lines_for(state, section)
 
   local win_ok = win_showing_canvas(state)
@@ -533,12 +567,24 @@ local function resplice(state, i)
   if not (start_row and end_row_exclusive) then return end
 
   local collapsed = fold.hidden(state, sec.path)
+
+  -- Record what a user-folded section looked like as it went away. The nil guard keeps
+  -- later visibility resyncs from adopting changed content as newly "seen"; bringing
+  -- the section back clears the fingerprint.
+  if fold.user_folded(state, sec.path) then
+    if state.folded_seen[sec.path] == nil then
+      state.folded_seen[sec.path] = { lens = lens.of(state).id, fp = model.fingerprint(sec) }
+    end
+  else
+    state.folded_seen[sec.path] = nil
+  end
+
+  -- render.section_lines emits one row per entry, so the desired row count can be
+  -- checked before building strings.
+  local want_rows = collapsed and 1 or #sec.entries
+  if end_row_exclusive - start_row == want_rows then return end
+
   local new_lines = section_lines_for(state, sec)
-  -- Already in the desired form. Comparing row spans is exact: build_section
-  -- always emits a file_hdr plus at least one hunk_hdr/binary entry, so an
-  -- expanded section is never one row and can never be mistaken for a
-  -- placeholder.
-  if end_row_exclusive - start_row == #new_lines then return end
 
   local win_ok = win_showing_canvas(state)
   local branch, top0, view

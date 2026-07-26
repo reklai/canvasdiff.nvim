@@ -15,7 +15,7 @@ T["sidebar_entries flat root files need no dir rows"] = function()
   local entries = sidebar.build_entries({ sec("a.txt"), sec("b.txt") }, {})
   H.eq(#entries, 2)
   H.eq(entries[1], { kind = "file", path = "a.txt", name = "a.txt", depth = 0,
-    section_i = 1, adds = 1, dels = 0, aside = false })
+    section_i = 1, adds = 1, dels = 0, aside = false, stale = false })
   H.eq(entries[2].section_i, 2)
 end
 
@@ -57,16 +57,50 @@ T["sidebar_entries folded dir hides all descendants"] = function()
   H.eq(entries[2].folded, true)
 end
 
-T["sidebar_entries a set-aside file is flagged"] = function()
+T["sidebar_entries a user-folded file is flagged"] = function()
   local entries = sidebar.build_entries(
     { sec("a.txt"), sec("b.txt") }, {}, { ["b.txt"] = true })
   H.eq(entries[1].aside, false, "a.txt is in play")
-  H.eq(entries[2].aside, true, "b.txt was set aside")
+  H.eq(entries[2].aside, true, "b.txt is folded")
   H.eq(sidebar.build_entries({ sec("a.txt") }, {})[1].aside, false,
-    "omitting the set means nothing is set aside")
+    "omitting the set means nothing is folded")
 end
 
-T["sidebar_render marks set-aside files with the placeholder glyph"] = function()
+T["sidebar_entries a stale file is flagged, and so is the folded dir above it"] = function()
+  local secs = { sec("src/a.txt"), sec("src/b.txt"), sec("top.md") }
+  local entries = sidebar.build_entries(secs, {}, {}, { ["src/a.txt"] = true })
+  H.eq(entries[1].kind, "dir")
+  H.eq(entries[1].stale, false,
+    "an OPEN dir says nothing -- its own rows carry the marker, so repeating it is noise")
+  H.eq(entries[2].stale, true, "src/a.txt changed since it was folded")
+  H.eq(entries[3].stale, false, "src/b.txt did not")
+
+  local folded = sidebar.build_entries(secs, { ["src/"] = true }, {}, { ["src/a.txt"] = true })
+  H.eq(folded[1].kind, "dir")
+  H.eq(folded[1].stale, true, "something under the folded dir changed")
+  H.eq(folded[2].path, "top.md", "sanity: the children really are hidden")
+  H.eq(folded[2].stale, false)
+
+  H.eq(sidebar.build_entries({ sec("a.txt") }, {})[1].stale, false,
+    "omitting the set means nothing is stale")
+end
+
+T["sidebar_render marks a stale file and a stale folded dir"] = function()
+  local secs = { sec("src/a.lua", 1, 2), sec("root.md", 0, 5) }
+  H.eq(sidebar.render_lines(sidebar.build_entries(secs, {}, {}, { ["src/a.lua"] = true })), {
+    "▾ src/",
+    "    a.lua  +1 −2 ●",
+    "  root.md  +0 −5",
+  }, "the marker trails the counts, leaving the ▸ gutter alone")
+
+  H.eq(sidebar.render_lines(sidebar.build_entries(
+    secs, { ["src/"] = true }, {}, { ["src/a.lua"] = true })), {
+    "▸ src/ ●",
+    "  root.md  +0 −5",
+  }, "a folded dir reports that something under it moved on")
+end
+
+T["sidebar_render marks user-folded files with the placeholder glyph"] = function()
   local lines = sidebar.render_lines(sidebar.build_entries(
     { sec("lua/a.lua", 1, 2), sec("root.md", 0, 5) }, {}, { ["root.md"] = true }))
   H.eq(lines, {
@@ -74,6 +108,78 @@ T["sidebar_render marks set-aside files with the placeholder glyph"] = function(
     "    a.lua  +1 −2",
     "▸ root.md  +0 −5",
   }, "the same ▸ that marks a folded dir and a collapsed section in the canvas")
+end
+
+T["sidebar_render marker spans colour the right ● in a staged-and-stale row"] = function()
+  local s = sec("a.txt", 2, 2)
+  s.staged = "M"
+  local entries = sidebar.build_entries({ s }, {}, { ["a.txt"] = true }, { ["a.txt"] = true })
+  local line = sidebar.render_lines(entries)[1]
+  H.eq(line, "▸ a.txt  +2 −2 ● ●", "sanity: two identical glyphs, staged then stale")
+
+  local spans = render.marker_spans(line, s.staged, s.unstaged, true)
+  H.eq(#spans, 3, "staged, stale colour, stale emphasis -- and none for the absent ○")
+
+  local at = {}
+  for _, sp in ipairs(spans) do
+    at[sp[3]] = { col = sp[1], text = line:sub(sp[1] + 1, sp[2]) }
+  end
+  H.eq(at.GalleyStaged.text, render.glyphs.staged, "the staged span covers exactly one ●")
+  H.eq(at.GalleyStale.text, render.glyphs.stale, "the stale span covers the space and its ●")
+  H.eq(at.GalleyStaleEmphasis.text, render.glyphs.stale,
+    "and the bold layer covers exactly the same range as the colour")
+  H.eq(at.GalleyStaleEmphasis.col, at.GalleyStale.col)
+  assert(at.GalleyStaged.col ~= at.GalleyStale.col,
+    "the two spans must not point at the same ●")
+  assert(at.GalleyStaged.col < at.GalleyStale.col,
+    "staged is appended before stale")
+  H.eq(spans[1][2], #line, "the stale span reaches end-of-line")
+end
+
+T["sidebar_render marker spans handle every combination of the three facts"] = function()
+  local function row(staged, unstaged, stale)
+    local s = sec("a.txt", 2, 2)
+    s.staged, s.unstaged = staged, unstaged
+    local entries = sidebar.build_entries(
+      { s }, {}, {}, stale and { ["a.txt"] = true } or {})
+    local line = sidebar.render_lines(entries)[1]
+    local got = {}
+    for _, sp in ipairs(render.marker_spans(line, staged, unstaged, stale)) do
+      got[#got + 1] = sp[3]:gsub("^Galley", "") .. "=" .. line:sub(sp[1] + 1, sp[2])
+    end
+    table.sort(got)
+    return line, table.concat(got, " ")
+  end
+
+  local line, got = row("M", "M", true)
+  H.eq(line, "  a.txt  +2 −2 ●○ ●")
+  H.eq(got, "Staged=● Stale= ● StaleEmphasis= ● Unstaged=○")
+
+  line, got = row("M", "M", false)
+  H.eq(line, "  a.txt  +2 −2 ●○")
+  H.eq(got, "Staged=● Unstaged=○")
+
+  line, got = row(nil, "M", true)
+  H.eq(line, "  a.txt  +2 −2 ○ ●")
+  H.eq(got, "Stale= ● StaleEmphasis= ● Unstaged=○")
+
+  line, got = row(nil, nil, false)
+  H.eq(line, "  a.txt  +2 −2")
+  H.eq(got, "")
+end
+
+T["sidebar_render a stale dir row gets exactly one marker range"] = function()
+  local s = sec("src/a.txt", 2, 2)
+  s.staged, s.unstaged = "M", "M"
+  local entries = sidebar.build_entries(
+    { s }, { ["src/"] = true }, {}, { ["src/a.txt"] = true })
+  local line = sidebar.render_lines(entries)[1]
+  H.eq(line, "▸ src/ ●")
+  local spans = render.marker_spans(line, nil, nil, true)
+  H.eq(#spans, 2, "stale colour plus emphasis")
+  for _, sp in ipairs(spans) do
+    H.eq(line:sub(sp[1] + 1, sp[2]), render.glyphs.stale)
+  end
 end
 
 T["sidebar_render formats dirs, files, indent, and counts"] = function()

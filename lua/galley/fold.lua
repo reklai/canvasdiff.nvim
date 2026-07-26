@@ -136,6 +136,65 @@ function F.user_folded_set(sections, state)
   return set
 end
 
+--- True when `path` is folded AND its diff no longer looks like it did when the
+--- user put it away. `current_fp` is the section's fingerprint right now
+--- (model.fingerprint) -- passed in rather than computed here so this module stays
+--- pure and dependency-free. `lens_id` scopes the comparison (see below).
+---
+--- Detection is a COMPARISON, not a flag, and that is the point: canvas.render_all
+--- re-renders a folded section straight into placeholder form without going
+--- through resplice or replace_section, so anything that set a flag from a mutation
+--- site would miss `:Galley refresh` and watch's full-render paths. Comparing at
+--- read time covers every path that can ever change a section, including ones added
+--- later.
+---
+--- `state.folded_seen[path]` holds `{ lens = <id>, fp = <fingerprint> }` captured when
+--- the section went away, with `fp = false` for one that arrived already hidden (a
+--- new file under a live fold) -- never seen, so never what you reviewed, so always
+--- stale.
+---
+--- SCOPED BY LENS, and it has to be. The fingerprint hashes the section's new side,
+--- and the `staged` lens moves that side from the worktree to the index -- so a pivot
+--- changes the content for reasons nobody edited. Comparing across lenses would
+--- report every folded file as changed and destroy the signal. A lens mismatch
+--- means "not comparable", which is emphatically not the same as "changed".
+--- (`all` and `unstaged` differ only in their OLD side, so they already agreed; the
+--- scoping is what makes that true by construction rather than by luck.)
+---
+--- Gated on F.user_folded, not F.hidden: the virtualizer's own collapses are its
+--- bookkeeping and were never a decision the user made, so there is nothing for
+--- them to be stale relative to.
+function F.stale(state, path, current_fp, lens_id)
+  if not state or not state.folded_seen then
+    return false
+  end
+  local seen = state.folded_seen[path]
+  if seen == nil then
+    return false
+  end
+  if seen.lens ~= lens_id then
+    return false -- captured through a different lens: no basis for comparison
+  end
+  if not F.user_folded(state, path) then
+    return false
+  end
+  return seen.fp ~= current_fp
+end
+
+--- `{[path] = true}` for every stale section. `fp_of(section)` yields a section's
+--- current fingerprint. Delegates to F.stale for the same reason F.user_folded_set
+--- delegates to F.user_folded: the canvas placeholder and the sidebar row promise to
+--- agree, and two copies of the rule would not stay that way.
+function F.stale_set(sections, state, fp_of, lens_id)
+  local set = {}
+  for _, sec in ipairs(sections or {}) do
+    if F.stale(state, sec.path, fp_of(sec), lens_id) then
+      set[sec.path] = true
+    end
+  end
+  return set
+end
+
 --- Indices of the sections under directory `dir` (a fold key, trailing
 --- slash). Ascending, and contiguous in practice because sections are
 --- path-sorted (model.build) and a fold key is a path prefix.

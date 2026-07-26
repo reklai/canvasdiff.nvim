@@ -315,6 +315,38 @@ T["lens_xy staged_then_changed reads it off the section"] = function()
   H.eq(model_.staged_then_changed({}), false)
   H.eq(model_.staged_then_changed(nil), false)
 end
+
+T["lens_xy stage_mark gives each state its own glyph"] = function()
+  H.eq(render.stage_mark("M", nil), render.glyphs.staged)
+  H.eq(render.stage_mark(nil, "M"), render.glyphs.unstaged)
+  H.eq(render.stage_mark("M", "M"), render.glyphs.staged .. render.glyphs.unstaged,
+    "two independent facts, so two glyphs -- not one tri-state symbol")
+  H.eq(render.stage_mark(nil, nil), "",
+    "no status information means render nothing, never 'clean'")
+end
+
+T["lens_xy the sidebar row says which kind of change it is"] = function()
+  local secs = {
+    { path = "a.txt", adds = 1, dels = 0, staged = "M" },
+    { path = "b.txt", adds = 2, dels = 1, staged = "M", unstaged = "M" },
+    { path = "c.txt", adds = 3, dels = 2, unstaged = "M" },
+  }
+  local lines = sidebar.render_lines(sidebar.build_entries(secs, {}, {}, {}))
+  H.eq(lines, {
+    "  a.txt  +1 −0 ●",
+    "  b.txt  +2 −1 ●○",
+    "  c.txt  +3 −2 ○",
+  }, "staged, staged-then-changed, and unstaged are each distinguishable at a glance")
+end
+
+T["lens_xy the stage mark sits before the stale marker"] = function()
+  local secs = { { path = "a.txt", adds = 1, dels = 0, staged = "M", unstaged = "M" } }
+  local lines = sidebar.render_lines(
+    sidebar.build_entries(secs, {}, { ["a.txt"] = true }, { ["a.txt"] = true }))
+  H.eq(lines, { "▸ a.txt  +1 −0 ●○" .. render.glyphs.stale },
+    "so the trailing ● keeps meaning exactly one thing in both windows")
+end
+
 -- --- the pivot is non-destructive ----------------------------------------
 
 --- A repo where `keep.txt` is IDENTICAL through the all and unstaged lenses (it has

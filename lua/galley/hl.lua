@@ -165,10 +165,35 @@ function M.section_ts_marks(section)
   return marks
 end
 
---- The intra-line marks emphasise the exact changed spans by attribute rather than by
---- adding another background inside the GalleyAdd/GalleyDel row tint. Attributes
---- compose over the row and syntax colours instead of competing with them, so this
---- remains legible independently of which colourscheme is active.
+--- The intra-line marks: which SPANS of a paired -/+ line actually differ.
+---
+--- ATTRIBUTES, not a colour, and deliberately no background of their own.
+---
+--- The problem being solved: this mark sits INSIDE a GalleyAdd/GalleyDel row tint, so a
+--- background here has to out-contrast a background that has already claimed most of
+--- the available range. It used to link to DiffText and lost that fight badly -- under
+--- tokyonight-moon DiffText's background cleared the row it sat on by only 9 luminance,
+--- while the row itself cleared Normal by 27. The strongest signal was "this line is
+--- involved" and the weakest was "this is the token that changed", which is backwards:
+--- the second is the only one you cannot already read off the +/- in column one.
+---
+--- No link fixes that, because which background wins is pure colourscheme luck. The
+--- link was briefly `Search` on the strength of tokyonight numbers (+39 against an
+--- added row, against DiffText's +9) -- and then measured under Neovim's builtin
+--- scheme, where it REVERSES: DiffText clears the row by 28 and Search by only 19,
+--- and the row clears Normal by 41 so neither dominates. Optimising a colour against
+--- one colourscheme is not a fix.
+---
+--- Bold plus underline cannot lose that fight because it is not in it. Attributes
+--- compose over whatever background is underneath instead of competing with it, so the
+--- span keeps the row's tint and the code's syntax colour and gains an unmissable mark
+--- on top -- identically under every colourscheme, with no measurement luck involved.
+--- Underline also states the extent exactly, which is the whole point of a word-diff:
+--- a background says "somewhere in here", an underline says "these characters".
+---
+--- Same reasoning that settled the sidebar markers and the +/- prefixes: a shape cue
+--- survives colour-vision deficiency and a monochrome terminal, a hue cue does not.
+--- `default = true`, so a colourscheme or your config can still replace these outright.
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleyWordAdd", { bold = true, underline = true, default = true })
   vim.api.nvim_set_hl(0, "GalleyWordDel", { bold = true, underline = true, default = true })
@@ -232,9 +257,9 @@ function M.apply_now(state)
     -- other, unrelated state table has since re-rendered without going
     -- through this state's bookkeeping). Nothing safe to do; skip it.
     if srow and erow then
-      -- A set-aside section is just its placeholder line -- there is no
+      -- A folded section is just its placeholder line -- there is no
       -- content to highlight, so treat it like "not in window" and never
-      -- (re-)apply. Marks applied before it was set aside are evicted
+      -- (re-)apply. Marks applied before it was folded are evicted
       -- synchronously via the on_section_replaced hook at splice time
       -- (canvas.resplice), not here. This MUST use the derived predicate: the
       -- section still carries all its entries, so believing it expanded would

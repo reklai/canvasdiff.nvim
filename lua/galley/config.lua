@@ -8,12 +8,18 @@ local M = {}
 --- `glyphs = "ascii"`.
 ---
 --- Every character here is one cell wide under BOTH `ambiwidth` settings, which the
---- defaults are not: `▎ −` are East Asian Ambiguous and double under
+--- defaults are not: `● ○ ▎ −` are East Asian Ambiguous and double under
 --- `ambiwidth=double`, so the marker column and the file-header gutter change width
 --- for anyone with that set.
+---
+--- Note `stale = " !"` against `staged = "*"`. In the default set those two are the
+--- SAME glyph (`●`) and only the highlight separates them; here they differ in the text
+--- itself, so the ASCII set is the one place that distinction cannot be lost to a
+--- colourscheme.
 M.ASCII_GLYPHS = {
   ctx = " ", del = "-", add = "+",
   file = "|", folded = ">", open = "v", minus = "-",
+  staged = "*", unstaged = "o", stale = " !",
   scroll_file = "-", scroll_bar = "|",
 }
 
@@ -182,8 +188,15 @@ function M.setup(opts)
   M.user_opts = vim.deepcopy(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
 
-  -- Glyphs live on `render`, not in M.options, because render must stay requirable
-  -- without config. Reset first, or two setup() calls layer on each other.
+  -- Glyphs live on `render`, not in M.options, and the reason is that render must stay
+  -- requirable without config: it is pure, model.lua and the sidebar build lines with
+  -- it, and its tests call it directly. So the defaults belong there and config only
+  -- pushes overrides in. Reset first, or two setup() calls layer on each other.
+  --
+  -- `glyphs = "ascii"` selects the preset above; a table overrides individual slots.
+  -- Unknown slots are reported rather than ignored: `glyphs = { fyle = "|" }` would
+  -- otherwise do nothing at all and look like galley failing to honour the option,
+  -- which is exactly the failure mode the legacy-keymaps check above exists for.
   render.reset_glyphs()
   local g = opts.glyphs
   if g == "ascii" then

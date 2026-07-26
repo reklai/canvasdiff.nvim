@@ -5,6 +5,7 @@ local virt = require("galley.virt")
 local session = require("galley.session")
 local config = require("galley.config")
 local scrollbar = require("galley.scrollbar")
+local fold = require("galley.fold")
 
 local T = {}
 
@@ -155,6 +156,36 @@ T["session_folds a fold is never persisted as a collapse"] = function()
   cleanup(root)
 end
 
+-- save() refuses to record a VIEW anchored on a section that renders as one
+-- row, because a placeholder's entries don't map to buffer rows. The cursor
+-- anchor needs the same refusal and didn't have it: cursor_offset is always 1
+-- on a one-row section, so the anchor came out as that section's file_hdr
+-- (new_lnum = nil, content = the header text) and restore put the cursor on a
+-- file header the user was never reading. `]f` deliberately still stops on an
+-- auto-collapsed placeholder, so this is a reachable resting place.
+T["session_cursor is not recorded when it sits on a placeholder"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  canvas.set_collapsed(st, 2, true)
+
+  local ph0 = (canvas.section_rows(st, 2)) -- 0-based placeholder row
+  H.eq(span(st, 2), 1, "a/two.txt is a placeholder")
+  -- Topline inside the still-expanded section 1, cursor on the placeholder --
+  -- the only arrangement where save() reaches the cursor branch at all.
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = ph0 - 9, lnum = ph0 + 1 })
+  end)
+  local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+  H.eq((canvas.locate(st, top0)), 1, "precondition: topline section is expanded")
+  H.eq((canvas.locate(st, ph0)), 2, "precondition: cursor is on section 2")
+
+  session.save(st)
+  local data = session.load(root)
+  H.eq(data.view.path, "a/one.txt", "the view half is still recorded")
+  H.eq(data.cursor, nil, "but a cursor on a placeholder resolves to nothing honest")
+  cleanup(root)
+end
+
 T["session_folds restore skips a view anchored on a folded-away file"] = function()
   local root = H.tmpdir()
   local st = open_ab(root)
@@ -205,7 +236,44 @@ T["session_ save and load round-trip the payload"] = function()
     "view.new_lnum must be the file's own line number, never the raw canvas buffer row")
   H.eq(data.cursor.path, "c/three.txt")
   H.eq(type(data.folds), "table")
+  H.eq(data.folded_seen,
+    { { path = "a/one.txt", lens = "all", fp = model.fingerprint(st.sections[1]) } },
+    "the collapsed file's fingerprint rides along, scoped to the lens that took it")
 
+  cleanup(root)
+end
+
+-- Staleness has to outlive the process, because a shut editor is exactly when files
+-- change behind your back. The trap is ordering: restoring the collapse re-splices
+-- the section, which records a fingerprint of the file AS IT IS NOW -- so if the
+-- saved fingerprints don't land afterwards and overwrite that, the change is
+-- silently absorbed and nothing is ever reported.
+T["session_ a file that changed while shut comes back marked stale"] = function()
+  local root = H.tmpdir()
+  local st = open_ab(root)
+  canvas.set_collapsed(st, 1, true) -- the user sets a/one.txt aside
+  local seen_then = st.folded_seen["a/one.txt"]
+  assert(seen_then, "sanity: setting it aside recorded a fingerprint")
+  session.save(st)
+
+  -- A fresh canvas whose a/one.txt has DIFFERENT content, as if it were edited
+  -- while Neovim was closed.
+  local edited = big_section("a/one.txt", "a")
+  edited.new_text = edited.new_text .. "edited while you were away\n"
+  local fresh = canvas.open({
+    edited,
+    big_section("a/two.txt", "b"),
+    big_section("b/three.txt", "c"),
+  }, {})
+  fresh.root = root
+  fresh.base = "HEAD"
+
+  session.restore(fresh, session.load(root))
+
+  H.eq(fresh.folded_seen["a/one.txt"], seen_then,
+    "the SAVED fingerprint wins over the one the restore's own resplice recorded")
+  H.eq(fold.stale(fresh, "a/one.txt", model.fingerprint(edited), "all"), true,
+    "so the file reports as changed since you set it aside")
   cleanup(root)
 end
 

@@ -88,14 +88,15 @@ T["config_ glyphs default to the shipped unicode set"] = function()
   config.setup({})
   H.eq(render.glyphs.file, "▎")
   H.eq(render.glyphs.folded, "▸")
+  H.eq(render.glyphs.stale, " ●")
   H.eq(render.glyphs.scroll_bar, "❘")
 end
 
 T["config_ a glyph table overrides only the slots it names"] = function()
   local render = require("galley.render")
-  config.setup({ glyphs = { file = "|", minus = "-" } })
+  config.setup({ glyphs = { file = "|", stale = " !" } })
   H.eq(render.glyphs.file, "|")
-  H.eq(render.glyphs.minus, "-")
+  H.eq(render.glyphs.stale, " !")
   H.eq(render.glyphs.folded, "▸", "untouched slots keep their default")
   config.setup({})
   H.eq(render.glyphs.file, "▎", "and setup resets, rather than layering")
@@ -112,7 +113,13 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
   for name in pairs(render.glyphs) do
     assert(config.ASCII_GLYPHS[name], "ASCII_GLYPHS is missing the '" .. name .. "' slot")
   end
-  -- And every one is a single cell under BOTH ambiwidth settings, unlike the defaults.
+  -- And every one is a single cell under BOTH ambiwidth settings, unlike the defaults
+  -- (`● ○ ▎ −` all double under `ambiwidth=double`, so the marker column and the
+  -- file-header gutter change width for anyone with that set).
+  --
+  -- Trimmed before measuring: `stale` carries its own leading space so that
+  -- `#glyphs.stale` stays a correct byte offset for its highlight span, and `ctx` IS a
+  -- space. It is the glyph that has to be one cell, not the padding around it.
   local saved = vim.o.ambiwidth
   for _, aw in ipairs({ "single", "double" }) do
     vim.o.ambiwidth = aw
@@ -126,6 +133,14 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
   end
   vim.o.ambiwidth = saved
   config.setup({})
+end
+
+-- In the default set `staged` and `stale` are the SAME glyph and only the highlight
+-- separates them -- which is colourscheme-dependent. The ASCII set is the one place
+-- that distinction lives in the text, so it must not regress into sharing a glyph.
+T["config_ the ascii preset separates staged from stale in the TEXT"] = function()
+  assert(config.ASCII_GLYPHS.staged ~= vim.trim(config.ASCII_GLYPHS.stale),
+    "ascii staged/stale must differ as characters, not just by highlight")
 end
 
 T["config_ a typo'd glyph name is reported, not silently ignored"] = function()

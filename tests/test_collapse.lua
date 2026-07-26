@@ -247,7 +247,9 @@ T["collapse_ replace_section keeps a collapsed section collapsed"] = function()
   local s2, e2 = canvas.section_rows(st, 2)
   H.eq(e2 - s2, 1, "still collapsed to 1 row after replace")
   local line = vim.api.nvim_buf_get_lines(st.buf, s2, s2 + 1, false)[1]
-  H.eq(line, render.placeholder(new_sec), "placeholder text reflects the NEW counts")
+  -- Stale, and correctly so: the section was collapsed and then its content
+  -- changed underneath, which is exactly what the marker is for.
+  H.eq(line, render.placeholder(new_sec, true), "placeholder text reflects the NEW counts")
 end
 
 return T

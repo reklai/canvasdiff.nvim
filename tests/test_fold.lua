@@ -124,6 +124,67 @@ T["fold_user_folded_set matches user_folded over a section list"] = function()
   H.eq(fold.user_folded_set(nil, nil), {}, "nil-safe")
 end
 
+-- --- F.stale / F.stale_set ---------------------------------------------
+
+T["fold_stale only fires for something the USER folded"] = function()
+  local function seen(fp) return { lens = "all", fp = fp } end
+  local st = {
+    collapsed = { ["a.txt"] = "user", ["b.txt"] = "auto" },
+    folded = {},
+    folded_seen = { ["a.txt"] = seen("OLD"), ["b.txt"] = seen("OLD"), ["c.txt"] = seen("OLD") },
+  }
+  H.eq(fold.stale(st, "a.txt", "NEW", "all"), true, "folded by hand, and it changed")
+  H.eq(fold.stale(st, "a.txt", "OLD", "all"), false, "folded by hand, unchanged")
+  H.eq(fold.stale(st, "b.txt", "NEW", "all"), false,
+    "virt's own collapse was never something the user put away, so it cannot go stale")
+  H.eq(fold.stale(st, "c.txt", "NEW", "all"), false,
+    "a leftover fingerprint for a path that is not folded means nothing")
+  -- The scoping rule: a fingerprint taken through one lens says nothing about
+  -- another, because the lens itself changes the content being hashed.
+  H.eq(fold.stale(st, "a.txt", "NEW", "staged"), false,
+    "captured through `all`, asked about `staged` -- not comparable, so not stale")
+end
+
+T["fold_stale counts a folded ancestor, and the sight-unseen sentinel"] = function()
+  local st = {
+    collapsed = {},
+    folded = { ["src/"] = true },
+    folded_seen = {
+      ["src/a.txt"] = { lens = "all", fp = "OLD" },
+      ["src/new.txt"] = { lens = "all", fp = false },
+    },
+  }
+  H.eq(fold.stale(st, "src/a.txt", "NEW", "all"), true, "hidden by a fold, and changed")
+  H.eq(fold.stale(st, "src/a.txt", "OLD", "all"), false, "hidden by a fold, unchanged")
+  H.eq(fold.stale(st, "src/new.txt", "ANY", "all"), true,
+    "`false` means it arrived under the fold sight-unseen, so it is never what you reviewed")
+end
+
+T["fold_stale is nil-safe"] = function()
+  H.eq(fold.stale(nil, "a.txt", "NEW", "all"), false, "nil state")
+  H.eq(fold.stale({}, "a.txt", "NEW", "all"), false, "no folded_seen table at all")
+  H.eq(fold.stale({ collapsed = { ["a.txt"] = "user" }, folded = {} }, "a.txt", "NEW", "all"),
+    false, "folded but never fingerprinted")
+end
+
+T["fold_stale_set matches stale over a section list"] = function()
+  local secs = sections("a.txt", "b.txt", "c.txt")
+  local st = {
+    collapsed = { ["a.txt"] = "user", ["b.txt"] = "user", ["c.txt"] = "user" },
+    folded = {},
+    folded_seen = {
+      ["a.txt"] = { lens = "all", fp = "OLD" },
+      ["b.txt"] = { lens = "all", fp = "SAME" },
+    },
+  }
+  local fp_of = function(sec) return sec.path == "b.txt" and "SAME" or "NEW" end
+  H.eq(fold.stale_set(secs, st, fp_of, "all"), { ["a.txt"] = true },
+    "only the one whose content moved on")
+  H.eq(fold.stale_set(secs, st, fp_of, "staged"), {},
+    "and nothing at all through a lens that captured none of them")
+  H.eq(fold.stale_set(nil, nil, fp_of, "all"), {}, "nil-safe")
+end
+
 -- --- F.prune -----------------------------------------------------------
 
 T["fold_prune drops fold keys with no section left under them"] = function()
@@ -149,7 +210,8 @@ T["fold_prune never mutates the table it is given"] = function()
   fold.prune(sections("a/one.txt"), original)
   H.eq(original, { ["gone/"] = true }, "callers assign the result; the input is theirs")
 end
--- --- F.indices_under ---------------------------------------------------
+
+-- --- F.indices_under -------------------------------------------------
 
 T["fold_indices_under is ascending and contiguous"] = function()
   local secs = sections("a/one.txt", "a/two.txt", "b/three.txt", "root.md")

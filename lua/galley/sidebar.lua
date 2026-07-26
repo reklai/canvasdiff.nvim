@@ -3,6 +3,8 @@ local config = require("galley.config")
 local keys = require("galley.keys")
 local fold = require("galley.fold")
 local render = require("galley.render")
+local model = require("galley.model")
+local lens = require("galley.lens")
 
 local S = {}
 
@@ -12,13 +14,26 @@ local S = {}
 --- Sections are sorted by path, so each dir is emitted exactly once,
 --- immediately before its first descendant.
 ---
---- `aside` is an optional set of file paths the user has set aside, used only
---- to flag their rows. Both are plain tables, so this stays pure.
-function S.build_entries(sections, folded, aside)
+--- `aside` is an optional set of file paths the user folded themselves, used only
+--- to flag their rows. `stale` is an optional set of paths that have changed since
+--- they were folded; a folded directory carries the signal when anything beneath it
+--- has changed, because its child rows are hidden. All inputs are plain tables.
+function S.build_entries(sections, folded, aside, stale)
   folded = folded or {}
   aside = aside or {}
+  stale = stale or {}
   local entries = {}
   local prev_dirs = {}
+  local stale_dirs = {}
+  for path in pairs(stale) do
+    local from = 1
+    while true do
+      local slash = string.find(path, "/", from, true)
+      if not slash then break end
+      stale_dirs[string.sub(path, 1, slash)] = true
+      from = slash + 1
+    end
+  end
 
   for i, section in ipairs(sections) do
     local parts = vim.split(section.path, "/", { plain = true })
@@ -42,6 +57,7 @@ function S.build_entries(sections, folded, aside)
           entries[#entries + 1] = {
             kind = "dir", path = prefix, name = parts[d] .. "/",
             depth = d - 1, folded = folded[prefix] or false,
+            stale = (folded[prefix] and stale_dirs[prefix]) or false,
           }
         end
         if folded[prefix] then
@@ -55,6 +71,9 @@ function S.build_entries(sections, folded, aside)
         kind = "file", path = section.path, name = fname, depth = #parts,
         section_i = i, adds = section.adds, dels = section.dels,
         aside = aside[section.path] or false,
+        stale = stale[section.path] or false,
+        staged = section.staged,
+        unstaged = section.unstaged,
       }
     end
     prev_dirs = parts
@@ -74,14 +93,18 @@ function S.render_lines(entries)
   local lines = {}
   for i, e in ipairs(entries) do
     local indent = ("  "):rep(e.depth)
+    local stale = e.stale and render.glyphs.stale or ""
     if e.kind == "dir" then
       lines[i] = indent
         .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
-        .. e.name
+        .. e.name .. stale
     else
+      local stage = render.stage_mark(e.staged, e.unstaged)
+      if stage ~= "" then stage = " " .. stage end
       lines[i] = indent .. (e.aside and (render.glyphs.folded .. " ") or "  ")
         .. e.name
         .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
+        .. stage .. stale
     end
   end
   return lines
@@ -97,6 +120,7 @@ local side = nil
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "GalleySidebarDir", { link = "Directory", default = true })
   vim.api.nvim_set_hl(0, "GalleySidebarActive", { link = "Visual", default = true })
+  render.ensure_marker_hl()
 end
 
 function S.is_open()
@@ -144,7 +168,8 @@ function S.refresh(state)
   -- every scroll of a large changeset -- and would claim the user folded
   -- what the virtualizer collapsed on its own.
   local aside = fold.user_folded_set(state.sections, state)
-  side.entries = S.build_entries(state.sections, state.folded, aside)
+  local stale = fold.stale_set(state.sections, state, model.fingerprint, lens.of(state).id)
+  side.entries = S.build_entries(state.sections, state.folded, aside, stale)
   local lines = S.render_lines(side.entries)
   if #lines == 0 then
     lines = { "" }
@@ -158,6 +183,18 @@ function S.refresh(state)
       vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, 0, {
         line_hl_group = "GalleySidebarDir",
         priority = 90,
+      })
+    end
+    local line = lines[row0] or ""
+    local is_file = e.kind ~= "dir"
+    local spans = render.marker_spans(
+      line, is_file and e.staged or nil, is_file and e.unstaged or nil, e.stale)
+    for _, span in ipairs(spans) do
+      vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, span[1], {
+        end_row = row0 - 1,
+        end_col = span[2],
+        hl_group = span[3],
+        priority = 101,
       })
     end
   end
