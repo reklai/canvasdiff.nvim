@@ -24,6 +24,7 @@ local WIN_IS_VALID = API.nvim_win_is_valid
 local WIN_GET_BUF = API.nvim_win_get_buf
 local REDRAW = API.nvim__redraw
 local SCHEDULE = vim.schedule
+local WINDOW_LAST_LINE = vim.fn.line
 
 local PAGE_LIST_VALIDATE = PageList.validate
 local PAGE_LIST_ROW_COUNT = PageList.row_count
@@ -552,7 +553,15 @@ local function on_win_impl(state, window, buffer, top_row, bottom_row)
 
   local overscan = RAWGET(state, "overscan_rows")
   local start0 = MAX(0, top_row - overscan)
-  local end0 = MIN(logical_rows, bottom_row + 1 + overscan)
+  -- `botrow` is exclusive until the viewport reaches EOF, where Neovim
+  -- reports the inclusive last row instead. line("w$") is one-based, so its
+  -- numeric value is the exact zero-based end-exclusive visible bound in
+  -- both cases (and it remains exact through folds and wrapping).
+  local visible_end0 = WINDOW_LAST_LINE("w$", window)
+  if not finite_integer(visible_end0) or visible_end0 <= top_row then
+    return false
+  end
+  local end0 = MIN(logical_rows, visible_end0 + overscan)
   if end0 <= start0 then
     return false
   end

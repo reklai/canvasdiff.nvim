@@ -218,13 +218,9 @@ T["projection_ cold viewport restores only a bounded range and cache hits"] =
 
       local first_calls = count_calls(fixture.decode_calls)
       local resident = assert(list:resident_stats())
-      assert(first_calls > 0)
+      H.eq(first_calls, math.min(row_count, height + 3),
+        "top viewport must pin only visible rows plus lower overscan")
       H.eq(resident.pages, first_calls)
-      assert(
-        first_calls <= height + 8,
-        ("viewport restored %d pages for a %d-row window")
-          :format(first_calls, height)
-      )
       H.eq(fixture.decode_calls[tostring(row_count)], nil)
       H.eq(resident.pinned_pages, 0)
       H.eq(resident.reserved_pages, 0)
