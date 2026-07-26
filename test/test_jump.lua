@@ -59,6 +59,14 @@ return {
   end,
   ["jump: back after edit regenerates section and restores position"] = function()
     local root, st = setup_repo()
+    local shape_changes = 0
+    local shaped_state
+    st.hooks = {
+      on_shape_change = function(changed_state)
+        shape_changes = shape_changes + 1
+        shaped_state = changed_state
+      end,
+    }
     local rows = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local target
     for i, l in ipairs(rows) do if l == "+A2" then target = i end end
@@ -77,6 +85,10 @@ return {
     local a2row
     for i, l in ipairs(newrows) do if l == "+A2" then a2row = i end end
     assert(math.abs(cur - a2row) <= 2, ("cursor %d not near +A2 at %d"):format(cur, a2row))
+    H.eq(shape_changes, 1,
+      "a successful return reports its one canvas shape change through the owner hook")
+    assert(rawequal(shaped_state, st),
+      "the shape event identifies the exact canvas state that changed")
   end,
   ["jump: branch rename round-trip survives ref deletion and keeps identity"] = function()
     local old_path = "old-name.txt"
@@ -168,6 +180,12 @@ return {
     })
     local section = st.sections[1]
     section.old_rev = "recoverable-base"
+    local shape_changes = 0
+    st.hooks = {
+      on_shape_change = function()
+        shape_changes = shape_changes + 1
+      end,
+    }
     vim.api.nvim_win_set_cursor(st.win, { 1, 0 })
     jump.enter(st)
     local file_buf = vim.api.nvim_get_current_buf()
@@ -185,6 +203,8 @@ return {
       "a failed destination lookup leaves the file on screen")
     assert(#messages == 1 and messages[1]:find("not found in canvas", 1, true),
       "the missing destination identity is explicit: " .. vim.inspect(messages))
+    H.eq(shape_changes, 0,
+      "a declined return cannot publish a shape change")
 
     canvas.render_all(st, { section })
     messages = {}
@@ -196,11 +216,15 @@ return {
       "a failed source lookup also leaves the destination file on screen")
     assert(#messages == 1 and messages[1]:find("cannot rebuild excursion old side", 1, true),
       "the source lookup failure is explicit: " .. vim.inspect(messages))
+    H.eq(shape_changes, 0,
+      "a failed source preflight cannot publish a shape change")
 
     sh(root, { "git", "branch", "recoverable-base", "HEAD" })
     assert(pcall(jump.back), "the same excursion remains retryable after its source appears")
     assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()),
       "the successful retry restores the canvas")
+    H.eq(shape_changes, 1,
+      "the eventual successful retry publishes exactly one shape change")
     H.eq(st.sections[1].old_rev, "recoverable-base",
       "the retry still uses the source captured on Enter")
 

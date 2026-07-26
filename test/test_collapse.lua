@@ -138,20 +138,21 @@ end
 T["collapse_ hl never marks a collapsed section"] = function()
   local st = open_three()
   reset_view(st)
-  hl.attach(st, { margin = 1000 })
-  assert(st.ts.ids_by_path["a/one.txt"] and #st.ts.ids_by_path["a/one.txt"] > 0,
+  local lease = hl.attach(st, { margin = 1000 })
+  assert(lease.ids_by_path["a/one.txt"] and #lease.ids_by_path["a/one.txt"] > 0,
     "sanity: attach marked section 1 before collapsing")
 
   canvas.set_collapsed(st, 1, true)
-  hl.apply_now(st)
-  H.eq(st.ts.ids_by_path["a/one.txt"], nil, "ids_by_path has no entry for the collapsed section")
+  hl.apply_now(lease)
+  H.eq(lease.ids_by_path["a/one.txt"], nil,
+    "ids_by_path has no entry for the collapsed section")
 
   local ns = vim.api.nvim_create_namespace("galley.canvas.ts")
   local s1, e1 = canvas.section_rows(st, 1)
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, {})) do
     assert(not (m[2] >= s1 and m[2] < e1), "no TS-namespace mark within the collapsed section's rows")
   end
-  hl.detach(st)
+  hl.detach(lease)
 end
 
 -- --- folds and collapse are one predicate --------------------------------
@@ -204,14 +205,14 @@ end
 T["collapse_ hl never marks a folded-away section"] = function()
   local st = open_three()
   reset_view(st)
-  hl.attach(st, { margin = 1000 })
-  assert(st.ts.ids_by_path["b/two.txt"] and #st.ts.ids_by_path["b/two.txt"] > 0,
+  local lease = hl.attach(st, { margin = 1000 })
+  assert(lease.ids_by_path["b/two.txt"] and #lease.ids_by_path["b/two.txt"] > 0,
     "sanity: attach marked section 2 before folding")
 
   st.folded = { ["b/"] = true }
   canvas.resync_visibility(st, fold.indices_under(st.sections, "b/"))
-  hl.apply_now(st)
-  H.eq(st.ts.ids_by_path["b/two.txt"], nil, "no ids tracked for a folded-away section")
+  hl.apply_now(lease)
+  H.eq(lease.ids_by_path["b/two.txt"], nil, "no ids tracked for a folded-away section")
 
   -- The real failure mode: a section that renders as one row still carries all
   -- its entries, so a reader that thinks it expanded writes marks at
@@ -222,7 +223,7 @@ T["collapse_ hl never marks a folded-away section"] = function()
     assert(not (m[2] >= s2 and m[2] < e2),
       "no TS-namespace mark within the folded-away section's rows")
   end
-  hl.detach(st)
+  hl.detach(lease)
   st.folded = {}
   canvas.resync_visibility(st)
 end

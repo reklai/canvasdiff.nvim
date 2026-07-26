@@ -250,7 +250,6 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
   watch.reconcile(st, {
     on_change = function(state)
-      require("galley.hl").apply_now(state)
       sidebar.refresh(state)
     end,
   })

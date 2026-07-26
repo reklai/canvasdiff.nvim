@@ -33,7 +33,25 @@ local SURFACE_GROUPS = {
   "galley.winbar",
 }
 
+local function highlighter_groups()
+  local out, seen = {}, {}
+  for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
+    local name = autocmd.group_name
+    if name
+        and (name == "galley.hl" or name:match("^galley%.hl%."))
+        and not seen[name] then
+      seen[name] = true
+      out[#out + 1] = name
+    end
+  end
+  table.sort(out)
+  return out
+end
+
 local function group_alive(name)
+  if name == "galley.hl" then
+    return #highlighter_groups() > 0
+  end
   return pcall(vim.api.nvim_get_autocmds, { group = name })
 end
 
@@ -54,7 +72,9 @@ local function reset_auxiliary_owners()
   require("galley.scrollbar").close()
   require("galley.virt").detach()
   require("galley.statuscol").detach()
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.hl")
+  for _, name in ipairs(highlighter_groups()) do
+    pcall(vim.api.nvim_del_augroup_by_name, name)
+  end
 end
 
 --- Temporarily count calls through table methods, restoring every method even
@@ -446,6 +466,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
   with_canvas(function(ctx)
     local surface = ctx.surface
     local generation = surface.generation
+    local hl_lease = assert(surface.controllers.hl)
     local virt_lease = assert(surface.controllers.virt)
     local statuscol_lease = assert(surface.controllers.statuscol)
     local disposed_callbacks = 0
@@ -494,6 +515,10 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
         "Surface teardown qualifies virtualizer cleanup with one exact lease")
       assert(rawequal(calls["virt.detach"][1][1], virt_lease),
         "Surface teardown passes the exact virtualizer lease it acquired")
+      H.eq(calls["hl.detach"][1].n, 1,
+        "Surface teardown qualifies highlighter cleanup with one exact lease")
+      assert(rawequal(calls["hl.detach"][1][1], hl_lease),
+        "Surface teardown passes the exact highlighter lease it acquired")
       H.eq(calls["statuscol.detach"][1].n, 1,
         "Surface teardown qualifies status-column cleanup with one exact lease")
       assert(rawequal(calls["statuscol.detach"][1][1], statuscol_lease),
@@ -513,16 +538,21 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
   with_canvas(function(ctx)
     local old = ctx.surface
     local old_generation = old.generation
+    local old_hl = assert(old.controllers.hl)
+    local old_shape_change = assert(ctx.state.hooks.on_shape_change)
     local old_virt = assert(old.controllers.virt)
     local old_statuscol = assert(old.controllers.statuscol)
     local session = require("galley.session")
     local watch = require("galley.watch")
+    local hl = require("galley.hl")
     local virt = require("galley.virt")
     local statuscol = require("galley.statuscol")
 
     with_spies({
       { name = "session.save", target = session, method = "save" },
       { name = "watch.stop", target = watch, method = "stop" },
+      { name = "hl.apply_now", target = hl, method = "apply_now" },
+      { name = "hl.detach", target = hl, method = "detach" },
       { name = "virt.detach", target = virt, method = "detach" },
       { name = "statuscol.detach", target = statuscol, method = "detach" },
     }, function(counts, calls)
@@ -539,6 +569,9 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       assert(replacement:is_alive())
       assert(replacement.generation > old_generation,
         "activation generations are monotonically increasing")
+      local replacement_hl = assert(replacement.controllers.hl)
+      assert(replacement_hl ~= old_hl,
+        "a replacement Surface acquires a distinct highlighter lease")
       local replacement_virt = assert(replacement.controllers.virt)
       assert(replacement_virt ~= old_virt,
         "a replacement Surface acquires a distinct virtualizer lease")
@@ -548,11 +581,15 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       H.eq(calls["virt.detach"][1].n, 1)
       assert(rawequal(calls["virt.detach"][1][1], old_virt),
         "replacement retires only the preceding Surface's virtualizer")
+      H.eq(calls["hl.detach"][1].n, 1)
+      assert(rawequal(calls["hl.detach"][1][1], old_hl),
+        "replacement retires only the preceding Surface's highlighter")
       H.eq(calls["statuscol.detach"][1].n, 1)
       assert(rawequal(calls["statuscol.detach"][1][1], old_statuscol),
         "replacement retires only the preceding Surface's status-column controller")
       local saves_after_open = counts["session.save"]
       local stops_after_open = counts["watch.stop"]
+      local hl_detaches_after_open = counts["hl.detach"]
       local detaches_after_open = counts["virt.detach"]
       local statuscol_detaches_after_open = counts["statuscol.detach"]
 
@@ -568,6 +605,8 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
         "the old queued callback did not persist the replacement")
       H.eq(counts["watch.stop"], stops_after_open,
         "the old queued callback did not stop the replacement watch")
+      H.eq(counts["hl.detach"], hl_detaches_after_open,
+        "the old queued callback did not detach the replacement highlighter")
       H.eq(counts["virt.detach"], detaches_after_open,
         "the old queued callback did not detach the replacement virtualizer")
       H.eq(counts["statuscol.detach"], statuscol_detaches_after_open,
@@ -575,7 +614,26 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       H.eq(#replacement:canvas_windows(), 1)
       assert_groups(true, "on the replacement", SURFACE_GROUPS)
 
+      local applies_before_stale = counts["hl.apply_now"]
+      old_shape_change()
+      H.eq(counts["hl.apply_now"], applies_before_stale,
+        "a stale generation's retained shape hook cannot apply to the replacement")
+
+      local applies_before_current = counts["hl.apply_now"]
+      next_state.hooks.on_shape_change()
+      H.eq(counts["hl.apply_now"], applies_before_current + 1,
+        "the replacement shape hook applies its highlighter exactly once")
+      local last_apply = calls["hl.apply_now"][#calls["hl.apply_now"]]
+      H.eq(last_apply.n, 1,
+        "shape composition qualifies highlighter application with one exact lease")
+      assert(rawequal(last_apply[1], replacement_hl),
+        "shape composition passes the replacement Surface's highlighter lease")
+
       ctx.fm.close()
+      H.eq(counts["hl.detach"], hl_detaches_after_open + 1)
+      H.eq(calls["hl.detach"][2].n, 1)
+      assert(rawequal(calls["hl.detach"][2][1], replacement_hl),
+        "final close detaches the replacement's own highlighter lease")
       H.eq(counts["virt.detach"], detaches_after_open + 1)
       H.eq(calls["virt.detach"][2].n, 1)
       assert(rawequal(calls["virt.detach"][2][1], replacement_virt),

@@ -662,20 +662,21 @@ end
 T["virt_ expanded sections get their highlights back"] = function()
   local st
   local lease
+  local hl_lease
   st, lease = open_six({
-    on_change = function(state)
-      hl.apply_now(state)
+    on_change = function()
+      hl.apply_now(hl_lease)
     end,
   })
   reset_view(st)
   local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 0, max_expanded = 1 }
 
-  hl.attach(st, { margin = 0, debounce_ms = 30 })
+  hl_lease = hl.attach(st, { margin = 0, debounce_ms = 30 })
 
   virt.apply(lease, opts)
   local path = st.sections[6].path
   assert(st.collapsed[path], "sanity: section 6 auto-collapsed while far from the viewport")
-  H.eq(st.ts.ids_by_path[path], nil, "sanity: a collapsed section carries no marks")
+  H.eq(hl_lease.ids_by_path[path], nil, "sanity: a collapsed section carries no marks")
 
   local s6 = (canvas.section_rows(st, 6))
   vim.api.nvim_win_call(st.win, function()
@@ -684,9 +685,9 @@ T["virt_ expanded sections get their highlights back"] = function()
   virt.apply(lease, opts)
 
   H.eq(st.collapsed[path], nil, "section 6 expanded back once it was near")
-  assert(st.ts.ids_by_path[path] ~= nil, "the expanded section got its highlights back")
+  assert(hl_lease.ids_by_path[path] ~= nil, "the expanded section got its highlights back")
 
-  hl.detach(st)
+  hl.detach(hl_lease)
 end
 
 -- The LRU belongs to a lease, not a path or canvas state. Reattaching even the

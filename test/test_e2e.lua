@@ -8,6 +8,19 @@ local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
 
 local cleanup_buf
 
+local function group_alive(name)
+  if name == "galley.hl" then
+    for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
+      local group = autocmd.group_name
+      if group and (group == name or group:match("^galley%.hl%.")) then
+        return true
+      end
+    end
+    return false
+  end
+  return pcall(vim.api.nvim_get_autocmds, { group = name })
+end
+
 local function wipe_buffer(buf)
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then
     return
@@ -376,9 +389,6 @@ return {
     vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { srow, 0 })
     select_cr()
 
-    local function group_alive(name)
-      return (pcall(vim.api.nvim_get_autocmds, { group = name }))
-    end
     for _, g in ipairs({ "galley.watch", "galley.virt", "galley.hl", "galley.session" }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
     end

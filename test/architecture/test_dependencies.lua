@@ -92,6 +92,46 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
   assert_no_errors(violations, "status column must be composed by its Surface owner")
 end
 
+T.architecture_highlighter_has_no_peer_controller_edges = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.scrollbar"] = true,
+    ["galley.sidebar"] = true,
+    ["galley.statuscol"] = true,
+    ["galley.virt"] = true,
+    ["galley.watch"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.hl" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "highlighter must report through its Surface owner")
+end
+
+T.architecture_jump_does_not_fan_out_to_highlighter_or_scrollbar = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.hl"] = true,
+    ["galley.scrollbar"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.jump" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations,
+    "jump must publish one shape change for its Surface owner to compose")
+end
+
 T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function()
   local nodes = {
     ["galley.canvas.Page"] = { rel = "lua/galley/canvas/Page.lua" },

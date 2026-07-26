@@ -114,8 +114,11 @@ end
 --- Refresh the other live UI pieces after a direct canvas.set_collapsed
 --- splice (mirrors what jump.back/App:refresh already do after their own
 --- canvas splices): reapply lazy highlighting and sync sidebar/scrollbar.
-local function sync_after_collapse(st)
-  hl.apply_now(st)
+local function sync_after_collapse(surface, st)
+  local lease = surface and surface.controllers.hl
+  if lease then
+    hl.apply_now(lease)
+  end
   sidebar.refresh(st)
   scrollbar.update(st)
 end
@@ -123,7 +126,7 @@ end
 --- Watch changed the model rather than only its rendered shape, so every
 --- consumer refreshes and the virtualizer re-evaluates the new full size.
 local function sync_after_reconcile(surface, st)
-  sync_after_collapse(st)
+  sync_after_collapse(surface, st)
   local lease = surface.controllers.virt
   if lease then
     virt.apply(lease, config.options.virt)
@@ -134,9 +137,9 @@ end
 --- keymaps). set_collapsed's default intent records exactly that, which is what
 --- stops the auto-virtualizer expanding it back on a later in-window pass and
 --- stops session.save discarding it as module bookkeeping.
-local function user_set_collapsed(st, i, collapsed)
+local function user_set_collapsed(surface, st, i, collapsed)
   canvas.set_collapsed(st, i, collapsed)
-  sync_after_collapse(st)
+  sync_after_collapse(surface, st)
 end
 
 --- Index of the section under the canvas cursor, or nil.
@@ -155,7 +158,7 @@ end
 --- This is also the only way out of a fold when the sidebar is disabled: folds
 --- restore onto state.folded regardless of the sidebar, so without it those
 --- files would be permanently invisible.
-local function reveal(st, i, path)
+local function reveal(surface, st, i, path)
   local dirs = fold.folds_hiding(st.folded, path)
   if #dirs == 0 then
     return nil
@@ -178,7 +181,7 @@ local function reveal(st, i, path)
     local start0 = (canvas.section_rows(st, i))
     pcall(vim.api.nvim_win_set_cursor, st.win, { start0 + 1, 0 })
   end
-  sync_after_collapse(st)
+  sync_after_collapse(surface, st)
   util.notify("unfolded " .. table.concat(dirs, ", "))
   return dirs
 end
@@ -202,16 +205,16 @@ end
 
 --- Fold or unfold the section under the cursor: reveal it when a
 --- folded directory is what's hiding it, otherwise flip its own collapse flag.
-local function toggle_collapse_under_cursor(st)
+local function toggle_collapse_under_cursor(surface, st)
   local i = section_under_cursor(st)
   if not i then
     return
   end
   local path = st.sections[i].path
-  if reveal(st, i, path) then
+  if reveal(surface, st, i, path) then
     return
   end
-  user_set_collapsed(st, i, not st.collapsed[path])
+  user_set_collapsed(surface, st, i, not st.collapsed[path])
 end
 
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
@@ -227,7 +230,8 @@ local function canvas_actions(app, surface, st, cfg)
   local generation = surface.generation
   return {
     jump       = owned_action(surface, generation, function() open_under_cursor(st, cfg) end),
-    collapse   = owned_action(surface, generation, function() toggle_collapse_under_cursor(st) end),
+    collapse   = owned_action(surface, generation,
+      function() toggle_collapse_under_cursor(surface, st) end),
     close      = owned_action(surface, generation, function() app:close() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
@@ -376,7 +380,7 @@ function App:open(opts)
   st.hooks = st.hooks or {}
   st.hooks.on_shape_change = function()
     surface:guard(generation, function()
-      sync_after_collapse(st)
+      sync_after_collapse(surface, st)
     end)
   end
   -- Fired by sidebar.sync once it has resolved which section the topline is in --
@@ -403,7 +407,14 @@ function App:open(opts)
   set_canvas_keymaps(self, surface, st)
 
   if config.options.highlight.enabled then
-    hl.attach(st, config.options.highlight)
+    surface.controllers.hl = hl.attach(st, config.options.highlight, {
+      alive = function()
+        return surface:guard(generation)
+      end,
+      windows = function()
+        return surface:canvas_windows()
+      end,
+    })
   end
 
   if config.options.watch.enabled then
@@ -567,7 +578,7 @@ function App:open(opts)
     -- all when the top section is the collapsed one) -- so nothing else
     -- brings them back in sync. Also fixes up the sidebar's active row, drawn
     -- from the pre-restore shape before the view step moved the viewport.
-    sync_after_collapse(st)
+    sync_after_collapse(surface, st)
   end
 
   if config.options.virt.enabled then
@@ -580,7 +591,7 @@ function App:open(opts)
       end,
       on_change = function(changed_state)
         surface:guard(generation, function()
-          sync_after_collapse(changed_state)
+          sync_after_collapse(surface, changed_state)
         end)
       end,
     })
@@ -765,7 +776,7 @@ local function pivot(surface, target_lens)
     show_empty_message(st)
   end
   set_winbar(st)
-  sync_after_collapse(st)
+  sync_after_collapse(surface, st)
   local lease = surface.controllers.virt
   if lease then
     virt.apply(lease, config.options.virt)

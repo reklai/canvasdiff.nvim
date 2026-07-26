@@ -3,9 +3,7 @@ local viewport = require("galley.viewport")
 local model = require("galley.model")
 local git = require("galley.git")
 local config = require("galley.config")
-local hl = require("galley.hl")
 local sidebar = require("galley.sidebar")
-local scrollbar = require("galley.scrollbar")
 local util = require("galley.util")
 local fold = require("galley.fold")
 local lens = require("galley.lens")
@@ -288,9 +286,10 @@ function M.back()
   end
 
   vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
-  hl.apply_now(state)
-  sidebar.refresh(state)
-  scrollbar.update(state)
+  local on_shape_change = state.hooks and state.hooks.on_shape_change
+  if on_shape_change then
+    on_shape_change(state)
+  end
 end
 
 return M

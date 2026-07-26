@@ -255,7 +255,12 @@ function Surface:dispose(reason)
       virt.detach(lease)
     end
   end)
-  attempt("hl.detach", function() hl.detach(self.state) end)
+  attempt("hl.detach", function()
+    local lease = self.controllers.hl
+    if lease then
+      hl.detach(lease)
+    end
+  end)
   attempt("sidebar.close", sidebar.close)
   attempt("scrollbar.close", scrollbar.close)
   attempt("statuscol.detach", function()
