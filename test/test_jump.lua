@@ -3,9 +3,9 @@ local git = require("canvasdiff.git")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local jump = require("canvasdiff.jump")
-local fold = require("canvasdiff.fold")
+local fold = model.fold
 local collect = require("canvasdiff.collect")
-local lens = require("canvasdiff.lens")
+local lens = model.lens
 
 local function sh(root, cmd)
   local res = vim.system(cmd, { cwd = root, text = true }):wait()

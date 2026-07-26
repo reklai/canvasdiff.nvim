@@ -14,7 +14,7 @@
 --- read-only diff viewer, which is a thing the world already has plenty of.
 ---
 --- Pure, and requires nothing, so it unit-tests standalone and every module can
---- read a lens without a dependency cycle -- same discipline as fold.lua.
+--- read a lens without a dependency cycle -- the same discipline as diff.fold.
 local L = {}
 
 --- The staged blob of a path, in git's rev syntax.

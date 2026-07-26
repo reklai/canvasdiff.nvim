@@ -13,8 +13,9 @@ local statuscol = require("canvasdiff.statuscol")
 local session = require("canvasdiff.session")
 local util = require("canvasdiff.util")
 local keys = require("canvasdiff.keys")
-local fold = require("canvasdiff.fold")
-local lens = require("canvasdiff.lens")
+local diff = require("canvasdiff.diff")
+local fold = diff.fold
+local lens = diff.lens
 local render = require("canvasdiff.render")
 local Surface = require("canvasdiff.Surface")
 

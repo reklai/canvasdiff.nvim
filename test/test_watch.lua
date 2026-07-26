@@ -3,7 +3,7 @@ local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local collect = require("canvasdiff.collect")
 local watch = require("canvasdiff.watch")
-local lens = require("canvasdiff.lens")
+local lens = model.lens
 
 local T = {}
 

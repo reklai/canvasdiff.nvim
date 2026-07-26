@@ -1,6 +1,6 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
-local viewport = require("canvasdiff.viewport")
+local viewport = require("canvasdiff.diff").anchor
 
 local T = {}
 

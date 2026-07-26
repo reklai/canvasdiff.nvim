@@ -1,7 +1,7 @@
 local canvas = require("canvasdiff.canvas")
 local collect = require("canvasdiff.collect")
 local config = require("canvasdiff.config")
-local lens = require("canvasdiff.lens")
+local lens = require("canvasdiff.diff").lens
 
 local W = {}
 

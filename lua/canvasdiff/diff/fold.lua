@@ -15,8 +15,8 @@
 --- which of the two gestures hid what, and a file the user collapsed by hand
 --- before folding its parent survives the round trip.
 ---
---- Pure, and requires nothing, so every module can read the predicate without
---- a dependency cycle and it unit-tests standalone.
+--- Pure, and requires nothing, so every module can read the predicate through
+--- the diff facade without a dependency cycle, and it unit-tests standalone.
 local F = {}
 
 --- True when a folded ancestor directory of `path` is in `folded`.

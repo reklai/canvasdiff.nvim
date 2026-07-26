@@ -1,3 +1,4 @@
+-- Semantic viewport anchors for restoring a stable reading position.
 local V = {}
 
 --- Resolve a semantic anchor against a section's line entries.

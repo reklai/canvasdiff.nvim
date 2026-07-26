@@ -5,7 +5,7 @@ local virt = require("canvasdiff.virt")
 local session = require("canvasdiff.session")
 local config = require("canvasdiff.config")
 local scrollbar = require("canvasdiff.scrollbar")
-local fold = require("canvasdiff.fold")
+local fold = model.fold
 local sidebar = require("canvasdiff.sidebar")
 
 local T = {}

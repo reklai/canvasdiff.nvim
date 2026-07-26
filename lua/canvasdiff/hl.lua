@@ -2,7 +2,7 @@ local M = {}
 
 local canvas = require("canvasdiff.canvas")
 local worddiff = require("canvasdiff.worddiff")
-local fold = require("canvasdiff.fold")
+local fold = require("canvasdiff.diff").fold
 
 local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 

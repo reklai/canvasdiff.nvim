@@ -1,5 +1,5 @@
 local H = require("helpers")
-local lens = require("canvasdiff.lens")
+local lens = require("canvasdiff.diff").lens
 local collect = require("canvasdiff.collect")
 local git = require("canvasdiff.git")
 

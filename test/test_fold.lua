@@ -1,5 +1,5 @@
 local H = require("helpers")
-local fold = require("canvasdiff.fold")
+local fold = require("canvasdiff.diff").fold
 
 local T = {}
 

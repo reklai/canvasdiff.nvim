@@ -13,7 +13,7 @@ local model = require("canvasdiff.diff")
 local collect = require("canvasdiff.collect")
 local watch = require("canvasdiff.watch")
 local virt = require("canvasdiff.virt")
-local fold = require("canvasdiff.fold")
+local fold = model.fold
 
 local T = {}
 
@@ -71,7 +71,7 @@ end
 local function is_stale(st, i)
   local sec = st.sections[i]
   return fold.stale(st, sec.path, model.fingerprint(sec),
-    require("canvasdiff.lens").of(st).id)
+    model.lens.of(st).id)
 end
 
 local function index_of(st, path)
@@ -296,7 +296,7 @@ end
 -- from the worktree to the index, so it is the only pivot that can misfire -- and
 -- without scoping it reports every folded file as changed.
 T["stale_ pivoting to the staged lens does not fake a change"] = function()
-  local lens = require("canvasdiff.lens")
+  local lens = model.lens
   local root = H.git_fixture({
     committed = { ["src/a.txt"] = bigtext(40, "a"), ["top.txt"] = bigtext(40, "t") },
   })

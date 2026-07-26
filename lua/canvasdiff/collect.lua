@@ -1,7 +1,8 @@
 local git = require("canvasdiff.git")
 local util = require("canvasdiff.util")
-local lens = require("canvasdiff.lens")
-local model = require("canvasdiff.diff")
+local diff = require("canvasdiff.diff")
+local lens = diff.lens
+local model = diff
 
 local M = {}
 
@@ -24,7 +25,7 @@ local function fixed_paths(l, file)
   local old_path = path
   local status = file.status
 
-  if lens.same(l, lens.named.staged) then
+  if lens.same(l, lens.get("staged")) then
     status = file.staged or status
     if file.staged == "R" then
       old_path = file.old_path or path
@@ -32,7 +33,7 @@ local function fixed_paths(l, file)
       path = file.old_path
       old_path = path
     end
-  elseif lens.same(l, lens.named.unstaged) then
+  elseif lens.same(l, lens.get("unstaged")) then
     status = file.unstaged or status
     if file.unstaged == "R" then
       old_path = file.old_path or path

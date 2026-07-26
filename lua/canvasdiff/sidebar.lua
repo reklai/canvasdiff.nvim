@@ -1,10 +1,11 @@
 local canvas = require("canvasdiff.canvas")
 local config = require("canvasdiff.config")
 local keys = require("canvasdiff.keys")
-local fold = require("canvasdiff.fold")
 local render = require("canvasdiff.render")
-local model = require("canvasdiff.diff")
-local lens = require("canvasdiff.lens")
+local diff = require("canvasdiff.diff")
+local fold = diff.fold
+local model = diff
+local lens = diff.lens
 local util = require("canvasdiff.util")
 
 local S = {}

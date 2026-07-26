@@ -876,7 +876,7 @@ return {
     -- cached canvas buffer a real close/reopen cycle would use.
     package.loaded["canvasdiff"] = nil
     local fm = require("canvasdiff")
-    local lens = require("canvasdiff.lens")
+    local lens = require("canvasdiff.diff").lens
     local session = require("canvasdiff.session")
 
     local before = {
@@ -1015,7 +1015,7 @@ return {
     vim.api.nvim_set_current_dir(root)
     package.loaded["canvasdiff"] = nil
     local fm = require("canvasdiff")
-    local lens = require("canvasdiff.lens")
+    local lens = require("canvasdiff.diff").lens
     local session = require("canvasdiff.session")
     assert(fm.open({ lens = lens.branch("comparison-base") }))
 

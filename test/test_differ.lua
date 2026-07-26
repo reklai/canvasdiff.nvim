@@ -5,11 +5,14 @@ return {
     local names = vim.tbl_keys(differ)
     table.sort(names)
     H.eq(names, {
+      "anchor",
       "build",
       "build_section",
       "fingerprint",
+      "fold",
       "hunks",
       "is_binary",
+      "lens",
       "staged_then_changed",
     })
   end,

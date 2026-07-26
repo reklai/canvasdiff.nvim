@@ -1,5 +1,5 @@
 local H = require("helpers")
-local V = require("canvasdiff.viewport")
+local V = require("canvasdiff.diff").anchor
 
 local function mkentries(n)
   local es = {}

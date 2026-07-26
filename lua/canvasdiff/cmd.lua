@@ -106,7 +106,7 @@ function C.run(parse)
   local fm = require("canvasdiff")
 
   if parse.action == "set_lens" then
-    fm.set_lens(require("canvasdiff.lens").get(parse.lens))
+    fm.set_lens(require("canvasdiff.diff").lens.get(parse.lens))
     return
   end
 

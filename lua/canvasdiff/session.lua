@@ -1,7 +1,8 @@
 local canvas = require("canvasdiff.canvas")
-local viewport = require("canvasdiff.viewport")
-local fold = require("canvasdiff.fold")
-local lens = require("canvasdiff.lens")
+local diff = require("canvasdiff.diff")
+local viewport = diff.anchor
+local fold = diff.fold
+local lens = diff.lens
 
 local M = {}
 

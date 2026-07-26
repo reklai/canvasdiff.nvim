@@ -4,7 +4,7 @@ local model = require("canvasdiff.diff")
 local render = require("canvasdiff.render")
 local scrollbar = require("canvasdiff.scrollbar")
 local hl = require("canvasdiff.hl")
-local fold = require("canvasdiff.fold")
+local fold = model.fold
 
 local T = {}
 
