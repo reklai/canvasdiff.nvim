@@ -54,6 +54,7 @@ T["page_ loads without an editor runtime"] = function()
   H.eq(type(loaded.publish_cold), "function")
   H.eq(type(loaded.discard_candidate), "function")
   H.eq(type(loaded.read_view), "function")
+  H.eq(type(loaded.cancel_restore), "function")
   H.eq(type(loaded.release_view), "function")
   H.eq(type(loaded.is_authorized), "function")
   H.eq(type(loaded.view_metadata), "function")
@@ -978,6 +979,186 @@ T["page_ authenticated restore returns a nonmutating opaque raw view"] =
     local resident, resident_err = Page.rows(page)
     H.eq(resident, nil)
     assert(resident_err:find("not resident", 1, true), resident_err)
+  end
+
+T["page_ authenticated restore cancellation preserves valid cold bytes"] =
+  function()
+    local function make_cold(rows, block)
+      local page = Page.new(rows)
+      local node = {}
+      local claimed, capability = Page.claim(page, node)
+      H.eq(claimed, true)
+      local body
+      local candidate = assert(Page.prepare_cold(page, 0, {
+        codec = TEST_CODEC,
+        encode = function(raw)
+          body = raw
+          return block
+        end,
+        crc32 = test_crc32,
+      }, capability))
+      assert(Page.publish_cold(page, candidate, 0, capability))
+      return page, capability, body
+    end
+
+    local rows = { "cancel-cancel", "omega" }
+    local page, capability, body = make_cold(rows, "\7")
+    local before = Page.encoded(page)
+    local missing_scope, missing_scope_err = Page.cancel_restore(
+      page,
+      1,
+      capability,
+      {},
+      "out-of-band cancellation"
+    )
+    H.eq(missing_scope, nil)
+    assert(missing_scope_err:find("scope", 1, true), missing_scope_err)
+
+    local decode_cancellation
+    local crc_calls = 0
+    local view, err = Page.read_view(page, 1, {
+      codec = TEST_CODEC,
+      decode = function(_, _, scope)
+        local wrong, wrong_err = Page.cancel_restore(
+          page,
+          1,
+          {},
+          scope,
+          "forged cancellation"
+        )
+        H.eq(wrong, nil)
+        assert(wrong_err:find("capability", 1, true), wrong_err)
+        decode_cancellation = assert(Page.cancel_restore(
+          page,
+          1,
+          capability,
+          scope,
+          "page-list restore source changed"
+        ))
+        H.eq(getmetatable(decode_cancellation), false)
+        H.eq(next(decode_cancellation), nil)
+        return decode_cancellation
+      end,
+      crc32 = function()
+        crc_calls = crc_calls + 1
+        return 0
+      end,
+    }, capability)
+    H.eq(view, nil)
+    assert(err:find("page-list restore source changed", 1, true), err)
+    H.eq(crc_calls, 0, "CRC must not run after decode cancellation")
+    H.eq(Page.metadata(page).quarantined, false)
+    H.eq(Page.encoded(page), before)
+
+    local restored = assert(Page.read_view(page, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return body
+      end,
+      crc32 = test_crc32,
+    }, capability))
+    H.eq(Page.view_rows(restored), rows)
+
+    -- A used token is malformed decoder output, not a standing exemption from
+    -- authentication. Reuse therefore quarantines this exact cold revision.
+    view, err = Page.read_view(page, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return decode_cancellation
+      end,
+      crc32 = function()
+        crc_calls = crc_calls + 1
+        return 0
+      end,
+    }, capability)
+    H.eq(view, nil)
+    assert(err:find("decode failed", 1, true), err)
+    H.eq(crc_calls, 0)
+    H.eq(Page.metadata(page).quarantined, true)
+
+    local crc_page, crc_capability, crc_body =
+      make_cold({ "checksum-cancel" }, "\8")
+    local checksum_calls = 0
+    view, err = Page.read_view(crc_page, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return crc_body
+      end,
+      crc32 = function(_, scope)
+        checksum_calls = checksum_calls + 1
+        return assert(Page.cancel_restore(
+          crc_page,
+          1,
+          crc_capability,
+          scope,
+          "page-list checksum source changed"
+        ))
+      end,
+    }, crc_capability)
+    H.eq(view, nil)
+    assert(err:find("page-list checksum source changed", 1, true), err)
+    H.eq(checksum_calls, 1)
+    H.eq(Page.metadata(crc_page).quarantined, false)
+
+    restored = assert(Page.read_view(crc_page, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return crc_body
+      end,
+      crc32 = test_crc32,
+    }, crc_capability))
+    H.eq(Page.view_rows(restored), { "checksum-cancel" })
+
+    -- Even an authentic token is bound to one Page, revision, stage, and
+    -- callback scope. Returning it from another restore is ordinary corrupt
+    -- decoder output and quarantines the target, while leaving the source
+    -- revision untouched.
+    local source, source_capability, source_body =
+      make_cold({ "source-token" }, "\9")
+    local foreign
+    assert(Page.read_view(source, 1, {
+      codec = TEST_CODEC,
+      decode = function(_, _, scope)
+        foreign = assert(Page.cancel_restore(
+          source,
+          1,
+          source_capability,
+          scope,
+          "captured but not returned"
+        ))
+        return source_body
+      end,
+      crc32 = test_crc32,
+    }, source_capability))
+
+    local target, target_capability =
+      make_cold({ "target-token" }, "\10")
+    view, err = Page.read_view(target, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return foreign
+      end,
+      crc32 = test_crc32,
+    }, target_capability)
+    H.eq(view, nil)
+    assert(err:find("decode failed", 1, true), err)
+    H.eq(Page.metadata(target).quarantined, true)
+    H.eq(Page.metadata(source).quarantined, false)
+
+    local forged = {}
+    debug.setmetatable(forged, debug.getmetatable(foreign))
+    local forged_target, forged_capability =
+      make_cold({ "forged-token" }, "\11")
+    view, err = Page.read_view(forged_target, 1, {
+      codec = TEST_CODEC,
+      decode = function()
+        return forged
+      end,
+      crc32 = test_crc32,
+    }, forged_capability)
+    H.eq(view, nil)
+    assert(err:find("decode failed", 1, true), err)
+    H.eq(Page.metadata(forged_target).quarantined, true)
   end
 
 T["page_ corrupt cold restore quarantines once without changing revision"] =

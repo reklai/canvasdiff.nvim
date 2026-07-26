@@ -40,6 +40,8 @@ local COLD_CANDIDATES = setmetatable({}, { __mode = "k" })
 local PAGE_CANDIDATES = setmetatable({}, { __mode = "k" })
 local RAW_VIEW_STATES = setmetatable({}, { __mode = "k" })
 local PAGE_RAW_VIEWS = setmetatable({}, { __mode = "k" })
+local RESTORE_CANCELLATIONS = setmetatable({}, { __mode = "k" })
+local ACTIVE_RESTORE_SCOPES = setmetatable({}, { __mode = "k" })
 local ColdCandidate = {}
 ColdCandidate.__metatable = false
 local RepresentationCapability = {}
@@ -47,6 +49,10 @@ RepresentationCapability.__metatable = false
 local RawView = {}
 RawView.__index = RawView
 RawView.__metatable = false
+local RestoreCancellation = {}
+RestoreCancellation.__metatable = false
+local RestoreScope = {}
+RestoreScope.__metatable = false
 local REPRESENTATION_FIELDS = {
   "codec",
   "payload",
@@ -1217,6 +1223,131 @@ local function quarantine_current(
   return nil, reason
 end
 
+local function begin_restore_scope(
+    page,
+    state,
+    revision,
+    capability,
+    stage
+)
+  local scope = setmetatable({}, RestoreScope)
+  rawset(ACTIVE_RESTORE_SCOPES, scope, {
+    page = page,
+    state = state,
+    revision = revision,
+    capability = capability,
+    stage = stage,
+  })
+  return scope
+end
+
+local function end_restore_scope(scope)
+  rawset(ACTIVE_RESTORE_SCOPES, scope, nil)
+end
+
+--- Create a one-shot, authenticated cancellation for an in-flight restore.
+---
+--- PageList uses this only after its callback fence has restored a mutated
+--- source graph. Unlike a decoder failure, cancellation says nothing about the
+--- stored bytes and therefore must not quarantine the unchanged Page revision.
+--- The exact private representation capability prevents a codec callback from
+--- forging this outcome through the public Page module.
+local function cancel_restore(
+    self,
+    expected,
+    capability,
+    scope,
+    reason
+)
+  local state, state_err = private_state_for(self)
+  if not state then
+    return nil, state_err
+  end
+  local authorized, authorization_err =
+    representation_authorized(self, capability)
+  if not authorized then
+    return nil, authorization_err
+  end
+  local revision_ok, revision_err = expected_revision(state, expected)
+  if not revision_ok then
+    return nil, revision_err
+  end
+  if rawget(state, "codec") == "raw" then
+    return nil, "only a cold Page restore can be cancelled"
+  end
+  if type(reason) ~= "string" or reason == "" or #reason > 512 then
+    return nil, "restore cancellation reason must be a bounded non-empty string"
+  end
+  local scope_record = type(scope) == "table"
+    and rawget(ACTIVE_RESTORE_SCOPES, scope)
+    or nil
+  if not RAW_EQUAL(RAW_METATABLE(scope), RestoreScope)
+      or not RAW_EQUAL(next(scope), nil)
+      or type(scope_record) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(scope_record), nil)
+      or not RAW_EQUAL(rawget(scope_record, "page"), self)
+      or not RAW_EQUAL(rawget(scope_record, "state"), state)
+      or rawget(scope_record, "revision") ~= expected
+      or not RAW_EQUAL(
+        rawget(scope_record, "capability"),
+        capability
+      )
+      or (rawget(scope_record, "stage") ~= "decode"
+        and rawget(scope_record, "stage") ~= "crc32") then
+    return nil, "active restore cancellation scope is required"
+  end
+  local fence_ok, fence_err =
+    restore_fence(self, state, expected, capability)
+  if not fence_ok then
+    return nil, fence_err
+  end
+
+  local cancellation = setmetatable({}, RestoreCancellation)
+  rawset(RESTORE_CANCELLATIONS, cancellation, {
+    page = self,
+    state = state,
+    revision = expected,
+    capability = capability,
+    scope = scope,
+    stage = rawget(scope_record, "stage"),
+    reason = reason,
+  })
+  return cancellation
+end
+Page.cancel_restore = cancel_restore
+
+local function consume_restore_cancellation(
+    value,
+    page,
+    state,
+    expected,
+    capability,
+    scope,
+    stage
+)
+  if type(value) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(value), RestoreCancellation) then
+    return false
+  end
+
+  local record = rawget(RESTORE_CANCELLATIONS, value)
+  if not RAW_EQUAL(next(value), nil)
+      or type(record) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(record), nil)
+      or not RAW_EQUAL(rawget(record, "page"), page)
+      or not RAW_EQUAL(rawget(record, "state"), state)
+      or rawget(record, "revision") ~= expected
+      or not RAW_EQUAL(rawget(record, "capability"), capability)
+      or not RAW_EQUAL(rawget(record, "scope"), scope)
+      or rawget(record, "stage") ~= stage
+      or type(rawget(record, "reason")) ~= "string"
+      or rawget(record, "reason") == "" then
+    return false
+  end
+  rawset(RESTORE_CANCELLATIONS, value, nil)
+  return true, rawget(record, "reason")
+end
+
 --- Return an opaque raw snapshot for one exact Page revision.
 ---
 --- Raw pages require no options and invoke no callbacks. Cold pages require a
@@ -1261,16 +1392,37 @@ local function read_view(self, expected, opts, capability)
   end
 
   local expected_bytes = raw_body_bytes(state)
+  local decode_scope = begin_restore_scope(
+    self,
+    state,
+    expected,
+    capability,
+    "decode"
+  )
   local called, decoded = protected_callback(
     "decode",
     configured.callback,
     rawget(state, "payload"),
-    expected_bytes
+    expected_bytes,
+    decode_scope
   )
+  end_restore_scope(decode_scope)
   local fence_ok, fence_err =
     restore_fence(self, state, expected, capability)
   if not fence_ok then
     return nil, fence_err
+  end
+  local cancelled, cancellation_err = consume_restore_cancellation(
+    decoded,
+    self,
+    state,
+    expected,
+    capability,
+    decode_scope,
+    "decode"
+  )
+  if cancelled then
+    return nil, cancellation_err
   end
   if not called
       or RAW_EQUAL(decoded, nil)
@@ -1294,11 +1446,20 @@ local function read_view(self, expected, opts, capability)
     )
   end
 
+  local checksum_scope = begin_restore_scope(
+    self,
+    state,
+    expected,
+    capability,
+    "crc32"
+  )
   local checksum_called, checksum = protected_callback(
     "crc32",
     configured.crc32,
-    decoded
+    decoded,
+    checksum_scope
   )
+  end_restore_scope(checksum_scope)
   fence_ok, fence_err = restore_fence(
     self,
     state,
@@ -1307,6 +1468,18 @@ local function read_view(self, expected, opts, capability)
   )
   if not fence_ok then
     return nil, fence_err
+  end
+  cancelled, cancellation_err = consume_restore_cancellation(
+    checksum,
+    self,
+    state,
+    expected,
+    capability,
+    checksum_scope,
+    "crc32"
+  )
+  if cancelled then
+    return nil, cancellation_err
   end
   if not checksum_called
       or not integer(checksum)
