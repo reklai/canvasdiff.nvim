@@ -397,9 +397,10 @@ function M.locate(state, row0)
   return ans, row0 - starts[ans] + 1
 end
 
-local function win_showing_canvas(state)
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and vim.api.nvim_win_get_buf(state.win) == state.buf
+local function win_showing_canvas(state, win)
+  win = win or state.win
+  return win and vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_buf(win) == state.buf
 end
 
 local function win_view_info(win)
@@ -642,7 +643,7 @@ end
 --- No-op when the section is missing, when its anchors don't resolve against
 --- this buffer (same staleness case hl.apply_now guards), or when the buffer
 --- already shows the right form.
-local function resplice(state, i)
+local function resplice(state, i, preferred_win)
   local sec = state.sections[i]
   if not sec then return end
 
@@ -697,10 +698,11 @@ local function resplice(state, i)
 
   local new_lines = section_lines_for(state, sec)
 
-  local win_ok = win_showing_canvas(state)
+  local view_win = preferred_win or state.win
+  local win_ok = win_showing_canvas(state, view_win)
   local branch, top0, view
   if win_ok then
-    local info = win_view_info(state.win)
+    local info = win_view_info(view_win)
     top0 = info.top - 1
     view = info.view
     local bot0 = info.bot - 1
@@ -729,16 +731,16 @@ local function resplice(state, i)
     local delta = #new_lines - (end_row_exclusive - start_row)
     view.topline = math.max(1, view.topline + delta)
     view.lnum = math.max(1, view.lnum + delta)
-    vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+    vim.api.nvim_win_call(view_win, function() vim.fn.winrestview(view) end)
   elseif branch == "intersect" then
     if top0 < start_row then
       view.lnum = math.min(view.lnum, vim.api.nvim_buf_line_count(state.buf))
-      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+      vim.api.nvim_win_call(view_win, function() vim.fn.winrestview(view) end)
     else
       local topline = start_row + 1
       view.topline = topline
       view.lnum = topline
-      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+      vim.api.nvim_win_call(view_win, function() vim.fn.winrestview(view) end)
     end
   end
   -- "below"/"none": nothing to do.
@@ -758,14 +760,17 @@ end
 --- visible changes. An intent-only change (the user taking over a path virt had
 --- claimed) is recorded and falls through to a resplice whose span check makes
 --- it a no-op, so it needs no special case.
-function M.set_collapsed(state, i, collapsed, intent)
+---
+--- `preferred_win`, when supplied, is the one Canvas view whose viewport is
+--- corrected; it does not re-elect `state.win`.
+function M.set_collapsed(state, i, collapsed, intent, preferred_win)
   local sec = state.sections[i]
   if not sec then return end
   local want = collapsed and (intent or "user") or nil
   if state.collapsed[sec.path] == want then return end
 
   state.collapsed[sec.path] = want
-  resplice(state, i)
+  resplice(state, i, preferred_win)
 end
 
 --- Bring the canvas to `desired` with the fewest possible splices.
@@ -862,15 +867,17 @@ end
 ---
 --- The caller owns the single follow-up sync of the other UI pieces
 --- (highlighting / sidebar / scrollbar), mirroring session.restore.
-function M.resync_visibility(state, indices)
+--- `preferred_win` selects the one Canvas view corrected by every splice and
+--- leaves the historical scalar primary untouched.
+function M.resync_visibility(state, indices, preferred_win)
   if indices then
     for _, i in ipairs(indices) do
-      resplice(state, i)
+      resplice(state, i, preferred_win)
     end
     return
   end
   for i = 1, #state.sections do
-    resplice(state, i)
+    resplice(state, i, preferred_win)
   end
 end
 

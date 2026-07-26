@@ -6,9 +6,6 @@ local render = require("galley.render")
 local model = require("galley.model")
 local lens = require("galley.lens")
 local util = require("galley.util")
--- For S.cycle's stepping only. Safe: motions requires canvas/fold/config and
--- nothing in that chain requires this module back.
-local motions = require("galley.motions")
 
 local S = {}
 
@@ -29,14 +26,14 @@ function S.build_entries(sections, folded, aside, stale)
   stale = stale or {}
   local entries = {}
   local prev_dirs = {}
-  -- Which dir prefixes have something stale under them. Built up front because a
-  -- dir row is emitted before the descendants that would justify its marker.
   local stale_dirs = {}
   for path in pairs(stale) do
     local from = 1
     while true do
       local slash = string.find(path, "/", from, true)
-      if not slash then break end
+      if not slash then
+        break
+      end
       stale_dirs[string.sub(path, 1, slash)] = true
       from = slash + 1
     end
@@ -62,10 +59,11 @@ function S.build_entries(sections, folded, aside, stale)
       if not hidden then
         if d > shared then
           entries[#entries + 1] = {
-            kind = "dir", path = prefix, name = parts[d] .. "/",
-            depth = d - 1, folded = folded[prefix] or false,
-            -- Only worth saying on a FOLDED dir: if it is open, its own rows carry
-            -- the marker and repeating it on the parent is noise.
+            kind = "dir",
+            path = prefix,
+            name = parts[d] .. "/",
+            depth = d - 1,
+            folded = folded[prefix] or false,
             stale = (folded[prefix] and stale_dirs[prefix]) or false,
           }
         end
@@ -77,12 +75,15 @@ function S.build_entries(sections, folded, aside, stale)
 
     if not hidden then
       entries[#entries + 1] = {
-        kind = "file", path = section.path, name = fname, depth = #parts,
-        section_i = i, adds = section.adds, dels = section.dels,
+        kind = "file",
+        path = section.path,
+        name = fname,
+        depth = #parts,
+        section_i = i,
+        adds = section.adds,
+        dels = section.dels,
         aside = aside[section.path] or false,
         stale = stale[section.path] or false,
-        -- Straight off git's XY pair, so it says which KIND of change this is
-        -- regardless of which lens you happen to be looking through.
         staged = section.staged,
         unstaged = section.unstaged,
       }
@@ -94,478 +95,1261 @@ function S.build_entries(sections, folded, aside, stale)
 end
 
 --- Render entries to display lines (pure).
----
---- File rows carry the same two-column gutter as dir rows, holding "▸ " when
---- the file is folded -- the same glyph render.placeholder uses in the
---- canvas and a folded dir uses here, so one symbol means one thing
---- everywhere. Without it the tree and the navigation disagree: ]f skips a
---- file and nothing on screen explains why.
 function S.render_lines(entries)
   local lines = {}
   for i, e in ipairs(entries) do
     local indent = ("  "):rep(e.depth)
-    -- Same glyph and same trailing position as the canvas placeholder's, so one
-    -- symbol keeps meaning one thing in both windows.
     local mark = e.stale and render.glyphs.stale or ""
     if e.kind == "dir" then
       lines[i] = indent
         .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
-        .. render.escape_path(e.name) .. mark
+        .. render.escape_path(e.name)
+        .. mark
     else
-      -- Stage state goes BEFORE the stale marker. That ordering does NOT disambiguate
-      -- them -- STALE and STAGED are the same `●`, so a trailing ● means "staged" on
-      -- a row with no stale marker and "stale" on a row with one, and a staged-and-
-      -- stale row is `● ●`. Only the highlight separates those; render.marker_spans
-      -- owns that arithmetic and depends on this exact append order.
       local stage = render.stage_mark(e.staged, e.unstaged)
       if stage ~= "" then
         stage = " " .. stage
       end
-      lines[i] = indent .. (e.aside and (render.glyphs.folded .. " ") or "  ")
+      lines[i] = indent
+        .. (e.aside and (render.glyphs.folded .. " ") or "  ")
         .. render.escape_path(e.name)
         .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
-        .. stage .. mark
+        .. stage
+        .. mark
     end
   end
   return lines
 end
 
 local NS = vim.api.nvim_create_namespace("galley.sidebar")
-local BUFNAME = "galley://sidebar"
+local next_lease_id = 0
+local next_view_id = 0
+local next_mark_id = 0
 
--- Window-bound singleton: at most one sidebar, always attached to the one
--- live canvas.
-local side = nil
+local WINDOW_OPTIONS = {
+  { name = "winfixwidth", value = true },
+  { name = "winfixbuf", value = true },
+  { name = "wrap", value = false },
+  { name = "cursorline", value = true },
+  { name = "number", value = false },
+  { name = "relativenumber", value = false },
+  { name = "signcolumn", value = "no" },
+  { name = "foldenable", value = false },
+}
 
 local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "GalleySidebarDir", { link = "Directory", default = true })
-  vim.api.nvim_set_hl(0, "GalleySidebarActive", { link = "Visual", default = true })
-  -- The three marker groups (stale / staged / unstaged) live in render, next to the
-  -- glyphs they colour, and are shared with the canvas -- one `●` means one thing in
-  -- both windows. See render.ensure_marker_hl for why these particular links.
+  vim.api.nvim_set_hl(0, "GalleySidebarDir", {
+    link = "Directory",
+    default = true,
+  })
+  vim.api.nvim_set_hl(0, "GalleySidebarActive", {
+    link = "Visual",
+    default = true,
+  })
   render.ensure_marker_hl()
 end
 
-function S.is_open()
-  return side ~= nil and side.win ~= nil and vim.api.nvim_win_is_valid(side.win)
+local function valid_win(win)
+  return win ~= nil and vim.api.nvim_win_is_valid(win)
 end
 
---- True when `win` is the live sidebar window.
-function S.is_sidebar_win(win)
-  return S.is_open() and win == side.win
+local function valid_buf(buf)
+  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
 end
 
-local function set_modifiable(buf, val)
-  vim.api.nvim_set_option_value("modifiable", val, { buf = buf })
+local function normalize_tab(tab)
+  if tab == nil or tab == 0 then
+    return vim.api.nvim_get_current_tabpage()
+  end
+  return tab
 end
 
---- "The canvas changed shape" -- a fold spliced sections down to placeholders,
---- or back. Lives on the STATE (`state.hooks`, the same table hl.attach uses)
---- rather than on this module, so it belongs to the canvas it describes and
---- cannot outlive it: a module-global assigned for one canvas would still be
---- pointing at that canvas's consumers after it closed.
----
---- The hook is what wakes the pieces this module cannot reach: without it the
---- treesitter tier keeps marks on rows that no longer exist and the minimap
---- depicts a canvas that isn't there. App:open wires it unconditionally.
----
---- The bare `S.refresh` fallback is for a sidebar driven against a hand-built
---- state (the tests do this): it keeps the tree honest, which is all this module
---- owns, and there are no other consumers to wake in that case.
-local function notify_change(state)
-  local hook = state.hooks and state.hooks.on_shape_change
-  if hook then
-    hook(state)
-  else
-    S.refresh(state)
+local function exact(lease)
+  return lease ~= nil
+    and not lease.disposed
+    and (lease.phase == "attaching" or lease.phase == "active")
+end
+
+--- Owner liveness is protected and fail-closed. The identity check after the
+--- callback is load-bearing: the callback itself may reentrantly replace or
+--- dispose this lease.
+local function active(lease)
+  if not exact(lease) then
+    return false
+  end
+  local alive = lease.callbacks and lease.callbacks.alive
+  if alive then
+    local ok, result = pcall(alive, lease)
+    if not (ok and result) then
+      return false
+    end
+  end
+  return exact(lease)
+end
+
+local function view_exact(lease, view)
+  return lease ~= nil
+    and view ~= nil
+    and not view.disposed
+    and view.lease == lease
+    and lease.views_by_tab
+    and lease.views_by_tab[view.tab] == view
+end
+
+local function view_active(lease, view)
+  return active(lease) and view_exact(lease, view)
+end
+
+local function owned_pair(view)
+  if not (view and valid_win(view.win) and valid_buf(view.buf)) then
+    return false
+  end
+  local ok, showing = pcall(vim.api.nvim_win_get_buf, view.win)
+  return ok and showing == view.buf
+end
+
+local function default_snapshot(lease)
+  local state = lease.state
+  local hosts, canvases = {}, {}
+  local win = state and state.win
+  if valid_win(win) then
+    hosts[1] = win
+    if state.buf and valid_buf(state.buf) and vim.api.nvim_win_get_buf(win) == state.buf then
+      canvases[1] = win
+    end
+  end
+  return { hosts = hosts, canvas = canvases }
+end
+
+local function sanitize_windows(lease, input, canvas_only)
+  local out, seen = {}, {}
+  local state = lease.state
+  for _, win in ipairs(input or {}) do
+    if type(win) == "number" and not seen[win] and valid_win(win) then
+      local include = true
+      if canvas_only then
+        include = state
+          and state.buf
+          and valid_buf(state.buf)
+          and vim.api.nvim_win_get_buf(win) == state.buf
+      end
+      if include then
+        seen[win] = true
+        out[#out + 1] = win
+      end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+local function snapshot(lease)
+  if not active(lease) then
+    return nil
+  end
+  local callback = lease.callbacks and lease.callbacks.snapshot
+  local observed = callback and callback(lease) or default_snapshot(lease)
+  if not active(lease) then
+    return nil
+  end
+  observed = type(observed) == "table" and observed or {}
+  local result = {
+    hosts = sanitize_windows(lease, observed.hosts, false),
+    canvas = sanitize_windows(lease, observed.canvas, true),
+  }
+  local host_set = {}
+  for _, win in ipairs(result.hosts) do
+    host_set[win] = true
+  end
+  for _, win in ipairs(result.canvas) do
+    if not host_set[win] then
+      result.hosts[#result.hosts + 1] = win
+      host_set[win] = true
+    end
+  end
+  table.sort(result.hosts)
+  return active(lease) and result or nil
+end
+
+local function windows_in_tab(windows, tab)
+  local out = {}
+  for _, win in ipairs(windows or {}) do
+    if valid_win(win) and vim.api.nvim_win_get_tabpage(win) == tab then
+      out[#out + 1] = win
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+local function contains(list, value)
+  for _, item in ipairs(list) do
+    if item == value then
+      return true
+    end
+  end
+  return false
+end
+
+local function choose_window(list, remembered, preferred)
+  if preferred and contains(list, preferred) then
+    return preferred
+  end
+  if remembered and contains(list, remembered) then
+    return remembered
+  end
+  return list[1]
+end
+
+local function update_targets(view, observed, preferred_canvas)
+  local hosts = windows_in_tab(observed.hosts, view.tab)
+  local canvases = windows_in_tab(observed.canvas, view.tab)
+  view.host_win = choose_window(hosts, view.host_win, preferred_canvas)
+  view.canvas_win = choose_window(canvases, view.canvas_win, preferred_canvas)
+  return hosts, canvases
+end
+
+local function reserve_mark_id(buf)
+  while true do
+    next_mark_id = next_mark_id + 1
+    local ok, position = pcall(vim.api.nvim_buf_get_extmark_by_id, buf, NS, next_mark_id, {})
+    if not ok or #position == 0 then
+      return next_mark_id
+    end
   end
 end
 
---- Rebuild entries from the live sections + fold state and redraw.
-function S.refresh(state)
-  if not S.is_open() then
+local function mark_exists_in(buf, id)
+  if not valid_buf(buf) then
+    return false
+  end
+  local ok, position = pcall(vim.api.nvim_buf_get_extmark_by_id, buf, NS, id, {})
+  return ok and #position > 0
+end
+
+local function delete_mark(view, id)
+  if not id then
     return
   end
-  -- user_folded, not hidden: this runs on every shape change, so keying the
-  -- markers off the rendering predicate would churn every row in the tree on
-  -- every scroll of a large changeset -- and would claim the user folded
-  -- what the virtualizer collapsed on its own.
-  local aside = fold.user_folded_set(state.sections, state)
-  local stale = fold.stale_set(state.sections, state, model.fingerprint, lens.of(state).id)
-  side.entries = S.build_entries(state.sections, state.folded, aside, stale)
-  local lines = S.render_lines(side.entries)
-  if #lines == 0 then
-    lines = { "" }
+  local buf = view.buf
+  if view.deleting then
+    view.deleting[id] = true
   end
-  set_modifiable(side.buf, true)
-  vim.api.nvim_buf_set_lines(side.buf, 0, -1, false, lines)
-  set_modifiable(side.buf, false)
-  vim.api.nvim_buf_clear_namespace(side.buf, NS, 0, -1)
-  for row0, e in ipairs(side.entries) do
-    if e.kind == "dir" then
-      vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, 0, {
-        line_hl_group = "GalleySidebarDir",
-        priority = 90,
-      })
+  if valid_buf(buf) then
+    pcall(vim.api.nvim_buf_del_extmark, buf, NS, id)
+  end
+  if view.deleting then
+    view.deleting[id] = nil
+  end
+  if not mark_exists_in(buf, id) then
+    if view.mark_ids then
+      view.mark_ids[id] = nil
     end
-    -- Col-ranged, so only the markers are coloured, and above the active-row
-    -- highlight so they stay legible on the selected line.
-    --
-    -- Dir rows never carry stage state (only the files under them do), so their
-    -- stage columns are passed as nil rather than read off the entry -- a dir that
-    -- somehow had them set would otherwise get a span pointing at its name.
-    local line = lines[row0] or ""
-    local is_file = e.kind ~= "dir"
-    local spans = render.marker_spans(
-      line, is_file and e.staged or nil, is_file and e.unstaged or nil, e.stale)
-    for _, s in ipairs(spans) do
-      vim.api.nvim_buf_set_extmark(side.buf, NS, row0 - 1, s[1], {
-        end_row = row0 - 1,
-        end_col = s[2],
-        hl_group = s[3],
-        priority = 101,
-      })
+    if view.pending then
+      view.pending[id] = nil
     end
   end
-  side.active_mark = nil
-  S.sync(state)
 end
 
---- Is the canvas buffer actually in its window? False during a jump excursion, which
---- has replaced it with a real file, and after the window was closed.
-local function canvas_showing(state)
-  return state and state.win and vim.api.nvim_win_is_valid(state.win)
-    and vim.api.nvim_win_get_buf(state.win) == state.buf
+local function place_mark(lease, view, row, col, opts)
+  if not (view_active(lease, view) and valid_buf(view.buf)) then
+    return nil
+  end
+  local buf = view.buf
+  local id = reserve_mark_id(view.buf)
+  opts = vim.tbl_extend("force", opts or {}, { id = id })
+  view.pending[id] = true
+  local ok, result = pcall(vim.api.nvim_buf_set_extmark, buf, NS, row, col, opts)
+  if view.pending then
+    view.pending[id] = nil
+  end
+  if not ok then
+    if valid_buf(buf) then
+      pcall(vim.api.nvim_buf_del_extmark, buf, NS, id)
+    end
+    if mark_exists_in(buf, id) and view.mark_ids then
+      view.mark_ids[id] = true
+    end
+    error(result, 0)
+  end
+  if not view_active(lease, view) then
+    if valid_buf(buf) then
+      pcall(vim.api.nvim_buf_del_extmark, buf, NS, id)
+    end
+    return nil
+  end
+  view.mark_ids[id] = true
+  return id
 end
 
---- Index of the section for `path`, or nil.
----
---- By path rather than by an entry's cached `section_i`, because that index is only
---- valid for the entry list it was built with: any resplice that DELETES a section
---- shifts every index after it down by one, and a stale index then silently names a
---- different file.
 local function index_of_path(state, path)
-  for k, sec in ipairs(state.sections or {}) do
-    if sec.path == path then
-      return k
+  for i, section in ipairs(state.sections or {}) do
+    if section.path == path then
+      return i
     end
   end
 end
 
---- Move the active-row highlight onto the row for `section_i` (whose file is `path`),
---- or the deepest visible ancestor dir when a fold hides the file itself.
-local function set_active(state, section_i, path)
-  local best
-  for row0m1, e in ipairs(side.entries) do
-    if (e.kind == "file" and e.section_i == section_i)
-      or (e.kind == "dir" and path:sub(1, #e.path) == e.path) then
-      best = row0m1 - 1
+local function set_modifiable(buf, value)
+  vim.api.nvim_set_option_value("modifiable", value, { buf = buf })
+end
+
+local function write_lines(view, lines)
+  local ok_mod, mod_err = pcall(set_modifiable, view.buf, true)
+  if not ok_mod then
+    error(mod_err, 0)
+  end
+  local ok_write, write_err = pcall(vim.api.nvim_buf_set_lines, view.buf, 0, -1, false, lines)
+  local ok_restore, restore_err = pcall(set_modifiable, view.buf, false)
+  if not ok_write then
+    error(write_err, 0)
+  end
+  if not ok_restore then
+    error(restore_err, 0)
+  end
+end
+
+local EXTENDED_MARK_OPTIONS = {
+  "end_row",
+  "end_col",
+  "hl_group",
+  "hl_eol",
+  "hl_mode",
+  "virt_text",
+  "virt_text_pos",
+  "virt_text_win_col",
+  "virt_text_hide",
+  "virt_text_repeat_linebreak",
+  "virt_lines",
+  "virt_lines_above",
+  "virt_lines_leftcol",
+  "virt_lines_overflow",
+  "right_gravity",
+  "end_right_gravity",
+  "priority",
+  "strict",
+  "sign_text",
+  "sign_hl_group",
+  "cursorline_hl_group",
+  "number_hl_group",
+  "line_hl_group",
+  "conceal",
+  "spell",
+  "ui_watched",
+  "undo_restore",
+  "invalidate",
+  "url",
+}
+
+--- Replacing all buffer lines moves even marks this lease does not own. Keep
+--- foreign marks byte-for-byte at their prior coordinates and with the
+--- options Neovim reports, while continuing to delete only our exact IDs.
+local function snapshot_marks(view, foreign_only)
+  local buf = view.buf
+  local mark_ids = view.mark_ids
+  local pending = view.pending
+  local deleting = view.deleting
+  local out = {}
+  local marks = vim.api.nvim_buf_get_extmarks(buf, NS, 0, -1, {
+    details = true,
+  })
+  if view.disposed or view.buf ~= buf then
+    return nil
+  end
+  for _, mark in ipairs(marks) do
+    local id = mark[1]
+    local owned = mark_ids[id] or pending[id] or deleting[id]
+    if not foreign_only or not owned then
+      out[#out + 1] = mark
     end
   end
-  if not best then
-    return
+  return out
+end
+
+local function restore_marks(view, marks)
+  local buf = view.buf
+  if not valid_buf(buf) then
+    return false, "sidebar buffer disappeared while restoring extmarks"
+  end
+  local first_error
+  for _, mark in ipairs(marks) do
+    local details = mark[4] or {}
+    local opts = { id = mark[1] }
+    for _, name in ipairs(EXTENDED_MARK_OPTIONS) do
+      if details[name] ~= nil then
+        opts[name] = details[name]
+      end
+    end
+    local ok, err = pcall(
+      vim.api.nvim_buf_set_extmark, buf, NS, mark[2], mark[3], opts)
+    if view.disposed or view.buf ~= buf then
+      return nil
+    end
+    if not ok and not first_error then
+      first_error = err
+    end
+  end
+  return first_error == nil, first_error
+end
+
+local sync_view
+
+local function set_active(lease, view, section_i, path)
+  if not view_active(lease, view) then
+    return false
+  end
+  local best
+  for row, entry in ipairs(view.entries or {}) do
+    if
+      (entry.kind == "file" and entry.section_i == section_i)
+      or (entry.kind == "dir" and path:sub(1, #entry.path) == entry.path)
+    then
+      best = row - 1
+    end
+  end
+  if best == nil then
+    return false
   end
 
-  if side.active_mark then
-    pcall(vim.api.nvim_buf_del_extmark, side.buf, NS, side.active_mark)
-  end
-  side.active_mark = vim.api.nvim_buf_set_extmark(side.buf, NS, best, 0, {
+  local previous = view.active_mark
+  local id = place_mark(lease, view, best, 0, {
     line_hl_group = "GalleySidebarActive",
     priority = 100,
   })
-  -- Don't yank the cursor out from under the user while they're actually
-  -- navigating the sidebar themselves -- only steer it when focus is
-  -- elsewhere (e.g. the canvas window scrolled).
-  if vim.api.nvim_get_current_win() ~= side.win then
-    pcall(vim.api.nvim_win_set_cursor, side.win, { best + 1, 0 })
+  if not id then
+    return false
   end
+  view.active_mark = id
+  if previous and previous ~= id then
+    delete_mark(view, previous)
+  end
+  if owned_pair(view) and vim.api.nvim_get_current_win() ~= view.win then
+    pcall(vim.api.nvim_win_set_cursor, view.win, { best + 1, 0 })
+  end
+  return view_active(lease, view)
 end
 
---- Track the canvas topline: activate the file entry for the section under
---- it, or the deepest visible ancestor dir when folds hide the file.
-function S.sync(state)
-  if not S.is_open() then
-    return
+local function refresh_view(lease, view, observed)
+  if not (view_active(lease, view) and owned_pair(view)) then
+    return false
   end
-  if not canvas_showing(state) then
-    return -- excursion in progress or canvas hidden; see S.mark_path
+  local state = lease.state
+  local aside = fold.user_folded_set(state.sections, state)
+  local stale = fold.stale_set(state.sections, state, model.fingerprint, lens.of(state).id)
+  local entries = S.build_entries(state.sections, state.folded, aside, stale)
+  local lines = S.render_lines(entries)
+  if #lines == 0 then
+    lines = { "" }
   end
-  local top0 = vim.api.nvim_win_call(state.win, function()
+
+  local old_lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
+  local marks_before = snapshot_marks(view, false)
+  if not marks_before or not view_active(lease, view) then
+    return false
+  end
+  local foreign = snapshot_marks(view, true)
+  if not foreign or not view_active(lease, view) then
+    return false
+  end
+  local old_ids = {}
+  for id in pairs(view.mark_ids) do
+    old_ids[id] = true
+  end
+  local new_ids = {}
+
+  local ok_write, write_err = pcall(write_lines, view, lines)
+  if not ok_write then
+    if valid_buf(view.buf) then
+      pcall(write_lines, view, old_lines)
+      restore_marks(view, marks_before)
+    end
+    error(write_err, 0)
+  end
+  if not view_active(lease, view) then
+    return false
+  end
+  local foreign_ok, foreign_err = restore_marks(view, foreign)
+  if foreign_ok == nil or not view_active(lease, view) then
+    return false
+  end
+  if not foreign_ok then
+    if valid_buf(view.buf) then
+      pcall(write_lines, view, old_lines)
+      restore_marks(view, marks_before)
+    end
+    error(foreign_err, 0)
+  end
+  if not view_active(lease, view) then
+    return false
+  end
+
+  local ok, err = pcall(function()
+    for row, entry in ipairs(entries) do
+      if entry.kind == "dir" then
+        local id = place_mark(lease, view, row - 1, 0, {
+          line_hl_group = "GalleySidebarDir",
+          priority = 90,
+        })
+        if id then
+          new_ids[id] = true
+        end
+      end
+      local line = lines[row] or ""
+      local is_file = entry.kind ~= "dir"
+      local spans = render.marker_spans(
+        line,
+        is_file and entry.staged or nil,
+        is_file and entry.unstaged or nil,
+        entry.stale
+      )
+      for _, span in ipairs(spans) do
+        local id = place_mark(lease, view, row - 1, span[1], {
+          end_row = row - 1,
+          end_col = span[2],
+          hl_group = span[3],
+          priority = 101,
+        })
+        if id then
+          new_ids[id] = true
+        end
+      end
+    end
+  end)
+  if not ok then
+    for id in pairs(new_ids) do
+      delete_mark(view, id)
+    end
+    if valid_buf(view.buf) then
+      pcall(write_lines, view, old_lines)
+      restore_marks(view, marks_before)
+    end
+    error(err, 0)
+  end
+  if not view_active(lease, view) then
+    return false
+  end
+
+  for id in pairs(old_ids) do
+    delete_mark(view, id)
+  end
+  view.entries = entries
+  view.active_mark = nil
+  view.render_epoch = view.render_epoch + 1
+  return sync_view(lease, view, observed)
+end
+
+sync_view = function(lease, view, observed, preferred_canvas)
+  if not (view_active(lease, view) and owned_pair(view)) then
+    return false
+  end
+  observed = observed or snapshot(lease)
+  if not observed or not view_active(lease, view) then
+    return false
+  end
+  update_targets(view, observed, preferred_canvas)
+  local win = view.canvas_win
+  local state = lease.state
+  if
+    not (
+      win
+      and valid_win(win)
+      and valid_buf(state.buf)
+      and vim.api.nvim_win_get_buf(win) == state.buf
+    )
+  then
+    return false
+  end
+
+  local ok, top0 = pcall(vim.api.nvim_win_call, win, function()
     return vim.fn.line("w0") - 1
   end)
-  local section_i = (canvas.locate(state, top0))
-  if not section_i then
+  if not ok then
+    error(top0, 0)
+  end
+  if not view_active(lease, view) then
+    return false
+  end
+  if type(top0) ~= "number" then
+    return false
+  end
+  local section_i = canvas.locate(state, top0)
+  local section = section_i and state.sections[section_i]
+  if not section or not set_active(lease, view, section_i, section.path) then
+    return false
+  end
+
+  local callback = lease.callbacks and lease.callbacks.on_locate
+  if callback then
+    callback(lease, state, win, section.path)
+  end
+  return view_active(lease, view)
+end
+
+local function restore_surviving_window(view, win, buf)
+  if not (valid_win(win) and valid_buf(buf) and vim.api.nvim_win_get_buf(win) == buf) then
     return
   end
-  set_active(state, section_i, state.sections[section_i].path)
-  -- "The canvas viewport moved and this is where it landed." The winbar's sticky
-  -- filename subscribes, because a programmatic scroll (select below, jump.back, a
-  -- motion) fires no WinScrolled and would otherwise leave it naming the wrong file.
-  if state.hooks and state.hooks.on_locate then
-    pcall(state.hooks.on_locate)
+
+  -- The buffer must be replaceable before the old sidebar buffer can be
+  -- deleted. This is safe only while the exact owned pair still exists.
+  local winfixbuf_owned = false
+  local ok_fixed, fixed = pcall(
+    vim.api.nvim_get_option_value, "winfixbuf", { win = win })
+  if ok_fixed then
+    winfixbuf_owned = fixed == view.applied_options.winfixbuf
+  end
+  pcall(vim.api.nvim_set_option_value, "winfixbuf", false, {
+    win = win,
+    scope = "local",
+  })
+  local ok_scratch, scratch = pcall(vim.api.nvim_create_buf, true, true)
+  if ok_scratch then
+    local ok_set = pcall(vim.api.nvim_win_set_buf, win, scratch)
+    if not ok_set and valid_buf(scratch) then
+      pcall(vim.api.nvim_buf_delete, scratch, { force = true })
+    end
+  end
+
+  for _, option in ipairs(WINDOW_OPTIONS) do
+    local prior = view.prior_options[option.name]
+    local applied = view.applied_options[option.name]
+    local restore = option.name == "winfixbuf" and winfixbuf_owned
+    local ok, actual
+    if option.name ~= "winfixbuf" then
+      ok, actual = pcall(vim.api.nvim_get_option_value, option.name, { win = win })
+      restore = ok and actual == applied
+    end
+    if restore then
+      pcall(vim.api.nvim_set_option_value, option.name, prior, {
+        win = win,
+        scope = "local",
+      })
+    end
   end
 end
 
---- Activate the row for `path` outright, without consulting the canvas topline.
----
---- What a jump excursion needs, and why S.sync cannot serve it: during an excursion
---- the canvas is not in its window, so there is no topline to resolve and sync returns
---- early -- leaving the highlight on whatever file you were reading BEFORE you jumped.
---- The sidebar is a "where am I in the changeset" locator, and you are still somewhere
---- in the changeset; pointing confidently at the wrong file is worse than being merely
---- out of date.
-function S.mark_path(state, path)
-  if not S.is_open() or not path then
+local function close_view(lease, view, dismiss)
+  if not view_exact(lease, view) then
+    return false
+  end
+  local tab, win, buf = view.tab, view.win, view.buf
+  lease.views_by_tab[tab] = nil
+  if win then
+    lease.views_by_win[win] = nil
+  end
+  if dismiss then
+    lease.dismissed_tabs[tab] = true
+  end
+  view.disposed = true
+  view.phase = "closing"
+
+  for _, autocmd_id in ipairs(view.autocmd_ids) do
+    pcall(vim.api.nvim_del_autocmd, autocmd_id)
+  end
+  for _, lhs in ipairs(view.keymaps) do
+    if valid_buf(buf) then
+      pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+    end
+  end
+  local ids = {}
+  for id in pairs(view.mark_ids) do
+    ids[id] = true
+  end
+  for id in pairs(view.pending) do
+    ids[id] = true
+  end
+  for id in pairs(view.deleting) do
+    ids[id] = true
+  end
+  for id in pairs(ids) do
+    delete_mark(view, id)
+  end
+
+  local pair = owned_pair(view)
+  if pair then
+    pcall(vim.api.nvim_win_close, win, true)
+    if owned_pair(view) then
+      restore_surviving_window(view, win, buf)
+    end
+  end
+  if valid_buf(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+
+  view.lease = nil
+  view.entries = nil
+  view.keymaps = nil
+  view.autocmd_ids = nil
+  view.mark_ids = nil
+  view.pending = nil
+  view.deleting = nil
+  view.prior_options = nil
+  view.applied_options = nil
+  view.win = nil
+  view.buf = nil
+  view.host_win = nil
+  view.canvas_win = nil
+  view.phase = "disposed"
+  return true
+end
+
+local function defer_reconcile(lease)
+  if not active(lease) then
     return
   end
+  lease.reconcile_ticket = lease.reconcile_ticket + 1
+  local ticket = lease.reconcile_ticket
+  vim.schedule(function()
+    if active(lease) and ticket == lease.reconcile_ticket then
+      S.reconcile(lease)
+    end
+  end)
+end
+
+local function create_autocmd(lease, events, spec, sink)
+  spec.group = lease.group_name
+  local id = vim.api.nvim_create_autocmd(events, spec)
+  if not exact(lease) then
+    pcall(vim.api.nvim_del_autocmd, id)
+    error("sidebar open was superseded while creating autocmds", 0)
+  end
+  sink[#sink + 1] = id
+  return id
+end
+
+local function install_lease_autocmds(lease)
+  create_autocmd(lease, { "BufWinEnter", "BufWinLeave" }, {
+    buffer = lease.state.buf,
+    callback = function()
+      defer_reconcile(lease)
+    end,
+  }, lease.autocmd_ids)
+  create_autocmd(lease, { "WinClosed", "WinResized", "TabClosed" }, {
+    callback = function()
+      defer_reconcile(lease)
+    end,
+  }, lease.autocmd_ids)
+  create_autocmd(lease, "WinScrolled", {
+    callback = function(event)
+      if active(lease) then
+        S.sync(lease, tonumber(event.match))
+      end
+    end,
+  }, lease.autocmd_ids)
+  create_autocmd(lease, "WinEnter", {
+    callback = function()
+      if active(lease) then
+        S.sync(lease, vim.api.nvim_get_current_win())
+      end
+    end,
+  }, lease.autocmd_ids)
+end
+
+local function create_view(lease, tab, host_win, observed)
+  next_view_id = next_view_id + 1
+  local view = {
+    id = next_view_id,
+    lease = lease,
+    tab = tab,
+    phase = "creating",
+    disposed = false,
+    host_win = host_win,
+    canvas_win = nil,
+    buf = nil,
+    win = nil,
+    entries = {},
+    keymaps = {},
+    autocmd_ids = {},
+    mark_ids = {},
+    pending = {},
+    deleting = {},
+    active_mark = nil,
+    prior_options = {},
+    applied_options = {},
+    render_epoch = 0,
+  }
+  lease.views_by_tab[tab] = view
+
+  local ok, err = pcall(function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    if not view_active(lease, view) then
+      if valid_buf(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+      error("sidebar open was superseded while creating a buffer", 0)
+    end
+    view.buf = buf
+    vim.api.nvim_buf_set_name(buf, ("galley://sidebar/%d/%d"):format(lease.id, view.id))
+    vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+    vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+    vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
+    set_modifiable(buf, false)
+
+    local win = vim.api.nvim_open_win(buf, false, {
+      split = "left",
+      width = lease.width,
+      win = host_win,
+    })
+    if not view_active(lease, view) then
+      if valid_win(win) and vim.api.nvim_win_get_buf(win) == buf then
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+      if valid_buf(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+      error("sidebar open was superseded while creating a window", 0)
+    end
+    view.win = win
+    lease.views_by_win[win] = view
+
+    for _, option in ipairs(WINDOW_OPTIONS) do
+      view.prior_options[option.name] = vim.api.nvim_get_option_value(option.name, { win = win })
+      view.applied_options[option.name] = option.value
+      vim.api.nvim_set_option_value(option.name, option.value, {
+        win = win,
+        scope = "local",
+      })
+    end
+
+    local actions = {
+      select = function()
+        if view_active(lease, view) then
+          S.select(lease, view.win)
+        end
+      end,
+      close = function()
+        if view_active(lease, view) then
+          close_view(lease, view, true)
+        end
+      end,
+    }
+    for _, mapping in ipairs(keys.resolved("sidebar", config.options.keymaps)) do
+      local callback = actions[mapping.action]
+      if callback then
+        vim.keymap.set("n", mapping.lhs, callback, {
+          buffer = buf,
+          silent = true,
+          noremap = true,
+          desc = mapping.desc,
+        })
+        view.keymaps[#view.keymaps + 1] = mapping.lhs
+      end
+    end
+
+    create_autocmd(lease, "BufWipeout", {
+      buffer = buf,
+      callback = function()
+        defer_reconcile(lease)
+      end,
+    }, view.autocmd_ids)
+
+    view.phase = "active"
+    update_targets(view, observed)
+    refresh_view(lease, view, observed)
+  end)
+  if not ok then
+    if view_exact(lease, view) then
+      close_view(lease, view, false)
+    end
+    error(err, 0)
+  end
+  return view
+end
+
+function S.reconcile(lease)
+  if not active(lease) then
+    return false
+  end
+  local observed = snapshot(lease)
+  if not observed or not active(lease) then
+    return false
+  end
+
+  local hosts_by_tab = {}
+  for _, win in ipairs(observed.hosts) do
+    local tab = vim.api.nvim_win_get_tabpage(win)
+    hosts_by_tab[tab] = hosts_by_tab[tab] or {}
+    hosts_by_tab[tab][#hosts_by_tab[tab] + 1] = win
+  end
+
+  local existing = {}
+  for _, view in pairs(lease.views_by_tab) do
+    existing[#existing + 1] = view
+  end
+  for _, view in ipairs(existing) do
+    local tab_ok = vim.api.nvim_tabpage_is_valid(view.tab)
+    local hosts = hosts_by_tab[view.tab]
+    if not tab_ok or not hosts or #hosts == 0 then
+      close_view(lease, view, false)
+    elseif not owned_pair(view) then
+      close_view(lease, view, true)
+    else
+      update_targets(view, observed)
+    end
+  end
+
+  local tabs = {}
+  for tab in pairs(hosts_by_tab) do
+    tabs[#tabs + 1] = tab
+  end
+  table.sort(tabs)
+  for _, tab in ipairs(tabs) do
+    if not active(lease) then
+      return false
+    end
+    local view = lease.views_by_tab[tab]
+    if view then
+      update_targets(view, observed)
+    elseif not lease.dismissed_tabs[tab] then
+      local canvases = windows_in_tab(observed.canvas, tab)
+      local hosts = hosts_by_tab[tab]
+      local host = canvases[1] or hosts[1]
+      create_view(lease, tab, host, observed)
+    end
+  end
+  return active(lease)
+end
+
+function S.refresh(lease)
+  if not active(lease) then
+    return false
+  end
+  S.reconcile(lease)
+  if not active(lease) then
+    return false
+  end
+  local observed = snapshot(lease)
+  if not observed then
+    return false
+  end
+  local refreshed = false
+  local views = {}
+  for _, view in pairs(lease.views_by_tab) do
+    views[#views + 1] = view
+  end
+  table.sort(views, function(a, b)
+    return a.tab < b.tab
+  end)
+  for _, view in ipairs(views) do
+    if refresh_view(lease, view, observed) then
+      refreshed = true
+    end
+  end
+  return refreshed
+end
+
+function S.sync(lease, canvas_win)
+  if not active(lease) then
+    return false
+  end
+  local observed = snapshot(lease)
+  if not observed then
+    return false
+  end
+  if canvas_win and valid_win(canvas_win) then
+    local tab = vim.api.nvim_win_get_tabpage(canvas_win)
+    local view = lease.views_by_tab[tab]
+    return view and sync_view(lease, view, observed, canvas_win) or false
+  end
+
+  local synced = false
+  local views = {}
+  for _, view in pairs(lease.views_by_tab) do
+    views[#views + 1] = view
+  end
+  table.sort(views, function(a, b)
+    return a.tab < b.tab
+  end)
+  for _, view in ipairs(views) do
+    if sync_view(lease, view, observed) then
+      synced = true
+    end
+  end
+  return synced
+end
+
+function S.mark_path(lease, path, source_win)
+  if not (active(lease) and path) then
+    return false
+  end
+  local state = lease.state
   local section_i = index_of_path(state, path)
   if not section_i then
-    return
+    return false
   end
-  set_active(state, section_i, path)
+  local source_tab = source_win
+      and valid_win(source_win)
+      and vim.api.nvim_win_get_tabpage(source_win)
+    or nil
+  local marked = false
+  for tab, view in pairs(lease.views_by_tab) do
+    if (source_tab == nil or source_tab == tab) and set_active(lease, view, section_i, path) then
+      marked = true
+    end
+  end
+  return marked
 end
 
---- Act on the entry under the sidebar cursor: a dir toggles its fold, which
---- sets its files aside on the canvas too; a file scrolls the canvas to its
---- section, expanding it first if it was folded. Never changes any window's
---- buffer or the focused window.
-function S.select(state)
-  if not S.is_open() then
-    return
-  end
-  local row = vim.api.nvim_win_get_cursor(side.win)[1]
-  local e = side.entries[row]
-  if not e then
-    return
-  end
-
-  if e.kind == "dir" then
-    -- Buffer validity, deliberately NOT the file branch's window check: this
-    -- branch splices the canvas BUFFER, which is the right thing to do even
-    -- while a jump excursion has the window showing a real file (resplice
-    -- classifies that as "none" and skips view correction). A wiped buffer is
-    -- the case that must bail -- resolving anchors against it throws -- and it
-    -- has to bail before recording a fold it cannot apply.
-    if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
-      return
-    end
-    state.folded[e.path] = not state.folded[e.path] or nil
-    -- Ascending order (resync_visibility's contract): each correction after
-    -- the first is a no-op, and folding the directory you happen to be
-    -- reading lands you on that file's placeholder rather than somewhere
-    -- arbitrary.
-    canvas.resync_visibility(state, fold.indices_under(state.sections, e.path))
-    notify_change(state)
-    return
-  end
-
-  -- Read the path NOW: the resplice below can rebuild side.entries under us, which
-  -- makes `e` an entry from a list that no longer exists.
-  local path = e.path
-
-  -- A jump excursion has the canvas out of its window. Selecting a file in the tree
-  -- plainly means "take me to that file's diff", and you cannot scroll a canvas that
-  -- is not on screen -- so end the excursion first. back() IS the whole return path:
-  -- it regenerates the section from the buffer you were editing, unsaved edits
-  -- included, and splices it in, so navigating away from a jump loses nothing.
-  --
-  -- Lazily required, not at module scope: jump requires sidebar, so a top-level
-  -- require here would be a cycle.
-  --
-  -- This branch used to `return` silently. The tree stayed on screen, Enter did
-  -- nothing at all, and nothing said why -- a dead end you could only escape by
-  -- knowing about Ctrl+Space.
-  if not canvas_showing(state) then
-    require("galley.jump").back()
-    if not canvas_showing(state) then
-      -- back() declines when it has no window to restore into, and says so itself.
-      return
+local function view_for_selection(lease, side_win)
+  if side_win then
+    local direct = lease.views_by_win[side_win]
+    if direct and owned_pair(direct) then
+      return direct
     end
   end
+  local current = vim.api.nvim_get_current_win()
+  if valid_win(current) then
+    local tab = vim.api.nvim_win_get_tabpage(current)
+    local local_view = lease.views_by_tab[tab]
+    if local_view and owned_pair(local_view) then
+      return local_view
+    end
+  end
+  for _, view in pairs(lease.views_by_tab) do
+    if owned_pair(view) then
+      return view
+    end
+  end
+end
 
-  -- Resolved by path rather than `e.section_i`, because back() above may have
-  -- re-spliced: a file reverted while you were editing it loses its section outright
-  -- and every later index shifts down, so the cached index could now name a different
-  -- file. Cheap, and correct in the non-excursion case too.
+function S.select(lease, side_win)
+  if not active(lease) then
+    return false
+  end
+  local view = view_for_selection(lease, side_win)
+  if not view then
+    return false
+  end
+  local ok, cursor = pcall(vim.api.nvim_win_get_cursor, view.win)
+  if not ok or not view_active(lease, view) then
+    return false
+  end
+  local entry = view.entries[cursor[1]]
+  if not entry then
+    return false
+  end
+  local state = lease.state
+  local observed = snapshot(lease)
+  if not observed then
+    return false
+  end
+  update_targets(view, observed)
+
+  if entry.kind == "dir" then
+    if not (state.buf and valid_buf(state.buf)) then
+      return false
+    end
+    local previous = state.folded[entry.path]
+    if previous then
+      state.folded[entry.path] = nil
+    else
+      state.folded[entry.path] = true
+    end
+    local ok_resync, resync_err = pcall(
+      canvas.resync_visibility,
+      state,
+      fold.indices_under(state.sections, entry.path),
+      view.canvas_win
+    )
+    if not ok_resync then
+      state.folded[entry.path] = previous
+      pcall(
+        canvas.resync_visibility,
+        state,
+        fold.indices_under(state.sections, entry.path),
+        view.canvas_win
+      )
+      error(resync_err, 0)
+    end
+    if not view_active(lease, view) then
+      return false
+    end
+    local callback = lease.callbacks and lease.callbacks.on_shape_change
+    if callback then
+      callback(lease, state, view.canvas_win)
+    else
+      S.refresh(lease)
+    end
+    return view_active(lease, view)
+  end
+
+  local path = entry.path
+  if not view.canvas_win then
+    local callback = lease.callbacks and lease.callbacks.on_return
+    if not callback or not view.host_win then
+      return false
+    end
+    local returned = callback(lease, state, view.host_win)
+    if not (returned and view_active(lease, view)) then
+      return false
+    end
+    observed = snapshot(lease)
+    if not observed or not view_active(lease, view) then
+      return false
+    end
+    update_targets(view, observed, view.host_win)
+  end
+
   local section_i = index_of_path(state, path)
   if not section_i then
     util.notify(path .. " has no changes any more")
-    return
+    return false
   end
-
-  -- Scroll there and nothing more. Selecting a folded file does NOT unfold it:
-  -- folded means folded, and the collapse key on the canvas is the only thing that
-  -- changes that. (This used to expand first, on the theory that "take me there"
-  -- implies "let me read it" -- but that made a navigation key silently alter fold
-  -- state.)
-  local start0 = (canvas.section_rows(state, section_i))
-  vim.api.nvim_win_call(state.win, function()
+  local win = view.canvas_win
+  if not (win and valid_win(win) and vim.api.nvim_win_get_buf(win) == state.buf) then
+    return false
+  end
+  local start0 = canvas.section_rows(state, section_i)
+  vim.api.nvim_win_call(win, function()
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
   end)
-  S.sync(state)
+  return view_active(lease, view) and sync_view(lease, view, observed, win)
 end
 
---- Cycle the canvas view to the next/previous section (wrapping), stepping over
---- anything the user folded and keeping the sidebar selection in step.
---- Usable with or without the sidebar open; focus never moves.
----
---- Despite living here, this is a CANVAS action (keys.specs registers it under
---- ctx = "canvas", in the same Navigate group as ]f) -- it moves the canvas
---- viewport and is bound on the canvas buffer. It only sits in this module
---- because the sidebar-selection sync does. So it has to honour folded
---- sections exactly as goto_file does; behaving differently would be arbitrary.
-function S.cycle(state, delta, count)
-  if #state.sections == 0 then
-    return
+function S.is_open(lease, tab)
+  if not active(lease) then
+    return false
   end
-  if not (state.win and vim.api.nvim_win_is_valid(state.win)
-      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
-    return
+  if tab ~= nil then
+    local view = lease.views_by_tab[normalize_tab(tab)]
+    return view ~= nil and owned_pair(view)
   end
-  local top0 = vim.api.nvim_win_call(state.win, function()
-    return vim.fn.line("w0") - 1
-  end)
-  local i = (canvas.locate(state, top0)) or 1
-
-  -- Shared with ]f / [f, wrapping instead of clamping: the two must agree about
-  -- what is folded and about what a count means.
-  local target = motions.step(state, i, delta, count or vim.v.count1, true)
-  if not target then
-    return -- everything is folded; nowhere to cycle to
-  end
-
-  local start0 = (canvas.section_rows(state, target))
-  vim.api.nvim_win_call(state.win, function()
-    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
-  end)
-  S.sync(state)
-end
-
-function S.close()
-  if side then
-    local win = side.win
-    side = nil
-    pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
-    if win and vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_win_close, win, true)
-      -- nvim_win_close silently fails (E444) when `win` is the tabpage's
-      -- last window -- e.g. the canvas window already died out from under
-      -- the sidebar, leaving it as the sole survivor. Rather than abandon a
-      -- winfixbuf'd window with nothing to attach to, reclaim it as a plain
-      -- scratch window so it stays usable.
-      if vim.api.nvim_win_is_valid(win) then
-        vim.api.nvim_set_option_value("winfixbuf", false, { win = win })
-        vim.api.nvim_win_call(win, function() vim.cmd("enew") end)
-      end
+  for _, view in pairs(lease.views_by_tab) do
+    if owned_pair(view) then
+      return true
     end
   end
+  return false
 end
 
---- (Re)install the sidebar's autocmds against the CURRENT `side.win` and
---- `state.win` pair. An `augroup(..., { clear = true })` makes this
---- idempotent, so it's safe to call both on a fresh open and whenever an
---- already-open sidebar is rebound to a new canvas state (a different
---- `state.win` means the old WinClosed pattern would otherwise go stale and
---- never fire).
-local function install_autocmds(state)
-  local aug = vim.api.nvim_create_augroup("galley.sidebar", { clear = true })
-  vim.api.nvim_create_autocmd("WinScrolled", {
-    group = aug,
-    callback = function(ev)
-      local st = side and side.state
-      local w = tonumber(ev.match)
-      if st and w == st.win and vim.api.nvim_win_get_buf(st.win) == st.buf then
-        S.sync(st)
-      end
-    end,
-  })
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = aug,
-    pattern = tostring(side.win),
-    callback = function()
-      side = nil
-      pcall(vim.api.nvim_del_augroup_by_name, "galley.sidebar")
-    end,
-  })
-  -- The canvas window closing (e.g. `:q` there) must not strand a live
-  -- sidebar pointed at a dead state.win -- that's exactly the setup for the
-  -- "last window" winfixbuf trap in S.close(). Closing another window from
-  -- inside a WinClosed callback can be fragile (empirically: recursing into
-  -- window-close logic mid-autocmd), so defer the actual close a tick.
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = aug,
-    pattern = tostring(state.win),
-    callback = function()
-      local owner = side
-      vim.schedule(function()
-        if side == owner then
-          S.close()
-        end
-      end)
-    end,
-  })
+function S.is_sidebar_win(lease, win)
+  if not (active(lease) and valid_win(win)) then
+    return false
+  end
+  local view = lease.views_by_win[win]
+  return view ~= nil and view_exact(lease, view) and view.win == win and owned_pair(view)
 end
 
---- Open (or refresh) the sidebar as a non-focused fixed vsplit left of the
---- canvas window. The canvas window itself must never get winfixbuf.
-function S.open(state, opts)
+--- Open one Surface-owned Sidebar lease. A lease owns one view per host tab;
+--- no module-global "current" identity exists, so independent owners cannot
+--- erase or redirect one another.
+function S.open(state, opts, callbacks)
+  next_lease_id = next_lease_id + 1
   opts = opts or {}
-  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
-    return -- nothing to attach to; nil-safe no-op
-  end
-  if S.is_open() then
-    side.state = state
-    install_autocmds(state)
-    S.refresh(state)
-    return
-  end
-  ensure_hl_groups()
-
-  local buf = vim.api.nvim_create_buf(false, true)
-  pcall(vim.api.nvim_buf_set_name, buf, BUFNAME)
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
-  vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
-  set_modifiable(buf, false)
-
-  local win = vim.api.nvim_open_win(buf, false, {
-    split = "left",
+  local lease = {
+    id = next_lease_id,
+    phase = "attaching",
+    disposed = false,
+    state = state,
+    opts = opts,
+    callbacks = callbacks or {},
     width = opts.width or 32,
-    win = state.win,
-  })
-  local wopts = {
-    winfixwidth = true, winfixbuf = true, wrap = false, cursorline = true,
-    number = false, relativenumber = false, signcolumn = "no", foldenable = false,
+    group_name = "galley.sidebar." .. next_lease_id,
+    autocmd_ids = {},
+    views_by_tab = {},
+    views_by_win = {},
+    dismissed_tabs = {},
+    reconcile_ticket = 0,
+    claimed = false,
   }
-  for name, val in pairs(wopts) do
-    vim.api.nvim_set_option_value(name, val, { win = win, scope = "local" })
+
+  local claim = lease.callbacks.claim
+  if claim then
+    -- Treat a throwing claim as potentially committed: a callback can publish
+    -- this lease and then fault. Exact close will ask release() to undo only
+    -- that identity, while a clean `false` remains an unclaimed rejection.
+    lease.claimed = true
+    local ok_claim, claimed = pcall(claim, lease)
+    if not ok_claim then
+      pcall(S.close, lease)
+      error(claimed, 0)
+    end
+    if not claimed then
+      lease.claimed = false
+      lease.phase = "disposed"
+      lease.disposed = true
+      lease.state = nil
+      lease.callbacks = {}
+      return nil
+    end
+  else
+    lease.claimed = true
   end
 
-  -- No fold set here: folds live on `state` (canvas.open initializes it), so
-  -- they survive close/reopen, are readable by rendering and navigation, and
-  -- follow the state they belong to rather than this singleton.
-  side = { buf = buf, win = win, entries = {}, active_mark = nil, state = state }
+  local ok, err = pcall(function()
+    if not active(lease) then
+      error("sidebar owner is no longer alive", 0)
+    end
+    ensure_hl_groups()
+    if not active(lease) then
+      error("sidebar open was superseded while defining highlights", 0)
+    end
+    vim.api.nvim_create_augroup(lease.group_name, { clear = true })
+    if not active(lease) then
+      pcall(vim.api.nvim_del_augroup_by_name, lease.group_name)
+      error("sidebar open was superseded while creating its group", 0)
+    end
+    install_lease_autocmds(lease)
+    S.reconcile(lease)
+    if not active(lease) then
+      error("sidebar open was superseded during initial reconciliation", 0)
+    end
+    lease.phase = "active"
+  end)
+  if not ok then
+    pcall(S.close, lease)
+    error(err, 0)
+  end
+  return lease
+end
 
-  local actions = {
-    select = function()
-      local st = side and side.state
-      if st then
-        S.select(st)
-      end
-    end,
-    close = function() S.close() end,
-  }
-  for _, m in ipairs(keys.resolved("sidebar", config.options.keymaps)) do
-    local fn = actions[m.action]
-    if fn then
-      vim.keymap.set("n", m.lhs, fn,
-        { buffer = buf, silent = true, noremap = true, desc = m.desc })
+--- Terminal, exact, idempotent teardown for one Sidebar lease.
+function S.close(lease)
+  if not exact(lease) then
+    return false
+  end
+  lease.phase = "closing"
+  lease.disposed = true
+  lease.reconcile_ticket = lease.reconcile_ticket + 1
+
+  local views = {}
+  for _, view in pairs(lease.views_by_tab) do
+    views[#views + 1] = view
+  end
+  local first_error
+  for _, view in ipairs(views) do
+    local ok, err = pcall(close_view, lease, view, false)
+    if not ok and not first_error then
+      first_error = err
     end
   end
 
-  install_autocmds(state)
+  local group_deleted = pcall(vim.api.nvim_del_augroup_by_name, lease.group_name)
+  if not group_deleted then
+    for _, id in ipairs(lease.autocmd_ids) do
+      pcall(vim.api.nvim_del_autocmd, id)
+    end
+  end
 
-  S.refresh(state)
+  local release = lease.callbacks and lease.callbacks.release
+  lease.state = nil
+  lease.opts = nil
+  lease.callbacks = {}
+  lease.autocmd_ids = {}
+  lease.views_by_tab = {}
+  lease.views_by_win = {}
+  lease.dismissed_tabs = {}
+  lease.phase = "disposed"
+  if release and lease.claimed then
+    local ok, err = pcall(release, lease)
+    if not ok and not first_error then
+      first_error = err
+    end
+  end
+  if first_error then
+    error(first_error, 0)
+  end
+  return true
 end
 
 return S

@@ -85,6 +85,14 @@ local function fold_src(st)
   canvas.resync_visibility(st)
 end
 
+local function sidebar_buf(sidebar, lease)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if sidebar.is_sidebar_win(lease, win) then
+      return vim.api.nvim_win_get_buf(win)
+    end
+  end
+end
+
 T["stale_ folding records what the file looked like, and nothing is stale yet"] = function()
   local _, st = open_fixture()
   H.eq(st.folded_seen, {}, "nothing folded, nothing remembered")
@@ -184,22 +192,16 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   local root, st = open_fixture()
   local sidebar = require("galley.sidebar")
   local render = require("galley.render")
-  sidebar.close()
-  sidebar.open(st, { width = 30 })
+  local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
-  sidebar.refresh(st) -- fold_src only drives the canvas; the real path is S.select
+  sidebar.refresh(lease) -- fold_src only drives the canvas; the real path is S.select
 
   local function canvas_row(i)
     local s = (canvas.section_rows(st, i))
     return vim.api.nvim_buf_get_lines(st.buf, s, s + 1, false)[1]
   end
   local function tree()
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
-        return vim.api.nvim_buf_get_lines(b, 0, -1, false)
-      end
-    end
+    return vim.api.nvim_buf_get_lines(sidebar_buf(sidebar, lease), 0, -1, false)
   end
 
   local i = index_of(st, "src/a.txt")
@@ -211,7 +213,8 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
   watch.reconcile(st, {
     on_change = function(state)
-      sidebar.refresh(state)
+      H.eq(state, st)
+      sidebar.refresh(lease)
     end,
   })
 
@@ -225,13 +228,13 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   -- Bring it back: both markers must go.
   st.folded = {}
   canvas.resync_visibility(st)
-  sidebar.refresh(st)
+  sidebar.refresh(lease)
   i = index_of(st, "src/a.txt")
   assert(not canvas_row(i):find(render.glyphs.stale, 1, true), "expanded, so nothing to mark")
   for _, line in ipairs(tree()) do
     assert(not line:find(render.glyphs.stale, 1, true), "tree is clean too: " .. line)
   end
-  sidebar.close()
+  sidebar.close(lease)
 end
 
 -- The marker is a real character in the buffer, so it inherits whatever the row is
@@ -242,15 +245,15 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
   local root, st = open_fixture()
   local sidebar = require("galley.sidebar")
   local render = require("galley.render")
-  sidebar.close()
-  sidebar.open(st, { width = 30 })
+  local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
 
   write_file(root, "src/a.txt",
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
   watch.reconcile(st, {
     on_change = function(state)
-      sidebar.refresh(state)
+      H.eq(state, st)
+      sidebar.refresh(lease)
     end,
   })
 
@@ -270,11 +273,7 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
   H.eq(stale_span(st.buf, canvas_ns, srow), { #line - #render.glyphs.stale, #line },
     "the canvas marker is highlighted, and only the marker")
 
-  local sbuf
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(b)
-      and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then sbuf = b end
-  end
+  local sbuf = sidebar_buf(sidebar, lease)
   local srows = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(srows[1], "▸ src/ ●", "sanity: the folded dir row is marked")
   local side_ns = vim.api.nvim_create_namespace("galley.sidebar")
@@ -284,11 +283,11 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
   -- Once it comes back, the highlight must go with the text.
   st.folded = {}
   canvas.resync_visibility(st)
-  sidebar.refresh(st)
+  sidebar.refresh(lease)
   i = index_of(st, "src/a.txt")
   H.eq(stale_span(st.buf, canvas_ns, (canvas.section_rows(st, i))), nil,
     "no marker, no highlight")
-  sidebar.close()
+  sidebar.close(lease)
 end
 
 -- The fingerprint hashes new_text ONLY (deliberately, so changing the diff base

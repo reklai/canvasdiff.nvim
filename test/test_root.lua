@@ -124,13 +124,15 @@ end
 T["root_ Surface never issues unqualified controller teardown"] = function()
   local watch = require("galley.watch")
   local hl = require("galley.hl")
+  local sidebar = require("galley.sidebar")
   local virt = require("galley.virt")
   local statuscol = require("galley.statuscol")
   local real_stop = watch.stop
   local real_hl_detach = hl.detach
+  local real_sidebar_close = sidebar.close
   local real_detach = virt.detach
   local real_statuscol_detach = statuscol.detach
-  local stops, hl_detaches, detaches, statuscol_detaches = 0, 0, 0, 0
+  local stops, hl_detaches, sidebar_closes, detaches, statuscol_detaches = 0, 0, 0, 0, 0
   watch.stop = function(...)
     stops = stops + 1
     return real_stop(...)
@@ -138,6 +140,10 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
   hl.detach = function(...)
     hl_detaches = hl_detaches + 1
     return real_hl_detach(...)
+  end
+  sidebar.close = function(...)
+    sidebar_closes = sidebar_closes + 1
+    return real_sidebar_close(...)
   end
   virt.detach = function(...)
     detaches = detaches + 1
@@ -154,6 +160,7 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
     surface.saved = true
     H.eq(surface.controllers.watch, nil, "this Surface acquired no watch lease")
     H.eq(surface.controllers.hl, nil, "this Surface acquired no highlighter lease")
+    H.eq(surface.controllers.sidebar, nil, "this Surface acquired no sidebar lease")
     H.eq(surface.controllers.virt, nil, "this Surface acquired no virtualizer lease")
     H.eq(surface.controllers.statuscol, nil,
       "this Surface acquired no status-column lease")
@@ -162,6 +169,8 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
       "a lease-less owner must not translate nil into stop-the-current-watch")
     H.eq(hl_detaches, 0,
       "a lease-less owner must not detach the current highlighter")
+    H.eq(sidebar_closes, 0,
+      "a lease-less owner must not close the current sidebar")
     H.eq(detaches, 0,
       "a lease-less owner must not translate nil into detach-the-current-virtualizer")
     H.eq(statuscol_detaches, 0,
@@ -170,6 +179,7 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
 
   watch.stop = real_stop
   hl.detach = real_hl_detach
+  sidebar.close = real_sidebar_close
   virt.detach = real_detach
   statuscol.detach = real_statuscol_detach
   assert(ok, err)

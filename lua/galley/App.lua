@@ -32,15 +32,11 @@ local function active_surface(app)
   return surface and surface:is_alive() and surface or nil
 end
 
---- Is `st`'s remembered primary window still displaying the canvas? A Surface
---- may have several views and owns the authoritative global scan; this narrow
---- helper is for row operations that must target one concrete Neovim window.
----
---- Surface rebinds st.win after an owned view disappears. App:close
---- deliberately does not use this scalar predicate.
-local function canvas_showing(st)
-  return st.win and vim.api.nvim_win_is_valid(st.win)
-    and vim.api.nvim_win_get_buf(st.win) == st.buf
+--- Is one concrete window displaying this Canvas?
+local function canvas_showing(st, win)
+  win = win or st.win
+  return win and vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_buf(win) == st.buf
 end
 
 --- Public setup: merge user options into the config module. Entirely
@@ -68,19 +64,23 @@ end
 ---
 --- Resolved from the topline rather than the cursor, matching the sidebar's active
 --- row exactly, so the two never disagree about which file you are "in".
-local function path_under_top(st)
-  if not canvas_showing(st) or #st.sections == 0 then
+local function path_under_top(st, win)
+  if not canvas_showing(st, win) or #st.sections == 0 then
     return nil
   end
-  local top0 = vim.api.nvim_win_call(st.win, function()
-    return vim.fn.line("w0") - 1
+  local ok, path = pcall(function()
+    local top0 = vim.api.nvim_win_call(win, function()
+      return vim.fn.line("w0") - 1
+    end)
+    local i = (canvas.locate(st, top0))
+    return i and st.sections[i] and st.sections[i].path or nil
   end)
-  local i = (canvas.locate(st, top0))
-  return i and st.sections[i] and st.sections[i].path or nil
+  return ok and path or nil
 end
 
-local function set_winbar(st, text)
-  if not (st and st.win and vim.api.nvim_win_is_valid(st.win)) then
+local function set_winbar(st, text, win, path)
+  win = win or (st and st.win)
+  if not (st and win and vim.api.nvim_win_is_valid(win)) then
     return
   end
   if text == nil then
@@ -89,7 +89,7 @@ local function set_winbar(st, text)
     -- then on nothing IN the canvas says which block you are reading. The sidebar
     -- knows, but peripherally and only if it is enabled. This keeps the answer on the
     -- canvas itself.
-    local here = path_under_top(st)
+    local here = path or path_under_top(st, win)
     local file = here and ("  │  " .. render.escape_path(here)) or ""
 
     text = ("  galley: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
@@ -98,11 +98,60 @@ local function set_winbar(st, text)
   -- 'winbar' forces a redraw of the window. Comparing the resolved string also covers
   -- the common case of scrolling WITHIN one file, where the text is identical and only
   -- path_under_top's work was wasted.
-  if st.winbar_text == text then
+  st.winbar_text_by_win = st.winbar_text_by_win or {}
+  if st.winbar_text_by_win[win] == text then
+    local ok, actual = pcall(
+      vim.api.nvim_get_option_value, "winbar", { win = win })
+    if ok and actual == text then
+      return
+    end
+  end
+  st.winbar_text_by_win[win] = text
+  pcall(vim.api.nvim_set_option_value, "winbar", text, { win = win, scope = "local" })
+end
+
+local function clear_winbar(st, win)
+  if not (st and win) then
     return
   end
-  st.winbar_text = text
-  pcall(vim.api.nvim_set_option_value, "winbar", text, { win = st.win, scope = "local" })
+  local owned_text = st.winbar_text_by_win and st.winbar_text_by_win[win] or nil
+  if st.winbar_text_by_win then
+    st.winbar_text_by_win[win] = nil
+  end
+  if not vim.api.nvim_win_is_valid(win) or owned_text == nil then
+    return
+  end
+  local ok, actual = pcall(
+    vim.api.nvim_get_option_value, "winbar", { win = win })
+  if ok and actual == owned_text then
+    pcall(vim.api.nvim_set_option_value, "winbar", "", { win = win, scope = "local" })
+  end
+end
+
+local function refresh_winbars(surface)
+  if not surface then
+    return
+  end
+  local st = surface.state
+  for _, win in ipairs(surface:canvas_snapshot().canvas) do
+    set_winbar(st, nil, win)
+  end
+end
+
+local function canvas_window_in_tab(surface, tab, preferred)
+  if not surface then
+    return nil
+  end
+  local fallback
+  for _, win in ipairs(surface:canvas_snapshot().canvas) do
+    if vim.api.nvim_win_get_tabpage(win) == tab then
+      fallback = fallback or win
+      if win == preferred then
+        return win
+      end
+    end
+  end
+  return fallback
 end
 
 local function show_empty_message(st)
@@ -119,7 +168,10 @@ local function sync_after_collapse(surface, st)
   if lease then
     hl.apply_now(lease)
   end
-  sidebar.refresh(st)
+  local side = surface and surface.controllers.sidebar
+  if side then
+    sidebar.refresh(side)
+  end
   scrollbar.update(st)
 end
 
@@ -137,14 +189,17 @@ end
 --- keymaps). set_collapsed's default intent records exactly that, which is what
 --- stops the auto-virtualizer expanding it back on a later in-window pass and
 --- stops session.save discarding it as module bookkeeping.
-local function user_set_collapsed(surface, st, i, collapsed)
-  canvas.set_collapsed(st, i, collapsed)
+local function user_set_collapsed(surface, st, i, collapsed, win)
+  canvas.set_collapsed(st, i, collapsed, nil, win)
   sync_after_collapse(surface, st)
 end
 
 --- Index of the section under the canvas cursor, or nil.
-local function section_under_cursor(st)
-  return canvas.locate(st, vim.api.nvim_win_get_cursor(st.win)[1] - 1)
+local function section_under_cursor(st, win)
+  if not canvas_showing(st, win) then
+    return nil
+  end
+  return canvas.locate(st, vim.api.nvim_win_get_cursor(win)[1] - 1)
 end
 
 --- Clear every folded directory hiding section `i` (at `path`). Returns the
@@ -158,7 +213,7 @@ end
 --- This is also the only way out of a fold when the sidebar is disabled: folds
 --- restore onto state.folded regardless of the sidebar, so without it those
 --- files would be permanently invisible.
-local function reveal(surface, st, i, path)
+local function reveal(surface, st, i, path, win)
   local dirs = fold.folds_hiding(st.folded, path)
   if #dirs == 0 then
     return nil
@@ -171,15 +226,15 @@ local function reveal(surface, st, i, path)
   -- are all ancestors of one path, outermost first), so its subtree is exactly
   -- the affected set; a section some unrelated inner fold still hides stays
   -- hidden and its resplice no-ops.
-  canvas.resync_visibility(st, fold.indices_under(st.sections, dirs[1]))
+  canvas.resync_visibility(st, fold.indices_under(st.sections, dirs[1]), win)
   -- Every resplice corrects the viewport, and the one whose section starts at
   -- the viewport top rewrites lnum too -- so the cursor must be put back on the
   -- file that was actually pressed. Without this, a <Tab> even one row below
   -- the viewport top lands the cursor on a different file, and the following
   -- <CR> / ]f / ]h all work from there.
-  if canvas_showing(st) then
+  if canvas_showing(st, win) then
     local start0 = (canvas.section_rows(st, i))
-    pcall(vim.api.nvim_win_set_cursor, st.win, { start0 + 1, 0 })
+    pcall(vim.api.nvim_win_set_cursor, win, { start0 + 1, 0 })
   end
   sync_after_collapse(surface, st)
   util.notify("unfolded " .. table.concat(dirs, ", "))
@@ -199,22 +254,33 @@ end
 --- Safe only because jump.back guards on fold.hidden: returning into a folded
 --- section lands on its placeholder instead of resolving a view against entries
 --- that no longer map to rows.
-local function open_under_cursor(st, cfg)
-  jump.enter(st, { back_keys = keys.list(cfg.keymaps.file.back) })
+local function open_under_cursor(surface, generation, st, cfg, win)
+  jump.enter(st, {
+    win = win,
+    back_keys = keys.list(cfg.keymaps.file.back),
+    on_path = function(path, source_win)
+      surface:guard(generation, function(owner)
+        local lease = owner.controllers.sidebar
+        if lease then
+          sidebar.mark_path(lease, path, source_win)
+        end
+      end)
+    end,
+  })
 end
 
 --- Fold or unfold the section under the cursor: reveal it when a
 --- folded directory is what's hiding it, otherwise flip its own collapse flag.
-local function toggle_collapse_under_cursor(surface, st)
-  local i = section_under_cursor(st)
+local function toggle_collapse_under_cursor(surface, st, win)
+  local i = section_under_cursor(st, win)
   if not i then
     return
   end
   local path = st.sections[i].path
-  if reveal(surface, st, i, path) then
+  if reveal(surface, st, i, path, win) then
     return
   end
-  user_set_collapsed(surface, st, i, not st.collapsed[path])
+  user_set_collapsed(surface, st, i, not st.collapsed[path], win)
 end
 
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
@@ -222,26 +288,49 @@ end
 --- before the feature behind it does.
 local function owned_action(surface, generation, callback)
   return function()
-    surface:guard(generation, callback)
+    local win = vim.api.nvim_get_current_win()
+    surface:guard(generation, function(owner)
+      callback(owner, win)
+    end)
   end
 end
 
 local function canvas_actions(app, surface, st, cfg)
   local generation = surface.generation
+  local function after_motion(owner, win)
+    local side = owner.controllers.sidebar
+    if side then
+      sidebar.sync(side, win)
+    end
+    set_winbar(st, nil, win)
+  end
   return {
-    jump       = owned_action(surface, generation, function() open_under_cursor(st, cfg) end),
+    jump       = owned_action(surface, generation,
+      function(_, win) open_under_cursor(surface, generation, st, cfg, win) end),
     collapse   = owned_action(surface, generation,
-      function() toggle_collapse_under_cursor(surface, st) end),
+      function(_, win) toggle_collapse_under_cursor(surface, st, win) end),
     close      = owned_action(surface, generation, function() app:close() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
-    cycle_next = owned_action(surface, generation, function() sidebar.cycle(st, 1) end),
-    cycle_prev = owned_action(surface, generation, function() sidebar.cycle(st, -1) end),
-    next_file  = owned_action(surface, generation, function() motions.goto_file(st, 1) end),
-    prev_file  = owned_action(surface, generation, function() motions.goto_file(st, -1) end),
-    next_hunk  = owned_action(surface, generation, function() motions.goto_hunk(st, 1) end),
-    prev_hunk  = owned_action(surface, generation, function() motions.goto_hunk(st, -1) end),
+    cycle_next = owned_action(surface, generation, function(owner, win)
+      if motions.cycle(st, win, 1) then after_motion(owner, win) end
+    end),
+    cycle_prev = owned_action(surface, generation, function(owner, win)
+      if motions.cycle(st, win, -1) then after_motion(owner, win) end
+    end),
+    next_file  = owned_action(surface, generation, function(owner, win)
+      if motions.goto_file(st, 1, nil, win) then after_motion(owner, win) end
+    end),
+    prev_file  = owned_action(surface, generation, function(owner, win)
+      if motions.goto_file(st, -1, nil, win) then after_motion(owner, win) end
+    end),
+    next_hunk  = owned_action(surface, generation, function(owner, win)
+      if motions.goto_hunk(st, 1, nil, win) then after_motion(owner, win) end
+    end),
+    prev_hunk  = owned_action(surface, generation, function(owner, win)
+      if motions.goto_hunk(st, -1, nil, win) then after_motion(owner, win) end
+    end),
   }
 end
 
@@ -292,13 +381,17 @@ end
 --- it rather than opening and then re-rendering.
 function App:open(opts)
   opts = opts or {}
-  -- Invoked from inside our own sidebar (winfixbuf): the canvas can't be
-  -- opened INTO that window. Redirect to the live canvas window if there is
-  -- one; otherwise treat the sidebar as an appendage of an open canvas.
-  if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
-    local active = active_surface(self)
-    if active and active:is_showing() then
-      vim.api.nvim_set_current_win(active.state.win)
+  -- Invoked from this Surface's own fixed sidebar: redirect only to a Canvas
+  -- view in the same tab. An unrelated/stale sidebar-shaped window must not
+  -- influence this App.
+  local current = vim.api.nvim_get_current_win()
+  local active = active_surface(self)
+  local side = active and active.controllers.sidebar
+  if side and sidebar.is_sidebar_win(side, current) then
+    local canvas_win = canvas_window_in_tab(
+      active, vim.api.nvim_win_get_tabpage(current))
+    if canvas_win then
+      vim.api.nvim_set_current_win(canvas_win)
     else
       return
     end
@@ -361,7 +454,14 @@ function App:open(opts)
 
   local surface = Surface.new(st, {
     clear_winbar = function(owner)
-      set_winbar(owner.state, "")
+      local seen = {}
+      for _, owned_win in ipairs(owner:host_windows()) do
+        clear_winbar(owner.state, owned_win)
+        seen[owned_win] = true
+      end
+      if owner.state.win and not seen[owner.state.win] then
+        clear_winbar(owner.state, owner.state.win)
+      end
     end,
     on_dispose = function(owner)
       -- A late callback from an older Surface must never clear a replacement.
@@ -378,27 +478,18 @@ function App:open(opts)
   -- synchronous model operation; asynchronous controllers such as the
   -- virtualizer report through their exact Surface-owned leases below.
   st.hooks = st.hooks or {}
-  st.hooks.on_shape_change = function()
+  st.hooks.on_shape_change = function(_, source_win)
     surface:guard(generation, function()
       sync_after_collapse(surface, st)
-    end)
-  end
-  -- Fired by sidebar.sync once it has resolved which section the topline is in --
-  -- i.e. "the canvas viewport moved". WinScrolled alone is not enough: a PROGRAMMATIC
-  -- move (sidebar select, jump.back, a motion) repositions the viewport without one,
-  -- and the winbar would keep naming the file you were previously in.
-  --
-  -- Riding on the sidebar is sound rather than a dependency inversion, because the
-  -- gap it closes only exists when the sidebar does -- selecting a row is the
-  -- programmatic scroll. With the sidebar disabled there is nothing but interactive
-  -- scrolling, which WinScrolled covers.
-  st.hooks.on_locate = function()
-    surface:guard(generation, function()
-      set_winbar(st)
+      if source_win then
+        set_winbar(st, nil, source_win)
+      else
+        refresh_winbars(surface)
+      end
     end)
   end
 
-  set_winbar(st)
+  set_winbar(st, nil, st.win)
 
   if #sections == 0 then
     show_empty_message(st)
@@ -441,7 +532,66 @@ function App:open(opts)
   end
 
   if config.options.sidebar.enabled then
-    sidebar.open(st, config.options.sidebar)
+    sidebar.open(st, config.options.sidebar, {
+      claim = function(lease)
+        if not surface:guard(generation)
+            or surface.controllers.sidebar ~= nil then
+          return false
+        end
+        surface.controllers.sidebar = lease
+        return true
+      end,
+      alive = function(lease)
+        return surface:guard(generation)
+          and surface.controllers.sidebar == lease
+      end,
+      snapshot = function(lease)
+        if not surface:guard(generation)
+            or surface.controllers.sidebar ~= lease then
+          return { hosts = {}, canvas = {} }
+        end
+        return surface:canvas_snapshot()
+      end,
+      on_shape_change = function(lease, changed_state, source_win)
+        if surface.controllers.sidebar ~= lease then
+          return
+        end
+        surface:guard(generation, function()
+          sync_after_collapse(surface, changed_state)
+          if source_win then
+            set_winbar(changed_state, nil, source_win)
+          else
+            refresh_winbars(surface)
+          end
+        end)
+      end,
+      on_locate = function(lease, changed_state, canvas_win, path)
+        if surface.controllers.sidebar ~= lease then
+          return
+        end
+        surface:guard(generation, function(owner)
+          owner:capture_view(canvas_win)
+          set_winbar(changed_state, nil, canvas_win, path)
+        end)
+      end,
+      on_return = function(lease, _, host_win)
+        if surface.controllers.sidebar ~= lease then
+          return false
+        end
+        local returned = false
+        surface:guard(generation, function()
+          returned = jump.back({ win = host_win }) and true or false
+        end)
+        return returned
+      end,
+      release = function(lease)
+        if surface.controllers.sidebar ~= lease then
+          return false
+        end
+        surface.controllers.sidebar = nil
+        return true
+      end,
+    })
   end
 
   if config.options.scrollbar.enabled then
@@ -466,9 +616,11 @@ function App:open(opts)
         local event_win = tonumber(ev.match)
         if event_win and owner:owns_window(event_win) then
           owner:capture_view(event_win)
-        end
-        if owner:is_showing() then
-          set_winbar(st)
+          if canvas_showing(st, event_win) then
+            set_winbar(st, nil, event_win)
+          end
+        else
+          refresh_winbars(owner)
         end
       end)
     end,
@@ -479,7 +631,7 @@ function App:open(opts)
     callback = function()
       local win = vim.api.nvim_get_current_win()
       surface:guard(generation, function(owner)
-        owner:canvas_windows()
+        owner:canvas_snapshot()
         owner:capture_view(win)
       end)
     end,
@@ -530,6 +682,11 @@ function App:open(opts)
       surface:guard(generation, function(owner)
         owner:adopt_window(win)
         owner:capture_view(win)
+        set_winbar(st, nil, win)
+        local side_lease = owner.controllers.sidebar
+        if side_lease then
+          sidebar.reconcile(side_lease)
+        end
       end)
     end,
   })
@@ -550,6 +707,9 @@ function App:open(opts)
       -- user's position.
       surface:capture_view(closed)
       surface:release_window(closed)
+      if st.winbar_text_by_win then
+        st.winbar_text_by_win[closed] = nil
+      end
 
       vim.schedule(function()
         surface:guard(generation, function(owner)
@@ -558,6 +718,11 @@ function App:open(opts)
           owner:canvas_windows()
           if #owner:host_windows() == 0 then
             owner:dispose("last_window")
+          else
+            local side_lease = owner.controllers.sidebar
+            if side_lease then
+              sidebar.reconcile(side_lease)
+            end
           end
         end)
       end)
@@ -675,9 +840,12 @@ function App:close()
   local landings = {}
   for _, win in ipairs(wins) do
     landings[win] = surface:landing_buffer(win)
+    surface:capture_view(win)
+  end
+  for _, win in ipairs(hosts) do
+    clear_winbar(st, win)
   end
 
-  surface:capture_view(st.win)
   for _, win in ipairs(hosts) do
     surface:release_window(win)
   end
@@ -698,6 +866,10 @@ function App:close()
 
   if not final then
     surface:canvas_windows()
+    local side = surface.controllers.sidebar
+    if side then
+      sidebar.reconcile(side)
+    end
   end
 end
 
@@ -713,13 +885,15 @@ end
 function App:toggle()
   local surface = active_surface(self)
   local tab = vim.api.nvim_get_current_tabpage()
-  local showing = surface and surface:is_showing(tab)
+  local showing = surface and canvas_window_in_tab(surface, tab) ~= nil
+  local current = vim.api.nvim_get_current_win()
+  local side = surface and surface.controllers.sidebar
 
-  if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
-    if showing then
+  if side and sidebar.is_sidebar_win(side, current) then
+    if #surface:host_windows(tab) > 0 then
       self:close()
     else
-      sidebar.close()
+      sidebar.reconcile(side)
     end
     return
   end
@@ -732,7 +906,11 @@ function App:toggle()
     if canvas.show(surface.state, win) then
       surface:adopt_window(win, landing)
       surface:capture_view(win)
-      set_winbar(surface.state)
+      set_winbar(surface.state, nil, win)
+      local side_lease = surface.controllers.sidebar
+      if side_lease then
+        sidebar.reconcile(side_lease)
+      end
     end
   else
     self:open()
@@ -775,7 +953,7 @@ local function pivot(surface, target_lens)
   if full and #desired == 0 then
     show_empty_message(st)
   end
-  set_winbar(st)
+  refresh_winbars(surface)
   sync_after_collapse(surface, st)
   local lease = surface.controllers.virt
   if lease then

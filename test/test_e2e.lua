@@ -1,4 +1,5 @@
 local H = require("helpers")
+local sidebar = require("galley.sidebar")
 
 -- E2E cases deliberately change cwd and open real files from throwaway repos.
 -- Restore a path that outlives every fixture before removing one: deleting the
@@ -8,11 +9,20 @@ local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
 
 local cleanup_buf
 
+local function sidebar_view(st, tab)
+  local lease = assert(st.surface.controllers.sidebar, "Surface owns a sidebar lease")
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab or 0)) do
+    if sidebar.is_sidebar_win(lease, win) then
+      return win, lease
+    end
+  end
+end
+
 local function group_alive(name)
-  if name == "galley.hl" then
+  if name == "galley.hl" or name == "galley.sidebar" then
     for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
       local group = autocmd.group_name
-      if group and (group == name or group:match("^galley%.hl%.")) then
+      if group and (group == name or group:sub(1, #name + 1) == name .. ".") then
         return true
       end
     end
@@ -150,24 +160,19 @@ return {
     vim.api.nvim_set_current_dir(root)
     package.loaded["galley"] = nil
     local fm = require("galley")
-    fm.open()
+    local st = assert(fm.open())
     local canvas_win = vim.api.nvim_get_current_win()
 
     -- Fold a/ the way a user does: drive the sidebar's own <CR> mapping.
-    local sbuf
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
-        sbuf = b
-      end
-    end
+    local side_win = assert(sidebar_view(st))
+    local sbuf = vim.api.nvim_win_get_buf(side_win)
     assert(sbuf, "sanity: the sidebar is open")
     local select_cr
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
       if m.lhs == "<CR>" then select_cr = m.callback end
     end
     assert(select_cr, "sanity: the sidebar binds <CR>")
-    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 }) -- the a/ dir row
+    vim.api.nvim_win_set_cursor(side_win, { 1, 0 }) -- the a/ dir row
     select_cr()
 
     local function canvas_lines()
@@ -237,22 +242,17 @@ return {
     vim.api.nvim_set_current_dir(root)
     package.loaded["galley"] = nil
     local fm = require("galley")
-    fm.open()
+    local st = assert(fm.open())
     local canvas_win = vim.api.nvim_get_current_win()
 
-    local sbuf
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
-        sbuf = b
-      end
-    end
+    local side_win = assert(sidebar_view(st))
+    local sbuf = vim.api.nvim_win_get_buf(side_win)
     assert(sbuf, "sanity: the sidebar is open")
     local select_cr
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
       if m.lhs == "<CR>" then select_cr = m.callback end
     end
-    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 }) -- the a/ dir row
+    vim.api.nvim_win_set_cursor(side_win, { 1, 0 }) -- the a/ dir row
     select_cr()
 
     local function canvas_lines()
@@ -366,16 +366,13 @@ return {
     vim.cmd("enew")
     local spare = vim.api.nvim_get_current_win()
     vim.cmd("wincmd j")
-    fm.open()
+    local st = assert(fm.open())
     local canvas_win = vim.api.nvim_get_current_win()
     assert(canvas_win ~= spare, "sanity: the canvas took its own window")
 
     -- Fold src/ the way a user does, through the sidebar's own <CR>.
-    local sbuf
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then sbuf = b end
-    end
+    local side_win = assert(sidebar_view(st))
+    local sbuf = vim.api.nvim_win_get_buf(side_win)
     assert(sbuf, "sanity: the sidebar is open")
     local select_cr
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
@@ -386,10 +383,12 @@ return {
       if l == "▾ src/" then srow = i break end
     end
     assert(srow, "sanity: found the src/ row")
-    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { srow, 0 })
+    vim.api.nvim_win_set_cursor(side_win, { srow, 0 })
     select_cr()
 
-    for _, g in ipairs({ "galley.watch", "galley.virt", "galley.hl", "galley.session" }) do
+    for _, g in ipairs({
+      "galley.watch", "galley.virt", "galley.hl", "galley.sidebar", "galley.session",
+    }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
     end
 
@@ -397,8 +396,10 @@ return {
     vim.api.nvim_win_close(canvas_win, false)
     vim.wait(200, function() return not group_alive("galley.watch") end)
 
-    for _, g in ipairs({ "galley.watch", "galley.virt", "galley.hl", "galley.statuscol",
-                         "galley.session" }) do
+    for _, g in ipairs({
+      "galley.watch", "galley.virt", "galley.hl", "galley.statuscol",
+      "galley.sidebar", "galley.session",
+    }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")
     end
 
@@ -636,16 +637,12 @@ return {
     vim.api.nvim_set_current_dir(root)
     package.loaded["galley"] = nil
     local fm = require("galley")
-    fm.open()
+    local st = assert(fm.open())
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
 
     local NS = vim.api.nvim_create_namespace("galley.sidebar")
     local function sbwin()
-      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w)):match("galley://sidebar") then
-          return w
-        end
-      end
+      return sidebar_view(st)
     end
     local function active()
       local w = sbwin()
@@ -936,7 +933,7 @@ return {
     package.loaded["galley"] = nil
     local fm = require("galley")
     local session = require("galley.session")
-    assert(fm.open())
+    local st = assert(fm.open())
 
     local win = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_get_current_buf()
@@ -944,13 +941,8 @@ return {
       vim.fn.winrestview({ topline = 12, lnum = 18 })
     end)
 
-    local sidebar_buf
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-          and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
-        sidebar_buf = b
-      end
-    end
+    local side_win = assert(sidebar_view(st))
+    local sidebar_buf = vim.api.nvim_win_get_buf(side_win)
     assert(sidebar_buf, "sanity: default UI opened the sidebar")
     local anchor_ns = vim.api.nvim_get_namespaces()["galley.canvas.anchors"]
     local before = {

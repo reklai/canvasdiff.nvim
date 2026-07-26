@@ -66,23 +66,44 @@ function Surface:is_alive()
   return self.phase == "active" and not self.disposed
 end
 
+--- Snapshot this Surface's valid hosts and Canvas windows without electing a
+--- new scalar primary.
+---
+--- The scan adopts post-open duplicate Canvas splits into the Surface graph,
+--- but deliberately does not write `state.win`. Controllers with per-window
+--- state need a stable ownership snapshot, not a write to an unrelated
+--- scalar merely because one of their callbacks happened to run.
+function Surface:canvas_snapshot()
+  local canvas_windows = {}
+  local state = self.state
+  if state and state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win)
+          and vim.api.nvim_win_get_buf(win) == state.buf
+          and (self.windows[win] or not self.baseline_windows[win]) then
+        canvas_windows[#canvas_windows + 1] = win
+        self.windows[win] = true
+      end
+    end
+  end
+  table.sort(canvas_windows)
+
+  return {
+    hosts = self:host_windows(),
+    canvas = canvas_windows,
+  }
+end
+
 --- Every window currently displaying this Surface's one canvas buffer.
 --- Remembering IDs lets WinClosed identify an owned window after Neovim has
---- already invalidated it; rescanning also adopts duplicate splits.
+--- already invalidated it; rescanning also adopts duplicate splits. Historical
+--- callers expect this method to repair the scalar primary when it disappears;
+--- controllers that must remain read-only use canvas_snapshot() instead.
 function Surface:canvas_windows()
-  local out = {}
+  local out = self:canvas_snapshot().canvas
   local state = self.state
-  if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+  if not state then
     return out
-  end
-
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_is_valid(win)
-        and vim.api.nvim_win_get_buf(win) == state.buf
-        and (self.windows[win] or not self.baseline_windows[win]) then
-      out[#out + 1] = win
-      self.windows[win] = true
-    end
   end
 
   local primary = state.win
@@ -261,7 +282,12 @@ function Surface:dispose(reason)
       hl.detach(lease)
     end
   end)
-  attempt("sidebar.close", sidebar.close)
+  attempt("sidebar.close", function()
+    local lease = self.controllers.sidebar
+    if lease then
+      sidebar.close(lease)
+    end
+  end)
   attempt("scrollbar.close", scrollbar.close)
   attempt("statuscol.detach", function()
     local lease = self.controllers.statuscol

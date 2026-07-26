@@ -3,7 +3,6 @@ local viewport = require("galley.viewport")
 local model = require("galley.model")
 local git = require("galley.git")
 local config = require("galley.config")
-local sidebar = require("galley.sidebar")
 local util = require("galley.util")
 local fold = require("galley.fold")
 local lens = require("galley.lens")
@@ -80,8 +79,13 @@ end
 function M.enter(state, opts)
   opts = opts or {}
   local back_keys = opts.back_keys or { "<M-CR>" }
+  local win = opts.win or state.win
+  if not (win and vim.api.nvim_win_is_valid(win))
+      or vim.api.nvim_win_get_buf(win) ~= state.buf then
+    return
+  end
 
-  local cursor = vim.api.nvim_win_get_cursor(state.win)
+  local cursor = vim.api.nvim_win_get_cursor(win)
   local row0 = cursor[1] - 1
   local i, entry_idx = canvas.locate(state, row0)
   if not i then
@@ -110,11 +114,12 @@ function M.enter(state, opts)
   local entry = entries[entry_idx]
   local target = target_lnum(entries, entry_idx, entry)
 
-  local top_offset = top_offset_for_view(state, state.win, i)
-  local view = vim.api.nvim_win_call(state.win, vim.fn.winsaveview)
+  local top_offset = top_offset_for_view(state, win, i)
+  local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
 
   excursion = {
     state = state,
+    win = win,
     -- Destination identity stays the key for editing, sidebar selection and
     -- finding the live section again. A rename's old source is separate.
     path = section.path,
@@ -132,23 +137,17 @@ function M.enter(state, opts)
   }
 
   local abs_path = vim.fs.joinpath(state.root, section.path)
-  vim.api.nvim_win_call(state.win, function()
+  vim.api.nvim_win_call(win, function()
     vim.cmd.edit({ abs_path, mods = { keepalt = true } })
   end)
 
-  local buf = vim.api.nvim_win_get_buf(state.win)
+  local buf = vim.api.nvim_win_get_buf(win)
   local line_count = vim.api.nvim_buf_line_count(buf)
   local clamped = math.max(1, math.min(target, line_count))
-  vim.api.nvim_win_set_cursor(state.win, { clamped, 0 })
+  vim.api.nvim_win_set_cursor(win, { clamped, 0 })
 
   excursion.buf = buf
   last_buf = buf
-
-  -- Follow the jump in the tree. sync() cannot do this -- the canvas is no longer in
-  -- its window, so it has no topline to resolve and bails, leaving the highlight on
-  -- the file you were reading BEFORE the jump. The sidebar answers "where am I in the
-  -- changeset", and during an excursion the answer is this file.
-  sidebar.mark_path(state, section.path)
 
   -- Never map `q` in the real file buffer.
   for _, lhs in ipairs(back_keys) do
@@ -159,6 +158,13 @@ function M.enter(state, opts)
       desc = "Return to the galley canvas at the same spot",
     })
   end
+
+  -- Consumers such as the sidebar can follow the excursion without making this
+  -- generic navigation primitive depend on them. Publish only after the return
+  -- mappings exist, so a callback fault cannot strand the excursion.
+  if opts.on_path then
+    opts.on_path(section.path, win)
+  end
 end
 
 --- Regenerate the excursed file's diff section from the CURRENT buffer
@@ -168,22 +174,48 @@ end
 --- it is still alive, else the one you are in now -- pressing the return key means
 --- "take me back", and there is no reason that has to be the original window.
 ---
---- Rejects the sidebar, which is 'winfixbuf': setting its buffer throws E1513.
+--- Rejects floating and winfixbuf windows: neither is a suitable host for the
+--- canvas, and setting a fixed window's buffer throws E1513.
 --- Returns nil when there is nothing usable, and the caller must then decline
 --- WITHOUT consuming the excursion.
-local function target_win(state)
-  if state.win and vim.api.nvim_win_is_valid(state.win)
-    and not sidebar.is_sidebar_win(state.win) then
-    return state.win
+local function eligible_target(win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return false
   end
-  local cur = vim.api.nvim_get_current_win()
-  if vim.api.nvim_win_is_valid(cur) and not sidebar.is_sidebar_win(cur) then
-    return cur
+  local ok_config, win_config = pcall(vim.api.nvim_win_get_config, win)
+  if not ok_config or (win_config.relative and win_config.relative ~= "") then
+    return false
+  end
+  local ok_fixed, fixed = pcall(
+    vim.api.nvim_get_option_value, "winfixbuf", { win = win })
+  return ok_fixed and not fixed
+end
+
+local function target_win(state, requested, source)
+  if requested ~= nil then
+    return eligible_target(requested) and requested or nil
+  end
+
+  local candidates = {}
+  if source then candidates[#candidates + 1] = source end
+  if state.win then candidates[#candidates + 1] = state.win end
+  candidates[#candidates + 1] = vim.api.nvim_get_current_win()
+  local seen = {}
+  for _, win in ipairs(candidates) do
+    if not seen[win] and eligible_target(win) then
+      return win
+    end
+    seen[win] = true
   end
   return nil
 end
 
-function M.back()
+function M.back(opts)
+  if type(opts) == "number" then
+    opts = { win = opts }
+  else
+    opts = opts or {}
+  end
   if not excursion then
     util.notify("no diff-canvas excursion")
     return
@@ -193,7 +225,7 @@ function M.back()
   -- unchecked, so a `:q` in the excursion window made the keypress throw E5108 --
   -- and it threw after clearing the excursion and deleting its own keymap, so the
   -- edits never reached the canvas and there was no second try.
-  local win = target_win(excursion.state)
+  local win = target_win(excursion.state, opts.win, excursion.win)
   if not win then
     util.warn("no window to bring the canvas back into — try again from a normal window")
     return
@@ -247,8 +279,8 @@ function M.back()
     end
   end
 
-  -- The canvas may be landing in a different window than it left from; everything
-  -- below, and every consumer we notify at the end, reads state.win.
+  -- Returning establishes this host as the primary Canvas window for historical
+  -- callers that do not yet carry an explicit window.
   state.win = win
   vim.api.nvim_win_set_buf(win, state.buf)
 
@@ -285,11 +317,12 @@ function M.back()
     end
   end
 
-  vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
+  vim.api.nvim_win_call(win, function() vim.fn.winrestview(view) end)
   local on_shape_change = state.hooks and state.hooks.on_shape_change
   if on_shape_change then
-    on_shape_change(state)
+    on_shape_change(state, win)
   end
+  return true
 end
 
 return M

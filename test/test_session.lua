@@ -6,6 +6,7 @@ local session = require("galley.session")
 local config = require("galley.config")
 local scrollbar = require("galley.scrollbar")
 local fold = require("galley.fold")
+local sidebar = require("galley.sidebar")
 
 local T = {}
 
@@ -67,14 +68,38 @@ local VIRT_FORCED = { virt = { max_files = 1, max_expanded = 1, margin = 0 } }
 local function in_repo(root, opts, fn)
   local orig_cwd = vim.fn.getcwd()
   local orig_tab = vim.api.nvim_get_current_tabpage()
+  local fm
   local ok, err = pcall(function()
     vim.cmd("tabnew") -- isolate from whatever windows earlier tests left behind
     vim.api.nvim_set_current_dir(root)
     package.loaded["galley"] = nil
-    local fm = require("galley")
+    fm = require("galley")
     fm.setup(opts)
     fn(fm)
   end)
+  -- A successful body is allowed to leave the review open so it can assert
+  -- against the live UI. Retire that exact App before tab cleanup: package
+  -- eviction creates a distinct owner, and a later test must never be relied
+  -- on to erase this one's Surface or fixed Sidebar window.
+  local close_ok, close_err = true, nil
+  if fm then
+    -- App:close is intentionally tab-local. Walk the current tab snapshot so
+    -- a test that leaves one Surface hosted in several tabs retires every
+    -- exact host before the facade is evicted.
+    for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+      if vim.api.nvim_tabpage_is_valid(tab) then
+        local switched, switch_err = pcall(vim.api.nvim_set_current_tabpage, tab)
+        if not switched and close_ok then
+          close_ok, close_err = false, switch_err
+        elseif switched then
+          local closed, close_one_err = pcall(fm.close)
+          if not closed and close_ok then
+            close_ok, close_err = false, close_one_err
+          end
+        end
+      end
+    end
+  end
   -- tabonly, not tabclose: a test may open more than one tab (a reopen needs
   -- a window with no remembered view for the canvas buffer -- see below).
   pcall(function()
@@ -88,6 +113,43 @@ local function in_repo(root, opts, fn)
   virt.detach()
   cleanup(root)
   assert(ok, err)
+  assert(close_ok, close_err)
+end
+
+T["session_ fixture teardown retires a Surface hosted across tabs"] = function()
+  local root = big_repo()
+  local captured_surface, captured_lease
+  local view_bufs = {}
+
+  in_repo(root, {}, function(fm)
+    local st = assert(fm.open())
+    captured_surface = assert(st.surface)
+    captured_lease = assert(captured_surface.controllers.sidebar)
+
+    vim.cmd("tabnew")
+    fm.toggle()
+    sidebar.reconcile(captured_lease)
+    H.eq(#captured_surface:host_windows(), 2,
+      "sanity: the fixture really left one Surface in two tabs")
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if sidebar.is_sidebar_win(captured_lease, win) then
+        view_bufs[#view_bufs + 1] = vim.api.nvim_win_get_buf(win)
+      end
+    end
+    H.eq(#view_bufs, 2, "each hosted tab acquired its own Sidebar view")
+  end)
+
+  H.eq(captured_surface.phase, "disposed")
+  H.eq(captured_surface.disposed, true)
+  H.eq(captured_lease.phase, "disposed")
+  H.eq(captured_surface.controllers.sidebar, nil,
+    "exact release unlinks the controller before the next facade exists")
+  for _, buf in ipairs(view_bufs) do
+    H.eq(vim.api.nvim_buf_is_valid(buf), false,
+      "fixture cleanup reaps every per-tab Sidebar buffer synchronously")
+  end
+  H.eq(pcall(vim.api.nvim_get_autocmds, { group = captured_lease.group_name }), false,
+    "fixture cleanup deletes the exact lease group")
 end
 
 -- --- folds ---------------------------------------------------------------
@@ -601,20 +663,19 @@ T["session_folds reveal works after reopening with the sidebar disabled"] = func
     worktree = { ["a/one.txt"] = "1x\n", ["a/two.txt"] = "2x\n", ["b/three.txt"] = "3x\n" },
   })
   in_repo(root, {}, function(fm)
-    fm.open()
+    local st = assert(fm.open())
 
     -- Fold a/ by driving the sidebar's own <CR>.
-    local sbuf
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_valid(b)
-        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then
-        sbuf = b
-      end
+    local lease = assert(st.surface.controllers.sidebar)
+    local side_win
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if sidebar.is_sidebar_win(lease, win) then side_win = win end
     end
+    local sbuf = side_win and vim.api.nvim_win_get_buf(side_win)
     assert(sbuf, "sanity: the sidebar is open")
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
       if m.lhs == "<CR>" then
-        vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { 1, 0 })
+        vim.api.nvim_win_set_cursor(side_win, { 1, 0 })
         m.callback()
       end
     end

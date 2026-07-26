@@ -6,7 +6,6 @@ local statuscol = require("galley.statuscol")
 local Surface = require("galley.Surface")
 local virt = require("galley.virt")
 local config = require("galley.config")
-local sidebar = require("galley.sidebar")
 
 local T = {}
 
@@ -178,7 +177,7 @@ T["motions_ count = 0 clamps to 1 in both goto_file and cycle"] = function()
   vim.api.nvim_win_call(st.win, function()
     vim.fn.winrestview({ topline = s1 + 1, lnum = s1 + 1 })
   end)
-  sidebar.cycle(st, 1, 0)
+  motions.cycle(st, st.win, 1, 0)
   local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
   H.eq((canvas.locate(st, top0)), 2, "and cycle agrees")
 end

@@ -305,8 +305,7 @@ return {
       worktree = { ["a.txt"] = lines("L", 20) },
     })
     local sidebar = require("galley.sidebar")
-    sidebar.close()
-    sidebar.open(st, { width = 30 })
+    local lease = assert(sidebar.open(st, { width = 30 }))
 
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 })
     jump.enter(st)
@@ -315,8 +314,8 @@ return {
     vim.api.nvim_win_close(gone, true)
     -- Focus the sidebar: winfixbuf, so setting its buffer would throw.
     local side_win
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-      if vim.api.nvim_get_option_value("winfixbuf", { win = w }) then side_win = w end
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if sidebar.is_sidebar_win(lease, w) then side_win = w end
     end
     assert(side_win, "sanity: the sidebar window is winfixbuf")
     vim.api.nvim_set_current_win(side_win)
@@ -341,7 +340,7 @@ return {
       assert(pcall(jump.back), "the excursion must have survived the decline")
       H.eq(vim.api.nvim_win_get_buf(usable), st.buf, "second press lands the canvas")
     end)
-    sidebar.close()
+    sidebar.close(lease)
     if vim.api.nvim_win_is_valid(side_win) then
       pcall(vim.api.nvim_win_close, side_win, true)
     end

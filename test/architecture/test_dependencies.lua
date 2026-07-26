@@ -113,13 +113,40 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
   assert_no_errors(violations, "highlighter must report through its Surface owner")
 end
 
-T.architecture_jump_does_not_fan_out_to_highlighter_or_scrollbar = function()
+T.architecture_sidebar_has_no_peer_controller_edges = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.hl"] = true,
+    ["galley.jump"] = true,
+    ["galley.motions"] = true,
+    ["galley.scrollbar"] = true,
+    ["galley.statuscol"] = true,
+    ["galley.virt"] = true,
+    ["galley.watch"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.sidebar" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "sidebar must be composed by its Surface owner")
+end
+
+T.architecture_jump_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
 
   local forbidden = {
     ["galley.hl"] = true,
     ["galley.scrollbar"] = true,
+    ["galley.sidebar"] = true,
+    ["galley.statuscol"] = true,
+    ["galley.virt"] = true,
+    ["galley.watch"] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do

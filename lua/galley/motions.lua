@@ -3,9 +3,10 @@ local fold = require("galley.fold")
 
 local M = {}
 
-local function canvas_showing(state)
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and vim.api.nvim_win_get_buf(state.win) == state.buf
+local function canvas_showing(state, win)
+  win = win or state.win
+  return win and vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_buf(win) == state.buf
 end
 
 --- The section index `count` steps from section `i` in direction `dir`. `wrap`
@@ -18,7 +19,7 @@ end
 --- parallel index space (a navigable-indices list plus two stepping functions) to
 --- express.
 ---
---- One home for the arithmetic, shared by goto_file and sidebar.cycle, so a count
+--- One home for the arithmetic, shared by goto_file and cycle, so a count
 --- of 0 cannot mean different things in the two of them -- it clamps to 1 here,
 --- matching Vim's count1 semantics (there is no zero-count motion).
 function M.step(state, i, dir, count, wrap)
@@ -37,11 +38,12 @@ end
 --- under the cursor, clamping at the ends. Lands on a folded file's placeholder
 --- like any other section. `count` defaults to `vim.v.count1`, so a real `]f`/`[f`
 --- mapping honors a leading count.
-function M.goto_file(state, dir, count)
-  if #state.sections == 0 or not canvas_showing(state) then
+function M.goto_file(state, dir, count, win)
+  win = win or state.win
+  if #state.sections == 0 or not canvas_showing(state, win) then
     return
   end
-  local cursor = vim.api.nvim_win_get_cursor(state.win)
+  local cursor = vim.api.nvim_win_get_cursor(win)
   local i = (canvas.locate(state, cursor[1] - 1)) or 1
 
   local target = M.step(state, i, dir, count or vim.v.count1, false)
@@ -50,7 +52,32 @@ function M.goto_file(state, dir, count)
   end
 
   local start0 = (canvas.section_rows(state, target))
-  vim.api.nvim_win_set_cursor(state.win, { start0 + 1, 0 })
+  vim.api.nvim_win_set_cursor(win, { start0 + 1, 0 })
+  return target
+end
+
+--- Scroll one explicit Canvas window by sections, wrapping at both ends.
+--- This is a Canvas motion even when no sidebar lease exists; the App may
+--- separately ask an acquired sidebar lease to follow the resulting view.
+function M.cycle(state, win, dir, count)
+  win = win or state.win
+  if #state.sections == 0 or not canvas_showing(state, win) then
+    return
+  end
+  local top0 = vim.api.nvim_win_call(win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  local i = (canvas.locate(state, top0)) or 1
+  local target = M.step(state, i, dir, count or vim.v.count1, true)
+  if not target then
+    return
+  end
+
+  local start0 = (canvas.section_rows(state, target))
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+  end)
+  return target
 end
 
 --- Jump `count` stops forward/backward from the cursor row, clamping at the list
@@ -77,9 +104,10 @@ end
 --- resync makes this compute rows past the end of the buffer and throw out of the
 --- keymap. Deliberately NOT clamped: a divergence like that is a bug worth a
 --- traceback, and clamping would turn it into `]h` quietly landing somewhere wrong.
-function M.goto_hunk(state, dir, count)
+function M.goto_hunk(state, dir, count, win)
+  win = win or state.win
   count = count or vim.v.count1
-  if not canvas_showing(state) then
+  if not canvas_showing(state, win) then
     return
   end
 
@@ -101,7 +129,7 @@ function M.goto_hunk(state, dir, count)
   end
   table.sort(rows)
 
-  local cursor_row0 = vim.api.nvim_win_get_cursor(state.win)[1] - 1
+  local cursor_row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
   -- `anchor_idx` is the index of the nearest qualifying row (first row
   -- strictly after the cursor for dir=1, or the closest strictly-before row
   -- for dir=-1). No qualifying row means nothing lies in the direction of
@@ -130,7 +158,8 @@ function M.goto_hunk(state, dir, count)
   end
 
   local target_idx = math.min(math.max(anchor_idx + dir * (count - 1), 1), #rows)
-  vim.api.nvim_win_set_cursor(state.win, { rows[target_idx] + 1, 0 })
+  vim.api.nvim_win_set_cursor(win, { rows[target_idx] + 1, 0 })
+  return target_idx
 end
 
 return M
