@@ -20,6 +20,61 @@ local function index_of_path(state, path)
   end
 end
 
+--- Capture the semantic viewport and cursor while `win` is still a valid
+--- canvas view. WinClosed callbacks run before Neovim invalidates the closing
+--- window, whereas the lifecycle teardown is deliberately deferred; keeping
+--- this small snapshot lets the later save retain the user's exact place.
+---
+--- The second return value says whether a live canvas view was observed.
+--- An uninspectable window leaves the last good snapshot alone; an observed
+--- placeholder deliberately clears it, because a stale earlier position must
+--- not masquerade as the user's current (unrepresentable) view.
+function M.capture(state, win)
+  win = win or (state and state.win)
+  if not (state and state.buf and win and vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_win_get_buf(win) == state.buf) then
+    return nil, false
+  end
+
+  local snapshot
+  local ok = pcall(function()
+    local top0 = vim.api.nvim_win_call(win, function()
+      return vim.fn.line("w0") - 1
+    end)
+    local i, top_offset = canvas.locate(state, top0)
+    if not (i and state.sections[i]
+        and not fold.hidden(state, state.sections[i].path)) then
+      return
+    end
+
+    local sec = state.sections[i]
+    local view = viewport.capture_from_entries(sec.entries, top_offset)
+    view.path = sec.path
+    snapshot = { view = view }
+
+    -- A folded placeholder has no stable entry offset. This is the same
+    -- refusal save() historically made: restoring a fabricated file-header
+    -- cursor is worse than falling back to the captured topline.
+    local cursor_row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
+    local ci, cursor_offset = canvas.locate(state, cursor_row0)
+    if ci and state.sections[ci]
+        and not fold.hidden(state, state.sections[ci].path) then
+      local centry = state.sections[ci].entries[cursor_offset]
+      snapshot.cursor = {
+        path = state.sections[ci].path,
+        new_lnum = centry and centry.new_lnum or nil,
+        content = centry and centry.content or nil,
+      }
+    end
+  end)
+
+  if not ok then
+    return nil, false
+  end
+  state.session_snapshot = snapshot
+  return snapshot, true
+end
+
 --- Where a root's session file lives on disk.
 function M.path_for(root)
   return vim.fn.stdpath("state") .. "/galley/" .. vim.fn.sha256(root) .. ".json"
@@ -79,36 +134,13 @@ function M.save(state)
     table.sort(seen, function(a, b) return a.path < b.path end)
     data.folded_seen = seen
 
-    if win_showing_canvas(state) then
-      local top0 = vim.api.nvim_win_call(state.win, function()
-        return vim.fn.line("w0") - 1
-      end)
-      local i, top_offset = canvas.locate(state, top0)
-      if i and not fold.hidden(state, state.sections[i].path) then
-        local sec = state.sections[i]
-        local view = viewport.capture_from_entries(sec.entries, top_offset)
-        view.path = sec.path
-        data.view = view
-
-        -- Same refusal as the view above, for the same reason: a section
-        -- rendered as one row has no offset to capture. cursor_offset is
-        -- always 1 there, so the anchor would come out as that section's
-        -- file_hdr -- an entry the user never sat on -- and restore would
-        -- dutifully put the cursor on a file header. `]f` deliberately still
-        -- stops on the virtualizer's own placeholders, so the cursor really
-        -- can be resting on one. Recording nothing leaves restore to fall
-        -- back to the topline, which is the honest answer.
-        local cursor_row0 = vim.api.nvim_win_get_cursor(state.win)[1] - 1
-        local ci, cursor_offset = canvas.locate(state, cursor_row0)
-        if ci and not fold.hidden(state, state.sections[ci].path) then
-          local centry = state.sections[ci].entries[cursor_offset]
-          data.cursor = {
-            path = state.sections[ci].path,
-            new_lnum = centry and centry.new_lnum or nil,
-            content = centry and centry.content or nil,
-          }
-        end
-      end
+    local position, observed = M.capture(state)
+    if not observed then
+      position = state.session_snapshot
+    end
+    if position then
+      data.view = position.view
+      data.cursor = position.cursor
     end
 
     local path = M.path_for(state.root)

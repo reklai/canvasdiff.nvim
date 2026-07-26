@@ -297,7 +297,12 @@ local function install_autocmds(state)
     group = aug,
     pattern = tostring(state.win),
     callback = function()
-      vim.schedule(S.close)
+      local owner = bar
+      vim.schedule(function()
+        if bar == owner then
+          S.close()
+        end
+      end)
     end,
   })
 end

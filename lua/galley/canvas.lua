@@ -351,6 +351,20 @@ function M.open(sections, opts)
   return state
 end
 
+--- Show an existing canvas state in `win` without rebuilding its model or
+--- anchors. This is a second view of one review, not a new review lifetime.
+function M.show(state, win)
+  win = win or vim.api.nvim_get_current_win()
+  if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)
+      and vim.api.nvim_win_is_valid(win)) then
+    return false
+  end
+  vim.api.nvim_win_set_buf(win, state.buf)
+  apply_win_opts(win)
+  state.win = win
+  return true
+end
+
 --- 0-based [start_row, end_row_exclusive) for section i, resolved live from
 --- extmarks -- never cached.
 function M.section_rows(state, i)

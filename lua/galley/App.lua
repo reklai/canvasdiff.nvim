@@ -16,6 +16,7 @@ local keys = require("galley.keys")
 local fold = require("galley.fold")
 local lens = require("galley.lens")
 local render = require("galley.render")
+local Surface = require("galley.Surface")
 
 local App = {}
 App.__index = App
@@ -26,15 +27,17 @@ function App.new()
   return setmetatable({}, App)
 end
 
---- Is `st`'s canvas actually live and on screen right now? App state outlives
---- App:close (the canvas buffer is cached and reopened), so a bare nil check
---- is not enough to tell an open canvas from a closed one.
+local function active_surface(app)
+  local surface = app.surface
+  return surface and surface:is_alive() and surface or nil
+end
+
+--- Is `st`'s remembered primary window still displaying the canvas? A Surface
+--- may have several views and owns the authoritative global scan; this narrow
+--- helper is for row operations that must target one concrete Neovim window.
 ---
---- Keys on st.win, which the scrollbar/hl/statuscolumn refresh on
---- BufWinEnter -- with all three disabled it can go stale, and multi-window
---- canvas display is a documented MVP limitation anyway. Note App:close
---- deliberately does NOT use this: it tests the CURRENT window instead, for
---- the reasons in its own docstring.
+--- Surface rebinds st.win after an owned view disappears. App:close
+--- deliberately does not use this scalar predicate.
 local function canvas_showing(st)
   return st.win and vim.api.nvim_win_is_valid(st.win)
     and vim.api.nvim_win_get_buf(st.win) == st.buf
@@ -100,39 +103,6 @@ local function set_winbar(st, text)
   end
   st.winbar_text = text
   pcall(vim.api.nvim_set_option_value, "winbar", text, { win = st.win, scope = "local" })
-end
-
---- Stop every subsystem attached to `st` and persist its session -- everything
---- App:close does EXCEPT putting windows back, because by the time this runs the
---- window may already be gone.
----
---- That separation is the whole point: `:q` destroys the canvas window without
---- coming through App:close, and watch's only lifecycle hook is BufWipeout on the
---- canvas buffer -- which is `bufhidden = "hide"`, so `:q` hides it and the hook
---- never fires. Left unreached, watch keeps its fs_event handles armed and keeps
---- running a blocking `git status` plus a `git show` per changed file on every
---- write in the repo, splicing a buffer nobody can see.
----
---- Every step is idempotent and nil-safe, so calling this twice is fine.
-local function teardown(st)
-  if config.options.session.enabled then
-    session.save(st)
-  end
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.session")
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.close")
-  -- Left armed, this keeps resolving sections against a torn-down state on every
-  -- scroll in any window.
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.winbar")
-
-  watch.stop()
-  hl.detach(st)
-  sidebar.close()
-  scrollbar.close()
-  virt.detach()
-  statuscol.detach()
-  -- Before restore_window hands the window back: a leftover winbar would claim
-  -- whatever file lands there is a diff canvas.
-  set_winbar(st, "")
 end
 
 local function show_empty_message(st)
@@ -237,26 +207,33 @@ end
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
 --- with no handler here simply installs no map, which is what lets a spec land
 --- before the feature behind it does.
-local function canvas_actions(app, st, cfg)
+local function owned_action(surface, generation, callback)
+  return function()
+    surface:guard(generation, callback)
+  end
+end
+
+local function canvas_actions(app, surface, st, cfg)
+  local generation = surface.generation
   return {
-    jump       = function() open_under_cursor(st, cfg) end,
-    collapse   = function() toggle_collapse_under_cursor(st) end,
-    close      = function() app:close() end,
-    refresh    = function() app:refresh() end,
-    lens_next  = function() app:cycle_lens(1) end,
-    lens_prev  = function() app:cycle_lens(-1) end,
-    cycle_next = function() sidebar.cycle(st, 1) end,
-    cycle_prev = function() sidebar.cycle(st, -1) end,
-    next_file  = function() motions.goto_file(st, 1) end,
-    prev_file  = function() motions.goto_file(st, -1) end,
-    next_hunk  = function() motions.goto_hunk(st, 1) end,
-    prev_hunk  = function() motions.goto_hunk(st, -1) end,
+    jump       = owned_action(surface, generation, function() open_under_cursor(st, cfg) end),
+    collapse   = owned_action(surface, generation, function() toggle_collapse_under_cursor(st) end),
+    close      = owned_action(surface, generation, function() app:close() end),
+    refresh    = owned_action(surface, generation, function() app:refresh() end),
+    lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
+    lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
+    cycle_next = owned_action(surface, generation, function() sidebar.cycle(st, 1) end),
+    cycle_prev = owned_action(surface, generation, function() sidebar.cycle(st, -1) end),
+    next_file  = owned_action(surface, generation, function() motions.goto_file(st, 1) end),
+    prev_file  = owned_action(surface, generation, function() motions.goto_file(st, -1) end),
+    next_hunk  = owned_action(surface, generation, function() motions.goto_hunk(st, 1) end),
+    prev_hunk  = owned_action(surface, generation, function() motions.goto_hunk(st, -1) end),
   }
 end
 
-local function set_canvas_keymaps(app, st)
+local function set_canvas_keymaps(app, surface, st)
   local cfg = config.options
-  local acts = canvas_actions(app, st, cfg)
+  local acts = canvas_actions(app, surface, st, cfg)
   for _, m in ipairs(keys.resolved("canvas", cfg.keymaps)) do
     local fn = acts[m.action]
     if fn then
@@ -305,8 +282,9 @@ function App:open(opts)
   -- opened INTO that window. Redirect to the live canvas window if there is
   -- one; otherwise treat the sidebar as an appendage of an open canvas.
   if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
-    if self.state and canvas_showing(self.state) then
-      vim.api.nvim_set_current_win(self.state.win)
+    local active = active_surface(self)
+    if active and active:is_showing() then
+      vim.api.nvim_set_current_win(active.state.win)
     else
       return
     end
@@ -350,6 +328,15 @@ function App:open(opts)
     return nil, collect_err
   end
 
+  -- Collection is transactional: only a valid replacement may retire the
+  -- current Surface. Dispose before canvas.open rewrites the shared scratch
+  -- buffer, so the outgoing session is saved from the model it owned.
+  local previous = active_surface(self)
+  local ownership = previous and previous:handoff() or nil
+  if previous then
+    previous:dispose("replaced")
+  end
+
   local st = canvas.open(sections, {})
   st.root = root
   st.lens = l
@@ -357,7 +344,20 @@ function App:open(opts)
   -- older vocabulary. nil for `staged` and branch lenses, which it cannot express.
   st.base = lens.to_base(l)
   st.prev_buf = prev_buf
-  self.state = st
+
+  local surface = Surface.new(st, {
+    clear_winbar = function(owner)
+      set_winbar(owner.state, "")
+    end,
+    on_dispose = function(owner)
+      -- A late callback from an older Surface must never clear a replacement.
+      if self.surface == owner then
+        self.surface = nil
+      end
+    end,
+  }, ownership)
+  self.surface = surface
+  local generation = surface.generation
 
   -- Before anything that can splice: a fold from the sidebar or a pass of the
   -- auto-virtualizer reshapes the canvas, and neither the highlight tier nor
@@ -365,7 +365,11 @@ function App:open(opts)
   -- state itself, so it is not a property of whichever of those two features
   -- happens to be enabled, and cannot outlive the canvas it describes.
   st.hooks = st.hooks or {}
-  st.hooks.on_shape_change = sync_after_collapse
+  st.hooks.on_shape_change = function()
+    surface:guard(generation, function()
+      sync_after_collapse(st)
+    end)
+  end
   -- Fired by sidebar.sync once it has resolved which section the topline is in --
   -- i.e. "the canvas viewport moved". WinScrolled alone is not enough: a PROGRAMMATIC
   -- move (sidebar select, jump.back, a motion) repositions the viewport without one,
@@ -376,7 +380,9 @@ function App:open(opts)
   -- programmatic scroll. With the sidebar disabled there is nothing but interactive
   -- scrolling, which WinScrolled covers.
   st.hooks.on_locate = function()
-    set_winbar(st)
+    surface:guard(generation, function()
+      set_winbar(st)
+    end)
   end
 
   set_winbar(st)
@@ -385,19 +391,25 @@ function App:open(opts)
     show_empty_message(st)
   end
 
-  set_canvas_keymaps(self, st)
+  set_canvas_keymaps(self, surface, st)
 
   if config.options.highlight.enabled then
     hl.attach(st, config.options.highlight)
   end
 
   if config.options.watch.enabled then
-    watch.on_empty = function()
-      show_empty_message(st)
+    surface.callbacks.watch_empty = function()
+      surface:guard(generation, function()
+        show_empty_message(st)
+      end)
     end
-    watch.on_error = function(err)
-      util.warn(err)
+    surface.callbacks.watch_error = function(err)
+      surface:guard(generation, function()
+        util.warn(err)
+      end)
     end
+    watch.on_empty = surface.callbacks.watch_empty
+    watch.on_error = surface.callbacks.watch_error
     watch.start(st, config.options.watch)
   end
 
@@ -422,11 +434,27 @@ function App:open(opts)
   -- set_winbar or this callback by hand, as they already do for hl and the minimap.)
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
     group = vim.api.nvim_create_augroup("galley.winbar", { clear = true }),
+    callback = function(ev)
+      surface:guard(generation, function(owner)
+        local event_win = tonumber(ev.match)
+        if event_win and owner:owns_window(event_win) then
+          owner:capture_view(event_win)
+        end
+        if owner:is_showing() then
+          set_winbar(st)
+        end
+      end)
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "CursorMoved", "WinLeave" }, {
+    group = "galley.winbar",
+    buffer = st.buf,
     callback = function()
-      local current = self.state
-      if current and canvas_showing(current) then
-        set_winbar(current)
-      end
+      local win = vim.api.nvim_get_current_win()
+      surface:guard(generation, function(owner)
+        owner:canvas_windows()
+        owner:capture_view(win)
+      end)
     end,
   })
 
@@ -439,7 +467,9 @@ function App:open(opts)
     vim.api.nvim_create_autocmd("VimLeavePre", {
       group = aug,
       callback = function()
-        session.save(st)
+        surface:guard(generation, function(owner)
+          owner:save()
+        end)
       end,
     })
   end
@@ -458,18 +488,44 @@ function App:open(opts)
   -- showing the canvas -- and because doing window work from inside WinClosed is
   -- fragile (the same reason sidebar.lua schedules its own).
   local close_aug = vim.api.nvim_create_augroup("galley.close", { clear = true })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = close_aug,
+    buffer = st.buf,
+    callback = function()
+      local win = vim.api.nvim_get_current_win()
+      surface:guard(generation, function(owner)
+        owner:adopt_window(win)
+        owner:capture_view(win)
+      end)
+    end,
+  })
   vim.api.nvim_create_autocmd("WinClosed", {
     group = close_aug,
     callback = function(ev)
-      local current = self.state
-      if not (current and tonumber(ev.match) == current.win) then
+      if not surface:guard(generation) then
         return
       end
+      local closed = tonumber(ev.match)
+      if not surface:owns_window(closed) then
+        return
+      end
+
+      -- WinClosed fires while the closing window is still valid. Capture the
+      -- semantic viewport now; the deferred disposal below runs after Neovim
+      -- invalidates it and would otherwise persist folds but silently lose the
+      -- user's position.
+      surface:capture_view(closed)
+      surface:release_window(closed)
+
       vim.schedule(function()
-        local owned = self.state
-        if owned and not canvas_showing(owned) then
-          teardown(owned)
-        end
+        surface:guard(generation, function(owner)
+          -- Adopt an unregistered duplicate (plain :split emits no
+          -- BufWinEnter), then decide from every still-valid host across tabs.
+          owner:canvas_windows()
+          if #owner:host_windows() == 0 then
+            owner:dispose("last_window")
+          end
+        end)
       end)
     end,
   })
@@ -496,24 +552,8 @@ function App:open(opts)
     -- on_shape_change hook is already in place from the top of this function.
     virt.attach(st, config.options.virt)
   end
+  surface:capture_view(st.win)
   return st
-end
-
---- Windows in the CURRENT tabpage showing the canvas buffer.
----
---- Tabpage-scoped on purpose: tabs are separate workspaces, so closing here
---- must not reach into a canvas someone left open in another one.
-local function canvas_wins(st)
-  local out = {}
-  if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
-    return out
-  end
-  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == st.buf then
-      out[#out + 1] = w
-    end
-  end
-  return out
 end
 
 --- Is `buf` something we could sensibly leave a window sitting on?
@@ -532,9 +572,9 @@ end
 --- alternate file; and only then a blank buffer. The chain exists because
 --- landing on [No Name] reads as something having gone wrong, when in fact
 --- nothing did -- the buffer we came from was simply deleted meanwhile.
-local function restore_window(win, st)
+local function restore_window(win, st, landing)
   local candidates = {
-    (win == st.win) and st.prev_buf or nil,
+    landing,
     jump.last_buf(),
     vim.api.nvim_win_call(win, function() return vim.fn.bufnr("#") end),
   }
@@ -556,10 +596,8 @@ end
 --- Acts on every window in this tabpage showing the canvas, not just the
 --- current one. Restricting it to the current window meant `:Galley close`
 --- from a neighbouring split was a silent no-op that read as the plugin being
---- broken. Each App still owns a single state, so only the one
---- window it remembers a `prev_buf` for gets that buffer back; the others go
---- through the same fallback chain rather than being handed another window's
---- history.
+--- broken. Surface records a landing per host, so views in different tabs
+--- return to their own buffers rather than inheriting another window's history.
 ---
 --- No canvas on screen ⇒ nothing to restore, but the teardown still runs. It used
 --- to return early here, which meant that after a `:q` had taken the window there
@@ -568,31 +606,69 @@ end
 --- A stale 'statuscolumn' left on a restored window is harmless: statuscol's
 --- text function returns "" as soon as the window isn't showing the canvas.
 function App:close()
-  if not self.state then
+  local surface = active_surface(self)
+  if not surface then
     return
   end
 
-  local wins = canvas_wins(self.state)
-  teardown(self.state)
+  -- One Surface may have views in several tabs. `close` retains the historical
+  -- tab-local command policy: retire the hosts in this workspace, but keep the
+  -- review alive when another tab still owns a view of the same canvas.
+  local st = surface.state
+  local tab = vim.api.nvim_get_current_tabpage()
+  surface:canvas_windows()
+  local hosts = surface:host_windows(tab)
+  if #hosts == 0 then
+    -- The final host may already have vanished and queued its deferred
+    -- WinClosed recheck. An explicit close in that gap still owns teardown.
+    if #surface:host_windows() == 0 then
+      surface:dispose("explicit")
+    end
+    return
+  end
+  local wins = surface:tab_canvas_windows(tab)
+  local landings = {}
+  for _, win in ipairs(wins) do
+    landings[win] = surface:landing_buffer(win)
+  end
+
+  surface:capture_view(st.win)
+  for _, win in ipairs(hosts) do
+    surface:release_window(win)
+  end
+
+  local final = #surface:host_windows() == 0
+  if final then
+    -- dispose() clears self.surface through an identity-checked callback, so
+    -- retain the exact state and window list locally through restoration.
+    surface:dispose("explicit")
+  end
 
   for _, win in ipairs(wins) do
-    restore_window(win, self.state)
+    if vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_win_get_buf(win) == st.buf then
+      restore_window(win, st, landings[win])
+    end
+  end
+
+  if not final then
+    surface:canvas_windows()
   end
 end
 
 --- Toggle: if the canvas is on screen anywhere in this tabpage, take it off;
 --- otherwise open it here.
 ---
---- Keyed on "is it showing at all", not "is it showing in THIS window".
---- Toggling from a neighbouring split used to fall through to open() and put
---- a second view of the same canvas on screen, so the key that is supposed to
---- dismiss it added another one instead.
+--- Keyed on this tabpage: a neighbouring split closes the local views, while
+--- a review living only in another tab is shown here without rebuilding it.
 ---
 --- Being focused inside our own sidebar counts as "the canvas is open": close
 --- it, or just close the sidebar if the canvas it was attached to is already
 --- gone. Never errors.
 function App:toggle()
-  local showing = self.state and #canvas_wins(self.state) > 0
+  local surface = active_surface(self)
+  local tab = vim.api.nvim_get_current_tabpage()
+  local showing = surface and surface:is_showing(tab)
 
   if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
     if showing then
@@ -605,6 +681,14 @@ function App:toggle()
 
   if showing then
     self:close()
+  elseif surface then
+    local win = vim.api.nvim_get_current_win()
+    local landing = vim.api.nvim_win_get_buf(win)
+    if canvas.show(surface.state, win) then
+      surface:adopt_window(win, landing)
+      surface:capture_view(win)
+      set_winbar(surface.state)
+    end
   else
     self:open()
   end
@@ -670,10 +754,11 @@ end
 --- test_e2e's "refresh cannot repair a divergent buffer, close+open can" pins both
 --- halves of that result.
 function App:refresh()
-  if not self.state then
+  local surface = active_surface(self)
+  if not surface then
     return
   end
-  local ok, err = pivot(self.state)
+  local ok, err = pivot(surface.state)
   if not ok then
     util.warn(err)
     return nil, err
@@ -693,18 +778,19 @@ function App:set_lens(l)
     util.warn(err)
     return nil, err
   end
-  if not (self.state and canvas_showing(self.state)) then
+  local surface = active_surface(self)
+  if not (surface and surface:is_showing()) then
     local opened, err = self:open({ lens = l })
     if not opened then
       return nil, err
     end
     return true
   end
-  if lens.same(lens.of(self.state), l) then
+  if lens.same(lens.of(surface.state), l) then
     return true
   end
 
-  local ok, err = pivot(self.state, l)
+  local ok, err = pivot(surface.state, l)
   if not ok then
     util.warn(err)
     return nil, err
@@ -719,11 +805,12 @@ end
 --- around -- one key to ask "what am I actually looking at" from three angles.
 --- Warns rather than opening: a keypress on no canvas is a mistake, not a request.
 function App:cycle_lens(delta)
-  if not (self.state and canvas_showing(self.state)) then
+  local surface = active_surface(self)
+  if not (surface and surface:is_showing()) then
     util.warn("no live diff canvas")
     return
   end
-  return self:set_lens(lens.step(lens.of(self.state), delta or 1))
+  return self:set_lens(lens.step(lens.of(surface.state), delta or 1))
 end
 
 --- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.
@@ -750,11 +837,13 @@ end
 --- `B` key runs App:cycle_lens, which also reaches the staged view. Warns rather than
 --- opening, for the same reason cycle_lens does.
 function App:toggle_base()
-  if not (self.state and canvas_showing(self.state)) then
+  local surface = active_surface(self)
+  if not (surface and surface:is_showing()) then
     util.warn("no live diff canvas")
     return
   end
-  return self:set_base(lens.to_base(lens.of(self.state)) == "index" and "HEAD" or "index")
+  return self:set_base(
+    lens.to_base(lens.of(surface.state)) == "index" and "HEAD" or "index")
 end
 
 return App

@@ -1,5 +1,6 @@
 local H = require("helpers")
 local canvas = require("galley.canvas")
+local viewport = require("galley.viewport")
 
 local T = {}
 
@@ -120,7 +121,7 @@ local function with_canvas(body)
   local fm = require("galley")
   fm.setup({})
   local previous_buf = vim.api.nvim_get_current_buf()
-  fm.open()
+  local st = fm.open()
   local owner = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_get_current_buf()
 
@@ -134,13 +135,14 @@ local function with_canvas(body)
       owner = owner,
       buf = buf,
       previous_buf = previous_buf,
+      state = st,
+      surface = st.surface,
     })
   end, debug.traceback)
 
-  -- Avoid a second close after a successful terminal path: the current
-  -- singleton has no disposed bit yet, and repeated close is deliberately a
-  -- later failure-first contract. On an assertion failure, however, reclaim
-  -- any still-live owner before restoring the shared test process.
+  -- On an assertion failure, reclaim any still-live owner before restoring the
+  -- shared test process. Surface disposal is idempotent, so this is also safe
+  -- after a successful terminal path.
   if group_alive("galley.watch") then
     pcall(fm.close)
   end
@@ -214,6 +216,304 @@ T["lifecycle_ a duplicate canvas split shares the review and only the final clos
       H.eq(counts["session.save"], 1,
         "the final close persists the shared review exactly once")
       assert_groups(false, "after the final canvas window closed")
+    end)
+  end)
+end
+
+T["lifecycle_ closing the original split first rebinds and persists the survivor"] = function()
+  with_canvas(function(ctx)
+    local session = require("galley.session")
+    with_spies({
+      { name = "session.save", target = session, method = "save" },
+    }, function(counts)
+      local surface = ctx.surface
+      local initial_generation = surface.generation
+
+      vim.api.nvim_set_current_win(ctx.owner)
+      vim.cmd("split")
+      local survivor = vim.api.nvim_get_current_win()
+      assert(survivor ~= ctx.owner, "sanity: the duplicate is a distinct window")
+      H.eq(ctx.state.win, ctx.owner,
+        "plain :split does not silently repair the scalar owner before the fault")
+
+      -- Close the remembered/original window, not the duplicate. The deferred
+      -- ownership scan must discover and rebind the surviving view.
+      vim.api.nvim_win_close(ctx.owner, false)
+      local rebound = vim.wait(500, function()
+        return ctx.state.win == survivor
+      end, 10)
+      assert(rebound, "the surviving split became the primary canvas view")
+      assert(surface:is_alive(), "one surviving view keeps the Surface active")
+      H.eq(counts["session.save"], 0, "a non-final close does not persist")
+      H.eq(vim.api.nvim_win_get_buf(survivor), ctx.buf)
+      assert_groups(true, "after the original view closed", SURFACE_GROUPS)
+
+      -- Derive the semantic payload independently, before WinClosed. The
+      -- terminal callback must capture this exact position synchronously while
+      -- the window is valid, then carry it through deferred disposal.
+      local row = math.min(3, vim.api.nvim_buf_line_count(ctx.buf))
+      vim.api.nvim_win_call(survivor, function()
+        vim.fn.winrestview({ topline = 1, lnum = row })
+      end)
+      local top0 = vim.api.nvim_win_call(survivor, function()
+        return vim.fn.line("w0") - 1
+      end)
+      local vi, voffset = canvas.locate(ctx.state, top0)
+      local expected_view = viewport.capture_from_entries(
+        ctx.state.sections[vi].entries, voffset)
+      expected_view.path = ctx.state.sections[vi].path
+
+      local cursor0 = vim.api.nvim_win_get_cursor(survivor)[1] - 1
+      local ci, coffset = canvas.locate(ctx.state, cursor0)
+      local centry = ctx.state.sections[ci].entries[coffset]
+      local expected_cursor = {
+        path = ctx.state.sections[ci].path,
+        new_lnum = centry and centry.new_lnum or nil,
+        content = centry and centry.content or nil,
+      }
+
+      vim.api.nvim_win_close(survivor, false)
+      local disposed = vim.wait(500, function()
+        return surface.disposed
+      end, 10)
+      assert(disposed, "the global final host disposes the Surface")
+      H.eq(surface.phase, "disposed")
+      H.eq(surface.generation, initial_generation + 1)
+      H.eq(counts["session.save"], 1, "the final view persists exactly once")
+
+      local saved = assert(session.load(ctx.root), "the final close wrote a session")
+      H.eq(saved.view, expected_view, "the closing window's semantic view survived")
+      H.eq(saved.cursor, expected_cursor, "the closing window's semantic cursor survived")
+      assert_groups(false, "after the rebound survivor closed")
+    end)
+  end)
+end
+
+T["lifecycle_ one Surface spans tabs until its global final host closes"] = function()
+  with_canvas(function(ctx)
+    local session = require("galley.session")
+    with_spies({
+      { name = "session.save", target = session, method = "save" },
+    }, function(counts)
+      local surface = ctx.surface
+
+      vim.cmd("tabnew")
+      local remote_tab = vim.api.nvim_get_current_tabpage()
+      local remote = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(remote, ctx.buf)
+      assert(surface:adopt_window(remote), "the remote BufWinEnter view is owned")
+
+      vim.api.nvim_set_current_tabpage(ctx.tab)
+      vim.api.nvim_win_close(ctx.owner, false)
+      local rebound = vim.wait(500, function()
+        return surface:is_alive() and ctx.state.win == remote
+      end, 10)
+      assert(rebound, "the Surface rebound across tabs after its local view closed")
+      H.eq(counts["session.save"], 0, "a remote host prevents terminal persistence")
+      H.eq(vim.api.nvim_win_get_buf(remote), ctx.buf,
+        "closing one tab cannot clobber the other tab's canvas")
+      assert_groups(true, "while a cross-tab host survives", SURFACE_GROUPS)
+
+      vim.api.nvim_set_current_tabpage(remote_tab)
+      vim.api.nvim_win_close(remote, false)
+      local disposed = vim.wait(500, function()
+        return surface.disposed
+      end, 10)
+      assert(disposed, "closing the global final host disposes the review")
+      H.eq(counts["session.save"], 1)
+      assert_groups(false, "after the cross-tab final host closed")
+    end)
+  end)
+end
+
+T["lifecycle_ tab-local close and toggle preserve each window landing"] = function()
+  with_canvas(function(ctx)
+    local surface = ctx.surface
+    local original_landing = ctx.previous_buf
+
+    -- Add a second tab whose own prior buffer is distinct from the original
+    -- host's landing.
+    vim.cmd("tabnew")
+    local remote_tab = vim.api.nvim_get_current_tabpage()
+    local remote = vim.api.nvim_get_current_win()
+    local remote_landing = vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_set_buf(remote, ctx.buf)
+    surface:adopt_window(remote, remote_landing)
+
+    -- Explicit close is tab-local. It restores the original host to its own
+    -- landing and leaves the remote review untouched.
+    vim.api.nvim_set_current_tabpage(ctx.tab)
+    ctx.fm.close()
+    H.eq(vim.api.nvim_win_get_buf(ctx.owner), original_landing,
+      "the original tab returns to the buffer it replaced")
+    H.eq(vim.api.nvim_win_get_buf(remote), ctx.buf,
+      "the remote tab keeps the shared canvas")
+    assert(surface:is_alive())
+
+    -- From a third tab, toggle must show this existing Surface rather than
+    -- silently trying to close a different tab or replacing the review.
+    vim.cmd("tabnew")
+    local third = vim.api.nvim_get_current_win()
+    local third_landing = vim.api.nvim_get_current_buf()
+    ctx.fm.toggle()
+    H.eq(vim.api.nvim_win_get_buf(third), ctx.buf,
+      "toggle shows the existing remote review in this tab")
+    H.eq(ctx.state.surface, surface, "toggle did not create a replacement Surface")
+    H.eq(#surface:canvas_windows(), 2)
+
+    ctx.fm.toggle()
+    H.eq(vim.api.nvim_win_get_buf(third), third_landing,
+      "the second toggle restores this tab's independent landing")
+    assert(surface:is_alive(), "the remote tab still owns the review")
+    H.eq(vim.api.nvim_win_get_buf(remote), ctx.buf)
+
+    vim.api.nvim_set_current_tabpage(remote_tab)
+    ctx.fm.close()
+    H.eq(vim.api.nvim_win_get_buf(remote), remote_landing,
+      "the remote tab restores its own prior buffer, not the original tab's")
+    assert(surface.disposed, "the remote host was the global final owner")
+    vim.cmd("tabonly!")
+  end)
+end
+
+T["lifecycle_ replacement hands every cross-tab host to the new Surface"] = function()
+  with_canvas(function(ctx)
+    local old = ctx.surface
+
+    vim.cmd("tabnew")
+    local remote_tab = vim.api.nvim_get_current_tabpage()
+    local remote = vim.api.nvim_get_current_win()
+    local remote_landing = vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_set_buf(remote, ctx.buf)
+    old:adopt_window(remote, remote_landing)
+
+    vim.api.nvim_set_current_tabpage(ctx.tab)
+    vim.api.nvim_set_current_win(ctx.owner)
+    local next_state = assert(ctx.fm.open())
+    local replacement = assert(next_state.surface)
+
+    assert(old.disposed, "the preceding generation was retired")
+    assert(replacement:is_alive())
+    H.eq(#replacement:canvas_windows(), 2,
+      "both visible hosts transferred to the replacement generation")
+    H.eq(vim.api.nvim_win_get_buf(remote), next_state.buf,
+      "the remote view sees the rerendered shared canvas")
+
+    vim.api.nvim_win_close(ctx.owner, false)
+    local rebound = vim.wait(500, function()
+      return replacement:is_alive() and next_state.win == remote
+    end, 10)
+    assert(rebound, "closing the local host rebinds the replacement remotely")
+    H.eq(vim.api.nvim_win_get_buf(remote), next_state.buf)
+
+    vim.api.nvim_set_current_tabpage(remote_tab)
+    ctx.fm.close()
+    H.eq(vim.api.nvim_win_get_buf(remote), remote_landing)
+    assert(replacement.disposed)
+    vim.cmd("tabonly!")
+  end)
+end
+
+T["lifecycle_ racing terminal paths dispose and persist exactly once"] = function()
+  with_canvas(function(ctx)
+    local surface = ctx.surface
+    local generation = surface.generation
+    local disposed_callbacks = 0
+    local release = surface.callbacks.on_dispose
+    surface.callbacks.on_dispose = function(...)
+      disposed_callbacks = disposed_callbacks + 1
+      return release(...)
+    end
+
+    local specs = {
+      { name = "session.save", target = require("galley.session"), method = "save" },
+      { name = "watch.stop", target = require("galley.watch"), method = "stop" },
+      { name = "hl.detach", target = require("galley.hl"), method = "detach" },
+      { name = "sidebar.close", target = require("galley.sidebar"), method = "close" },
+      { name = "scrollbar.close", target = require("galley.scrollbar"), method = "close" },
+      { name = "virt.detach", target = require("galley.virt"), method = "detach" },
+      { name = "statuscol.detach", target = require("galley.statuscol"), method = "detach" },
+    }
+
+    with_spies(specs, function(counts)
+      -- Keep a normal spare so the canvas WinClosed path can queue without
+      -- ending the tab or the headless process.
+      vim.api.nvim_set_current_win(ctx.owner)
+      vim.cmd("vnew")
+      local spare = vim.api.nvim_get_current_win()
+      vim.api.nvim_set_current_win(ctx.owner)
+      vim.api.nvim_win_close(ctx.owner, false)
+      vim.api.nvim_set_current_win(spare)
+
+      -- VimLeave, explicit close, repeat close, and the already-queued
+      -- WinClosed callback all converge on the same once gate.
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "galley.session" })
+      ctx.fm.close()
+      ctx.fm.close()
+      H.eq(surface:dispose("again"), false, "terminal disposal is idempotent")
+
+      local drained = false
+      vim.schedule(function() drained = true end)
+      assert(vim.wait(500, function() return drained end, 10),
+        "the held WinClosed queue drained")
+
+      for _, spec in ipairs(specs) do
+        H.eq(counts[spec.name], 1, spec.name .. " runs exactly once across the race")
+      end
+      H.eq(disposed_callbacks, 1, "the App release callback runs exactly once")
+      H.eq(surface.phase, "disposed")
+      H.eq(surface.disposed, true)
+      H.eq(surface.saved, true)
+      H.eq(surface.generation, generation + 1)
+      H.eq(ctx.state.surface, nil, "disposed state releases its owner back-reference")
+      assert_groups(false, "after racing terminal paths")
+    end)
+  end)
+end
+
+T["lifecycle_ a queued old callback cannot dispose its replacement"] = function()
+  with_canvas(function(ctx)
+    local old = ctx.surface
+    local old_generation = old.generation
+    local session = require("galley.session")
+    local watch = require("galley.watch")
+
+    with_spies({
+      { name = "session.save", target = session, method = "save" },
+      { name = "watch.stop", target = watch, method = "stop" },
+    }, function(counts)
+      vim.api.nvim_set_current_win(ctx.owner)
+      vim.cmd("vnew")
+      local spare = vim.api.nvim_get_current_win()
+      vim.api.nvim_set_current_win(ctx.owner)
+      vim.api.nvim_win_close(ctx.owner, false) -- queues old's guarded recheck
+      vim.api.nvim_set_current_win(spare)
+
+      local next_state = assert(ctx.fm.open())
+      local replacement = assert(next_state.surface)
+      assert(old.disposed, "opening the replacement retires the old Surface")
+      assert(replacement:is_alive())
+      assert(replacement.generation > old_generation,
+        "activation generations are monotonically increasing")
+      local saves_after_open = counts["session.save"]
+      local stops_after_open = counts["watch.stop"]
+
+      local drained = false
+      vim.schedule(function() drained = true end)
+      assert(vim.wait(500, function() return drained end, 10),
+        "the old queued callback ran before the marker")
+
+      assert(replacement:is_alive(), "old queued work cannot dispose the replacement")
+      H.eq(replacement.saved, false)
+      H.eq(saves_after_open, 1, "only the replaced Surface was persisted")
+      H.eq(counts["session.save"], saves_after_open,
+        "the old queued callback did not persist the replacement")
+      H.eq(counts["watch.stop"], stops_after_open,
+        "the old queued callback did not stop the replacement watch")
+      H.eq(#replacement:canvas_windows(), 1)
+      assert_groups(true, "on the replacement", SURFACE_GROUPS)
+
+      ctx.fm.close()
     end)
   end)
 end

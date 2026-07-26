@@ -65,7 +65,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   end
 end
 
-T["root_ loader has no init shim and App instances own separate state"] = function()
+T["root_ loader has no init shim and App instances own separate Surfaces"] = function()
   local cached = require("galley")
   package.loaded["galley"] = nil
   local reloaded = require("galley")
@@ -81,10 +81,21 @@ T["root_ loader has no init shim and App instances own separate state"] = functi
   local second = App.new()
   assert(not rawequal(first, second), "each App.new() returns a distinct owner")
 
-  local marker = {}
-  first.state = marker
-  H.eq(first.state, marker, "state is stored on its owning App")
-  H.eq(second.state, nil, "one App's state cannot leak into another App")
+  local state = {}
+  local surface = require("galley.Surface").new(state)
+  first.surface = surface
+  H.eq(first.surface, surface, "the active Surface is stored on its owning App")
+  H.eq(second.surface, nil, "one App's Surface cannot leak into another App")
+  H.eq(state.surface, surface, "the canvas state names its exact Surface owner")
+  H.eq(type(surface.id), "number")
+  H.eq(type(surface.generation), "number")
+  H.eq(surface.phase, "active")
+  H.eq(surface.saved, false)
+  H.eq(surface.disposed, false)
+  H.eq(type(surface.callbacks), "table")
+  assert(surface:is_alive(), "a new Surface is alive")
+  assert(not surface:is_showing(), "a Surface without a canvas buffer is hidden")
+  assert(surface:guard(surface.generation), "the current generation passes its guard")
 
   local util = require("galley.util")
   local real_warn = util.warn
@@ -97,7 +108,7 @@ T["root_ loader has no init shim and App instances own separate state"] = functi
     local refreshed, refresh_err = first:refresh()
     H.eq(refreshed, nil)
     H.eq(refresh_err, "no valid diff canvas",
-      "a method reads the state stored on its receiver")
+      "a method reads the Surface stored on its receiver")
 
     local untouched, untouched_err = second:refresh()
     H.eq(untouched, nil)
