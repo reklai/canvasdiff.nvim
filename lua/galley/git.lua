@@ -15,6 +15,25 @@ local function run(dir, args)
   return vim.system(cmd, { text = false }):wait()
 end
 
+local function command_error(what, res)
+  local detail = res and res.stderr and res.stderr:gsub("%s+$", "") or ""
+  if detail ~= "" then
+    return ("%s failed: %s"):format(what, detail)
+  end
+  return ("%s failed (exit %s)"):format(what, tostring(res and res.code or "?"))
+end
+
+local function nul_tokens(raw)
+  if raw == "" then
+    return {}
+  end
+  local tokens = vim.split(raw, "\0", { plain = true })
+  if tokens[#tokens] == "" then
+    table.remove(tokens)
+  end
+  return tokens
+end
+
 --- @param dir string
 --- @return string|nil
 function M.root(dir)
@@ -61,17 +80,18 @@ end
 ---   both           -> you staged it and then changed it again
 ---
 --- @param root string
---- @return { path: string, status: string, staged: string?, unstaged: string? }[]
+--- @return { path: string, old_path: string?, status: string, staged: string?, unstaged: string? }[]|nil
+--- @return string|nil
 function M.changed_files(root)
   local res = run(root, { "status", "--porcelain=v2", "-z", "--untracked-files=all" })
-  if res.code ~= 0 or not res.stdout or res.stdout == "" then
+  if res.code ~= 0 or res.stdout == nil then
+    return nil, command_error("git status", res)
+  end
+  if res.stdout == "" then
     return {}
   end
 
-  local tokens = vim.split(res.stdout, "\0", { plain = true })
-  if tokens[#tokens] == "" then
-    table.remove(tokens)
-  end
+  local tokens = nul_tokens(res.stdout)
 
   local files = {}
   local i = 1
@@ -82,7 +102,10 @@ function M.changed_files(root)
     if kind == "1" then
       -- "1 XY sub mH mI mW hH hI path"
       local xy, sub, path = tok:match("^1 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ (.*)$")
-      if xy and sub:sub(1, 1) ~= "S" then
+      if not (xy and sub and path) then
+        return nil, "malformed git status porcelain-v2 ordinary record"
+      end
+      if sub:sub(1, 1) ~= "S" then
         local staged, unstaged = xy_pair(xy)
         files[#files + 1] = {
           path = path, status = ordinary_status(xy),
@@ -93,13 +116,17 @@ function M.changed_files(root)
     elseif kind == "2" then
       -- "2 XY sub mH mI mW hH hI Xscore newpath" NUL "origpath"
       local xy, sub, newpath = tok:match("^2 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ %S+ (.*)$")
+      local oldpath = tokens[i + 1]
       -- consume the origpath token unconditionally so it never leaks into
       -- the next iteration as a bogus record.
       i = i + 2
-      if sub and sub:sub(1, 1) ~= "S" then
+      if not (xy and sub and newpath and oldpath) then
+        return nil, "malformed git status porcelain-v2 rename/copy record"
+      end
+      if sub:sub(1, 1) ~= "S" then
         local staged, unstaged = xy_pair(xy)
         files[#files + 1] = {
-          path = newpath, status = "R",
+          path = newpath, old_path = oldpath, status = "R",
           staged = staged, unstaged = unstaged,
         }
       end
@@ -124,14 +151,114 @@ function M.changed_files(root)
   return files
 end
 
+--- Resolve an arbitrary revision expression to one canonical commit object.
+---
+--- `--end-of-options` makes a ref beginning with "-" data rather than another
+--- rev-parse option. Appending ^{commit} accepts commits and commit-ish tags,
+--- while rejecting a blob/tree that cannot serve as a diff base.
+--- @param root string
+--- @param ref string
+--- @return string|nil oid
+--- @return string|nil err
+function M.resolve_commit(root, ref)
+  if type(ref) ~= "string" or ref == "" then
+    return nil, "revision must be a non-empty string"
+  end
+  local res = run(root, {
+    "rev-parse", "--verify", "--quiet", "--end-of-options", ref .. "^{commit}",
+  })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil, ("revision '%s' does not resolve to a commit"):format(ref)
+  end
+  local oid = res.stdout:gsub("%s+$", "")
+  if oid == "" or not oid:match("^[0-9a-fA-F]+$") then
+    return nil, ("revision '%s' did not resolve to a canonical object id"):format(ref)
+  end
+  return oid
+end
+
+--- Files whose tracked worktree result differs from `oid`.
+---
+--- `--name-status -z` makes every status and path its own NUL-delimited field:
+--- ordinary records are STATUS, PATH; rename/copy records are Rnnn/Cnnn,
+--- OLD_PATH, NEW_PATH. No path is whitespace-split or trimmed.
+--- @param root string
+--- @param oid string canonical commit id
+--- @return { path: string, old_path: string, status: string, score: integer? }[]|nil
+--- @return string|nil
+function M.diff_files(root, oid)
+  if type(oid) ~= "string" or oid == "" then
+    return nil, "diff base must be a non-empty object id"
+  end
+  local res = run(root, {
+    "diff",
+    "--no-ext-diff",
+    "--ignore-submodules=all",
+    "--name-status",
+    "-z",
+    "--find-renames",
+    "--diff-filter=ACDMRT",
+    oid,
+    "--",
+  })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil, command_error("git diff", res)
+  end
+
+  local tokens = nul_tokens(res.stdout)
+  local files = {}
+  local i = 1
+  while i <= #tokens do
+    local raw_status = tokens[i]
+    i = i + 1
+
+    local status = raw_status:sub(1, 1)
+    if raw_status:match("^[RC]%d+$") then
+      local old_path, new_path = tokens[i], tokens[i + 1]
+      if old_path == nil or new_path == nil or old_path == "" or new_path == "" then
+        return nil, "malformed git diff --name-status -z rename/copy record"
+      end
+      files[#files + 1] = {
+        path = new_path,
+        old_path = old_path,
+        status = status,
+        score = tonumber(raw_status:sub(2)),
+      }
+      i = i + 2
+    elseif raw_status:match("^[ADMT]$") then
+      local path = tokens[i]
+      if path == nil or path == "" then
+        return nil, "malformed git diff --name-status -z ordinary record"
+      end
+      files[#files + 1] = {
+        path = path,
+        old_path = path,
+        status = status,
+      }
+      i = i + 1
+    else
+      return nil, ("unexpected git diff --name-status status '%s'"):format(raw_status)
+    end
+  end
+
+  table.sort(files, function(a, b)
+    if a.path == b.path then
+      return a.old_path < b.old_path
+    end
+    return a.path < b.path
+  end)
+  return files
+end
+
 --- @param root string
 --- @param rev string "HEAD" or ":0" (the index/staged blob)
 --- @param path string
 --- @return string|nil
+--- @return string|nil
 function M.show(root, rev, path)
   local res = run(root, { "show", rev .. ":" .. path })
   if res.code ~= 0 or res.stdout == nil then
-    return nil
+    return nil, command_error("git show", res)
   end
   return res.stdout
 end

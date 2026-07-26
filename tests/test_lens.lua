@@ -1,6 +1,7 @@
 local H = require("helpers")
 local lens = require("galley.lens")
 local collect = require("galley.collect")
+local git = require("galley.git")
 
 local T = {}
 
@@ -71,6 +72,25 @@ T["lens_collect a worktree new side still prefers unsaved buffer content"] = fun
   vim.fn.delete(root, "rf")
 end
 
+T["lens_collect a staged rename addresses the index by its destination"] = function()
+  local root = H.git_fixture({ committed = { ["old.txt"] = "same\n" } })
+  local res = vim.system({ "git", "mv", "old.txt", "new.txt" },
+    { cwd = root, text = true }):wait()
+  assert(res.code == 0, res.stderr)
+
+  local files, err = collect.files(root, lens.get("unstaged"))
+  assert(files, err)
+  H.eq(#files, 1, "porcelain still enumerates the staged rename")
+  H.eq(files[1].path, "new.txt")
+  H.eq(files[1].old_path, "new.txt",
+    "the unstaged old side is the index, where the blob already has its destination path")
+  H.eq(files[1].old_text, "same\n")
+  H.eq(files[1].new_text, "same\n",
+    "model.build will correctly drop it from the unstaged-only lens")
+
+  vim.fn.delete(root, "rf")
+end
+
 T["lens_named the three fixed lenses point at the right pair of sides"] = function()
   H.eq(lens.get("all"), { id = "all", old = "HEAD", new = "worktree",
     label = "worktree vs HEAD" })
@@ -95,6 +115,137 @@ T["lens_branch compares the worktree against a ref"] = function()
   H.eq(lens.branch("origin/main").id, "branch:origin/main", "the ref is part of the id")
   H.eq(lens.branch(""), nil, "no ref, no lens")
   H.eq(lens.branch(nil), nil)
+end
+
+T["lens_branch is_branch distinguishes arbitrary refs from fixed lenses"] = function()
+  H.eq(lens.is_branch(lens.branch("main")), true)
+  H.eq(lens.is_branch({ id = "branch:main", old = "main", new = "worktree" }), true,
+    "the identity survives a session round trip without metatables")
+  H.eq(lens.is_branch(lens.get("all")), false, "all has the same new side but is fixed")
+  H.eq(lens.is_branch(lens.get("unstaged")), false)
+  H.eq(lens.is_branch({ id = "branch:other", old = "main", new = "worktree" }), false,
+    "a malformed id/ref pair must not enter ref-specific collection")
+  H.eq(lens.is_branch(nil), false)
+end
+
+T["lens_branch collect sees clean committed A D M R plus untracked against the ref"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["deleted.txt"] = "deleted at head\n",
+      ["modified.txt"] = "before\n",
+      ["old-name.txt"] = "rename-only body\n",
+    },
+  })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+    return res.stdout
+  end
+  local function write(rel, body)
+    local abs = vim.fs.joinpath(root, rel)
+    vim.fn.mkdir(vim.fs.dirname(abs), "p")
+    local f = assert(io.open(abs, "w"))
+    f:write(body)
+    f:close()
+  end
+
+  sh({ "git", "branch", "comparison-base", "HEAD" })
+  local base_oid = assert(git.resolve_commit(root, "comparison-base"))
+  write("added.txt", "added after base\n")
+  write("modified.txt", "after\n")
+  assert(vim.fn.delete(vim.fs.joinpath(root, "deleted.txt")) == 0)
+  sh({ "git", "mv", "old-name.txt", "renamed.txt" })
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "advance from comparison base" })
+  write("untracked.txt", "not in the index\n")
+
+  local files, err = collect.files(root, lens.branch("comparison-base"))
+  assert(files, err)
+  local by = {}
+  local paths = {}
+  for _, f in ipairs(files) do
+    paths[#paths + 1] = f.path
+    by[f.path] = f
+    H.eq(f.old_rev, base_oid, "every old-side read is pinned to the resolved commit")
+  end
+  H.eq(paths, {
+    "added.txt",
+    "deleted.txt",
+    "modified.txt",
+    "renamed.txt",
+    "untracked.txt",
+  })
+
+  H.eq({ by["added.txt"].status, by["added.txt"].old_path,
+    by["added.txt"].old_text, by["added.txt"].new_text },
+    { "A", "added.txt", "", "added after base\n" })
+  H.eq({ by["deleted.txt"].status, by["deleted.txt"].old_path,
+    by["deleted.txt"].old_text, by["deleted.txt"].new_text },
+    { "D", "deleted.txt", "deleted at head\n", "" })
+  H.eq({ by["modified.txt"].status, by["modified.txt"].old_path,
+    by["modified.txt"].old_text, by["modified.txt"].new_text },
+    { "M", "modified.txt", "before\n", "after\n" })
+  H.eq({ by["renamed.txt"].status, by["renamed.txt"].old_path,
+    by["renamed.txt"].old_text, by["renamed.txt"].new_text },
+    { "R", "old-name.txt", "rename-only body\n", "rename-only body\n" })
+  H.eq({ by["untracked.txt"].status, by["untracked.txt"].old_path,
+    by["untracked.txt"].old_text, by["untracked.txt"].new_text,
+    by["untracked.txt"].staged, by["untracked.txt"].unstaged },
+    { "?", "untracked.txt", "", "not in the index\n", nil, "?" })
+
+  vim.fn.delete(root, "rf")
+end
+
+T["lens_branch invalid ref returns an error instead of fabricating an addition"] = function()
+  local root = H.git_fixture({
+    committed = { ["dirty.txt"] = "before\n" },
+    worktree = { ["dirty.txt"] = "after\n" },
+  })
+
+  local files, err = collect.files(root, lens.branch("definitely-missing"))
+  H.eq(files, nil, "an invalid old side is not an empty blob")
+  assert(type(err) == "string" and err:find("does not resolve", 1, true),
+    "the caller needs to distinguish invalid from an empty valid diff: " .. tostring(err))
+
+  vim.fn.delete(root, "rf")
+end
+
+T["lens_branch recreated untracked path replaces the ref-relative deletion"] = function()
+  local root = H.git_fixture({ committed = { ["same.txt"] = "old tracked body\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "branch", "comparison-base", "HEAD" })
+
+  assert(vim.fn.delete(vim.fs.joinpath(root, "same.txt")) == 0)
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "delete tracked path" })
+
+  local f = assert(io.open(vim.fs.joinpath(root, "same.txt"), "w"))
+  f:write("new untracked body\n")
+  f:close()
+
+  local files, err = collect.files(root, lens.branch("comparison-base"))
+  assert(files, err)
+  H.eq(#files, 1, "the same current path must not appear once as D and again as ?")
+  H.eq({
+    files[1].path,
+    files[1].old_path,
+    files[1].status,
+    files[1].old_text,
+    files[1].new_text,
+    files[1].unstaged,
+  }, {
+    "same.txt",
+    "same.txt",
+    "M",
+    "old tracked body\n",
+    "new untracked body\n",
+    "?",
+  })
+
+  vim.fn.delete(root, "rf")
 end
 
 -- The distinction the whole product rests on: a lens whose new side is the
@@ -266,7 +417,6 @@ end
 
 -- --- which kind of change is this? ---------------------------------------
 
-local git = require("galley.git")
 local render = require("galley.render")
 local sidebar = require("galley.sidebar")
 

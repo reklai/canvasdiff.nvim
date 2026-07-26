@@ -65,6 +65,18 @@ function L.branch(ref)
   }
 end
 
+--- True when `l` is one of the arbitrary-ref lenses built by L.branch.
+---
+--- `new == "worktree"` alone is not enough: both fixed editable lenses have
+--- that same new side. The id is the stable discriminator carried through the
+--- session payload, and requiring it to agree with `old` rejects a malformed
+--- hand-built record rather than routing it through the ref-specific collector.
+function L.is_branch(l)
+  return L.valid(l)
+    and l.new == "worktree"
+    and l.id == "branch:" .. l.old
+end
+
 --- A named lens by name, or nil. Returns a COPY: lenses end up on `state`, and a
 --- caller that mutated one would corrupt the table for every later open.
 function L.get(name)
