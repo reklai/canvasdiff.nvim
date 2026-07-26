@@ -4,6 +4,33 @@ local PageList = require("canvasdiff.canvas.PageList")
 
 local T = {}
 
+local function test_crc32(raw)
+  local checksum = 0
+  for index = 1, #raw do
+    checksum = (checksum + string.byte(raw, index) * index) % 4294967296
+  end
+  return checksum
+end
+
+local function test_resident_adapter(overrides)
+  overrides = overrides or {}
+  local bodies = {}
+  local next_block = 0
+  return {
+    codec = "page-list-test-v1",
+    encode = overrides.encode or function(body)
+      next_block = next_block + 1
+      local block = string.char(next_block)
+      bodies[block] = body
+      return block
+    end,
+    decode = overrides.decode or function(block)
+      return bodies[block]
+    end,
+    crc32 = overrides.crc32 or test_crc32,
+  }
+end
+
 local function page_rows(list, page_index0)
   local node = assert(list:page_at(page_index0))
   return assert(node.page:rows())
@@ -45,6 +72,9 @@ T["page_list_ loads without an editor runtime"] = function()
   H.eq(type(loaded.new), "function")
   H.eq(type(loaded.from_iterator), "function")
   H.eq(type(loaded.splice), "function")
+  H.eq(type(loaded.compact_page), "function")
+  H.eq(loaded.DEFAULT_RESIDENT_MAX_PAGES, 8)
+  H.eq(loaded.DEFAULT_RESIDENT_MAX_BYTES, 532512)
 end
 
 T["page_list_ empty input owns no phantom page"] = function()
@@ -1989,6 +2019,536 @@ T["page_list_ streaming contains adversarial iterator results"] = function()
   H.eq(list, nil)
   assert(err:match("options"), err)
 end
+
+T["page_list_ resident options are raw snapshotted and bounded"] = function()
+  local adapter = test_resident_adapter()
+  local invalid = {
+    { resident = false, reason = "resident cache options" },
+    { resident = { max_pages = -1 }, reason = "max_pages" },
+    { resident = { max_pages = 1.5 }, reason = "max_pages" },
+    { resident = { max_bytes = math.huge }, reason = "max_bytes" },
+    { resident = { restore = false }, reason = "restore adapter" },
+    {
+      resident = {
+        restore = {
+          codec = "raw",
+          encode = adapter.encode,
+          decode = adapter.decode,
+          crc32 = adapter.crc32,
+        },
+      },
+      reason = "codec",
+    },
+    {
+      resident = {
+        restore = {
+          codec = "missing-encode",
+          decode = adapter.decode,
+          crc32 = adapter.crc32,
+        },
+      },
+      reason = "encode",
+    },
+    {
+      resident = {
+        restore = {
+          codec = "missing-decode",
+          encode = adapter.encode,
+          crc32 = adapter.crc32,
+        },
+      },
+      reason = "decode",
+    },
+    {
+      resident = {
+        restore = {
+          codec = "missing-crc",
+          encode = adapter.encode,
+          decode = adapter.decode,
+        },
+      },
+      reason = "crc32",
+    },
+  }
+  for _, case in ipairs(invalid) do
+    local list, err = PageList.create({ "alpha" }, case)
+    H.eq(list, nil)
+    assert(err:find(case.reason, 1, true), err)
+  end
+
+  local callback_calls = 0
+  local restore = setmetatable(test_resident_adapter(), {
+    __index = function()
+      callback_calls = callback_calls + 1
+      error("restore options must be raw-read")
+    end,
+  })
+  local resident = setmetatable({
+    max_pages = 1,
+    max_bytes = 128,
+    restore = restore,
+  }, {
+    __index = function()
+      callback_calls = callback_calls + 1
+      error("resident options must be raw-read")
+    end,
+  })
+  local list = PageList.new({ "alpha-alpha" }, { resident = resident })
+  restore.encode = function()
+    error("the caller adapter must not remain live")
+  end
+  restore.codec = "mutated"
+  resident.max_pages = 0
+  H.eq(list:compact_page(0, 0), true)
+  H.eq(Page.metadata(assert(list:page_at(0)).page).codec,
+    "page-list-test-v1")
+  H.eq(callback_calls, 0)
+  H.eq(rawget(assert(list:page_at(0)), "capability"), nil)
+  H.eq(PageList.validate(list), true)
+
+  local raw_only = PageList.new({ "raw" }, {
+    resident = { max_pages = 0, max_bytes = 0 },
+  })
+  H.eq(raw_only:row(0), "raw")
+  local compacted, compact_err = raw_only:compact_page(0)
+  H.eq(compacted, nil)
+  assert(compact_err:find("not configured", 1, true), compact_err)
+end
+
+T["page_list_ compact_page publishes one exact unpinned page"] = function()
+  local encode_calls = 0
+  local adapter = test_resident_adapter({
+    encode = function()
+      encode_calls = encode_calls + 1
+      return "\1"
+    end,
+  })
+  local list = PageList.new({
+    "first-first-first",
+    "second-second-second",
+  }, {
+    max_rows = 1,
+    resident = {
+      max_pages = 1,
+      max_bytes = 128,
+      restore = adapter,
+    },
+  })
+  local first = assert(list:page_at(0))
+  local before_page = Page.metadata(first.page)
+  local before_stats = list:stats()
+
+  H.eq(list:compact_page(3, 0), nil)
+  H.eq(list:compact_page(0, 1), nil)
+  H.eq(encode_calls, 0)
+  local lease = assert(list:pin_range(0, 1, 0))
+  local compacted, compact_err = list:compact_page(0, 0)
+  H.eq(compacted, nil)
+  assert(compact_err:find("unpinned", 1, true), compact_err)
+  H.eq(encode_calls, 0)
+  H.eq(list:release_pin(lease), true)
+
+  local ok, old_storage, new_storage, revision =
+    list:compact_page(0, 0)
+  H.eq(ok, true)
+  H.eq(old_storage, before_page.storage_bytes)
+  H.eq(new_storage, 1)
+  H.eq(revision, 1)
+  H.eq(encode_calls, 1)
+  H.eq(list:generation(), 0)
+  H.eq(list:stats().storage_bytes,
+    before_stats.storage_bytes - old_storage + new_storage)
+  local after = Page.metadata(first.page)
+  H.eq(after.kind, "cold")
+  H.eq(after.revision, 1)
+  H.eq(after.restore_bytes, before_page.restore_bytes)
+  H.eq(PageList.validate(list), true)
+
+  compacted, compact_err = list:compact_page(0, 0)
+  H.eq(compacted, false)
+  assert(compact_err:find("raw page", 1, true), compact_err)
+  H.eq(encode_calls, 1)
+end
+
+T["page_list_ cold metadata caps and adapter survive an untouched splice"] =
+  function()
+    local adapter = test_resident_adapter()
+    local list = PageList.new({ "first-first", "second-second" }, {
+      max_rows = 1,
+      resident = { restore = adapter },
+    })
+    local first = assert(list:page_at(0))
+    H.eq(list:compact_page(0, 0), true)
+    H.eq(Page.metadata(first.page).kind, "cold")
+
+    H.eq(list:splice(2, 0, { "third-third" }), true)
+    H.eq(list:generation(), 1)
+    assert(list:page_at(0) == first)
+    H.eq(Page.metadata(first.page).kind, "cold")
+    H.eq(list:compact_page(2, 1), true)
+    H.eq(Page.metadata(assert(list:page_at(2)).page).kind, "cold")
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ compact_page preflights resident capacity before encode"] =
+  function()
+    for _, limits in ipairs({
+      { max_pages = 0, max_bytes = 1000 },
+      { max_pages = 1, max_bytes = 1 },
+    }) do
+      local encode_calls = 0
+      local adapter = test_resident_adapter({
+        encode = function()
+          encode_calls = encode_calls + 1
+          return "\1"
+        end,
+      })
+      local list = PageList.new({ "capacity-capacity" }, {
+        resident = {
+          max_pages = limits.max_pages,
+          max_bytes = limits.max_bytes,
+          restore = adapter,
+        },
+      })
+      local before = list:stats()
+      local compacted, err = list:compact_page(0, 0)
+      H.eq(compacted, false)
+      assert(err:find("cache limits", 1, true), err)
+      H.eq(encode_calls, 0)
+      H.eq(list:stats(), before)
+      H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+      H.eq(PageList.validate(list), true)
+    end
+  end
+
+T["page_list_ compact_page faults and no-benefit stay atomic"] = function()
+  local modes = { "decline", "throw" }
+  for _, mode in ipairs(modes) do
+    local adapter = test_resident_adapter({
+      encode = function(body)
+        if mode == "throw" then
+          error(string.rep("codec-fault", 100))
+        end
+        return body
+      end,
+    })
+    local list = PageList.new({ "fault-fault-fault" }, {
+      resident = { restore = adapter },
+    })
+    local before = list:stats()
+    local compacted, err = list:compact_page(0, 0)
+    if mode == "decline" then
+      H.eq(compacted, false)
+      assert(err:find("not smaller", 1, true), err)
+    else
+      H.eq(compacted, nil)
+      assert(err:find("encode callback failed", 1, true), err)
+      assert(#err < 100, err)
+    end
+    H.eq(list:stats(), before)
+    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(PageList.validate(list), true)
+  end
+end
+
+T["page_list_ compact callbacks cannot reenter or mutate the list"] =
+  function()
+    local list
+    local lease
+    local reenter = true
+    local nested = {}
+    local crc_calls = 0
+    local adapter = test_resident_adapter({
+      encode = function()
+        if reenter then
+          nested.row = { list:row(0) }
+          nested.rows = { list:rows(0, 1) }
+          nested.pin = { list:pin_range(0, 1) }
+          nested.release = { list:release_pin(lease) }
+          nested.splice = { list:splice(0, 0, { "x" }) }
+          nested.compact = { list:compact_page(0) }
+        end
+        return "\1"
+      end,
+      crc32 = function(raw)
+        crc_calls = crc_calls + 1
+        return test_crc32(raw)
+      end,
+    })
+    list = PageList.new({
+      "target-target-target",
+      "pinned-pinned-pinned",
+    }, {
+      max_rows = 1,
+      resident = { restore = adapter },
+    })
+    lease = assert(list:pin_range(1, 1, 0))
+    local before = list:stats()
+    local compacted, err = list:compact_page(0, 0)
+    H.eq(compacted, nil)
+    assert(err:find("changed during compaction", 1, true), err)
+    for name, result in pairs(nested) do
+      H.eq(result[1], nil, name)
+      assert(result[2]:find("compaction is already active", 1, true),
+        result[2])
+    end
+    H.eq(list:stats(), before)
+    H.eq(crc_calls, 0, "encode-side reentry must stop before CRC")
+    H.eq(list:pin_is_current(lease), true)
+    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(PageList.validate(list), true)
+
+    reenter = false
+    H.eq(list:compact_page(0, 0), true)
+    H.eq(crc_calls, 1)
+    H.eq(list:pin_is_current(lease), true)
+    H.eq(list:release_pin(lease), true)
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ compact crc callback reentry discards its candidate"] =
+  function()
+    local list
+    local reenter = true
+    local crc_calls = 0
+    local adapter = test_resident_adapter({
+      crc32 = function(raw)
+        crc_calls = crc_calls + 1
+        if reenter then
+          local row, err = list:row(0)
+          H.eq(row, nil)
+          assert(err:find("compaction is already active", 1, true), err)
+        end
+        return test_crc32(raw)
+      end,
+    })
+    list = PageList.new({ "crc-reentry-crc-reentry" }, {
+      resident = { restore = adapter },
+    })
+    local before = list:stats()
+    local compacted, err = list:compact_page(0, 0)
+    H.eq(compacted, nil)
+    assert(err:find("changed during compaction", 1, true), err)
+    H.eq(crc_calls, 1)
+    H.eq(list:stats(), before)
+    H.eq(Page.metadata(assert(list:page_at(0)).page).kind, "raw")
+    H.eq(PageList.validate(list), true)
+
+    reenter = false
+    H.eq(list:compact_page(0, 0), true)
+    H.eq(crc_calls, 2)
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ compact callback graph mutation is rolled back"] = function()
+  local list
+  local mutate = true
+  local crc_calls = 0
+  local adapter = test_resident_adapter({
+    encode = function()
+      if mutate then
+        list._generation = 99
+        list._storage_bytes = 0
+        list._pages[1].page = Page.new({ "forged" })
+      end
+      return "\1"
+    end,
+    crc32 = function(raw)
+      crc_calls = crc_calls + 1
+      return test_crc32(raw)
+    end,
+  })
+  list = PageList.new({ "graph-graph-graph" }, {
+    resident = { restore = adapter },
+  })
+  local node = assert(list:page_at(0))
+  local page = node.page
+  local before = list:stats()
+  local compacted, err = list:compact_page(0, 0)
+  H.eq(compacted, nil)
+  assert(err:find("mutated the source", 1, true), err)
+  H.eq(list:stats(), before)
+  H.eq(crc_calls, 0, "encode-side mutation must stop before CRC")
+  assert(list:page_at(0) == node)
+  assert(node.page == page)
+  H.eq(Page.metadata(page).kind, "raw")
+  H.eq(PageList.validate(list), true)
+
+  mutate = false
+  H.eq(list:compact_page(0, 0), true)
+  H.eq(crc_calls, 1)
+  H.eq(PageList.validate(list), true)
+end
+
+T["page_list_ compact callback shell additions are exactly rolled back"] =
+  function()
+    for _, target in ipairs({ "page", "node", "list" }) do
+      local list
+      local node
+      local mutate = true
+      local crc_calls = 0
+      local adapter = test_resident_adapter({
+        encode = function()
+          if mutate then
+            if target == "page" then
+              node.page.evil = true
+            elseif target == "node" then
+              node.evil = true
+            else
+              list.row = function()
+                return "evil"
+              end
+              _G.error = function()
+                return nil
+              end
+            end
+          end
+          return "\1"
+        end,
+        crc32 = function(raw)
+          crc_calls = crc_calls + 1
+          return test_crc32(raw)
+        end,
+      })
+      list = PageList.new({ "shell-shell-shell" }, {
+        resident = { restore = adapter },
+      })
+      node = assert(list:page_at(0))
+      local before = list:stats()
+      local original_error = _G.error
+      local called, compacted, err = pcall(
+        list.compact_page,
+        list,
+        0,
+        0
+      )
+      _G.error = original_error
+
+      assert(called, compacted)
+      H.eq(compacted, nil, target)
+      assert(err:find("mutated the source", 1, true)
+        or err:find("changed during compaction", 1, true), err)
+      H.eq(rawget(node.page, "evil"), nil)
+      H.eq(rawget(node, "evil"), nil)
+      H.eq(rawget(list, "row"), nil)
+      H.eq(crc_calls, 0,
+        "a poisoned global error must not let a doomed encode reach CRC")
+      H.eq(list:stats(), before)
+      H.eq(PageList.validate(list), true)
+
+      mutate = false
+      H.eq(list:compact_page(0, 0), true)
+      H.eq(crc_calls, 1)
+      H.eq(PageList.validate(list), true)
+    end
+  end
+
+T["page_list_ compact fences avoid hostile equality and length hooks"] =
+  function()
+    local ffi = require("ffi")
+    ffi.cdef([[
+      typedef struct {
+        int value;
+      } canvasdiff_compact_fence_probe;
+    ]])
+
+    local equality_calls = 0
+    local Probe = ffi.metatype("canvasdiff_compact_fence_probe", {
+      __eq = function()
+        equality_calls = equality_calls + 1
+        return true
+      end,
+    })
+    for _, field in ipairs({ "_generation", "_row_count" }) do
+      local list = PageList.new({ "public-scalar-probe" }, {
+        resident = { restore = test_resident_adapter() },
+      })
+      local original = rawget(list, field)
+      rawset(list, field, Probe(original))
+      local compacted, err = list:compact_page(0, 0)
+      H.eq(compacted, nil)
+      assert(err:find("invalid metadata", 1, true), err)
+      H.eq(equality_calls, 0)
+      rawset(list, field, original)
+      H.eq(PageList.validate(list), true)
+    end
+
+    for _, target in ipairs({ "id", "created_generation", "start" }) do
+      local list
+      local node
+      local adapter = test_resident_adapter({
+        encode = function()
+          if target == "start" then
+            list._starts[1] = Probe(0)
+          else
+            node[target] = Probe(rawget(node, target))
+          end
+          return "\1"
+        end,
+      })
+      list = PageList.new({ "target-scalar-probe" }, {
+        resident = { restore = adapter },
+      })
+      node = assert(list:page_at(0))
+      local compacted, err = list:compact_page(0, 0)
+      H.eq(compacted, nil)
+      assert(err:find("mutated the source", 1, true), err)
+      H.eq(equality_calls, 0)
+      H.eq(PageList.validate(list), true)
+    end
+
+    local list
+    local length_calls = 0
+    local hostile_metatable = {
+      __len = function()
+        length_calls = length_calls + 1
+        return 1
+      end,
+    }
+    local adapter = test_resident_adapter({
+      encode = function()
+        setmetatable(list._pages, hostile_metatable)
+        setmetatable(list._starts, hostile_metatable)
+        return "\1"
+      end,
+    })
+    list = PageList.new({ "layout-metatable-probe" }, {
+      resident = { restore = adapter },
+    })
+    local compacted, err = list:compact_page(0, 0)
+    H.eq(compacted, nil)
+    assert(err:find("mutated the source", 1, true), err)
+    H.eq(length_calls, 0)
+    H.eq(getmetatable(list._pages), nil)
+    H.eq(getmetatable(list._starts), nil)
+    H.eq(PageList.validate(list), true)
+  end
+
+T["page_list_ compact treats unrelated raw layout writes as corruption"] =
+  function()
+    local list
+    local adapter = test_resident_adapter({
+      encode = function()
+        list._pages[2], list._pages[3] =
+          list._pages[3], list._pages[2]
+        return "\1"
+      end,
+    })
+    list = PageList.new({ "first", "second", "third" }, {
+      max_rows = 1,
+      resident = { restore = adapter },
+    })
+
+    -- compact_page intentionally fences only the target slot in O(1).
+    H.eq(list:compact_page(0, 0), true)
+    local valid, validate_err = PageList.validate(list)
+    H.eq(valid, nil)
+    assert(validate_err:find("trusted pin layout", 1, true), validate_err)
+
+    list._pages[2], list._pages[3] =
+      list._pages[3], list._pages[2]
+    H.eq(PageList.validate(list), true)
+  end
 
 T["page_list_ streaming supports one million rows without an input table"] = function()
   local logical_rows = 1000000
