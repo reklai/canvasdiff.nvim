@@ -4,6 +4,7 @@ local model = require("canvasdiff.diff")
 local virt = require("canvasdiff.virt")
 local session = require("canvasdiff.session")
 local config = require("canvasdiff.config")
+local system = require("canvasdiff.os")
 local scrollbar = require("canvasdiff.scrollbar")
 local fold = model.fold
 local sidebar = require("canvasdiff.sidebar")
@@ -169,6 +170,43 @@ end
 local function span(st, i)
   local s, e = canvas.section_rows(st, i)
   return e - s
+end
+
+T["session_ persistence uses the os facade without leaking storage semantics"] = function()
+  local root = H.tmpdir()
+  local expected_path = session.path_for(root)
+  local real_read_file = system.read_file
+  local real_write_file = system.write_file
+  local written_path, written_content
+
+  system.write_file = function(path, content)
+    written_path, written_content = path, content
+  end
+  system.read_file = function(path)
+    H.eq(path, expected_path)
+    return written_content
+  end
+
+  local loaded
+  local ok, err = xpcall(function()
+    session.save({
+      root = root,
+      base = "HEAD",
+      collapsed = {},
+      folded = {},
+      folded_seen = {},
+    })
+    loaded = session.load(root)
+  end, debug.traceback)
+
+  system.read_file = real_read_file
+  system.write_file = real_write_file
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+  H.eq(written_path, expected_path)
+  H.eq(type(written_content), "string")
+  H.eq(loaded.version, 2)
+  H.eq(loaded.base, "HEAD")
 end
 
 T["session_identity boundary isolates retired state and rejects version 1"] = function()

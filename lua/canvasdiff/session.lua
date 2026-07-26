@@ -1,5 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local diff = require("canvasdiff.diff")
+local system = require("canvasdiff.os")
 local viewport = diff.anchor
 local fold = diff.fold
 local lens = diff.lens
@@ -145,10 +146,7 @@ function M.save(state)
     end
 
     local path = M.path_for(state.root)
-    vim.fn.mkdir(vim.fs.dirname(path), "p")
-    local f = assert(io.open(path, "w"))
-    f:write(vim.json.encode(data))
-    f:close()
+    system.write_file(path, vim.json.encode(data))
   end)
 end
 
@@ -156,12 +154,7 @@ end
 --- it can't be decoded / it's from an incompatible version.
 function M.load(root)
   local path = M.path_for(root)
-  local f = io.open(path, "r")
-  if not f then
-    return nil
-  end
-  local content = f:read("*a")
-  f:close()
+  local content = system.read_file(path)
   if not content or content == "" then
     return nil
   end

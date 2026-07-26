@@ -1,3 +1,5 @@
+local system = require("canvasdiff.os")
+
 local M = {}
 
 --- Run `git -C dir <args...>` synchronously.
@@ -12,7 +14,7 @@ local function run(dir, args)
   for _, a in ipairs(args) do
     cmd[#cmd + 1] = a
   end
-  return vim.system(cmd, { text = false }):wait()
+  return system.run(cmd, { text = false })
 end
 
 local function command_error(what, res)

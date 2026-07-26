@@ -2,10 +2,10 @@ local canvas = require("canvasdiff.canvas")
 local collect = require("canvasdiff.collect")
 local config = require("canvasdiff.config")
 local lens = require("canvasdiff.diff").lens
+local system = require("canvasdiff.os")
 
 local W = {}
 
-local uv = vim.uv
 local current = nil
 local next_id = 0
 
@@ -172,7 +172,7 @@ local function mark_dirty(lease)
       timer:stop()
     end)
   else
-    lease.timer = uv.new_timer()
+    lease.timer = system.new_timer()
     if not lease.timer then
       return
     end
@@ -209,7 +209,7 @@ local function watch_dir(lease, path, filter)
     return
   end
 
-  local handle = uv.new_fs_event()
+  local handle = system.new_fs_event()
   if not handle then
     return
   end

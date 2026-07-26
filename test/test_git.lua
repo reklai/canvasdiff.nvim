@@ -1,5 +1,6 @@
 local H = require("helpers")
 local git = require("canvasdiff.git")
+local system = require("canvasdiff.os")
 
 local function sh(root, cmd)
   local res = vim.system(cmd, { cwd = root, text = true }):wait()
@@ -16,6 +17,24 @@ local function write(root, rel, content)
 end
 
 return {
+  ["git: delegates raw process execution through the os facade"] = function()
+    local real_run = system.run
+    local command, opts, root
+    system.run = function(next_command, next_opts)
+      command, opts = next_command, next_opts
+      return { code = 0, stdout = "/resolved/root\r\n", stderr = "" }
+    end
+
+    local ok, err = xpcall(function()
+      root = git.root("/worktree")
+    end, debug.traceback)
+
+    system.run = real_run
+    assert(ok, err)
+    H.eq(root, "/resolved/root")
+    H.eq(command, { "git", "-C", "/worktree", "rev-parse", "--show-toplevel" })
+    H.eq(opts, { text = false })
+  end,
   ["git: root finds toplevel, nil outside"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
     H.eq(git.root(root), (vim.uv.fs_realpath(root)))

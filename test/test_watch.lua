@@ -3,6 +3,7 @@ local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local collect = require("canvasdiff.collect")
 local watch = require("canvasdiff.watch")
+local system = require("canvasdiff.os")
 local lens = model.lens
 
 local T = {}
@@ -572,8 +573,8 @@ T["watch_trigger stop() really stops"] = function()
 end
 
 T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = function()
-  local real_new_timer = vim.uv.new_timer
-  local real_new_fs_event = vim.uv.new_fs_event
+  local real_new_timer = system.new_timer
+  local real_new_fs_event = system.new_fs_event
   local real_schedule_wrap = vim.schedule_wrap
   local timers, events, scheduled = {}, {}, {}
   local roots, states = {}, {}
@@ -609,10 +610,10 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
     return handle
   end
 
-  vim.uv.new_timer = function()
+  system.new_timer = function()
     return fake_handle(timers)
   end
-  vim.uv.new_fs_event = function()
+  system.new_fs_event = function()
     return fake_handle(events)
   end
   vim.schedule_wrap = function(callback)
@@ -717,8 +718,8 @@ T["watch_lease stale callbacks and stale stop cannot reach the replacement"] = f
   end, debug.traceback)
 
   watch.stop()
-  vim.uv.new_timer = real_new_timer
-  vim.uv.new_fs_event = real_new_fs_event
+  system.new_timer = real_new_timer
+  system.new_fs_event = real_new_fs_event
   vim.schedule_wrap = real_schedule_wrap
   for _, state in ipairs(states) do
     if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
