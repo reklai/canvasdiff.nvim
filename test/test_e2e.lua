@@ -1,5 +1,43 @@
 local H = require("helpers")
 
+-- E2E cases deliberately change cwd and open real files from throwaway repos.
+-- Restore a path that outlives every fixture before removing one: deleting the
+-- process cwd makes later vim.fs calls order-dependent.
+local PROJECT_ROOT = vim.fs.dirname(vim.fs.dirname(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p")))
+
+local cleanup_buf
+
+local function wipe_buffer(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+
+  -- Deleting the buffer currently displayed in a window makes Neovim choose a
+  -- replacement. Move it to a known scratch buffer first, so a stale hidden
+  -- file from another fixture can never be selected and checked on disk.
+  local scratch
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      if not (cleanup_buf and vim.api.nvim_buf_is_valid(cleanup_buf)) then
+        cleanup_buf = vim.api.nvim_create_buf(false, true)
+      end
+      scratch = cleanup_buf
+      vim.api.nvim_win_set_buf(win, scratch)
+    end
+  end
+  vim.api.nvim_buf_delete(buf, { force = true })
+  H.eq(vim.api.nvim_buf_is_valid(buf), false, "fixture file buffer was wiped")
+end
+
+local function remove_fixture(root)
+  H.eq(pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" }), false,
+    "the canvas watch is stopped before its fixture is removed")
+  vim.api.nvim_set_current_dir(PROJECT_ROOT)
+  H.eq(vim.fn.delete(root, "rf"), 0, "fixture directory was removed")
+  H.eq(vim.uv.fs_stat(root), nil, "fixture directory no longer exists")
+end
+
 return {
   ["e2e: open renders alphabetical, jump+edit+back round-trip"] = function()
     local root = H.git_fixture({
@@ -28,12 +66,17 @@ return {
     vim.api.nvim_win_set_cursor(0, { target, 0 })
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     assert(vim.api.nvim_buf_get_name(0):find("src/a.lua", 1, true), "should be in a.lua")
+    local file_buf = vim.api.nvim_get_current_buf()
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "return 99" })
     vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
     local after = vim.api.nvim_buf_get_lines(0, 0, -1, false)
     local found = false
     for _, l in ipairs(after) do if l == "+return 99" then found = true end end
     assert(found, "canvas must show the edited content")
+
+    fm.close()
+    wipe_buffer(file_buf)
+    remove_fixture(root)
   end,
   -- Enter (and double-click, which shares the handler) is fold-BLIND: on a folded
   -- file's placeholder it opens the file and leaves the fold alone. Two verbs with
@@ -62,6 +105,7 @@ return {
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     assert(vim.api.nvim_buf_get_name(0):find("a.txt", 1, true),
       "Enter must open the file, not unfold: in " .. vim.api.nvim_buf_get_name(0))
+    local file_buf = vim.api.nvim_get_current_buf()
 
     -- And coming back lands on the placeholder, still folded.
     vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
@@ -82,6 +126,8 @@ return {
       "double-click opens it too")
 
     fm.close()
+    wipe_buffer(file_buf)
+    remove_fixture(root)
   end,
   ["e2e: <Tab> and <CR> on a folded-away placeholder reveal the directory"] = function()
     local root = H.git_fixture({
@@ -154,10 +200,15 @@ return {
     vim.api.nvim_set_current_win(canvas_win)
     vim.api.nvim_win_set_cursor(canvas_win, { 1, 0 })
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    local selected_buf = vim.api.nvim_get_current_buf()
+    local file_buf = not require("galley.canvas").is_canvas_buf(selected_buf)
+      and selected_buf or nil
     H.eq(vim.api.nvim_get_current_win(), canvas_win, "<CR> must not jump out of the canvas")
     assert(not canvas_lines()[1]:match("^▸"), "<CR> reveals it too")
 
     fm.close()
+    wipe_buffer(file_buf)
+    remove_fixture(root)
   end,
   -- The test above presses <Tab> on the TOP placeholder, where the viewport
   -- top and the cursor are the same row and resplice's "above" branch happens
@@ -221,13 +272,35 @@ return {
         :format(cur, revealed[cur]))
 
     fm.close()
+    remove_fixture(root)
   end,
   ["e2e: toggle and no-repo error"] = function()
     local dir = H.tmpdir()
     vim.api.nvim_set_current_dir(dir)
     local fm = require("galley")
-    local ok = pcall(fm.open)
-    assert(ok, "open outside a repo must not throw (notify instead)")
+    local messages = {}
+    local real_notify = vim.notify
+    vim.notify = function(msg, level)
+      messages[#messages + 1] = { msg = msg, level = level }
+    end
+    local result, open_err
+    local ok, call_err = pcall(function()
+      result, open_err = fm.open()
+    end)
+    vim.notify = real_notify
+
+    assert(ok, "open outside a repo must not throw: " .. tostring(call_err))
+    H.eq(result, nil)
+    assert(type(open_err) == "string"
+      and open_err:find("not inside a git repository", 1, true),
+      "open returns the no-repository error: " .. tostring(open_err))
+    H.eq(#messages, 1, "the expected warning is captured instead of leaking to stdout")
+    H.eq(messages[1].level, vim.log.levels.WARN)
+    assert(messages[1].msg:find("not inside a git repository", 1, true),
+      "the warning explains the failure: " .. messages[1].msg)
+    assert(messages[1].msg:find(dir, 1, true),
+      "the warning names the directory it inspected: " .. messages[1].msg)
+    remove_fixture(dir)
   end,
   ["e2e: close() does not clobber a window that navigated away from the canvas"] = function()
     local root = H.git_fixture({
@@ -253,6 +326,8 @@ return {
     fm.close()
     H.eq(vim.api.nvim_get_current_buf(), edited_buf, "close() must not swap away the window's current buffer")
     H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "other.txt")
+    wipe_buffer(edited_buf)
+    remove_fixture(root)
   end,
   -- `:q` destroys the canvas window without going through M.close, whose teardown
   -- sat behind `#wins == 0` -- true forever once the window is gone. So watch kept
@@ -323,6 +398,7 @@ return {
 
     os.remove(session.path_for(root))
     vim.cmd("tabonly!")
+    remove_fixture(root)
   end,
   -- The teardown is deferred and re-checks, so closing one of two windows showing
   -- the canvas must not tear anything down.
@@ -350,6 +426,7 @@ return {
     fm.close()
     os.remove(session.path_for(root))
     vim.cmd("tabonly!")
+    remove_fixture(root)
   end,
   -- `r` (refresh) is the manual version of watch's pass, and it must hold the niri
   -- invariant: content changing OUTSIDE the viewport never moves what you are
@@ -420,7 +497,7 @@ return {
     H.eq(after.lnum - before.lnum, 3, "and so did the cursor row")
 
     fm.close()
-    vim.fn.delete(root, "rf")
+    remove_fixture(root)
   end,
   -- The honest limit of `r`, and the reason there is no hard-rebuild key.
   --
@@ -476,7 +553,8 @@ return {
     assert(not diverged(after), "close+open must rebuild the canvas cleanly")
     assert(vim.api.nvim_buf_line_count(after) > 1, "and leave a real canvas behind")
 
-    vim.fn.delete(root, "rf")
+    fm.close()
+    remove_fixture(root)
   end,
   -- Orientation: the sidebar and the canvas must never disagree about which file you
   -- are in, including while a jump excursion has the canvas out of its window.
@@ -530,7 +608,7 @@ return {
     -- Left armed, this resolves sections against a dead state on every scroll anywhere.
     assert(not pcall(vim.api.nvim_get_autocmds, { group = "galley.winbar" }),
       "the winbar augroup must be reaped by teardown")
-    vim.fn.delete(root, "rf")
+    remove_fixture(root)
   end,
   -- The excursion half, deliberately on SMALL files so the whole canvas fits one
   -- window. That is load-bearing for the test, not incidental: with tall files the
@@ -587,6 +665,7 @@ return {
     vim.api.nvim_win_set_cursor(cwin, { zline, 0 })
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     assert(vim.api.nvim_buf_get_name(0):match("zzz%.txt"), "sanity: editing zzz.txt")
+    local file_buf = vim.api.nvim_get_current_buf()
     assert((active() or ""):match("zzz"),
       "the tree must follow the jump. It used to keep pointing at the file the TOPLINE "
       .. "was in -- confidently naming the wrong file. got: " .. tostring(active()))
@@ -614,7 +693,8 @@ return {
     assert((active() or ""):match("aaa"), "and the active row agrees: " .. tostring(active()))
 
     fm.close()
-    vim.fn.delete(root, "rf")
+    wipe_buffer(file_buf)
+    remove_fixture(root)
   end,
   -- The file-boundary bar: a full-width tint on each expanded file's header row, so
   -- crossing out of one file and into the next is visible while scrolling rather than
@@ -701,7 +781,7 @@ return {
     H.eq(bars(), rows_matching("^▎"), "bars survive a refresh's splice")
 
     fm.close()
-    vim.fn.delete(root, "rf")
+    remove_fixture(root)
   end,
   -- The result view: the canvas shows the file as it WILL be. Deletions are drawn as
   -- virtual lines rather than buffer rows, so every remaining row maps 1:1 to a real
@@ -762,6 +842,7 @@ return {
     vim.api.nvim_win_set_cursor(cwin, { trow, 0 })
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
     assert(vim.api.nvim_buf_get_name(0):match("a%.lua"), "Enter opened the file")
+    local file_buf = vim.api.nvim_get_current_buf()
     H.eq(vim.api.nvim_win_get_cursor(0)[1], 3, "on the line the cursor was on")
     H.eq(vim.api.nvim_buf_get_lines(0, 2, 3, false)[1], "THREE",
       "and that line really is the one we pointed at in the canvas")
@@ -769,7 +850,8 @@ return {
     vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
     H.eq(vim.api.nvim_get_current_buf(), cbuf, "and the round trip still works")
     fm.close()
-    vim.fn.delete(root, "rf")
+    wipe_buffer(file_buf)
+    remove_fixture(root)
   end,
   ["e2e: invalid ref on initial open leaves the file window untouched"] = function()
     local root = H.git_fixture({
@@ -824,8 +906,8 @@ return {
     H.eq(vim.uv.fs_stat(session.path_for(root)), nil,
       "no owner state was created that close/session persistence could observe")
 
-    vim.cmd("bwipeout!")
-    vim.fn.delete(root, "rf")
+    wipe_buffer(before.buf)
+    remove_fixture(root)
   end,
   ["e2e: invalid live lens pivot is an observational no-op"] = function()
     local function body(tag, changed)
@@ -916,7 +998,7 @@ return {
     H.eq(saved.base, "HEAD")
     os.remove(session.path_for(root))
     vim.cmd("enew!")
-    vim.fn.delete(root, "rf")
+    remove_fixture(root)
   end,
   ["e2e: refresh retains a branch canvas after its ref disappears"] = function()
     local root = H.git_fixture({
@@ -968,7 +1050,7 @@ return {
       "the private active lens remains the last valid branch comparison")
     os.remove(session.path_for(root))
     vim.cmd("enew!")
-    vim.fn.delete(root, "rf")
+    remove_fixture(root)
   end,
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh module instance so its module-level `state` is nil,
