@@ -4,6 +4,14 @@ local model = require("galley.model")
 local canvas = require("galley.canvas")
 local jump = require("galley.jump")
 local fold = require("galley.fold")
+local collect = require("galley.collect")
+local lens = require("galley.lens")
+
+local function sh(root, cmd)
+  local res = vim.system(cmd, { cwd = root, text = true }):wait()
+  assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  return res.stdout
+end
 
 local function open_fixture(spec)
   local root = H.git_fixture(spec)
@@ -69,6 +77,135 @@ return {
     local a2row
     for i, l in ipairs(newrows) do if l == "+A2" then a2row = i end end
     assert(math.abs(cur - a2row) <= 2, ("cursor %d not near +A2 at %d"):format(cur, a2row))
+  end,
+  ["jump: branch rename round-trip survives ref deletion and keeps identity"] = function()
+    local old_path = "old-name.txt"
+    local new_path = "new-name.txt"
+    local original = lines("base line ", 16)
+    local root = H.git_fixture({ committed = { [old_path] = original } })
+    sh(root, { "git", "branch", "comparison-base", "HEAD" })
+    local base_oid = assert(git.resolve_commit(root, "comparison-base"))
+    sh(root, { "git", "mv", "--", old_path, new_path })
+
+    local l = lens.branch("comparison-base")
+    local sections, collect_err = collect.sections(root, l, 3)
+    assert(sections, collect_err)
+    H.eq(#sections, 1)
+    H.eq({
+      sections[1].path,
+      sections[1].old_path,
+      sections[1].old_rev,
+      sections[1].rename_only,
+    }, {
+      new_path, old_path, base_oid, true,
+    }, "sanity: the branch lens starts as one pure-rename header")
+
+    local st = canvas.open(sections, {})
+    st.root = root
+    st.lens = l
+    local before_view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    jump.enter(st)
+
+    local file_buf = vim.api.nvim_get_current_buf()
+    H.eq(vim.api.nvim_buf_get_name(file_buf), vim.fs.joinpath(root, new_path),
+      "Enter edits the rename destination, never the historical source")
+    vim.api.nvim_buf_set_lines(file_buf, 7, 7, false, { "unsaved through rename" })
+
+    sh(root, { "git", "branch", "-D", "comparison-base" })
+    H.eq(git.resolve_commit(root, "comparison-base"), nil,
+      "sanity: the symbolic lens ref no longer resolves")
+
+    local ok, back_err = pcall(jump.back)
+    assert(ok, "Back must use the captured canonical source: " .. tostring(back_err))
+    assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()), "Back restores the canvas")
+
+    H.eq(#st.sections, 1)
+    local rebuilt = st.sections[1]
+    H.eq({
+      rebuilt.path,
+      rebuilt.old_path,
+      rebuilt.old_rev,
+      rebuilt.status,
+      rebuilt.staged,
+      rebuilt.unstaged,
+      rebuilt.renamed,
+      rebuilt.rename_only,
+    }, {
+      new_path,
+      old_path,
+      base_oid,
+      "R",
+      "R",
+      nil,
+      true,
+      nil,
+    }, "the rebuilt section retains destination and captured rename metadata")
+    H.eq(rebuilt.old_text, original,
+      "old bytes came from canonical-oid:old-path after the branch was deleted")
+    assert(rebuilt.new_text:find("unsaved through rename", 1, true),
+      "the destination's unsaved buffer bytes become the new side")
+
+    local rendered = vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)
+    assert(rendered[1]:find("old%-name%.txt → new%-name%.txt"),
+      "the rename header survives the round trip: " .. tostring(rendered[1]))
+    local saw_edit = false
+    for _, line in ipairs(rendered) do
+      if line == "+unsaved through rename" then saw_edit = true end
+    end
+    assert(saw_edit, "the unsaved destination edit is visible in the canvas")
+
+    local after_view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    H.eq(after_view.topline, before_view.topline, "the rename header keeps its viewport")
+    H.eq(after_view.lnum, before_view.lnum, "and restores the cursor to that header")
+
+    vim.api.nvim_buf_delete(file_buf, { force = true })
+    vim.fn.delete(root, "rf")
+  end,
+  ["jump: failed destination or source lookup keeps the excursion retryable"] = function()
+    local root, st = open_fixture({
+      committed = { ["a.txt"] = "old\n" },
+      worktree = { ["a.txt"] = "new\n" },
+    })
+    local section = st.sections[1]
+    section.old_rev = "recoverable-base"
+    vim.api.nvim_win_set_cursor(st.win, { 1, 0 })
+    jump.enter(st)
+    local file_buf = vim.api.nvim_get_current_buf()
+
+    local messages = {}
+    local real_notify = vim.notify
+    vim.notify = function(message) messages[#messages + 1] = message end
+
+    -- Simulate a hidden-canvas refresh removing the destination identity while
+    -- the real file is open. The first Back must decline before consuming.
+    canvas.render_all(st, {})
+    local section_ok, section_err = pcall(jump.back)
+    assert(section_ok, "a missing destination must report, not throw: " .. tostring(section_err))
+    H.eq(vim.api.nvim_get_current_buf(), file_buf,
+      "a failed destination lookup leaves the file on screen")
+    assert(#messages == 1 and messages[1]:find("not found in canvas", 1, true),
+      "the missing destination identity is explicit: " .. vim.inspect(messages))
+
+    canvas.render_all(st, { section })
+    messages = {}
+    local source_ok, source_err = pcall(jump.back)
+    vim.notify = real_notify
+
+    assert(source_ok, "a missing captured source must report, not throw: " .. tostring(source_err))
+    H.eq(vim.api.nvim_get_current_buf(), file_buf,
+      "a failed source lookup also leaves the destination file on screen")
+    assert(#messages == 1 and messages[1]:find("cannot rebuild excursion old side", 1, true),
+      "the source lookup failure is explicit: " .. vim.inspect(messages))
+
+    sh(root, { "git", "branch", "recoverable-base", "HEAD" })
+    assert(pcall(jump.back), "the same excursion remains retryable after its source appears")
+    assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()),
+      "the successful retry restores the canvas")
+    H.eq(st.sections[1].old_rev, "recoverable-base",
+      "the retry still uses the source captured on Enter")
+
+    vim.api.nvim_buf_delete(file_buf, { force = true })
+    vim.fn.delete(root, "rf")
   end,
   -- A fold applied from the sidebar while the excursion is live reduces the
   -- excursed section to its single placeholder row. Its entries then no longer

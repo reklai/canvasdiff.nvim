@@ -117,8 +117,16 @@ function M.enter(state, opts)
 
   excursion = {
     state = state,
+    -- Destination identity stays the key for editing, sidebar selection and
+    -- finding the live section again. A rename's old source is separate.
     path = section.path,
     status = section.status,
+    metadata = {
+      old_path = section.old_path or section.path,
+      old_rev = section.old_rev or lens.of(state).old,
+      staged = section.staged,
+      unstaged = section.unstaged,
+    },
     view = view,
     anchor = viewport.capture_from_entries(entries, top_offset),
     cursor = { new_lnum = target, content = entry.content },
@@ -194,20 +202,11 @@ function M.back()
   end
 
   local ex = excursion
-  excursion = nil
-
-  if ex.back_keys and ex.buf then
-    for _, lhs in ipairs(ex.back_keys) do
-      pcall(vim.keymap.del, "n", lhs, { buffer = ex.buf })
-    end
-  end
-
   local state = ex.state
-  local abs_path = vim.fs.joinpath(state.root, ex.path)
-  local content = read_current_content(ex.buf, abs_path)
-  local old = git.show(state.root, lens.of(state).old, ex.path)
-  local new_section = model.build_section(ex.path, old or "", content, ex.status, config.options.context)
 
+  -- Resolve the destination section before consuming the excursion. A watch or
+  -- another canvas operation may have removed it while the real file was open;
+  -- declining here keeps the file, keymap and excursion retryable.
   local idx
   for k, sec in ipairs(state.sections) do
     if sec.path == ex.path then
@@ -215,22 +214,45 @@ function M.back()
       break
     end
   end
+  if not idx then
+    util.warn(
+      "excursion section for '" .. ex.path .. "' not found in canvas; return not applied"
+    )
+    return
+  end
+
+  -- A rename has two independent addresses. Read the old bytes from the source
+  -- revision/path captured on Enter, never from the live lens ref or destination:
+  -- a branch can move or disappear during the excursion, while its canonical
+  -- commit object still names exactly what the user reviewed.
+  local metadata = ex.metadata or {}
+  local old_rev = metadata.old_rev or lens.of(state).old
+  local old_path = metadata.old_path or ex.path
+  local old, old_err = git.show(state.root, old_rev, old_path)
+  if old == nil and ex.status ~= "A" and ex.status ~= "?" then
+    util.warn(("cannot rebuild excursion old side %s:%s: %s")
+      :format(old_rev, old_path, old_err or "unknown git error"))
+    return
+  end
+
+  local abs_path = vim.fs.joinpath(state.root, ex.path)
+  local content = read_current_content(ex.buf, abs_path)
+  local new_section = model.build_section(
+    ex.path, old or "", content, ex.status, config.options.context, metadata)
+
+  -- All fallible preflight work succeeded. Only now consume the excursion and
+  -- remove its return mappings.
+  excursion = nil
+  if ex.back_keys and ex.buf then
+    for _, lhs in ipairs(ex.back_keys) do
+      pcall(vim.keymap.del, "n", lhs, { buffer = ex.buf })
+    end
+  end
 
   -- The canvas may be landing in a different window than it left from; everything
   -- below, and every consumer we notify at the end, reads state.win.
   state.win = win
   vim.api.nvim_win_set_buf(win, state.buf)
-
-  if not idx then
-    -- Edge case (MVP): the section for this path is no longer in the
-    -- canvas at all (e.g. some other operation removed it out from under
-    -- us). Nothing to splice; just warn and leave the canvas viewport as
-    -- `nvim_win_set_buf` left it.
-    util.warn(
-      "excursion section for '" .. ex.path .. "' not found in canvas; view not updated"
-    )
-    return
-  end
 
   canvas.replace_section(state, idx, new_section)
 
