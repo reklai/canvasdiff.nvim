@@ -1501,32 +1501,15 @@ T["statuscol_ callback errors are observable except from text"] = function()
   H.eq(statuscol.detach(nil), false, "there is no unqualified teardown to fall back on")
 end
 
---- A second complete review on its own buffer and window. `canvas.open` still
---- resolves one process-wide canvas buffer, so it cannot express two
---- simultaneous reviews yet; this builds the second one on the same public
---- render path, which is the shape App produces once it indexes Surfaces by
---- buffer.
-local function independent_state(tag)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, "canvasdiff://test-canvas/" .. tag)
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
-  vim.cmd("split")
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, buf)
-  local state = {
-    buf = buf,
-    win = win,
-    sections = {},
-    anchor_ids = {},
-    hl_ids = {},
-    collapsed = {},
-    folded = {},
-    rendered_hidden = {},
-    folded_seen = {},
-  }
-  canvas.render_all(state, three_sections())
-  return state
+--- A second complete review on its own buffer and its own window.
+---
+--- `canvas.open` creates one buffer per review now, and shows it in the
+--- CURRENT window -- so two concurrent reviews need two windows, exactly as a
+--- user would give them.
+local function independent_state()
+  return (H.in_new_window(function()
+    return canvas.open(three_sections(), {})
+  end))
 end
 
 T["statuscol_ two simultaneous leases render their own canvases"] = function()
@@ -1534,7 +1517,7 @@ T["statuscol_ two simultaneous leases render their own canvases"] = function()
   local st = canvas.open(three_sections(), {})
   local first = st.win
   vim.api.nvim_set_current_win(first)
-  local other = independent_state("statuscol")
+  local other = independent_state()
   local second = other.win
   local lease_a, lease_b
 

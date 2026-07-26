@@ -170,35 +170,16 @@ local function reset_view(st)
   end)
 end
 
---- A complete canvas review on its own buffer and its own window.
+--- A complete review on its own buffer and its own window.
 ---
---- `canvas.open` still resolves one process-wide `canvasdiff://canvas` buffer,
---- so it cannot express two simultaneous reviews yet; removing that bottleneck
---- is a later step of this journey. Independent-Surface coverage therefore
---- builds the second review directly on the same public render path, which is
---- exactly the shape App will produce once it indexes Surfaces by buffer.
-local function independent_canvas(sections, tag)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, "canvasdiff://test-canvas/" .. tag)
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
-  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
-  vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
-  vim.cmd("split")
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, buf)
+--- `canvas.open` creates one buffer per review now, and shows it in the
+--- CURRENT window -- so two concurrent reviews need two windows, exactly as a
+--- user would give them.
+local function independent_canvas(sections)
+  local state, win = H.in_new_window(function()
+    return canvas.open(sections, {})
+  end)
   vim.api.nvim_set_option_value("scrolloff", 0, { win = win, scope = "local" })
-  local state = {
-    buf = buf,
-    win = win,
-    sections = {},
-    anchor_ids = {},
-    hl_ids = {},
-    collapsed = {},
-    folded = {},
-    rendered_hidden = {},
-    folded_seen = {},
-  }
-  canvas.render_all(state, sections)
   vim.api.nvim_win_call(win, function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
@@ -206,9 +187,7 @@ local function independent_canvas(sections, tag)
 end
 
 local function close_canvas(state)
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    pcall(vim.api.nvim_win_close, state.win, true)
-  end
+  H.close_windows(state.win)
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
   end
@@ -523,8 +502,8 @@ end
 -- identity, owns unique resources, and tears down without touching its peer.
 
 T["hl_lease independent canvases hold concurrent highlighter leases"] = function()
-  local a = independent_canvas(big_sections(), "a")
-  local b = independent_canvas(big_sections(), "b")
+  local a = independent_canvas(big_sections())
+  local b = independent_canvas(big_sections())
   local lease_a, lease_b
   local ok, err = xpcall(function()
     lease_a = hl.attach(a, { margin = 5 }, { windows = function() return { a.win } end })
