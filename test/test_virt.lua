@@ -4,7 +4,7 @@ local model = require("canvasdiff.diff")
 local runtime_domain = require("canvasdiff.runtime")
 local virt = runtime_domain.virtualizer
 local system = require("canvasdiff.os")
-local hl = require("canvasdiff.hl")
+local hl = require("canvasdiff.ui").highlight
 
 local T = {}
 

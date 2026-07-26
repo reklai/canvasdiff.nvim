@@ -862,7 +862,7 @@ function M.attach(state, opts, callbacks)
   opts = opts or {}
   local lease = {
     id = next_id,
-    group_name = "canvasdiff.hl." .. next_id,
+    group_name = "canvasdiff.highlight." .. next_id,
     claimed = false,
     state = state,
     opts = opts,

@@ -11,6 +11,7 @@ local SESSION_FACADE = "canvasdiff.session"
 local SESSION_CODEC_OWNER = "canvasdiff.session.codec"
 local UI_FACADE = "canvasdiff.ui"
 local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
+local HIGHLIGHT_OWNER = "canvasdiff.ui.highlight"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -95,7 +96,7 @@ T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
   assert_inspected_module(inspection, WATCH_OWNER)
 
   local forbidden = {
-    ["canvasdiff.hl"] = true,
+    [HIGHLIGHT_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     [RUNTIME_FACADE] = true,
@@ -117,7 +118,7 @@ T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
   assert_inspected_module(inspection, VIRTUALIZER_OWNER)
 
   local forbidden = {
-    ["canvasdiff.hl"] = true,
+    [HIGHLIGHT_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     ["canvasdiff.sidebar"] = true,
     [RUNTIME_FACADE] = true,
@@ -181,19 +182,20 @@ T.architecture_session_internal_is_reached_only_through_the_facade = function()
     "session production and test consumers must enter through canvasdiff.session")
 end
 
-T.architecture_scrollbar_internal_is_reached_only_through_the_ui_facade = function()
+T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
   assert_inspected_module(inspection, UI_FACADE)
   assert_inspected_module(inspection, SCROLLBAR_OWNER)
+  assert_inspected_module(inspection, HIGHLIGHT_OWNER)
 
-  local facade_edges = 0
+  local facade_edges = {}
   local violations = {}
   for _, file in ipairs(inspection.files) do
     for _, dependency in ipairs(literal_requires_in(file)) do
-      if dependency.module == SCROLLBAR_OWNER then
+      if dependency.module:match("^canvasdiff%.ui%.") then
         if file.rel == "lua/canvasdiff/ui.lua" then
-          facade_edges = facade_edges + 1
+          facade_edges[dependency.module] = (facade_edges[dependency.module] or 0) + 1
         else
           violations[#violations + 1] = (
             "%s:%d -> %s"
@@ -203,9 +205,10 @@ T.architecture_scrollbar_internal_is_reached_only_through_the_ui_facade = functi
     end
   end
 
-  H.eq(facade_edges, 1, "the UI facade must own the one internal scrollbar edge")
+  H.eq(facade_edges[SCROLLBAR_OWNER], 1, "the UI facade owns the one scrollbar edge")
+  H.eq(facade_edges[HIGHLIGHT_OWNER], 1, "the UI facade owns the one highlighter edge")
   assert_no_errors(violations,
-    "scrollbar production and test consumers must enter through canvasdiff.ui")
+    "UI production and test consumers must enter through canvasdiff.ui")
 end
 
 T.architecture_status_column_has_no_peer_controller_edges = function()
@@ -214,7 +217,7 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, "canvasdiff.statuscol")
 
   local forbidden = {
-    ["canvasdiff.hl"] = true,
+    [HIGHLIGHT_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
@@ -234,7 +237,7 @@ end
 T.architecture_highlighter_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.hl")
+  assert_inspected_module(inspection, HIGHLIGHT_OWNER)
 
   local forbidden = {
     [RUNTIME_FACADE] = true,
@@ -246,7 +249,7 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.hl" and forbidden[edge.to] then
+    if edge.from == HIGHLIGHT_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
@@ -260,7 +263,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, "canvasdiff.sidebar")
 
   local forbidden = {
-    ["canvasdiff.hl"] = true,
+    [HIGHLIGHT_OWNER] = true,
     ["canvasdiff.jump"] = true,
     ["canvasdiff.input.motions"] = true,
     [RUNTIME_FACADE] = true,
@@ -285,7 +288,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, "canvasdiff.jump")
 
   local forbidden = {
-    ["canvasdiff.hl"] = true,
+    [HIGHLIGHT_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,

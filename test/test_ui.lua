@@ -20,7 +20,22 @@ end
 T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "err", "notify", "scrollbar", "warn" })
+  H.eq(names, { "err", "highlight", "notify", "scrollbar", "warn" })
+end
+
+T["ui_highlight facade exposes the lease operations its owners call"] = function()
+  for _, name in ipairs({
+    "attach", "detach", "apply_now", "invalidate", "lang_for", "section_ts_marks",
+  }) do
+    H.eq(type(ui.highlight[name]), "function",
+      "ui.highlight." .. name .. " is callable")
+  end
+end
+
+T["ui_highlight legacy hl module path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.hl"] = nil
+  local loaded = pcall(require, "canvasdiff.hl")
+  assert(not loaded, "canvasdiff.hl must not remain as a forwarding module")
 end
 
 T["ui_notify prefixes and defaults to INFO"] = function()

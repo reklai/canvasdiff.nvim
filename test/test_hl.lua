@@ -1,6 +1,6 @@
 local H = require("helpers")
 local model = require("canvasdiff.diff")
-local hl = require("canvasdiff.hl")
+local hl = require("canvasdiff.ui").highlight
 local canvas = require("canvasdiff.canvas")
 
 local T = {}
@@ -1199,7 +1199,7 @@ T["hl_lease unique group created after reentrant disposal is deleted by name"] =
   local first = true
   local victim_name, victim, peer
   vim.api.nvim_create_augroup = function(name, opts)
-    if first and name:match("^canvasdiff%.hl%.") then
+    if first and name:match("^canvasdiff%.highlight%.") then
       first = false
       victim_name = name
       assert(hl.detach(victim))
@@ -1228,7 +1228,7 @@ T["hl_lease stale autocmd creation cannot join a recycled peer group"] = functio
   local first = true
   local victim, peer
   vim.api.nvim_create_autocmd = function(events, spec)
-    if first and type(spec.group) == "string" and spec.group:match("^canvasdiff%.hl%.") then
+    if first and type(spec.group) == "string" and spec.group:match("^canvasdiff%.highlight%.") then
       first = false
       assert(hl.detach(victim))
       peer = hl.attach(st, { margin = 0 }, { windows = function() return {} end })

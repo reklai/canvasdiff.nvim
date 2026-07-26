@@ -19,7 +19,7 @@ local function sidebar_view(st, tab)
 end
 
 local function group_alive(name)
-  if name == "canvasdiff.hl"
+  if name == "canvasdiff.highlight"
       or name == "canvasdiff.sidebar"
       or name == "canvasdiff.scrollbar"
       or name == "canvasdiff.virt"
@@ -391,7 +391,7 @@ return {
     select_cr()
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.sidebar",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.sidebar",
       "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
@@ -402,7 +402,7 @@ return {
     vim.wait(200, function() return not group_alive("canvasdiff.watch") end)
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.hl", "canvasdiff.statuscol",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.statuscol",
       "canvasdiff.sidebar", "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")
