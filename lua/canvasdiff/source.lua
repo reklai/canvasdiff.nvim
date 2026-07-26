@@ -8,9 +8,11 @@ local repository = require("canvasdiff.source.repository")
 return {
   changed_files = repository.changed_files,
   diff_files = repository.diff_files,
+  file_stream = collect.file_stream,
   files = collect.files,
   resolve_commit = repository.resolve_commit,
   root = repository.root,
+  section_stream = collect.section_stream,
   sections = collect.sections,
   show = repository.show,
   show_head = repository.show_head,

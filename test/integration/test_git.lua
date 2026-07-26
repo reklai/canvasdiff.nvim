@@ -23,9 +23,11 @@ return {
     H.eq(names, {
       "changed_files",
       "diff_files",
+      "file_stream",
       "files",
       "resolve_commit",
       "root",
+      "section_stream",
       "sections",
       "show",
       "show_head",
@@ -44,6 +46,110 @@ return {
     package.loaded["canvasdiff.collect"] = nil
     local loaded = pcall(require, "canvasdiff.collect")
     assert(not loaded, "canvasdiff.collect must not remain as a forwarding module")
+  end,
+  -- Ingestion is where a million-line changeset either fits in memory or does
+  -- not. Reading every file's two sides up front is the eager convenience;
+  -- these prove the streaming boundary underneath it never does that.
+  ["source_ file_stream reads one file's sides at a time"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n", ["b.txt"] = "b\n", ["c.txt"] = "c\n" },
+      worktree = { ["a.txt"] = "A\n", ["b.txt"] = "B\n", ["c.txt"] = "C\n" },
+    })
+    -- Observed at the OS boundary, which is the only seam a test outside the
+    -- source domain is allowed to reach.
+    local reads = {}
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        for index, word in ipairs(cmd) do
+          if word == "show" and cmd[index + 1] then
+            reads[#reads + 1] = cmd[index + 1]:match(":(.*)$")
+          end
+        end
+        return real_run(cmd, opts)
+      end
+      local next_file, stream_err = source.file_stream(root, "HEAD")
+      assert(next_file, stream_err)
+      H.eq(reads, {}, "planning reads no file content at all")
+
+      local first = assert(next_file())
+      H.eq(first.path, "a.txt")
+      H.eq(reads, { "a.txt" }, "only the file asked for was read")
+      H.eq(first.old_text, "a\n")
+      H.eq(first.new_text, "A\n")
+
+      local second = assert(next_file())
+      H.eq(second.path, "b.txt")
+      H.eq(reads, { "a.txt", "b.txt" })
+
+      assert(next_file(), "c.txt")
+      H.eq(next_file(), nil, "the stream ends after the last planned file")
+      H.eq(reads, { "a.txt", "b.txt", "c.txt" },
+        "each file is read exactly once, in path order")
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["source_ section_stream retains only the section it just built"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n", ["b.txt"] = "b\n" },
+      worktree = { ["a.txt"] = "A\n", ["b.txt"] = "B\n" },
+    })
+    local ok, err = xpcall(function()
+      local next_section, stream_err = source.section_stream(root, "HEAD", 3)
+      assert(next_section, stream_err)
+
+      local first = assert(next_section())
+      H.eq(first.path, "a.txt")
+      local weak = setmetatable({ section = first }, { __mode = "v" })
+      first = nil
+
+      local second = assert(next_section())
+      H.eq(second.path, "b.txt", "the stream advances in path order")
+      collectgarbage("collect")
+      collectgarbage("collect")
+      H.eq(weak.section, nil,
+        "a consumed section is not retained by the stream that produced it")
+      H.eq(next_section(), nil)
+    end, debug.traceback)
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["source_ a failed side aborts the stream at the file that caused it"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n", ["b.txt"] = "b\n" },
+      worktree = { ["a.txt"] = "A\n", ["b.txt"] = "B\n" },
+    })
+    sh(root, { "git", "branch", "gone", "HEAD" })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      local lens = require("canvasdiff.diff").lens
+      local spec = lens.branch("gone")
+      system.run = function(cmd, opts)
+        for index, word in ipairs(cmd) do
+          if word == "show" and (cmd[index + 1] or ""):find("b.txt", 1, true) then
+            return { code = 128, stdout = nil, stderr = "injected missing blob" }
+          end
+        end
+        return real_run(cmd, opts)
+      end
+      local next_file = assert(source.file_stream(root, spec))
+      local first = assert(next_file())
+      H.eq(first.path, "a.txt", "files before the failure still stream")
+      local failed, stream_err = next_file()
+      H.eq(failed, nil)
+      assert(stream_err and stream_err:find("b.txt", 1, true),
+        "the error names the file that caused it: " .. tostring(stream_err))
+
+      -- And the eager collector still reports it transactionally.
+      local sections, sections_err = source.sections(root, spec, 3)
+      H.eq(sections, nil, "a failed side yields no partial section list")
+      assert(sections_err and sections_err:find("b.txt", 1, true), sections_err)
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
   end,
   ["source_ worktree disk reads use the os facade and contain failures"] = function()
     local root = H.git_fixture({

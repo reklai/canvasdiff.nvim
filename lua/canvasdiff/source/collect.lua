@@ -52,11 +52,19 @@ end
 --- ("HEAD" | "index") that only ever named the old side -- config.options.base and
 --- previously-saved sessions still speak it. lens.from_base does the translation.
 ---
+--- Resolve WHICH paths this lens compares, and how each relates to
+--- HEAD/index/worktree, without reading a single byte of file content.
+---
+--- Split from reading, because planning is one bounded round of git plumbing
+--- while reading is proportional to the size of the changeset. Keeping them
+--- apart is what lets content be read one file at a time.
 --- @param root string
 --- @param spec CanvasDiffLens|string|nil a lens, a legacy base string, or nil
---- @return table[]|nil files
+--- @return table[]|nil plan
 --- @return string|nil err
-function M.files(root, spec)
+--- @return CanvasDiffLens|nil lens
+--- @return string|nil old_rev
+local function plan_files(root, spec)
   local l = type(spec) == "table" and spec or lens.from_base(spec)
   local is_branch = lens.is_branch(l)
   local changed
@@ -124,7 +132,6 @@ function M.files(root, spec)
         end
       end
     end
-    table.sort(changed, function(a, b) return a.path < b.path end)
   else
     local err
     changed, err = repository.changed_files(root)
@@ -133,7 +140,7 @@ function M.files(root, spec)
     end
   end
 
-  local files = {}
+  local planned = {}
   for _, f in ipairs(changed) do
     local path, old_path, status
     if is_branch then
@@ -143,12 +150,7 @@ function M.files(root, spec)
     else
       path, old_path, status = fixed_paths(l, f)
     end
-    local old_text, old_err = repository.show(root, old_rev, old_path)
-    if old_text == nil and is_branch and f.status ~= "A" and f.status ~= "?" then
-      return nil, ("cannot read old side %s:%s for %s change: %s")
-        :format(old_rev, old_path, f.status, old_err or "unknown git error")
-    end
-    files[#files + 1] = {
+    planned[#planned + 1] = {
       path = path,
       old_path = old_path,
       old_rev = old_rev,
@@ -157,15 +159,122 @@ function M.files(root, spec)
       -- independently of the lens you happen to be looking through.
       staged = f.staged,
       unstaged = f.unstaged,
-      old_text = old_text or "",
-      new_text = M.new_side(root, l, path, status),
     }
   end
   -- fixed_paths can remap an unstaged-rename destination back to the index
   -- origin for the staged lens, so porcelain's current-path order is not
   -- necessarily this lens's effective path order.
-  table.sort(files, function(a, b) return a.path < b.path end)
-  return files
+  table.sort(planned, function(a, b) return a.path < b.path end)
+  return planned, nil, l, old_rev
+end
+
+--- Read one planned file's two sides.
+--- @return table|nil file
+--- @return string|nil err
+local function read_file(root, l, entry, is_branch)
+  local old_text, old_err = repository.show(root, entry.old_rev, entry.old_path)
+  if old_text == nil and is_branch
+      and entry.status ~= "A" and entry.status ~= "?" then
+    return nil, ("cannot read old side %s:%s for %s change: %s")
+      :format(entry.old_rev, entry.old_path, entry.status,
+        old_err or "unknown git error")
+  end
+  return {
+    path = entry.path,
+    old_path = entry.old_path,
+    old_rev = entry.old_rev,
+    status = entry.status,
+    staged = entry.staged,
+    unstaged = entry.unstaged,
+    old_text = old_text or "",
+    new_text = M.new_side(root, l, entry.path, entry.status),
+  }
+end
+
+--- Stream this lens's changed files in path order, reading each file's two
+--- sides only when it is asked for.
+---
+--- The iterator returns `nil` when exhausted and `nil, err` when a side cannot
+--- be read -- the same transactional failure `files` reports, surfaced at the
+--- file that caused it rather than after the whole changeset was materialized.
+--- @param root string
+--- @param spec CanvasDiffLens|string|nil
+--- @return fun(): table|nil, string|nil next_file
+--- @return string|nil err
+function M.file_stream(root, spec)
+  local planned, err, l = plan_files(root, spec)
+  if not planned then
+    return nil, err
+  end
+  local is_branch = lens.is_branch(l)
+  local index = 0
+  return function()
+    index = index + 1
+    local entry = planned[index]
+    if not entry then
+      return nil
+    end
+    return read_file(root, l, entry, is_branch)
+  end
+end
+
+--- Every changed file with both its sides, in path order.
+---
+--- The whole changeset resident at once, which is what the eager canvas needs
+--- and what `file_stream` exists to avoid for anything larger.
+--- @param root string
+--- @param spec CanvasDiffLens|string|nil a lens, a legacy base string, or nil
+--- @return table[]|nil files
+--- @return string|nil err
+function M.files(root, spec)
+  local next_file, stream_err = M.file_stream(root, spec)
+  if not next_file then
+    return nil, stream_err
+  end
+  local files = {}
+  while true do
+    local file, read_err = next_file()
+    if read_err then
+      return nil, read_err
+    end
+    if not file then
+      return files
+    end
+    files[#files + 1] = file
+  end
+end
+
+--- Stream this lens's sections in path order, one built section at a time.
+---
+--- The ingestion boundary: only one file's two sides are resident while its
+--- section is built, so a caller that consumes sections as they arrive never
+--- holds the whole changeset's text at once. `sections` is the eager consumer.
+--- @param root string
+--- @param spec CanvasDiffLens|string|nil
+--- @param context integer|nil
+--- @return fun(): table|nil, string|nil next_section
+--- @return string|nil err
+function M.section_stream(root, spec, context)
+  local next_file, err = M.file_stream(root, spec)
+  if not next_file then
+    return nil, err
+  end
+  return function()
+    while true do
+      local file, read_err = next_file()
+      if read_err then
+        return nil, read_err
+      end
+      if not file then
+        return nil
+      end
+      local section = model.build_section(
+        file.path, file.old_text, file.new_text, file.status, context, file)
+      if section then
+        return section
+      end
+    end
+  end
 end
 
 --- Collect and build the complete desired section list without mutating a
@@ -178,11 +287,25 @@ end
 --- @return table[]|nil sections
 --- @return string|nil err
 function M.sections(root, spec, context)
-  local files, err = M.files(root, spec)
-  if not files then
+  local next_section, err = M.section_stream(root, spec, context)
+  if not next_section then
     return nil, err
   end
-  return model.build(files, context)
+  local sections = {}
+  while true do
+    local section, build_err = next_section()
+    if build_err then
+      return nil, build_err
+    end
+    if not section then
+      break
+    end
+    sections[#sections + 1] = section
+  end
+  -- Already in path order from the plan, but sorting is what `model.build`
+  -- promised and what watch reconciliation compares against.
+  table.sort(sections, function(a, b) return a.path < b.path end)
+  return sections
 end
 
 --- The lens's NEW side for one path: the worktree as it stands (unsaved buffer
