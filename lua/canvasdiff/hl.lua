@@ -7,31 +7,39 @@ local fold = diff.fold
 local TS_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
 
 local CACHE_CAP = 20
-local current = nil
 local next_id = 0
 -- Supplying extmark IDs before placement lets a lease publish ownership before
 -- the Neovim call that creates the mark. That matters under fault injection:
--- if set_extmark reentrantly installs a replacement, predecessor teardown
--- already knows the exact ID it must remove. IDs never repeat within this
--- module, so a delayed old cleanup cannot hit an ID recycled by its successor.
+-- if set_extmark reentrantly disposes this lease, teardown already knows the
+-- exact ID it must remove. IDs never repeat within this module, so a delayed
+-- old cleanup cannot hit an ID recycled by a concurrent or later lease.
 local next_extmark_id = 0
 
+-- Lookup-only authentication. Weak keys cannot keep a lease alive and, unlike
+-- trusting a handful of public table fields, cannot be copied onto a forged
+-- shell. Nothing here decides which highlighter is "the" live one: independent
+-- Surfaces hold independent leases simultaneously, and every live resource
+-- stays reachable only from the lease that owns it.
+local LEASE_AUTH = setmetatable({}, { __mode = "k" })
+
 local function exact(lease)
-  return lease ~= nil and current == lease and not lease.disposed
+  return type(lease) == "table"
+    and LEASE_AUTH[lease] == true
+    and not lease.disposed
 end
 
---- Add the Surface generation fence to the module's identity check. Both
---- checks after `alive` are load-bearing: owner code may replace this lease
---- reentrantly before returning.
+--- Add the owner's generation fence to exact lease authentication. Both checks
+--- around `alive` are load-bearing: owner code may dispose this exact lease
+--- reentrantly before the callback returns.
 local function active(lease)
   if not exact(lease) then
     return false
   end
-  local alive = lease.callbacks.alive
+  local alive = lease.callbacks and lease.callbacks.alive
   if not alive then
     return true
   end
-  local ok, result = pcall(alive)
+  local ok, result = pcall(alive, lease)
   return ok and result and exact(lease) or false
 end
 
@@ -313,16 +321,78 @@ local function owned_ids(lease)
   return out
 end
 
---- Exact, idempotent teardown. Invalidate and release the retained graph
---- before any Neovim/uv operation can run user fault-injection code.
+-- Highlighter hook records live on the canvas state's own hooks table under
+-- this private key. Keeping the chain there rather than in a module-global
+-- registry means no process-wide table retains a state, a wrapper, or an
+-- owner callback, and a lease can still be spliced out of the middle of the
+-- chain when leases are torn down out of installation order.
+local HOOK_CHAIN = {}
+
+--- Remove one record from one hook slot's chain.
+---
+--- Restoring only works when this record still holds the slot. Otherwise a
+--- later lease captured this wrapper as its own predecessor, so hand that peer
+--- our predecessor instead: the consumer's original hook stays reachable and
+--- no wrapper of ours remains referenced from anywhere.
+local function unlink_hook(record, slot, wrapper_key, prior_key)
+  local hooks_table = record.table
+  if rawget(hooks_table, slot) == record[wrapper_key] then
+    rawset(hooks_table, slot, record[prior_key])
+    return true
+  end
+  for _, peer in ipairs(rawget(hooks_table, HOOK_CHAIN) or {}) do
+    if peer ~= record and peer[prior_key] == record[wrapper_key] then
+      peer[prior_key] = record[prior_key]
+      return true
+    end
+  end
+  -- A consumer replaced the slot outright after attach. Its replacement is
+  -- not ours to undo.
+  return false
+end
+
+local function release_hooks(hooks)
+  if not (hooks and hooks.table) then
+    return
+  end
+  unlink_hook(hooks, "on_render_all", "render_wrapper", "prior_render")
+  unlink_hook(hooks, "on_section_replaced", "replace_wrapper", "prior_replace")
+
+  local chain = rawget(hooks.table, HOOK_CHAIN)
+  if chain then
+    for i, peer in ipairs(chain) do
+      if peer == hooks then
+        table.remove(chain, i)
+        break
+      end
+    end
+    if #chain == 0 then
+      rawset(hooks.table, HOOK_CHAIN, nil)
+    end
+  end
+
+  -- A caller may retain either wrapper after detach. Empty its captured hook
+  -- graph so that stale closure retains neither the state table nor earlier
+  -- owner callbacks. Unlinking already handed our predecessor to whoever still
+  -- needed it, so no live chain can reach these fields.
+  hooks.table = nil
+  hooks.prior_render = nil
+  hooks.prior_replace = nil
+  hooks.render_wrapper = nil
+  hooks.replace_wrapper = nil
+end
+
+--- Exact, idempotent teardown for one highlighter lease. Invalidate and
+--- release the retained graph before any Neovim/uv operation can run user
+--- fault-injection code.
 function M.detach(expected)
-  local lease = current
-  if not lease or expected ~= lease then
+  local lease = expected
+  if not exact(lease) then
     return false
   end
 
+  LEASE_AUTH[lease] = nil
   lease.disposed = true
-  current = nil
 
   local state = lease.state
   local buf = state and state.buf
@@ -331,6 +401,8 @@ function M.detach(expected)
   local autocmd_ids = lease.autocmd_ids
   local timer = lease.timer
   local hooks = lease.hooks
+  local release = lease.callbacks and lease.callbacks.release
+  local claimed = lease.claimed
   local ids = owned_ids(lease)
 
   lease.state = nil
@@ -351,22 +423,7 @@ function M.detach(expected)
 
   -- Restore only the hook slots this exact lease still owns. A consumer that
   -- replaced either slot after attach keeps its replacement untouched.
-  if hooks and hooks.table then
-    if rawget(hooks.table, "on_render_all") == hooks.render_wrapper then
-      rawset(hooks.table, "on_render_all", hooks.prior_render)
-    end
-    if rawget(hooks.table, "on_section_replaced") == hooks.replace_wrapper then
-      rawset(hooks.table, "on_section_replaced", hooks.prior_replace)
-    end
-    -- A caller may retain either wrapper after detach. Empty its captured hook
-    -- graph so that stale closure retains neither the state table nor earlier
-    -- owner callbacks.
-    hooks.table = nil
-    hooks.prior_render = nil
-    hooks.prior_replace = nil
-    hooks.render_wrapper = nil
-    hooks.replace_wrapper = nil
-  end
+  release_hooks(hooks)
   local group_deleted = false
   if aug then
     group_deleted = pcall(vim.api.nvim_del_augroup_by_id, aug)
@@ -387,6 +444,15 @@ function M.detach(expected)
     end
   end
   close_timer(timer)
+
+  -- Last, so the owner's slot is only cleared once every resource this lease
+  -- held has actually been released.
+  if release and claimed then
+    local ok, err = pcall(release, lease)
+    if not ok then
+      error(err, 0)
+    end
+  end
   return true
 end
 
@@ -736,61 +802,68 @@ local function install_hooks(lease)
     prior_replace = rawget(state.hooks, "on_section_replaced"),
   }
 
+  -- Both wrappers read their predecessor from the record rather than from a
+  -- captured upvalue, so an out-of-order teardown can rewire the chain under
+  -- a wrapper that is already installed.
   hooks.render_wrapper = function(...)
     if not active(lease) then
-      return
+      -- Fenced off or already unlinked. Either way the consumer's own hook is
+      -- not ours to swallow; detach clears `prior_render` once nothing can
+      -- still reach this wrapper.
+      local prior = hooks.prior_render
+      return prior and prior(...)
     end
     lease.epoch = lease.epoch + 1
     lease.cache = {}
     lease.cache_n = 0
     lease.cache_tick = 0
     del_all_marks(lease)
-    if not active(lease) then
-      return
-    end
-    if hooks.prior_render then
-      return hooks.prior_render(...)
+    local prior = hooks.prior_render
+    if prior then
+      return prior(...)
     end
   end
   hooks.replace_wrapper = function(path, ...)
     if not active(lease) then
-      return
+      local prior = hooks.prior_replace
+      return prior and prior(path, ...)
     end
     lease.epoch = lease.epoch + 1
     del_path_marks(lease, path)
-    if not active(lease) then
-      return
+    if active(lease) then
+      M.invalidate(lease, path)
     end
-    M.invalidate(lease, path)
-    if not active(lease) then
-      return
-    end
-    if hooks.prior_replace then
-      return hooks.prior_replace(path, ...)
+    local prior = hooks.prior_replace
+    if prior then
+      return prior(path, ...)
     end
   end
 
   lease.hooks = hooks
+  local chain = rawget(hooks.table, HOOK_CHAIN)
+  if not chain then
+    chain = {}
+    rawset(hooks.table, HOOK_CHAIN, chain)
+  end
+  chain[#chain + 1] = hooks
   rawset(hooks.table, "on_render_all", hooks.render_wrapper)
   rawset(hooks.table, "on_section_replaced", hooks.replace_wrapper)
 end
 
 --- Attach one exact highlighter lease. All retained syntax trees, mark IDs,
 --- hooks, event sources, and owner callbacks belong to the returned object.
+---
+--- Attaching never disturbs another lease: two independent reviews highlight
+--- concurrently, and only their own owners may dispose them. `claim`, `alive`,
+--- and `release` let the owner publish and fence the exact identity before any
+--- resource exists.
 function M.attach(state, opts, callbacks)
-  if current then
-    local predecessor = current
-    M.detach(predecessor)
-    if current then
-      error("highlighter attach was superseded during predecessor teardown", 0)
-    end
-  end
-
   next_id = next_id + 1
   opts = opts or {}
   local lease = {
     id = next_id,
     group_name = "canvasdiff.hl." .. next_id,
+    claimed = false,
     state = state,
     opts = opts,
     callbacks = callbacks or {},
@@ -811,19 +884,43 @@ function M.attach(state, opts, callbacks)
   }
   local group_name = lease.group_name
   -- Publish identity before the first external call. A reentrant callback can
-  -- now tear down only this exact partial lease.
-  current = lease
+  -- now tear down only this exact partial lease; it can never select which of
+  -- several live highlighters counts as current.
+  LEASE_AUTH[lease] = true
+
+  local claim = lease.callbacks.claim
+  if claim then
+    -- A throwing claim may already have published the lease. Mark it claimed
+    -- before entering owner code so exact teardown can safely ask release to
+    -- unlink only this identity.
+    lease.claimed = true
+    local ok, claimed = pcall(claim, lease)
+    if not ok then
+      pcall(M.detach, lease)
+      error(claimed, 0)
+    end
+    if not claimed then
+      lease.claimed = false
+      M.detach(lease)
+      return nil
+    end
+  else
+    lease.claimed = true
+  end
 
   local ok, err = pcall(function()
+    if not active(lease) then
+      error("highlighter owner is no longer alive", 0)
+    end
     ensure_hl_groups()
     if not active(lease) then
-      error("highlighter attach was superseded while defining groups", 0)
+      error("highlighter attach was disposed while defining groups", 0)
     end
     if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
       error("highlighter requires a valid canvas state", 0)
     end
     if not active(lease) then
-      error("highlighter attach was superseded while validating state", 0)
+      error("highlighter attach was disposed while validating state", 0)
     end
 
     local timer = vim.uv.new_timer()
@@ -831,37 +928,38 @@ function M.attach(state, opts, callbacks)
       error("failed to allocate highlighter timer", 0)
     end
     if not exact(lease) then
-      -- The allocating wrapper may have installed B before returning A's
-      -- handle. It was never published for predecessor teardown to see.
+      -- The allocating wrapper may have disposed this lease before returning
+      -- the handle, which teardown therefore never saw.
       close_timer(timer)
-      error("highlighter attach was superseded while allocating timer", 0)
+      error("highlighter attach was disposed while allocating timer", 0)
     end
     lease.timer = timer
     if not active(lease) then
-      error("highlighter attach was superseded while allocating timer", 0)
+      error("highlighter attach was disposed while allocating timer", 0)
     end
 
     install_hooks(lease)
     if not active(lease) then
-      error("highlighter attach was superseded while installing hooks", 0)
+      error("highlighter attach was disposed while installing hooks", 0)
     end
 
     local aug = vim.api.nvim_create_augroup(group_name, { clear = true })
     if not exact(lease) then
-      -- Per-lease names make this cleanup incapable of touching the winner's
-      -- group even when the wrapper created A's group after B took ownership.
+      -- Per-lease names make this cleanup incapable of touching a peer's
+      -- group even when the wrapper created this one after teardown ran.
       pcall(vim.api.nvim_del_augroup_by_name, group_name)
-      error("highlighter attach was superseded while creating autocmds", 0)
+      error("highlighter attach was disposed while creating autocmds", 0)
     end
     lease.aug = aug
     if not active(lease) then
-      error("highlighter attach was superseded while creating autocmds", 0)
+      error("highlighter attach was disposed while creating autocmds", 0)
     end
 
     local function create_autocmd(events, spec)
       -- Refer to the unique NAME, not its numeric ID. If an outer stale call
-      -- resumes after B deleted A's group and Neovim recycled the number, the
-      -- call fails against A's absent name instead of joining B's group.
+      -- resumes after this lease's group was deleted and Neovim recycled the
+      -- number, the call fails against an absent name instead of silently
+      -- joining a peer's group.
       spec.group = group_name
       local autocmd_id = vim.api.nvim_create_autocmd(events, spec)
       if not exact(lease) then
@@ -869,11 +967,11 @@ function M.attach(state, opts, callbacks)
         if not group_deleted then
           pcall(vim.api.nvim_del_autocmd, autocmd_id)
         end
-        error("highlighter attach was superseded while creating autocmds", 0)
+        error("highlighter attach was disposed while creating autocmds", 0)
       end
       lease.autocmd_ids[#lease.autocmd_ids + 1] = autocmd_id
       if not active(lease) then
-        error("highlighter attach was superseded while creating autocmds", 0)
+        error("highlighter attach was disposed while creating autocmds", 0)
       end
     end
 
@@ -922,11 +1020,11 @@ function M.attach(state, opts, callbacks)
 
     M.apply_now(lease)
     if not active(lease) then
-      error("highlighter attach was superseded during initial apply", 0)
+      error("highlighter attach was disposed during initial apply", 0)
     end
   end)
   if not ok then
-    M.detach(lease)
+    pcall(M.detach, lease)
     error(err, 0)
   end
   return lease

@@ -170,6 +170,50 @@ local function reset_view(st)
   end)
 end
 
+--- A complete canvas review on its own buffer and its own window.
+---
+--- `canvas.open` still resolves one process-wide `canvasdiff://canvas` buffer,
+--- so it cannot express two simultaneous reviews yet; removing that bottleneck
+--- is a later step of this journey. Independent-Surface coverage therefore
+--- builds the second review directly on the same public render path, which is
+--- exactly the shape App will produce once it indexes Surfaces by buffer.
+local function independent_canvas(sections, tag)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, "canvasdiff://test-canvas/" .. tag)
+  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
+  vim.cmd("split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  vim.api.nvim_set_option_value("scrolloff", 0, { win = win, scope = "local" })
+  local state = {
+    buf = buf,
+    win = win,
+    sections = {},
+    anchor_ids = {},
+    hl_ids = {},
+    collapsed = {},
+    folded = {},
+    rendered_hidden = {},
+    folded_seen = {},
+  }
+  canvas.render_all(state, sections)
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  return state
+end
+
+local function close_canvas(state)
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    pcall(vim.api.nvim_win_close, state.win, true)
+  end
+  if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
+  end
+end
+
 T["hl_engine marks visible sections and skips far ones"] = function()
   local st = canvas.open(big_sections(), {})
   reset_view(st)
@@ -235,10 +279,14 @@ end
 
 T["hl_engine reattach after reopen leaves no stale marks"] = function()
   local st1 = canvas.open(big_sections(), {})
-  hl.attach(st1, { margin = 50 })
+  local lease1 = hl.attach(st1, { margin = 50 })
   -- reopen on the same cached buffer: render_all runs on a hookless fresh
-  -- state, then attach must start from a clean namespace
+  -- state, so lease1's marks are orphaned by an edit it never observed.
   local st2 = canvas.open(big_sections(), {})
+  -- The owner disposes the previous review; nothing in the highlighter elects
+  -- a winner on its behalf, and teardown after a foreign full render must
+  -- still resolve exactly the IDs lease1 reserved.
+  assert(hl.detach(lease1))
   local lease2 = hl.attach(st2, { margin = 50 })
   local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local total = #vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
@@ -252,9 +300,16 @@ T["hl_engine reattach after reopen leaves no stale marks"] = function()
 end
 
 T["hl_engine stale state apply is a no-op after reattach"] = function()
+  -- The old review's generation fence is what makes it stale. No module-global
+  -- selector is involved: lease1 keeps its own exact identity, and its owner
+  -- refusing the fence is the only thing that stops it reconciling.
   local st1 = canvas.open(big_sections(), {})
-  local lease1 = hl.attach(st1, { margin = 5 })
+  local superseded = false
+  local lease1 = hl.attach(st1, { margin = 5 }, {
+    alive = function() return not superseded end,
+  })
   local st2 = canvas.open(big_sections(), {})
+  superseded = true
   local lease2 = hl.attach(st2, { margin = 5 })
 
   -- Move the viewport far from the sections both states applied at attach
@@ -267,16 +322,18 @@ T["hl_engine stale state apply is a no-op after reattach"] = function()
   local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
   local before = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
 
-  hl.apply_now(lease1) -- simulated stale debounce callback
+  H.eq(hl.apply_now(lease1), false, "simulated stale debounce callback is inert")
 
   local after = vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {})
   H.eq(after, before, "stale-state apply changed the namespace")
 
+  assert(hl.detach(lease1))
   local tracked = 0
   for _, ids in pairs(lease2.ids_by_path) do
     tracked = tracked + #ids
   end
-  H.eq(#after, tracked, "live state tracks every mark in the namespace")
+  H.eq(#vim.api.nvim_buf_get_extmarks(st2.buf, ns, 0, -1, {}), tracked,
+    "once the stale review is disposed the live state tracks every remaining mark")
   assert(hl.detach(lease2))
 end
 
@@ -459,7 +516,191 @@ local function with_fake_highlighter_runtime(callback)
   if not ok then error(err, 0) end
 end
 
-T["hl_lease stale event timer and scheduled callbacks cannot cross replacement"] = function()
+-- --- lease independence ------------------------------------------------------
+--
+-- No module-global selector decides which highlighter is live. Two independent
+-- reviews hold two independent leases; each one authenticates by exact private
+-- identity, owns unique resources, and tears down without touching its peer.
+
+T["hl_lease independent canvases hold concurrent highlighter leases"] = function()
+  local a = independent_canvas(big_sections(), "a")
+  local b = independent_canvas(big_sections(), "b")
+  local lease_a, lease_b
+  local ok, err = xpcall(function()
+    lease_a = hl.attach(a, { margin = 5 }, { windows = function() return { a.win } end })
+    lease_b = hl.attach(b, { margin = 5 }, { windows = function() return { b.win } end })
+
+    assert(lease_a.ids_by_path["f1.lua"], "A applied inside its own buffer")
+    assert(lease_b.ids_by_path["f1.lua"],
+      "attaching B did not require superseding A")
+    assert(lease_a.aug ~= lease_b.aug, "each lease owns a distinct augroup")
+    assert(lease_a.group_name ~= lease_b.group_name, "group names never collide")
+    assert(not rawequal(lease_a.timer, lease_b.timer), "each lease owns its timer")
+    assert(hl.apply_now(lease_a), "A still reconciles after B attached")
+    assert(hl.apply_now(lease_b), "B still reconciles alongside A")
+
+    H.eq(#ts_marks(a.buf), tracked_count(lease_a), "A's buffer holds exactly A's marks")
+    H.eq(#ts_marks(b.buf), tracked_count(lease_b), "B's buffer holds exactly B's marks")
+    assert(tracked_count(lease_a) > 0 and tracked_count(lease_b) > 0, "sanity: both applied")
+
+    local b_before = ts_marks(b.buf)
+    local b_tracked = tracked_count(lease_b)
+    assert(hl.detach(lease_a))
+    H.eq(ts_marks(a.buf), {}, "A teardown clears exactly A's buffer")
+    H.eq(ts_marks(b.buf), b_before, "A teardown never touches a peer's marks")
+    H.eq(tracked_count(lease_b), b_tracked, "A teardown never touches peer bookkeeping")
+    H.eq(#vim.api.nvim_get_autocmds({ group = lease_b.aug }), 6,
+      "B retains exactly its own viewport event sources")
+    assert(not lease_b.timer:is_closing(), "A teardown never closes a peer's timer")
+    assert(hl.apply_now(lease_b), "B survives its peer's teardown")
+
+    assert(hl.detach(lease_b))
+    H.eq(ts_marks(b.buf), {}, "B teardown clears its own buffer")
+  end, debug.traceback)
+
+  if lease_a then pcall(hl.detach, lease_a) end
+  if lease_b then pcall(hl.detach, lease_b) end
+  close_canvas(a)
+  close_canvas(b)
+  if not ok then error(err, 0) end
+end
+
+T["hl_lease a forged shell cannot authenticate as a lease"] = function()
+  local st = canvas.open(big_sections(), {})
+  reset_view(st)
+  local lease = hl.attach(st, { margin = 5 })
+  local before = ts_marks(st.buf)
+  assert(#before > 0, "sanity: the real lease applied marks")
+  local cached = hl._cache_size(lease)
+  assert(cached > 0, "sanity: the real lease holds a parse cache")
+
+  local copy = {}
+  for k, v in pairs(lease) do
+    copy[k] = v
+  end
+  local forgeries = {
+    copy,
+    setmetatable({}, { __index = lease }),
+    { disposed = false, id = lease.id, group_name = lease.group_name, state = st },
+    "not a table",
+    nil,
+  }
+  for i = 1, 5 do
+    local forged = forgeries[i]
+    H.eq(hl.apply_now(forged), false, "a forged handle cannot drive reconciliation")
+    H.eq(hl.detach(forged), false, "a forged handle cannot tear down a real lease")
+    H.eq(hl.invalidate(forged, "f1.lua"), false, "a forged handle cannot evict the cache")
+    H.eq(hl._cache_size(forged), 0, "a forged handle reports no cache")
+  end
+
+  H.eq(ts_marks(st.buf), before, "no forgery disturbed the real lease's marks")
+  H.eq(hl._cache_size(lease), cached, "no forgery disturbed the real lease's cache")
+  assert(hl.apply_now(lease), "the real lease still reconciles")
+  assert(hl.detach(lease))
+end
+
+T["hl_lease out-of-order detach keeps the consumer's own hook reachable"] = function()
+  local st = canvas.open(big_sections(), {})
+  local render_calls, replace_calls = 0, 0
+  local prior_render = function() render_calls = render_calls + 1 end
+  local prior_replace = function() replace_calls = replace_calls + 1 end
+  st.hooks = { on_render_all = prior_render, on_section_replaced = prior_replace }
+  local windows = function() return {} end
+
+  local first = hl.attach(st, { margin = 0 }, { windows = windows })
+  local second = hl.attach(st, { margin = 0 }, { windows = windows })
+
+  -- The inner lease leaves first, so its wrapper is spliced out of the middle
+  -- of the chain rather than restored from the top of it.
+  assert(hl.detach(first), "the inner lease detaches independently")
+  st.hooks.on_render_all()
+  st.hooks.on_section_replaced("f1.lua")
+  H.eq({ render_calls, replace_calls }, { 1, 1 },
+    "the surviving wrapper still reaches the consumer's own hooks")
+
+  assert(hl.detach(second))
+  assert(rawequal(st.hooks.on_render_all, prior_render),
+    "the last lease restores the consumer's own render hook by identity")
+  assert(rawequal(st.hooks.on_section_replaced, prior_replace),
+    "the last lease restores the consumer's own replace hook by identity")
+  st.hooks.on_render_all()
+  st.hooks.on_section_replaced("f1.lua")
+  H.eq({ render_calls, replace_calls }, { 2, 2 }, "no wrapper remains in the way")
+end
+
+T["hl_lease claim publishes the exact lease before any resource exists"] = function()
+  local st = canvas.open({}, {})
+  local published, timers_at_claim
+  local lease = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    claim = function(candidate)
+      published = candidate
+      timers_at_claim = candidate.timer
+      return true
+    end,
+  })
+  assert(rawequal(published, lease), "claim received the exact returned lease")
+  H.eq(timers_at_claim, nil, "claim ran before the first resource was allocated")
+  assert(hl.detach(lease))
+end
+
+T["hl_lease a refused claim allocates nothing and returns nil"] = function()
+  local st = canvas.open({}, {})
+  local timers = 0
+  local real_new_timer = vim.uv.new_timer
+  vim.uv.new_timer = function()
+    timers = timers + 1
+    return real_new_timer()
+  end
+  local lease = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    claim = function() return false end,
+  })
+  vim.uv.new_timer = real_new_timer
+  H.eq(lease, nil, "a refused claim yields no lease")
+  H.eq(timers, 0, "a refused claim allocates no timer")
+end
+
+T["hl_lease release runs exactly once on exact teardown"] = function()
+  local st = canvas.open({}, {})
+  local released = 0
+  local lease = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    claim = function() return true end,
+    release = function() released = released + 1 end,
+  })
+  assert(hl.detach(lease))
+  H.eq(released, 1, "exact teardown released the owner slot once")
+  H.eq(hl.detach(lease), false, "a second detach is inert")
+  H.eq(released, 1, "an inert detach does not release again")
+end
+
+T["hl_lease a fenced-off lease performs no reconciliation"] = function()
+  local st = canvas.open(big_sections(), {})
+  reset_view(st)
+  local alive = true
+  local lease = hl.attach(st, { margin = 5 }, {
+    alive = function() return alive end,
+  })
+  local before = ts_marks(st.buf)
+  assert(#before > 0, "sanity: attach applied marks")
+
+  alive = false
+  vim.api.nvim_win_call(st.win, function()
+    vim.cmd("normal! G")
+  end)
+  H.eq(hl.apply_now(lease), false, "a fenced-off lease refuses to reconcile")
+  H.eq(ts_marks(st.buf), before, "a fenced-off lease changed nothing in the namespace")
+  H.eq(hl.invalidate(lease, "f1.lua"), true,
+    "the generation fence does not revoke exact private identity")
+
+  alive = true
+  assert(hl.apply_now(lease), "lifting the fence restores reconciliation")
+  assert(hl.detach(lease))
+  H.eq(ts_marks(st.buf), {}, "teardown still removes exactly its own marks")
+end
+
+T["hl_lease stale event timer and scheduled callbacks cannot cross teardown"] = function()
   local st = canvas.open(big_sections(), {})
   reset_view(st)
   with_fake_highlighter_runtime(function(runtime)
@@ -476,6 +717,7 @@ T["hl_lease stale event timer and scheduled callbacks cannot cross replacement"]
     raw_a()
     local scheduled_a = assert(runtime.scheduled[#runtime.scheduled])
 
+    assert(hl.detach(lease_a), "the owner disposes A")
     local lease_b = hl.attach(st, { margin = 0, debounce_ms = 1 }, { windows = windows })
     local before = ts_marks(st.buf)
     local stops_after_detach = timer_a.stops
@@ -486,7 +728,7 @@ T["hl_lease stale event timer and scheduled callbacks cannot cross replacement"]
     H.eq(timer_a.starts, 1, "stale A event did not rearm its timer")
     H.eq(timer_a.stops, stops_after_detach, "stale A callbacks did not touch its handle")
     H.eq(timer_a.closes, 1, "A timer closed exactly once")
-    H.eq(hl.detach(lease_a), false, "stale exact detach cannot stop B")
+    H.eq(hl.detach(lease_a), false, "a disposed lease cannot be torn down twice")
     assert(runtime.groups[lease_b.aug], "B's unique group remains live")
 
     local callback_b = assert(runtime:event(lease_b, "WinScrolled"))
@@ -843,11 +1085,13 @@ T["hl_lease late predecessor write cannot orphan a reserved ID"] = function()
   vim.api.nvim_buf_set_extmark = function(...)
     if not replacing then
       replacing = true
+      -- The owner disposes A and starts B from inside A's own placement call.
+      assert(hl.detach(predecessor))
       replacement = hl.attach(st, { margin = 1000 }, { windows = windows })
       replacing = false
     end
-    -- Deliberately land A's reserved ID only after B has detached A and
-    -- completed its own initial apply.
+    -- Deliberately land A's reserved ID only after B has completed its own
+    -- initial apply, i.e. after A had already been torn down.
     return real_set(...)
   end
   local ok, err = pcall(hl.apply_now, predecessor)
@@ -857,7 +1101,7 @@ T["hl_lease late predecessor write cannot orphan a reserved ID"] = function()
   assert(replacement, "set wrapper installed the replacement")
   H.eq(#ts_marks(st.buf), tracked_count(replacement),
     "namespace contains only IDs tracked by replacement B")
-  H.eq(hl.detach(predecessor), false, "stale A cannot detach B")
+  H.eq(hl.detach(predecessor), false, "a disposed A cannot be torn down again")
   assert(hl.detach(replacement))
   H.eq(ts_marks(st.buf), {}, "B teardown leaves no late A orphan")
 end
@@ -897,86 +1141,110 @@ T["hl_lease same lease render epoch cancels an old placement transaction"] = fun
   assert(hl.detach(lease))
 end
 
-T["hl_lease closes a timer returned after reentrant replacement"] = function()
+-- --- reentrant disposal during partial resource creation ---------------------
+--
+-- With no module-global selector left, "superseded" means exactly one thing:
+-- the owner disposed THIS lease while its own attach was still allocating.
+-- `claim` publishes the exact identity before the first resource exists, which
+-- is what lets these tests reach in and dispose it mid-flight.
+
+--- Attach a lease whose `claim` hands the exact candidate to `on_claim`, so a
+--- fault injector can dispose it from inside a later allocation call.
+local function attaching_lease(st, on_claim)
+  local captured
+  local ok, err = pcall(hl.attach, st, { margin = 0 }, {
+    windows = function() return {} end,
+    claim = function(candidate)
+      captured = candidate
+      if on_claim then on_claim(candidate) end
+      return true
+    end,
+  })
+  return ok, err, captured
+end
+
+T["hl_lease closes a timer returned after reentrant disposal"] = function()
   local st = canvas.open({}, {})
   local real_new_timer = vim.uv.new_timer
   local first = true
-  local orphan, replacement
+  local orphan, victim, peer
   vim.uv.new_timer = function()
     if first then
       first = false
       orphan = real_new_timer()
-      replacement = hl.attach(st, { margin = 0 }, {
-        windows = function() return {} end,
-      })
+      -- The owner disposes the half-built lease and opens an independent
+      -- review before this allocation call ever returns its handle.
+      assert(hl.detach(victim))
+      peer = hl.attach(st, { margin = 0 }, { windows = function() return {} end })
       return orphan
     end
     return real_new_timer()
   end
-  local ok, err = pcall(hl.attach, st, { margin = 0 }, {
-    windows = function() return {} end,
-  })
+  local ok, err = attaching_lease(st, function(candidate)
+    victim = candidate
+  end)
   vim.uv.new_timer = real_new_timer
 
-  assert(not ok and tostring(err):find("superseded", 1, true), "outer attach loses")
-  assert(replacement, "inner attach wins")
+  assert(not ok and tostring(err):find("disposed", 1, true),
+    "the disposed attach must fail: " .. tostring(err))
+  assert(peer, "the independent peer attached")
   assert(orphan:is_closing(), "late unpublished timer is closed directly")
-  assert(hl.detach(replacement))
+  assert(not peer.timer:is_closing(), "the peer's timer is untouched")
+  assert(hl.detach(peer))
 end
 
-T["hl_lease unique group survives a predecessor create return race"] = function()
+T["hl_lease unique group created after reentrant disposal is deleted by name"] = function()
   local st = canvas.open({}, {})
   local real_create = vim.api.nvim_create_augroup
   local first = true
-  local outer_name, replacement
+  local victim_name, victim, peer
   vim.api.nvim_create_augroup = function(name, opts)
     if first and name:match("^canvasdiff%.hl%.") then
       first = false
-      outer_name = name
-      replacement = hl.attach(st, { margin = 0 }, {
-        windows = function() return {} end,
-      })
+      victim_name = name
+      assert(hl.detach(victim))
+      peer = hl.attach(st, { margin = 0 }, { windows = function() return {} end })
     end
     return real_create(name, opts)
   end
-  local ok, err = pcall(hl.attach, st, { margin = 0 }, {
-    windows = function() return {} end,
-  })
+  local ok, err = attaching_lease(st, function(candidate)
+    victim = candidate
+  end)
   vim.api.nvim_create_augroup = real_create
 
-  assert(not ok and tostring(err):find("superseded", 1, true), "outer attach loses")
-  assert(replacement, "inner attach wins")
-  H.eq(#vim.api.nvim_get_autocmds({ group = replacement.aug }), 6,
-    "late predecessor group creation cannot clear B's event sources")
-  local stale_ok = pcall(vim.api.nvim_get_autocmds, { group = outer_name })
-  assert(not stale_ok, "late A group was deleted by its unique name")
-  assert(hl.detach(replacement))
+  assert(not ok and tostring(err):find("disposed", 1, true),
+    "the disposed attach must fail: " .. tostring(err))
+  assert(peer, "the independent peer attached")
+  H.eq(#vim.api.nvim_get_autocmds({ group = peer.aug }), 6,
+    "a late group creation by a disposed lease cannot clear a peer's event sources")
+  local stale_ok = pcall(vim.api.nvim_get_autocmds, { group = victim_name })
+  assert(not stale_ok, "the disposed lease's group was deleted by its unique name")
+  assert(hl.detach(peer))
 end
 
-T["hl_lease stale autocmd creation cannot join a recycled winner group"] = function()
+T["hl_lease stale autocmd creation cannot join a recycled peer group"] = function()
   local st = canvas.open({}, {})
   local real_create = vim.api.nvim_create_autocmd
   local first = true
-  local replacement
+  local victim, peer
   vim.api.nvim_create_autocmd = function(events, spec)
     if first and type(spec.group) == "string" and spec.group:match("^canvasdiff%.hl%.") then
       first = false
-      replacement = hl.attach(st, { margin = 0 }, {
-        windows = function() return {} end,
-      })
+      assert(hl.detach(victim))
+      peer = hl.attach(st, { margin = 0 }, { windows = function() return {} end })
     end
     return real_create(events, spec)
   end
-  local ok = pcall(hl.attach, st, { margin = 0 }, {
-    windows = function() return {} end,
-  })
+  local ok = attaching_lease(st, function(candidate)
+    victim = candidate
+  end)
   vim.api.nvim_create_autocmd = real_create
 
-  assert(not ok, "A's create against its deleted unique group must fail")
-  assert(replacement, "inner attach wins")
-  H.eq(#vim.api.nvim_get_autocmds({ group = replacement.aug }), 6,
-    "B retains exactly its own viewport event sources")
-  assert(hl.detach(replacement))
+  assert(not ok, "a create against a deleted unique group must fail")
+  assert(peer, "the independent peer attached")
+  H.eq(#vim.api.nvim_get_autocmds({ group = peer.aug }), 6,
+    "the peer retains exactly its own viewport event sources")
+  assert(hl.detach(peer))
 end
 
 -- --- the diff-row contrast budget -------------------------------------------

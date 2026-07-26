@@ -507,14 +507,32 @@ function App:open(opts)
   set_canvas_keymaps(self, surface, st)
 
   if config.options.highlight.enabled then
-    surface.controllers.hl = hl.attach(st, config.options.highlight, {
-      alive = function()
-        return surface:guard(generation)
+    local hl_lease = hl.attach(st, config.options.highlight, {
+      claim = function(lease)
+        if not surface:guard(generation) or surface.controllers.hl ~= nil then
+          return false
+        end
+        surface.controllers.hl = lease
+        return true
+      end,
+      alive = function(lease)
+        return surface:guard(generation) and surface.controllers.hl == lease
+      end,
+      release = function(lease)
+        if surface.controllers.hl ~= lease then
+          return false
+        end
+        surface.controllers.hl = nil
+        return true
       end,
       windows = function()
         return surface:canvas_windows()
       end,
     })
+    if hl_lease then
+      assert(surface.controllers.hl == hl_lease,
+        "highlighter claim must publish its returned exact lease")
+    end
   end
 
   if config.options.watch.enabled then
