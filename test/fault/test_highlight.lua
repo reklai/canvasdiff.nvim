@@ -69,6 +69,67 @@ T["hl_ts_marks land on content rows with +1 col offset"] = function()
   assert(found_number, "expected a @number capture on the ctx line")
 end
 
+-- A section may have released its two sides so a large changeset fits in
+-- memory. The UI domain cannot read the repository itself, so it asks its
+-- owner -- and when nobody can answer, it produces nothing rather than
+-- something wrong.
+T["hl_ts_marks a released side is re-read through the owner"] = function()
+  local st = canvas.open({}, {})
+  local section = model.build_section("a.lua", OLD, NEW, "M")
+  local expected = hl.section_ts_marks(section)
+  assert(#expected > 0, "sanity: the retained section highlights")
+
+  local asked = {}
+  local lease = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    side = function(asked_section, which)
+      asked[#asked + 1] = which
+      H.eq(asked_section.path, "a.lua", "the owner is asked about one section")
+      return which == "new" and NEW or OLD
+    end,
+  })
+  model.release_text(section)
+  H.eq(section.new_text, nil, "sanity: the side really is gone")
+
+  local marks = hl.section_ts_marks(section, lease)
+  H.eq(marks, expected, "the owner's text produces byte-identical marks")
+  table.sort(asked)
+  H.eq(asked, { "new", "old" }, "each side is asked for exactly once")
+  assert(hl.detach(lease))
+end
+
+T["hl_ts_marks a released side without an owner yields no marks"] = function()
+  local st = canvas.open({}, {})
+  local section = model.build_section("a.lua", OLD, NEW, "M")
+  model.release_text(section)
+
+  H.eq(hl.section_ts_marks(section), {},
+    "no lease at all means no treesitter marks, not an error")
+
+  local lease = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+  })
+  H.eq(hl.section_ts_marks(section, lease), {},
+    "nor does a lease whose owner offers no sides")
+  assert(hl.detach(lease))
+
+  local faulty = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    side = function() error("injected side provider fault") end,
+  })
+  H.eq(hl.section_ts_marks(section, faulty), {},
+    "a throwing provider degrades to no marks rather than failing the render")
+  assert(hl.detach(faulty))
+
+  local wrong = hl.attach(st, { margin = 0 }, {
+    windows = function() return {} end,
+    side = function() return 42 end,
+  })
+  H.eq(hl.section_ts_marks(section, wrong), {},
+    "and so does one that answers with something that is not text")
+  assert(hl.detach(wrong))
+end
+
 T["hl_ts_marks unknown language returns empty"] = function()
   local s = model.build_section("a.qqqzzz", OLD, NEW, "M")
   H.eq(hl.section_ts_marks(s), {})

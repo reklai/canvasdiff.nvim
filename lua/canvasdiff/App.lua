@@ -696,6 +696,18 @@ function App:open(opts)
       windows = function()
         return surface:canvas_windows()
       end,
+      side = function(section, which)
+        -- Only reached for a section that has released its own copy. The UI
+        -- domain cannot read the repository itself, so the owner answers.
+        if not surface:guard(generation) or type(section) ~= "table" then
+          return ""
+        end
+        if which == "new" then
+          return source.worktree_text(st.root, section.path, section.status)
+        end
+        return source.show(st.root, section.old_rev or lens.of(st).old,
+          section.old_path or section.path) or ""
+      end,
     })
     if hl_lease then
       assert(surface.controllers.hl == hl_lease,

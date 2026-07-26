@@ -158,8 +158,30 @@ function M.section_ts_marks(section, lease)
 
   local marks = {}
 
+  --- One side's raw file text.
+  ---
+  --- A section may have released its copies (bounded ingestion), so fall back
+  --- to the owner. Input for a parse only -- the UI domain must not read the
+  --- repository itself, and a side that cannot be produced simply yields no
+  --- treesitter marks rather than a wrong or partial highlight.
+  local function side_text(side)
+    local retained = (side == "new") and section.new_text or section.old_text
+    if retained ~= nil then
+      return retained
+    end
+    local provide = lease and lease.callbacks and lease.callbacks.side
+    if not provide then
+      return ""
+    end
+    local ok, text = pcall(provide, section, side)
+    if not ok or type(text) ~= "string" then
+      return ""
+    end
+    return text
+  end
+
   local function side_marks(side)
-    local src = (side == "new") and (section.new_text or "") or (section.old_text or "")
+    local src = side_text(side)
     if src == "" then
       return
     end

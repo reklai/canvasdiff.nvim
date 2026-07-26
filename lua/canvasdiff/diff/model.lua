@@ -79,6 +79,10 @@ local function with_metadata(section, path, old_text, new_text, status, metadata
   section.renamed = section.old_path ~= path
   section.old_text = old_text or ""
   section.new_text = new_text or ""
+  -- Computed while the text is in hand, so a section that later releases its
+  -- sides can still answer "did this file change" -- a 64-byte answer instead
+  -- of a retained copy of the file.
+  section.new_fingerprint = vim.fn.sha256(section.new_text)
   return section
 end
 
@@ -291,7 +295,26 @@ end
 --- would be noise. The question is "did the file change", not "did the comparison
 --- change".
 function M.fingerprint(section)
+  if section and section.new_fingerprint then
+    return section.new_fingerprint
+  end
   return vim.fn.sha256(section and section.new_text or "")
+end
+
+--- Release a section's retained copies of both file sides.
+---
+--- The entries, anchors and fingerprint that everything else reads are already
+--- independent of them; only syntax highlighting needs the raw text, and it
+--- asks its owner for a side it cannot find. Bounded ingestion is what this
+--- exists for: without it, keeping every section keeps every file.
+--- @param section table
+--- @return table section
+function M.release_text(section)
+  if type(section) == "table" then
+    section.old_text = nil
+    section.new_text = nil
+  end
+  return section
 end
 
 --- True when `sec` was staged and then modified again -- git's own durable version of

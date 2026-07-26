@@ -16,6 +16,7 @@ return {
   build = model.build,
   build_section = model.build_section,
   fingerprint = model.fingerprint,
+  release_text = model.release_text,
   fold = {
     folds_hiding = fold.folds_hiding,
     hidden = fold.hidden,

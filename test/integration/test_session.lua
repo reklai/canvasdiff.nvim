@@ -402,9 +402,16 @@ T["session_ a file that changed while shut comes back marked stale"] = function(
   session.save(st)
 
   -- A fresh canvas whose a/one.txt has DIFFERENT content, as if it were edited
-  -- while Neovim was closed.
-  local edited = big_section("a/one.txt", "a")
-  edited.new_text = edited.new_text .. "edited while you were away\n"
+  -- while Neovim was closed. Built from the edited text rather than patched
+  -- afterwards: a section's fingerprint is taken when it is built, so that it
+  -- can outlive the text it summarizes.
+  local old = bigtext(60, "a")
+  local lines = vim.split(old, "\n", { plain = true })
+  for i = 10, 60, 10 do
+    lines[i] = lines[i] .. " changed"
+  end
+  local edited = model.build_section("a/one.txt", old,
+    table.concat(lines, "\n") .. "edited while you were away\n", "M")
   local fresh = canvas.open({
     edited,
     big_section("a/two.txt", "b"),
