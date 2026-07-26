@@ -186,6 +186,9 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
     ["canvasdiff.os"] = { rel = "lua/canvasdiff/os.lua" },
     ["canvasdiff.os.process"] = { rel = "lua/canvasdiff/os/process.lua" },
     ["canvasdiff.source"] = { rel = "lua/canvasdiff/source.lua" },
+    ["canvasdiff.source.repository"] = {
+      rel = "lua/canvasdiff/source/repository.lua",
+    },
     ["canvasdiff.ui"] = { rel = "lua/canvasdiff/ui.lua" },
     ["canvasdiff.ui.sidebar"] = { rel = "lua/canvasdiff/ui/sidebar.lua" },
     ["canvasdiff.util"] = { rel = "lua/canvasdiff/util.lua" },
@@ -346,13 +349,31 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
   H.eq(#os_reverse, 1)
   assert(os_reverse[1]:find("forbidden dependency", 1, true), os_reverse[1])
 
-  local input_presentation = policy.edge_violations({
+  local source_internal = policy.edge_violations({
     nodes = nodes,
     edges = {
       {
         from = "canvasdiff.input",
         from_path = nodes["canvasdiff.input"].rel,
         line = 12,
+        to = "canvasdiff.source.repository",
+        to_path = nodes["canvasdiff.source.repository"].rel,
+      },
+    },
+  })
+  H.eq(#source_internal, 1)
+  assert(
+    source_internal[1]:find("must target facade canvasdiff.source", 1, true),
+    source_internal[1]
+  )
+
+  local input_presentation = policy.edge_violations({
+    nodes = nodes,
+    edges = {
+      {
+        from = "canvasdiff.input",
+        from_path = nodes["canvasdiff.input"].rel,
+        line = 13,
         to = "canvasdiff.ui",
         to_path = nodes["canvasdiff.ui"].rel,
       },
@@ -370,7 +391,7 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
       {
         from = "canvasdiff.canvas.Page",
         from_path = nodes["canvasdiff.canvas.Page"].rel,
-        line = 13,
+        line = 14,
         to = "canvasdiff.ui",
         to_path = nodes["canvasdiff.ui"].rel,
       },

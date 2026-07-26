@@ -58,7 +58,8 @@ local function wipe(b)
   pcall(vim.api.nvim_buf_delete, b, { force = true })
 end
 
--- Regression: git.run used { text = true }, which rewrites \r\n -> \n in
+-- Regression: the repository process call used { text = true }, which rewrites
+-- \r\n -> \n in
 -- stdout. The old side then came back LF while the disk read preserved CRLF,
 -- so every line mismatched and a one-line edit rendered as a whole-file
 -- rewrite (-3 +3 against git's -1 +1).

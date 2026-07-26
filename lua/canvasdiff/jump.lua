@@ -1,7 +1,7 @@
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local viewport = model.anchor
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local config = require("canvasdiff.config")
 local util = require("canvasdiff.util")
 local ui = require("canvasdiff.ui")
@@ -259,7 +259,7 @@ function M.back(opts)
   local metadata = ex.metadata or {}
   local old_rev = metadata.old_rev or lens.of(state).old
   local old_path = metadata.old_path or ex.path
-  local old, old_err = git.show(state.root, old_rev, old_path)
+  local old, old_err = source.show(state.root, old_rev, old_path)
   if old == nil and ex.status ~= "A" and ex.status ~= "?" then
     ui.warn(("cannot rebuild excursion old side %s:%s: %s")
       :format(old_rev, old_path, old_err or "unknown git error"))

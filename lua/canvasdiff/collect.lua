@@ -1,4 +1,4 @@
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local util = require("canvasdiff.util")
 local diff = require("canvasdiff.diff")
 local lens = diff.lens
@@ -97,12 +97,12 @@ function M.files(root, spec)
 
   if is_branch then
     local err
-    old_rev, err = git.resolve_commit(root, l.old)
+    old_rev, err = source.resolve_commit(root, l.old)
     if not old_rev then
       return nil, err
     end
 
-    changed, err = git.diff_files(root, old_rev)
+    changed, err = source.diff_files(root, old_rev)
     if not changed then
       return nil, err
     end
@@ -112,7 +112,7 @@ function M.files(root, spec)
     -- HEAD/index/worktree, which drives the staged/unstaged sidebar markers.
     -- It also supplies untracked paths, which `git diff <commit>` never emits.
     local status_files
-    status_files, err = git.changed_files(root)
+    status_files, err = source.changed_files(root)
     if not status_files then
       return nil, err
     end
@@ -160,7 +160,7 @@ function M.files(root, spec)
     table.sort(changed, function(a, b) return a.path < b.path end)
   else
     local err
-    changed, err = git.changed_files(root)
+    changed, err = source.changed_files(root)
     if not changed then
       return nil, err
     end
@@ -176,7 +176,7 @@ function M.files(root, spec)
     else
       path, old_path, status = fixed_paths(l, f)
     end
-    local old_text, old_err = git.show(root, old_rev, old_path)
+    local old_text, old_err = source.show(root, old_rev, old_path)
     if old_text == nil and is_branch and f.status ~= "A" and f.status ~= "?" then
       return nil, ("cannot read old side %s:%s for %s change: %s")
         :format(old_rev, old_path, f.status, old_err or "unknown git error")
@@ -229,7 +229,7 @@ function M.new_side(root, l, path, status)
   if l.new == "worktree" then
     return read_worktree_content(root, path, status)
   end
-  return git.show(root, l.new, path) or ""
+  return source.show(root, l.new, path) or ""
 end
 
 return M

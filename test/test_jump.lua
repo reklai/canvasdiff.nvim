@@ -1,5 +1,5 @@
 local H = require("helpers")
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local jump = require("canvasdiff.jump")
@@ -16,10 +16,10 @@ end
 local function open_fixture(spec)
   local root = H.git_fixture(spec)
   local files = {}
-  for _, f in ipairs(git.changed_files(root)) do
+  for _, f in ipairs(source.changed_files(root)) do
     files[#files + 1] = {
       path = f.path, status = f.status,
-      old_text = git.show_head(root, f.path) or "",
+      old_text = source.show_head(root, f.path) or "",
       new_text = table.concat(vim.fn.readfile(vim.fs.joinpath(root, f.path)), "\n") .. "\n",
     }
   end
@@ -96,7 +96,7 @@ return {
     local original = lines("base line ", 16)
     local root = H.git_fixture({ committed = { [old_path] = original } })
     sh(root, { "git", "branch", "comparison-base", "HEAD" })
-    local base_oid = assert(git.resolve_commit(root, "comparison-base"))
+    local base_oid = assert(source.resolve_commit(root, "comparison-base"))
     sh(root, { "git", "mv", "--", old_path, new_path })
 
     local l = lens.branch("comparison-base")
@@ -124,7 +124,7 @@ return {
     vim.api.nvim_buf_set_lines(file_buf, 7, 7, false, { "unsaved through rename" })
 
     sh(root, { "git", "branch", "-D", "comparison-base" })
-    H.eq(git.resolve_commit(root, "comparison-base"), nil,
+    H.eq(source.resolve_commit(root, "comparison-base"), nil,
       "sanity: the symbolic lens ref no longer resolves")
 
     local ok, back_err = pcall(jump.back)

@@ -1,7 +1,7 @@
 local H = require("helpers")
 local lens = require("canvasdiff.diff").lens
 local collect = require("canvasdiff.collect")
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 
 local T = {}
 
@@ -177,7 +177,7 @@ T["lens_branch collect sees clean committed A D M R plus untracked against the r
   end
 
   sh({ "git", "branch", "comparison-base", "HEAD" })
-  local base_oid = assert(git.resolve_commit(root, "comparison-base"))
+  local base_oid = assert(source.resolve_commit(root, "comparison-base"))
   write("added.txt", "added after base\n")
   write("modified.txt", "after\n")
   assert(vim.fn.delete(vim.fs.joinpath(root, "deleted.txt")) == 0)
@@ -515,7 +515,7 @@ T["lens_xy git.changed_files keeps both halves of the status"] = function()
   write("new.txt", "n\n")              -- untracked
 
   local by = {}
-  for _, f in ipairs(git.changed_files(root)) do by[f.path] = f end
+  for _, f in ipairs(source.changed_files(root)) do by[f.path] = f end
 
   assert(by["staged.txt"].staged, "staged.txt has an index change")
   H.eq(by["staged.txt"].unstaged, nil, "and nothing outstanding in the worktree")

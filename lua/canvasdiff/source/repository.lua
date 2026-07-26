@@ -1,5 +1,7 @@
 local system = require("canvasdiff.os")
 
+-- Owns Git command construction and protocol parsing. Raw process execution
+-- remains behind the operating-system facade above.
 local M = {}
 
 --- Run `git -C dir <args...>` synchronously.

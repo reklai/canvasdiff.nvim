@@ -1,6 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local jump = require("canvasdiff.jump")
 local config = require("canvasdiff.config")
 local hl = require("canvasdiff.hl")
@@ -406,10 +406,10 @@ function App:open(opts)
   local prev_buf = vim.api.nvim_win_get_buf(win)
 
   local cwd = vim.fn.getcwd()
-  local root = git.root(cwd)
+  local root = source.root(cwd)
   if not root then
     local dir = buf_dir(prev_buf)
-    root = dir and git.root(dir) or nil
+    root = dir and source.root(dir) or nil
   end
   if not root then
     local err = "not inside a git repository (looked in " .. cwd .. ")"

@@ -1,5 +1,5 @@
 local H = require("helpers")
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local collect = require("canvasdiff.collect")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
@@ -40,8 +40,8 @@ end
 return {
   ["base_ git.show reads HEAD and index objects"] = function()
     local root = staged_and_unstaged_fixture()
-    H.eq(git.show(root, "HEAD", "f.txt"), "head\n")
-    H.eq(git.show(root, ":0", "f.txt"), "staged\n")
+    H.eq(source.show(root, "HEAD", "f.txt"), "head\n")
+    H.eq(source.show(root, ":0", "f.txt"), "staged\n")
   end,
 
   ["base_ index mode diffs worktree against the index"] = function()

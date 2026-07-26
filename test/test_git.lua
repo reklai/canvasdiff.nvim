@@ -1,5 +1,5 @@
 local H = require("helpers")
-local git = require("canvasdiff.git")
+local source = require("canvasdiff.source")
 local system = require("canvasdiff.os")
 
 local function sh(root, cmd)
@@ -17,6 +17,26 @@ local function write(root, rel, content)
 end
 
 return {
+  ["source_ facade exports exactly the repository operations"] = function()
+    local names = vim.tbl_keys(source)
+    table.sort(names)
+    H.eq(names, {
+      "changed_files",
+      "diff_files",
+      "resolve_commit",
+      "root",
+      "show",
+      "show_head",
+    })
+    for _, name in ipairs(names) do
+      H.eq(type(source[name]), "function", name .. " is callable")
+    end
+  end,
+  ["source_ legacy git module path is deleted rather than shimmed"] = function()
+    package.loaded["canvasdiff.git"] = nil
+    local loaded = pcall(require, "canvasdiff.git")
+    assert(not loaded, "canvasdiff.git must not remain as a forwarding module")
+  end,
   ["git: delegates raw process execution through the os facade"] = function()
     local real_run = system.run
     local command, opts, root
@@ -26,7 +46,7 @@ return {
     end
 
     local ok, err = xpcall(function()
-      root = git.root("/worktree")
+      root = source.root("/worktree")
     end, debug.traceback)
 
     system.run = real_run
@@ -37,15 +57,15 @@ return {
   end,
   ["git: root finds toplevel, nil outside"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
-    H.eq(git.root(root), (vim.uv.fs_realpath(root)))
-    H.eq(git.root(H.tmpdir()), nil)
+    H.eq(source.root(root), (vim.uv.fs_realpath(root)))
+    H.eq(source.root(H.tmpdir()), nil)
   end,
   ["git: changed_files lists M, A(?), D sorted"] = function()
     local root = H.git_fixture({
       committed = { ["b.txt"] = "old\n", ["gone.txt"] = "bye\n" },
       worktree = { ["b.txt"] = "new\n", ["a_new.txt"] = "hi\n", ["gone.txt"] = false },
     })
-    local files = git.changed_files(root)
+    local files = source.changed_files(root)
     local got = {}
     for _, f in ipairs(files) do got[#got + 1] = f.path .. ":" .. f.status end
     H.eq(got, { "a_new.txt:?", "b.txt:M", "gone.txt:D" })
@@ -55,22 +75,23 @@ return {
       committed = { ["b.txt"] = "old\n" },
       worktree = { ["b.txt"] = "new\n", ["u.txt"] = "u\n" },
     })
-    H.eq(git.show_head(root, "b.txt"), "old\n")
-    H.eq(git.show_head(root, "u.txt"), nil)
+    H.eq(source.show_head(root, "b.txt"), "old\n")
+    H.eq(source.show_head(root, "u.txt"), nil)
   end,
   ["git: resolve_commit returns a canonical oid and rejects invalid refs"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
     local expected = vim.trim(sh(root, { "git", "rev-parse", "HEAD" }))
 
-    H.eq(git.resolve_commit(root, "HEAD"), expected)
-    H.eq(git.resolve_commit(root, "main"), expected)
+    H.eq(source.resolve_commit(root, "HEAD"), expected)
+    H.eq(source.resolve_commit(root, "main"), expected)
 
-    local missing, err = git.resolve_commit(root, "definitely-not-a-ref")
+    local missing, err = source.resolve_commit(root, "definitely-not-a-ref")
     H.eq(missing, nil)
     assert(type(err) == "string" and err:find("does not resolve", 1, true),
       "invalid ref needs an actionable error, got: " .. tostring(err))
 
-    local option_like, option_err = git.resolve_commit(root, "--definitely-not-an-option")
+    local option_like, option_err =
+      source.resolve_commit(root, "--definitely-not-an-option")
     H.eq(option_like, nil, "--end-of-options must make this a ref, never an option")
     assert(option_err, "option-looking invalid ref must still return an error")
   end,
@@ -82,7 +103,7 @@ return {
         ["old-name.txt"] = "rename-only unique body\n",
       },
     })
-    local base = assert(git.resolve_commit(root, "HEAD"))
+    local base = assert(source.resolve_commit(root, "HEAD"))
 
     write(root, "added.txt", "added later\n")
     write(root, "modified.txt", "after\n")
@@ -91,7 +112,7 @@ return {
     sh(root, { "git", "add", "-A" })
     sh(root, { "git", "commit", "-m", "advance fixture" })
 
-    local files, err = git.diff_files(root, base)
+    local files, err = source.diff_files(root, base)
     assert(files, err)
     local got = {}
     for _, f in ipairs(files) do
@@ -120,12 +141,12 @@ return {
       committed[path] = "before\n"
     end
     local root = H.git_fixture({ committed = committed })
-    local base = assert(git.resolve_commit(root, "HEAD"))
+    local base = assert(source.resolve_commit(root, "HEAD"))
     for _, path in ipairs(paths) do
       write(root, path, "after\n")
     end
 
-    local files, err = git.diff_files(root, base)
+    local files, err = source.diff_files(root, base)
     assert(files, err)
     local got = {}
     for _, f in ipairs(files) do
@@ -140,7 +161,7 @@ return {
     local root = H.git_fixture({ committed = { ["old name.txt"] = "same\n" } })
     sh(root, { "git", "mv", "old name.txt", "new name.txt" })
 
-    local files, err = git.changed_files(root)
+    local files, err = source.changed_files(root)
     assert(files, err)
     H.eq(#files, 1)
     H.eq(files[1].path, "new name.txt")
