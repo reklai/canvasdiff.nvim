@@ -99,6 +99,100 @@ return {
     H.eq(view.lnum, start0 + 1, "cursor must land on the placeholder, not inside z.txt")
     H.eq(view.topline, start0 + 1, "topline must land on the placeholder too")
   end,
+  -- `:q` in the excursion window leaves the excursion live with its buffer-local
+  -- the return key still on the file, pointing at a window that no longer exists. back()
+  -- used to reach nvim_win_set_buf(state.win, ...) with no validity check and throw
+  -- E5108 -- after it had already cleared `excursion` and deleted its own keymap, so
+  -- the edits never made it back and there was no retry.
+  ["jump: back after the excursion window is gone uses the current window"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 20), ["b.txt"] = "b1\nb2\n" },
+      worktree = { ["a.txt"] = lines("L", 20), ["b.txt"] = "b1\nB2\n" },
+    })
+    -- A spare window, so closing the canvas window doesn't take the last one.
+    vim.cmd("split")
+    vim.cmd("enew")
+    local spare = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(st.win)
+
+    vim.api.nvim_win_set_cursor(st.win, { 4, 0 })
+    jump.enter(st)
+    -- An unsaved edit, so we can prove the splice still ran.
+    vim.api.nvim_buf_set_lines(0, 0, 0, false, { "inserted before the quit" })
+
+    local gone = st.win
+    vim.api.nvim_win_close(gone, true) -- the `:q`
+    assert(not vim.api.nvim_win_is_valid(gone), "sanity: the window really is gone")
+
+    vim.api.nvim_set_current_win(spare)
+    local ok, err = pcall(jump.back)
+    assert(ok, "back() must not throw when its window is gone: " .. tostring(err))
+
+    H.eq(vim.api.nvim_win_get_buf(spare), st.buf, "the canvas came back in the window we were in")
+    H.eq(st.win, spare, "and the state follows it")
+    local found = false
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)) do
+      if l == "+inserted before the quit" then found = true end
+    end
+    assert(found, "the edit made before the quit must still be spliced into the canvas")
+  end,
+  -- Declining must happen BEFORE the excursion is discarded, or the keypress is
+  -- unrecoverable: the map deletes itself and a retry only says "no excursion".
+  ["jump: back with only the sidebar focusable declines but stays retryable"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 20) },
+      worktree = { ["a.txt"] = lines("L", 20) },
+    })
+    local sidebar = require("galley.sidebar")
+    sidebar.close()
+    sidebar.open(st, { width = 30 })
+
+    vim.api.nvim_win_set_cursor(st.win, { 4, 0 })
+    jump.enter(st)
+
+    local gone = st.win
+    vim.api.nvim_win_close(gone, true)
+    -- Focus the sidebar: winfixbuf, so setting its buffer would throw.
+    local side_win
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_get_option_value("winfixbuf", { win = w }) then side_win = w end
+    end
+    assert(side_win, "sanity: the sidebar window is winfixbuf")
+    vim.api.nvim_set_current_win(side_win)
+
+    -- Guarded, because a failure here would otherwise leave the winfixbuf sidebar
+    -- focused and every later canvas.open would die on E1513.
+    local notified = {}
+    local ok, err = pcall(function()
+      local real = vim.notify
+      vim.notify = function(m) notified[#notified + 1] = m end
+      local declined = pcall(jump.back)
+      vim.notify = real
+      assert(declined, "declining must not throw")
+      assert(#notified > 0, "and must say why")
+      H.eq(vim.api.nvim_win_get_buf(side_win) == st.buf, false,
+        "the sidebar keeps its own buffer")
+
+      -- Retryable: a usable window appears, and the same call now works.
+      vim.cmd("split")
+      vim.cmd("enew")
+      local usable = vim.api.nvim_get_current_win()
+      assert(pcall(jump.back), "the excursion must have survived the decline")
+      H.eq(vim.api.nvim_win_get_buf(usable), st.buf, "second press lands the canvas")
+    end)
+    sidebar.close()
+    if vim.api.nvim_win_is_valid(side_win) then
+      pcall(vim.api.nvim_win_close, side_win, true)
+    end
+    -- Never hand the next test a winfixbuf window to open the canvas into.
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if not vim.api.nvim_get_option_value("winfixbuf", { win = w }) then
+        vim.api.nvim_set_current_win(w)
+        break
+      end
+    end
+    assert(ok, err)
+  end,
   ["jump: back with all changes reverted deletes section"] = function()
     local root, st = setup_repo()
     vim.api.nvim_win_set_cursor(st.win, { 4, 0 }) -- somewhere in a.txt section

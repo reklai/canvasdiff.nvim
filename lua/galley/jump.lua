@@ -151,11 +151,41 @@ end
 --- Regenerate the excursed file's diff section from the CURRENT buffer
 --- content (unsaved edits count), splice it back into the canvas, and
 --- restore the canvas viewport to the semantic position the user left.
+--- The window to bring the canvas back into: the one the excursion left from when
+--- it is still alive, else the one you are in now -- pressing the return key means
+--- "take me back", and there is no reason that has to be the original window.
+---
+--- Rejects the sidebar, which is 'winfixbuf': setting its buffer throws E1513.
+--- Returns nil when there is nothing usable, and the caller must then decline
+--- WITHOUT consuming the excursion.
+local function target_win(state)
+  if state.win and vim.api.nvim_win_is_valid(state.win)
+    and not sidebar.is_sidebar_win(state.win) then
+    return state.win
+  end
+  local cur = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(cur) and not sidebar.is_sidebar_win(cur) then
+    return cur
+  end
+  return nil
+end
+
 function M.back()
   if not excursion then
     util.notify("no diff-canvas excursion")
     return
   end
+
+  -- Resolved BEFORE anything is consumed. This used to run against state.win
+  -- unchecked, so a `:q` in the excursion window made the keypress throw E5108 --
+  -- and it threw after clearing the excursion and deleting its own keymap, so the
+  -- edits never reached the canvas and there was no second try.
+  local win = target_win(excursion.state)
+  if not win then
+    util.warn("no window to bring the canvas back into — try again from a normal window")
+    return
+  end
+
   local ex = excursion
   excursion = nil
 
@@ -179,7 +209,10 @@ function M.back()
     end
   end
 
-  vim.api.nvim_win_set_buf(state.win, state.buf)
+  -- The canvas may be landing in a different window than it left from; everything
+  -- below, and every consumer we notify at the end, reads state.win.
+  state.win = win
+  vim.api.nvim_win_set_buf(win, state.buf)
 
   if not idx then
     -- Edge case (MVP): the section for this path is no longer in the
