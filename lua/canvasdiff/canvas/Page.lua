@@ -30,12 +30,30 @@ local CREATION_IDS = setmetatable({}, { __mode = "k" })
 local CLAIMED_PAGES = setmetatable({}, { __mode = "k" })
 local PAGE_OWNERS = setmetatable({}, { __mode = "kv" })
 local NODE_PAGES = setmetatable({}, { __mode = "k" })
+local PAGE_STATES = setmetatable({}, { __mode = "k" })
+local REPRESENTATION_FIELDS = {
+  "codec",
+  "payload",
+  "offsets",
+  "offset_width",
+  "row_count",
+  "decoded_bytes",
+  "max_rows",
+  "max_bytes",
+  "oversized",
+}
 local next_creation_id = 1
 
 local function own(page)
+  local state = { revision = 0 }
+  for _, field in ipairs(REPRESENTATION_FIELDS) do
+    state[field] = rawget(page, field)
+  end
+
   setmetatable(page, Page)
   OWNED_PAGES[page] = true
   CREATION_IDS[page] = next_creation_id
+  PAGE_STATES[page] = state
   next_creation_id = next_creation_id + 1
   return page
 end
@@ -162,37 +180,21 @@ local function sequence_length(rows)
   return count
 end
 
---- Validate a raw page representation without trusting any decoded offset.
---- Returns true, or nil plus a bounded diagnostic.
-local function validate(page)
-  if type(page) ~= "table" then
-    return nil, "page must be a table"
-  end
-  if not OWNED_PAGES[page] or not RAW_EQUAL(RAW_METATABLE(page), Page) then
-    return nil, "page is not an owned Page"
-  end
-  for _, method in ipairs({
-    "encoded",
-    "byte_range",
-    "row",
-    "rows",
-    "storage_bytes",
-  }) do
-    if rawget(page, method) ~= nil then
-      return nil, "page shadows trusted method " .. method
-    end
-  end
-  local codec = rawget(page, "codec")
-  local payload = rawget(page, "payload")
-  local offsets = rawget(page, "offsets")
-  local row_count = rawget(page, "row_count")
-  local offset_width = rawget(page, "offset_width")
-  local decoded_bytes = rawget(page, "decoded_bytes")
-  local max_rows = rawget(page, "max_rows")
-  local max_bytes = rawget(page, "max_bytes")
-  local oversized = rawget(page, "oversized")
+--- Validate the private raw representation without trusting any decoded offset.
+--- Public fields are only compatible snapshots and are reconciled separately.
+local function validate_raw(state)
+  local codec = rawget(state, "codec")
+  local payload = rawget(state, "payload")
+  local offsets = rawget(state, "offsets")
+  local row_count = rawget(state, "row_count")
+  local offset_width = rawget(state, "offset_width")
+  local decoded_bytes = rawget(state, "decoded_bytes")
+  local max_rows = rawget(state, "max_rows")
+  local max_bytes = rawget(state, "max_bytes")
+  local oversized = rawget(state, "oversized")
+  local revision = rawget(state, "revision")
 
-  if codec ~= "raw" then
+  if type(codec) ~= "string" or codec ~= "raw" then
     return nil, "unsupported page codec"
   end
   if type(payload) ~= "string" or type(offsets) ~= "string" then
@@ -201,7 +203,8 @@ local function validate(page)
   if not positive_integer(row_count) then
     return nil, "page row_count must be a positive integer"
   end
-  if offset_width ~= 2 and offset_width ~= 4 then
+  if type(offset_width) ~= "number"
+      or (offset_width ~= 2 and offset_width ~= 4) then
     return nil, "page offset_width must be 2 or 4"
   end
   if not integer(decoded_bytes) or decoded_bytes > U32_MAX then
@@ -219,6 +222,9 @@ local function validate(page)
   end
   if type(oversized) ~= "boolean" then
     return nil, "page oversized flag must be a boolean"
+  end
+  if not integer(revision) then
+    return nil, "page revision must be a non-negative integer"
   end
   if row_count > max_rows then
     return nil, "page exceeds its row limit"
@@ -251,6 +257,42 @@ local function validate(page)
     return nil, "page offsets must end at decoded_bytes"
   end
   return true
+end
+
+--- Reconcile every compatible public snapshot without invoking callbacks, then
+--- validate only the private representation that trusted reads consume.
+--- Returns true, or nil plus a bounded diagnostic.
+local function validate(page)
+  if type(page) ~= "table" then
+    return nil, "page must be a table"
+  end
+  if not OWNED_PAGES[page] or not RAW_EQUAL(RAW_METATABLE(page), Page) then
+    return nil, "page is not an owned Page"
+  end
+  local state = PAGE_STATES[page]
+  if type(state) ~= "table"
+      or not RAW_EQUAL(RAW_METATABLE(state), nil) then
+    return nil, "page has no private representation state"
+  end
+  for _, method in ipairs({
+    "encoded",
+    "byte_range",
+    "row",
+    "rows",
+    "storage_bytes",
+    "revision",
+  }) do
+    if not RAW_EQUAL(rawget(page, method), nil) then
+      return nil, "page shadows trusted method " .. method
+    end
+  end
+  for _, field in ipairs(REPRESENTATION_FIELDS) do
+    if not RAW_EQUAL(rawget(page, field), rawget(state, field)) then
+      return nil,
+        "page " .. field .. " snapshot does not match private state"
+    end
+  end
+  return validate_raw(state)
 end
 Page.validate = validate
 
@@ -356,45 +398,69 @@ function Page.from_encoded(spec)
 end
 
 local function encoded(self)
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
   return {
-    codec = rawget(self, "codec"),
-    payload = rawget(self, "payload"),
-    offsets = rawget(self, "offsets"),
-    offset_width = rawget(self, "offset_width"),
-    row_count = rawget(self, "row_count"),
-    decoded_bytes = rawget(self, "decoded_bytes"),
-    max_rows = rawget(self, "max_rows"),
-    max_bytes = rawget(self, "max_bytes"),
-    oversized = rawget(self, "oversized"),
+    codec = rawget(state, "codec"),
+    payload = rawget(state, "payload"),
+    offsets = rawget(state, "offsets"),
+    offset_width = rawget(state, "offset_width"),
+    row_count = rawget(state, "row_count"),
+    decoded_bytes = rawget(state, "decoded_bytes"),
+    max_rows = rawget(state, "max_rows"),
+    max_bytes = rawget(state, "max_bytes"),
+    oversized = rawget(state, "oversized"),
   }
 end
 Page.encoded = encoded
 
 --- Zero-based byte bounds [start, end) for a 1-based logical row.
-local function byte_range(self, index)
-  local row_count = rawget(self, "row_count")
+local function state_byte_range(state, index)
+  local row_count = rawget(state, "row_count")
   if not positive_integer(index) or index > row_count then
     return nil, "row index is outside the page"
   end
-  local offsets = rawget(self, "offsets")
-  local offset_width = rawget(self, "offset_width")
+  local offsets = rawget(state, "offsets")
+  local offset_width = rawget(state, "offset_width")
   return decode_offset(offsets, offset_width, index),
     decode_offset(offsets, offset_width, index + 1)
 end
+
+local function byte_range(self, index)
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
+  return state_byte_range(state, index)
+end
 Page.byte_range = byte_range
 
-local function row(self, index)
-  local start_byte, end_byte = byte_range(self, index)
+local function state_row(state, index)
+  local start_byte, end_byte = state_byte_range(state, index)
   if start_byte == nil then
     return nil, end_byte
   end
-  return STRING_SUB(rawget(self, "payload"), start_byte + 1, end_byte)
+  return STRING_SUB(rawget(state, "payload"), start_byte + 1, end_byte)
+end
+
+local function row(self, index)
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
+  return state_row(state, index)
 end
 Page.row = row
 
 local function rows(self, first, last)
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
   first = first or 1
-  local row_count = rawget(self, "row_count")
+  local row_count = rawget(state, "row_count")
   last = last or row_count
   if not positive_integer(first) or not positive_integer(last)
       or first > last or last > row_count then
@@ -402,15 +468,28 @@ local function rows(self, first, last)
   end
   local result = {}
   for index = first, last do
-    result[#result + 1] = assert(row(self, index))
+    result[#result + 1] = assert(state_row(state, index))
   end
   return result
 end
 Page.rows = rows
 
 local function storage_bytes(self)
-  return #rawget(self, "offsets") + #rawget(self, "payload")
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
+  return #rawget(state, "offsets") + #rawget(state, "payload")
 end
 Page.storage_bytes = storage_bytes
+
+local function revision(self)
+  local state = PAGE_STATES[self]
+  if not state then
+    return nil, "page has no private representation state"
+  end
+  return rawget(state, "revision")
+end
+Page.revision = revision
 
 return Page

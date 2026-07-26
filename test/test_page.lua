@@ -40,6 +40,7 @@ T["page_ loads without an editor runtime"] = function()
   _G.vim = runtime
   assert(ok, loaded)
   H.eq(type(loaded.new), "function")
+  H.eq(type(loaded.revision), "function")
 end
 
 T["page_ round-trips byte rows and empty rows"] = function()
@@ -62,6 +63,47 @@ T["page_ round-trips byte rows and empty rows"] = function()
   H.eq(page:storage_bytes(), #page.payload + (#rows + 1) * page.offset_width)
   H.eq(Page.validate(page), true)
 end
+
+T["page_ public representation mutations cannot alter trusted reads"] =
+  function()
+    local rows = { "alpha", "beta" }
+    local page = Page.new(rows, { max_rows = 8, max_bytes = 64 })
+    local original = page:encoded()
+    local storage_bytes = #original.payload + #original.offsets
+    local mutations = {
+      { "codec", "RAW" },
+      { "payload", "ALPHAbeta" },
+      { "offsets", u16(0) .. u16(4) .. u16(9) },
+      { "offset_width", 4 },
+      { "row_count", 1 },
+      { "decoded_bytes", 8 },
+      { "max_rows", 9 },
+      { "max_bytes", 65 },
+      { "oversized", true },
+    }
+
+    H.eq(Page.revision(page), 0)
+    for _, mutation in ipairs(mutations) do
+      local field, value = mutation[1], mutation[2]
+      page[field] = value
+
+      H.eq(Page.encoded(page), original, field .. " encoded authority")
+      H.eq({ Page.byte_range(page, 1) }, { 0, 5 },
+        field .. " offset authority")
+      H.eq(Page.row(page, 1), "alpha", field .. " row authority")
+      H.eq(Page.rows(page), rows, field .. " rows authority")
+      H.eq(Page.storage_bytes(page), storage_bytes,
+        field .. " storage authority")
+      H.eq(Page.revision(page), 0, field .. " revision authority")
+
+      local ok, err = Page.validate(page)
+      H.eq(ok, nil, field .. " mutation must be rejected")
+      assert(err:find(field, 1, true), err)
+
+      page[field] = original[field]
+      H.eq(Page.validate(page), true)
+    end
+  end
 
 T["page_ chooses the narrowest safe offset table"] = function()
   local narrow = Page.new({ string.rep("x", 65535) })
@@ -161,6 +203,42 @@ T["page_ trusted decode rejects and bypasses instance method shadows"] = functio
   ok, err = Page.validate(page)
   H.eq(ok, nil)
   assert(err:match("shadows trusted method row"), err)
+  page.row = nil
+
+  page.revision = function()
+    return 99
+  end
+  H.eq(Page.revision(page), 0)
+  ok, err = Page.validate(page)
+  H.eq(ok, nil)
+  assert(err:match("shadows trusted method revision"), err)
+end
+
+T["page_ validation never invokes cdata shadow equality"] = function()
+  local ffi = require("ffi")
+  ffi.cdef([[
+    typedef struct {
+      int value;
+    } canvasdiff_page_shadow_probe;
+  ]])
+
+  local calls = 0
+  local Probe = ffi.metatype("canvasdiff_page_shadow_probe", {
+    __eq = function()
+      calls = calls + 1
+      return false
+    end,
+  })
+  local page = Page.new({ "alpha" })
+  page.row = Probe(0)
+
+  local ok, err = Page.validate(page)
+  H.eq(ok, nil)
+  assert(err:match("shadows trusted method row"), err)
+  H.eq(calls, 0)
+
+  page.row = nil
+  H.eq(Page.validate(page), true)
 end
 
 T["page_ ownership cannot be forged with a protected metatable"] = function()
