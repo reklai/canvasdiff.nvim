@@ -531,17 +531,27 @@ local function resplice(state, i)
   -- "below"/"none": nothing to do.
 end
 
---- Collapse or expand section i outright. The guard is on `state.collapsed`
---- rather than on the rendered form, because this records the path's OWN
---- collapse state independently of whether a folded ancestor also happens to
---- be hiding it -- resplice then no-ops when nothing visible changes.
-function M.set_collapsed(state, i, collapsed)
+--- Collapse or expand section i outright, recording WHOSE decision it was:
+--- `intent` is "user" (the default -- a <Tab>/za/<CR>, a sidebar selection, a
+--- restored session) or "auto" (the virtualizer's own pass). fold.user_folded
+--- reads that back, so navigation steps over what you put away while still
+--- landing on what virt merely tidied. Keeping it in this one table is what
+--- makes the distinction structural rather than a convention every caller has
+--- to remember.
+---
+--- The guard is on `state.collapsed` rather than on the rendered form, because
+--- this records the path's OWN collapse state independently of whether a folded
+--- ancestor also happens to be hiding it -- resplice then no-ops when nothing
+--- visible changes. An intent-only change (the user taking over a path virt had
+--- claimed) is recorded and falls through to a resplice whose span check makes
+--- it a no-op, so it needs no special case.
+function M.set_collapsed(state, i, collapsed, intent)
   local sec = state.sections[i]
   if not sec then return end
-  collapsed = collapsed and true or false
-  if (state.collapsed[sec.path] or false) == collapsed then return end
+  local want = collapsed and (intent or "user") or nil
+  if state.collapsed[sec.path] == want then return end
 
-  state.collapsed[sec.path] = collapsed or nil
+  state.collapsed[sec.path] = want
   resplice(state, i)
 end
 

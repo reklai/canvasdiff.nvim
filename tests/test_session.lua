@@ -340,8 +340,8 @@ T["session_ auto-collapsed sections are not persisted"] = function()
   end)
   virt.apply(st, { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 0 })
 
-  assert(next(virt.auto_set()) ~= nil, "sanity: virt auto-collapsed something")
-  H.eq(virt.auto_set()["a/one.txt"], nil, "sanity: the user-collapsed path is never claimed by the auto-set")
+  assert(next(H.auto_set(st)) ~= nil, "sanity: virt auto-collapsed something")
+  H.eq(H.auto_set(st)["a/one.txt"], nil, "sanity: the user-collapsed path is never claimed by the auto-set")
 
   session.save(st)
   local data = session.load(root)
@@ -370,7 +370,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
   virt.attach(st, opts)
 
   assert(st.collapsed["c/three.txt"], "sanity: virt already auto-collapsed the far section")
-  assert(virt.auto_set()["c/three.txt"], "sanity: it's virt's own auto-set claim")
+  assert(H.auto_set(st)["c/three.txt"], "sanity: it's virt's own auto-set claim")
 
   -- A previously-saved USER collapse of that same path, restored onto this
   -- virt-active canvas (mirrors init.M.open's restore-LAST ordering).
@@ -398,30 +398,35 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
   cleanup(root)
 end
 
--- The <Tab> keymap is an EXPLICIT user action, so it must revoke virt's
--- ownership claim on the path. Without that, the auto-set still names the
--- section: session.save discards the collapse as module intent and the next
--- in-window apply expands it straight back.
+-- A <Tab> is an EXPLICIT user action, so the collapse it leaves behind has to
+-- be recorded as the user's -- not as the virtualizer's own bookkeeping, which
+-- session.save discards and the next in-window apply expands straight back.
+--
+-- Driven end to end through the public API, so there is no handle on the state
+-- to inspect intent directly. The persisted payload is the observable that
+-- matters here, and it is exactly what regressed.
 T["session_ explicit collapse of an auto-collapsed section is persisted"] = function()
   local root = big_repo()
   in_repo(root, VIRT_FORCED, function(fm)
     fm.open()
-    assert(virt.auto_set()["c.txt"], "sanity: virt auto-collapsed c.txt at open")
+    -- c.txt sorts last, so the buffer's last line is its row either way.
+    local function collapsed_c()
+      return vim.api.nvim_buf_get_lines(0, -2, -1, false)[1]:match("^▸ c%.txt") ~= nil
+    end
+    assert(collapsed_c(), "sanity: virt auto-collapsed c.txt at open")
 
     -- G lands on the last row, which is c.txt's placeholder. WinScrolled is
     -- emitted from the redraw path and never fires without an attached UI,
-    -- so this scroll cannot arm virt's debounce headlessly -- the claim is
-    -- still virt's when the toggle below runs.
+    -- so this scroll cannot arm virt's debounce headlessly -- the collapse is
+    -- still virt's own when the toggle below runs.
     vim.cmd("normal! G")
-    assert(virt.auto_set()["c.txt"], "sanity: still virt's claim after scrolling to it")
+    assert(collapsed_c(), "sanity: still a placeholder after scrolling onto it")
 
     vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user expands
-    H.eq(virt.auto_set()["c.txt"], nil, "an explicit expand drops virt's claim")
+    assert(not collapsed_c(), "<Tab> brings it back")
 
     vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false) -- user re-collapses
-    H.eq(virt.auto_set()["c.txt"], nil, "the re-collapse is the user's, not virt's")
-    assert(vim.api.nvim_buf_get_lines(0, -2, -1, false)[1]:match("^▸ c%.txt"),
-      "c.txt is collapsed back to its placeholder")
+    assert(collapsed_c(), "c.txt is collapsed back to its placeholder")
 
     fm.close()
 
@@ -512,7 +517,7 @@ T["session_ restored collapses reach the scrollbar"] = function()
     assert(ok_open, open_err)
 
     assert(#seen > 0, "sanity: the scrollbar was drawn at all")
-    H.eq(seen[#seen], { ["a.txt"] = true },
+    H.eq(seen[#seen], { ["a.txt"] = "user" },
       "the last redraw saw the restored collapse, not the fully-expanded canvas")
   end)
 end

@@ -3,23 +3,15 @@ local fold = require("galley.fold")
 
 local M = {}
 
---- Assignable callback: fired once at the end of an apply that actually
---- changed collapse state, so the owner can resync the consumers that read
---- state.collapsed (highlighting, sidebar, scrollbar). None of them sees
---- these splices on its own -- they land on this module's private debounce,
---- after the other consumers' own scroll handlers have already run, and a
---- collapse fully below the viewport moves no rows and so fires no further
---- WinScrolled to bring them back.
-M.on_change = nil
-
 -- Tier-1 auto-virtualization: when a changeset is huge, far-from-viewport
--- sections auto-collapse and near ones auto-expand. `auto` is the set of
--- paths THIS module collapsed on its own (module intent, never persisted as
--- user intent -- session.lua reads auto_set() to exclude these). A path the
--- user collapsed directly (via canvas.set_collapsed, outside virt) is in
--- state.collapsed but NOT in `auto`, so the expand pass -- and deactivation
--- -- never touches it.
-local auto = {}
+-- sections auto-collapse and near ones auto-expand. Which collapses are THIS
+-- module's own work is recorded on the state that owns them, as
+-- state.collapsed[path] == "auto" (canvas.set_collapsed's `intent`). So a path
+-- the user collapsed is never expanded back by the expand pass and never
+-- discarded by session.save, with nothing to keep in sync here.
+--
+-- `tick_of` is per-path last-seen-in-window bookkeeping for the LRU, and IS
+-- private to this module -- it describes scroll history, not canvas state.
 local tick_of = {}
 local tick = 0
 
@@ -57,36 +49,28 @@ local function natural_line_count(state)
   return n
 end
 
---- Snapshot of the module's own auto-collapsed paths (shallow copy -- the
---- caller must not be able to mutate module state through it).
-function M.auto_set()
-  local copy = {}
-  for path, v in pairs(auto) do
-    copy[path] = v
-  end
-  return copy
-end
-
---- Disclaim `path` as module intent: delete it from the auto-set and its
---- tick bookkeeping. Safe no-op when virt is inactive/unattached or `path`
---- was never auto-collapsed. Called whenever USER intent takes over a path
---- this module had claimed -- the explicit collapse keymaps (init's
---- user_set_collapsed) and session.restore -- so that collapse is never
---- later auto-expanded back or excluded from a future session.save.
-function M.unauto(path)
-  auto[path] = nil
-  tick_of[path] = nil
-end
-
+--- Fire the state's "canvas changed shape" hook once, at the end of an apply
+--- that actually moved something, so the owner can resync the consumers that
+--- read state.collapsed (highlighting, sidebar, scrollbar). None of them sees
+--- these splices on its own: they land on this module's private debounce, after
+--- the other consumers' own scroll handlers have already run, and a collapse
+--- fully below the viewport moves no rows and so fires no further WinScrolled to
+--- bring them back.
+---
+--- On `state.hooks` rather than on this module (see sidebar's notify_change for
+--- the full reasoning): the callback describes one canvas, so it belongs to that
+--- canvas and is gone when it is.
 local function notify_change(state, changed)
-  if changed and M.on_change then
-    M.on_change(state)
+  local hook = changed and state.hooks and state.hooks.on_shape_change
+  if hook then
+    hook(state)
   end
 end
 
 --- Apply the AUTO virtualization policy once, synchronously, against the
 --- live viewport. No-op unless the canvas is actually showing in state.win.
---- Fires M.on_change once at the end when the pass moved anything.
+--- Fires state.hooks.on_shape_change once at the end when the pass moved
+--- anything.
 function M.apply(state, opts)
   opts = opts or {}
   if not state or not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
@@ -107,14 +91,26 @@ function M.apply(state, opts)
   local changed = false
 
   if not active then
-    for path in pairs(auto) do
+    -- Collect before expanding: set_collapsed mutates the very table being
+    -- scanned, which the old private auto-set never was.
+    local mine = {}
+    for path, intent in pairs(state.collapsed) do
+      if intent == "auto" then
+        mine[#mine + 1] = path
+      end
+    end
+    for _, path in ipairs(mine) do
       local idx = index_of_path(state, path)
       if idx then
         canvas.set_collapsed(state, idx, false)
         changed = true
+      else
+        -- No section holds this path any more (a render_all swapped the
+        -- changeset out from under it). Nothing to splice; drop the dead claim
+        -- rather than leave it to be mistaken for a collapse of the user's.
+        state.collapsed[path] = nil
       end
     end
-    auto = {}
     notify_change(state, changed)
     return
   end
@@ -147,11 +143,10 @@ function M.apply(state, opts)
   end
 
   -- Expand pass: in-window sections the MODULE collapsed get expanded back.
-  -- User-collapsed sections are never in `auto`, so they're never touched.
+  -- A user's own collapse reads "user", so it is never touched.
   for i, sec in ipairs(state.sections) do
-    if in_window[i] and auto[sec.path] then
+    if in_window[i] and state.collapsed[sec.path] == "auto" then
       canvas.set_collapsed(state, i, false)
-      auto[sec.path] = nil
       changed = true
     end
   end
@@ -161,7 +156,7 @@ function M.apply(state, opts)
   -- count and the candidate filter below use the DERIVED predicate, so a
   -- section a folded directory already reduced to one row is invisible to this
   -- module. Counting one as expanded would make it an eviction candidate:
-  -- set_collapsed would claim it in `auto` while splicing nothing, the loop
+  -- set_collapsed would record it as "auto" while splicing nothing, the loop
   -- would decrement having freed zero rows, and the user would inherit a
   -- collapse on unfold.
   local function count_expanded()
@@ -194,8 +189,7 @@ function M.apply(state, opts)
     if not best_i then
       break
     end
-    canvas.set_collapsed(state, best_i, true)
-    auto[state.sections[best_i].path] = true
+    canvas.set_collapsed(state, best_i, true, "auto")
     count = count - 1
     changed = true
   end
@@ -211,16 +205,15 @@ function M.attach(state, opts)
     timer:stop()
   end
 
-  -- Binding to a DIFFERENT canvas: auto/tick_of are keyed by path, but
-  -- canvas.open always hands back a fresh state.collapsed, so the previous
-  -- canvas's bookkeeping describes nothing in this one. Carrying it over
-  -- would claim paths nothing has collapsed and -- worse -- let stale
-  -- visibility ticks outrank everything the new canvas has actually seen,
-  -- so the LRU would keep the farthest section rendered and collapse the
-  -- nearest. (M.open can re-open without an intervening close via its
-  -- sidebar-redirect branch, so this is reachable.)
+  -- Binding to a DIFFERENT canvas: tick_of is keyed by path, so the previous
+  -- canvas's scroll history describes nothing in this one. Carrying it over
+  -- would let stale visibility ticks outrank everything the new canvas has
+  -- actually seen, so the LRU would keep the farthest section rendered and
+  -- collapse the nearest. (M.open can re-open without an intervening close via
+  -- its sidebar-redirect branch, so this is reachable.) The auto/user
+  -- distinction needs no such care: it lives on the state, and canvas.open
+  -- always hands back a fresh one.
   if live ~= state then
-    auto = {}
     tick_of = {}
     tick = 0
   end
@@ -250,20 +243,23 @@ function M.attach(state, opts)
   M.apply(state, opts)
 end
 
---- Tear everything down: timer, augroup, the resync callback, and the
---- module's own auto-set/tick bookkeeping. Nil-safe; safe to call when never
---- attached.
+--- Tear everything down: timer, augroup, and the module's own tick bookkeeping.
+--- Nil-safe; safe to call when never attached. The shape-change hook needs no
+--- clearing -- it lives on the state, so it goes when the state does.
+---
+--- Note what this deliberately no longer does: forget which collapses were
+--- this module's. That lives on the state now, so detaching cannot blur an
+--- auto-collapse into one of the user's -- which is what used to make
+--- init.M.close's ordering (save before detach) load-bearing.
 function M.detach()
   if timer then
     timer:stop()
   end
   pcall(vim.api.nvim_del_augroup_by_name, "galley.virt")
-  auto = {}
   tick_of = {}
   tick = 0
   live = nil
   live_opts = nil
-  M.on_change = nil
 end
 
 return M

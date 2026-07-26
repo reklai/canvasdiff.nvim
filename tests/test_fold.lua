@@ -86,39 +86,42 @@ T["fold_hidden_set covers both axes over plain tables"] = function()
   H.eq(fold.hidden_set(nil, nil, nil), {}, "nil sections")
 end
 
--- --- F.set_aside / F.aside_set -----------------------------------------
+-- --- F.user_folded / F.user_folded_set -----------------------------------------
 
-T["fold_set_aside excludes what the virtualizer collapsed on its own"] = function()
-  local st = { collapsed = { ["a/x.lua"] = true, ["b/y.lua"] = true }, folded = {} }
-  local auto = { ["b/y.lua"] = true }
-  H.eq(fold.set_aside(st, "a/x.lua", auto), true, "the user collapsed this one")
-  H.eq(fold.set_aside(st, "b/y.lua", auto), false,
+T["fold_user_folded excludes what the virtualizer collapsed on its own"] = function()
+  local st = { collapsed = { ["a/x.lua"] = "user", ["b/y.lua"] = "auto" }, folded = {} }
+  H.eq(fold.user_folded(st, "a/x.lua"), true, "the user collapsed this one")
+  H.eq(fold.user_folded(st, "b/y.lua"), false,
     "virt collapsed this one -- bookkeeping, not intent, so navigation may land on it")
-  H.eq(fold.set_aside(st, "c/z.lua", auto), false, "not collapsed at all")
+  H.eq(fold.user_folded(st, "c/z.lua"), false, "not collapsed at all")
 end
 
-T["fold_set_aside counts a folded ancestor even for an auto path"] = function()
-  local st = { collapsed = { ["a/x.lua"] = true }, folded = { ["a/"] = true } }
-  H.eq(fold.set_aside(st, "a/x.lua", { ["a/x.lua"] = true }), true,
+T["fold_user_folded counts a folded ancestor even for an auto path"] = function()
+  local st = { collapsed = { ["a/x.lua"] = "auto" }, folded = { ["a/"] = true } }
+  H.eq(fold.user_folded(st, "a/x.lua"), true,
     "the fold is the user's decision regardless of who collapsed the file")
-  H.eq(fold.set_aside(st, "a/z.lua", { ["a/z.lua"] = true }), true, "same for a sibling")
+  H.eq(fold.user_folded(st, "a/z.lua"), true, "same for a sibling")
 end
 
-T["fold_set_aside is nil-safe on auto and state"] = function()
-  H.eq(fold.set_aside(nil, "a/x.lua", nil), false, "nil state")
-  H.eq(fold.set_aside({ collapsed = { ["a/x.lua"] = true } }, "a/x.lua", nil), true,
-    "no auto set means nothing is auto")
+T["fold_user_folded is nil-safe, and only 'user' counts"] = function()
+  H.eq(fold.user_folded(nil, "a/x.lua"), false, "nil state")
+  H.eq(fold.user_folded({}, "a/x.lua"), false, "no collapsed table at all")
+  H.eq(fold.user_folded({ collapsed = { ["a/x.lua"] = "user" } }, "a/x.lua"), true,
+    "a user collapse with no folds still counts")
 end
 
-T["fold_aside_set matches set_aside over a section list"] = function()
+T["fold_user_folded_set matches user_folded over a section list"] = function()
   local secs = sections("a/one.txt", "b/two.txt", "c/three.txt")
-  local collapsed = { ["b/two.txt"] = true, ["c/three.txt"] = true }
-  local auto = { ["c/three.txt"] = true }
-  H.eq(fold.aside_set(secs, collapsed, { ["a/"] = true }, auto), {
+  local st = {
+    collapsed = { ["b/two.txt"] = "user", ["c/three.txt"] = "auto" },
+    folded = { ["a/"] = true },
+  }
+  H.eq(fold.user_folded_set(secs, st), {
     ["a/one.txt"] = true,
     ["b/two.txt"] = true,
   }, "folded and hand-collapsed, but not the auto-collapsed one")
-  H.eq(fold.aside_set(secs, nil, nil, nil), {}, "nil-safe")
+  H.eq(fold.user_folded_set(secs, { collapsed = {}, folded = {} }), {}, "nothing folded by the user")
+  H.eq(fold.user_folded_set(nil, nil), {}, "nil-safe")
 end
 
 -- --- F.navigable -------------------------------------------------------

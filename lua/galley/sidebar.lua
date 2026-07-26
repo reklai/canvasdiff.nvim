@@ -2,17 +2,8 @@ local canvas = require("galley.canvas")
 local config = require("galley.config")
 local keys = require("galley.keys")
 local fold = require("galley.fold")
-local virt = require("galley.virt")
 
 local S = {}
-
---- Assignable "the canvas changed shape" callback, mirroring virt.on_change.
---- init wires it to its own sync_after_collapse; this module cannot require
---- init (init requires it), and a fold that only redrew the tree would leave
---- the treesitter tier holding marks on rows that no longer exist and the
---- minimap depicting a canvas that isn't there. Falls back to a plain redraw
---- so the sidebar still works standalone.
-S.on_change = nil
 
 --- Flatten alphabetical sections into display-ordered dir/file entries.
 --- `folded` is a set of dir paths ("lua/mod/" -- cumulative, trailing
@@ -117,9 +108,23 @@ local function set_modifiable(buf, val)
   vim.api.nvim_set_option_value("modifiable", val, { buf = buf })
 end
 
+--- "The canvas changed shape" -- a fold spliced sections down to placeholders,
+--- or back. Lives on the STATE (`state.hooks`, the same table hl.attach uses)
+--- rather than on this module, so it belongs to the canvas it describes and
+--- cannot outlive it: a module-global assigned for one canvas would still be
+--- pointing at that canvas's consumers after it closed.
+---
+--- The hook is what wakes the pieces this module cannot reach: without it the
+--- treesitter tier keeps marks on rows that no longer exist and the minimap
+--- depicts a canvas that isn't there. init.M.open wires it unconditionally.
+---
+--- The bare `S.refresh` fallback is for a sidebar driven against a hand-built
+--- state (the tests do this): it keeps the tree honest, which is all this module
+--- owns, and there are no other consumers to wake in that case.
 local function notify_change(state)
-  if S.on_change then
-    S.on_change(state)
+  local hook = state.hooks and state.hooks.on_shape_change
+  if hook then
+    hook(state)
   else
     S.refresh(state)
   end
@@ -130,11 +135,11 @@ function S.refresh(state)
   if not S.is_open() then
     return
   end
-  -- set_aside, not hidden: this runs on virt.on_change, so keying the markers
-  -- off the rendering predicate would churn every row in the tree on every
-  -- scroll of a large changeset -- and would claim the user set aside what the
-  -- virtualizer collapsed on its own.
-  local aside = fold.aside_set(state.sections, state.collapsed, state.folded, virt.auto_set())
+  -- user_folded, not hidden: this runs on every shape change, so keying the
+  -- markers off the rendering predicate would churn every row in the tree on
+  -- every scroll of a large changeset -- and would claim the user folded
+  -- what the virtualizer collapsed on its own.
+  local aside = fold.user_folded_set(state.sections, state)
   side.entries = S.build_entries(state.sections, state.folded, aside)
   local lines = S.render_lines(side.entries)
   if #lines == 0 then
@@ -231,16 +236,13 @@ function S.select(state)
     return -- canvas window closed out from under the sidebar
   end
 
-  -- "Take me to this file" has to mean you can read it when you get there, so
-  -- a section that was set aside expands first -- the same interception canvas
-  -- <CR> makes via init's jump_or_expand. A visible file row is never hidden
-  -- by a fold (a folded dir emits no rows for its children), so its own
-  -- collapse flag is the whole question. unauto + set_collapsed mirrors
-  -- init.user_set_collapsed: an explicit selection is user intent, so virt
-  -- must not expand or discard it later.
+  -- "Take me to this file" means you can read it, so expand its own collapse
+  -- first. A visible file row is never hidden by a directory fold, and
+  -- set_collapsed clears the old auto intent as part of the same state update.
+  -- This remains a user action without a cross-module ownership handshake.
+  --
   local expanded = false
   if state.collapsed and state.collapsed[e.path] then
-    virt.unauto(e.path)
     canvas.set_collapsed(state, e.section_i, false)
     expanded = true
   end
@@ -282,7 +284,7 @@ function S.cycle(state, delta, count)
 
   local target
   if config.options.navigate.skip_set_aside then
-    local nav = fold.navigable(state.sections, state, virt.auto_set())
+    local nav = fold.navigable(state.sections, state)
     target = fold.step_wrapped(nav, i, delta, count)
   else
     target = ((i - 1 + delta * count) % n) + 1

@@ -1,6 +1,5 @@
 local canvas = require("galley.canvas")
 local viewport = require("galley.viewport")
-local virt = require("galley.virt")
 local fold = require("galley.fold")
 
 local M = {}
@@ -36,12 +35,12 @@ function M.save(state)
 
     local data = { version = VERSION, base = state.base }
 
-    -- Auto-collapsed (virt) paths are module intent, not user intent --
-    -- never persist them as if the user had collapsed them.
-    local auto = virt.auto_set()
+    -- Auto-collapsed (virt) paths are module intent, not user intent -- never
+    -- persist them as if the user had collapsed them. state.collapsed records
+    -- which is which, so this is a straight filter.
     local collapsed = {}
-    for path in pairs(state.collapsed or {}) do
-      if not auto[path] then
+    for path, intent in pairs(state.collapsed or {}) do
+      if intent == "user" then
         collapsed[#collapsed + 1] = path
       end
     end
@@ -134,7 +133,6 @@ function M.restore(state, data)
       if idx then
         canvas.set_collapsed(state, idx, true)
       end
-      virt.unauto(path)
     end
   end)
 

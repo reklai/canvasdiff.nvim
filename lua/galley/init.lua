@@ -63,13 +63,10 @@ local function sync_after_collapse(st)
 end
 
 --- Set section i's collapse state on behalf of the USER (the <Tab>/za/<CR>
---- keymaps). Drops virt's ownership claim on the path first: an explicit
---- action is user intent, so the auto-virtualizer must never expand it back
---- on a later in-window pass, and session.save must never discard it as
---- module intent. virt.apply only runs on scroll/refresh, so without this a
---- stale claim can outlive the toggle indefinitely.
+--- keymaps). set_collapsed's default intent records exactly that, which is what
+--- stops the auto-virtualizer expanding it back on a later in-window pass and
+--- stops session.save discarding it as module bookkeeping.
 local function user_set_collapsed(st, i, collapsed)
-  virt.unauto(st.sections[i].path)
   canvas.set_collapsed(st, i, collapsed)
   sync_after_collapse(st)
 end
@@ -246,6 +243,13 @@ function M.open(opts)
   st.prev_buf = prev_buf
   state = st
 
+  -- Before anything that can splice: a fold from the sidebar or a pass of the
+  -- auto-virtualizer reshapes the canvas, and neither the highlight tier nor
+  -- the minimap hears about it on its own. Wired unconditionally and on the
+  -- state itself, so it is not a property of whichever of those two features
+  -- happens to be enabled, and cannot outlive the canvas it describes.
+  st.hooks = st.hooks or {}
+  st.hooks.on_shape_change = sync_after_collapse
   if #sections == 0 then
     show_empty_message(st)
   end
@@ -264,9 +268,6 @@ function M.open(opts)
   end
 
   if config.options.sidebar.enabled then
-    -- Must precede open: folding a directory splices the canvas, and without
-    -- this the highlight tier and the minimap would never hear about it.
-    sidebar.on_change = sync_after_collapse
     sidebar.open(st, config.options.sidebar)
   end
 
@@ -306,9 +307,8 @@ function M.open(opts)
   end
 
   if config.options.virt.enabled then
-    -- Must precede attach: attach applies immediately, and that first pass
-    -- can already splice.
-    virt.on_change = sync_after_collapse
+    -- attach applies immediately, and that first pass can already splice -- the
+    -- on_shape_change hook is already in place from the top of this function.
     virt.attach(st, config.options.virt)
   end
 end

@@ -171,7 +171,7 @@ T["collapse_ set_collapsed on a folded-away section splices nothing"] = function
 
   canvas.set_collapsed(st, 2, true)
   H.eq(fired, 0, "already one row, so there is nothing to re-splice")
-  H.eq(st.collapsed["b/two.txt"], true, "but the flag is recorded")
+  H.eq(st.collapsed["b/two.txt"], "user", "but the intent is recorded")
   local s, e = canvas.section_rows(st, 2)
   H.eq(e - s, 1, "still exactly one row")
 

@@ -1,14 +1,19 @@
---- Which sections are "set aside" right now, and what that means.
+--- Which sections render as a one-row placeholder right now, and whose doing it is.
 ---
 --- Two gestures hide a file, and they are one concept to the user:
----   * collapsing it outright  -- state.collapsed[filepath]
+---   * collapsing it outright  -- state.collapsed[filepath] = "user" | "auto"
 ---   * folding a parent dir    -- state.folded["lua/mod/"]
+---
+--- A collapse also records WHOSE it was: "user" for a deliberate gesture,
+--- "auto" for one the virtualizer made to keep a huge changeset cheap. Both
+--- render as a placeholder; only "user" is something navigation should step
+--- over or a session should persist.
 ---
 --- Visibility is DERIVED from both rather than stored once. Folding never
 --- writes into state.collapsed, so unfolding restores the exact per-file
---- collapse state that was there before the fold -- no ownership bookkeeping,
---- and a file the user collapsed by hand before folding its parent survives
---- the round trip.
+--- collapse state that was there before the fold -- nothing has to remember
+--- which of the two gestures hid what, and a file the user collapsed by hand
+--- before folding its parent survives the round trip.
 ---
 --- Pure, and requires nothing, so every module can read the predicate without
 --- a dependency cycle and it unit-tests standalone.
@@ -70,7 +75,7 @@ end
 --- onto buffer rows has to agree with it: a section rendered as one row still
 --- has all its entries, so a reader that thinks it is expanded computes rows
 --- that land inside the FOLLOWING files (highlight marks, hunk jump targets,
---- viewport anchors). Navigation wants F.set_aside instead -- see there.
+--- viewport anchors). Navigation wants F.user_folded instead -- see there.
 function F.hidden(state, path)
   if not state then
     return false
@@ -83,7 +88,8 @@ end
 
 --- `{[path] = true}` for every hidden section. Takes plain tables rather than
 --- `state` so callers that are pure over a set stay pure (scrollbar.line_kinds
---- is the one that matters).
+--- is the one that matters). Intent-blind, like F.hidden: both kinds of collapse
+--- occupy one row.
 function F.hidden_set(sections, collapsed, folded)
   local set = {}
   for _, sec in ipairs(sections or {}) do
@@ -94,38 +100,37 @@ function F.hidden_set(sections, collapsed, folded)
   return set
 end
 
---- True when the USER set `path` aside -- by collapsing it, or by folding a
---- directory above it. `auto` is virt.auto_set(): a section the virtualizer
---- collapsed on its own is module bookkeeping, not a decision the user made,
---- so navigation must still be able to land there.
+--- True when the USER folded `path` -- by folding the file, or by folding a
+--- directory above it. A section the virtualizer collapsed on its own is module
+--- bookkeeping, not a decision the user made, so navigation must still be able
+--- to land there.
 ---
 --- Deliberately NOT F.hidden. Rendering cares what occupies a single row;
 --- navigation cares what you chose to put away. The two answers differ exactly
 --- on virt's auto-collapses.
 ---
---- Well-defined because a path is never both auto and user intent:
---- init.user_set_collapsed and session.restore each call virt.unauto first.
-function F.set_aside(state, path, auto)
+--- Well-defined by construction rather than by convention: state.collapsed
+--- stores WHICH of the two a collapse is ("user" / "auto"), so a path cannot be
+--- both, and no cross-module handshake has to keep them apart.
+function F.user_folded(state, path)
   if not state then
     return false
   end
   if F.hides(state.folded, path) then
     return true
   end
-  if state.collapsed and state.collapsed[path] then
-    return not (auto and auto[path])
-  end
-  return false
+  return (state.collapsed and state.collapsed[path]) == "user"
 end
 
---- `{[path] = true}` for every set-aside section, over plain tables.
-function F.aside_set(sections, collapsed, folded, auto)
+--- `{[path] = true}` for every user-folded section.
+---
+--- Delegates rather than re-deriving, so the sidebar's `▸` markers and the
+--- staleness check can never disagree about whose fold a placeholder is.
+function F.user_folded_set(sections, state)
   local set = {}
   for _, sec in ipairs(sections or {}) do
-    local path = sec.path
-    if F.hides(folded, path)
-      or ((collapsed and collapsed[path]) and not (auto and auto[path])) then
-      set[path] = true
+    if F.user_folded(state, sec.path) then
+      set[sec.path] = true
     end
   end
   return set
@@ -135,7 +140,7 @@ end
 function F.navigable(sections, state, auto)
   local out = {}
   for i, sec in ipairs(sections or {}) do
-    if not F.set_aside(state, sec.path, auto) then
+    if not F.user_folded(state, sec.path) then
       out[#out + 1] = i
     end
   end

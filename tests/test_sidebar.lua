@@ -548,7 +548,7 @@ T["sidebar_fold unfolding restores the exact pre-fold collapse state"] = functio
   select_row(st, A_DIR_ROW) -- unfold
   H.eq(span(st, 1), 1, "the hand-collapsed one stays collapsed")
   assert(span(st, 2) > 1, "the merely-folded one comes back expanded")
-  H.eq(st.collapsed, { ["a/one.txt"] = true }, "only the hand collapse survives")
+  H.eq(st.collapsed, { ["a/one.txt"] = "user" }, "only the hand collapse survives")
   done(st)
 end
 
@@ -630,7 +630,7 @@ T["sidebar_fold the tree marks what you set aside, but not virt's own work"] = f
   -- so it must not churn markers across the tree on every scroll.
   canvas.set_collapsed(st, 3, false)
   virt.apply(st, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
-  assert(next(virt.auto_set()), "sanity: virt auto-collapsed something")
+  assert(next(H.auto_set(st)), "sanity: virt auto-collapsed something")
   sidebar.refresh(st)
   for _, line in ipairs(vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)) do
     if not line:match("/$") then -- skip dir rows, whose ▸ means "folded"

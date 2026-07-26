@@ -24,11 +24,13 @@ local function big_section(path, tag)
   return model.build_section(path, old, table.concat(lines, "\n"), "M")
 end
 
--- virt's auto-set/tick bookkeeping is module-level, keyed by path -- and
--- every test below reopens the SAME literal paths in a fresh state. Without
--- an explicit reset, a leftover auto-set entry from an earlier test could
--- leak into a later one (only test execution order coincidentally hides
--- this); detach() clears it deterministically before each test.
+-- virt's LRU tick bookkeeping is module-level, keyed by path -- and every test
+-- below reopens the SAME literal paths in a fresh state. Without an explicit
+-- reset, an earlier test's visibility ticks could outrank anything the new
+-- canvas has seen and invert the eviction order (only test execution order
+-- coincidentally hides this); detach() clears them deterministically.
+-- (Which collapses are virt's own needs no such care: that lives on the state,
+-- and canvas.open hands back a fresh one every time.)
 local function six_sections()
   return {
     big_section("a/one.txt", "a"),
@@ -64,7 +66,7 @@ T["virt_ folded-away sections do not count as expanded"] = function()
   reset_view(st)
   -- Fold two of the six away. They already occupy one row each, so virt must
   -- see four expanded sections, not six -- and must never pick one of them as
-  -- an eviction candidate (that would claim it in `auto` while splicing
+  -- an eviction candidate (that would record it as "auto" while splicing
   -- nothing, freeing zero rows and leaving the user a collapse to inherit on
   -- unfold).
   st.folded = { ["e/"] = true, ["f/"] = true }
@@ -81,7 +83,7 @@ T["virt_ folded-away sections do not count as expanded"] = function()
   H.eq(n_rendered_expanded, opts.max_expanded,
     "virt collapses down to max_expanded RENDERED-expanded sections")
 
-  local auto = virt.auto_set()
+  local auto = H.auto_set(st)
   H.eq(auto["e/five.txt"], nil, "never claims a folded-away path")
   H.eq(auto["f/six.txt"], nil, "never claims a folded-away path")
 
@@ -96,7 +98,7 @@ T["virt_ unfolding leaves an auto-collapsed section as a placeholder"] = functio
   virt.apply(st, opts)
 
   -- Find something virt collapsed on its own, then fold its parent over it.
-  local auto = virt.auto_set()
+  local auto = H.auto_set(st)
   local path, idx
   for i, s in ipairs(st.sections) do
     if auto[s.path] then path, idx = s.path, i break end
@@ -111,7 +113,7 @@ T["virt_ unfolding leaves an auto-collapsed section as a placeholder"] = functio
 
   local s, e = canvas.section_rows(st, idx)
   H.eq(e - s, 1, "still virt's placeholder -- unfolding only undoes the fold")
-  H.eq(st.collapsed[path], true, "and its collapse flag is untouched")
+  H.eq(st.collapsed[path], "auto", "and it is still recorded as virt's own")
   virt.detach()
 end
 
@@ -196,7 +198,7 @@ T["virt_ never auto-expands a user-collapsed section"] = function()
   virt.apply(st, opts)
 
   assert(st.collapsed[st.sections[1].path], "user-collapsed section stays collapsed")
-  H.eq(virt.auto_set()[st.sections[1].path], nil, "auto-set never claims a user-collapsed path")
+  H.eq(H.auto_set(st)[st.sections[1].path], nil, "auto-set never claims a user-collapsed path")
 end
 
 T["virt_ deactivation auto-expands only the auto set"] = function()
@@ -205,13 +207,13 @@ T["virt_ deactivation auto-expands only the auto set"] = function()
   local active_opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
 
   virt.apply(st, active_opts)
-  assert(next(virt.auto_set()) ~= nil, "sanity: something got auto-collapsed")
+  assert(next(H.auto_set(st)) ~= nil, "sanity: something got auto-collapsed")
   assert(st.collapsed[st.sections[1].path] == nil, "sanity: section 1 still expanded (in-window)")
 
   -- User-collapses the still-expanded section 1 directly.
   canvas.set_collapsed(st, 1, true)
 
-  local auto_before = virt.auto_set()
+  local auto_before = H.auto_set(st)
   local inactive_opts = { enabled = true, max_files = 100, max_lines = 1000000, margin = 10, max_expanded = 2 }
   virt.apply(st, inactive_opts)
 
@@ -219,7 +221,7 @@ T["virt_ deactivation auto-expands only the auto set"] = function()
     H.eq(st.collapsed[path], nil, "auto-collapsed section " .. path .. " expanded back")
   end
   assert(st.collapsed[st.sections[1].path], "user-collapsed section 1 stays collapsed")
-  H.eq(next(virt.auto_set()), nil, "auto-set cleared")
+  H.eq(next(H.auto_set(st)), nil, "auto-set cleared")
 end
 
 -- The max_lines threshold must describe the CHANGESET, not the current
@@ -245,28 +247,29 @@ T["virt_ stays active while its own collapses shrink the buffer"] = function()
 
   H.eq(count_collapsed(st), collapsed_after_first,
     "a second apply keeps the same sections collapsed")
-  assert(next(virt.auto_set()) ~= nil, "auto-set survives the second apply")
+  assert(next(H.auto_set(st)) ~= nil, "auto-set survives the second apply")
 end
 
-T["virt_ on_change fires once per mutating apply"] = function()
+T["virt_ on_shape_change fires once per mutating apply"] = function()
   local st = open_six()
   reset_view(st)
   local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 10, max_expanded = 2 }
 
   local n, seen = 0, nil
-  virt.on_change = function(s)
+  st.hooks = st.hooks or {}
+  st.hooks.on_shape_change = function(s)
     n = n + 1
     seen = s
   end
 
   virt.apply(st, opts)
   H.eq(n, 1, "one notification for the apply that collapsed sections")
-  H.eq(seen, st, "on_change receives the state that was applied")
+  H.eq(seen, st, "the hook receives the state that was applied")
 
   virt.apply(st, opts)
   H.eq(n, 1, "an apply that changes nothing stays silent")
 
-  virt.on_change = nil
+  st.hooks.on_shape_change = nil
 end
 
 -- hl's WinScrolled debounce (30ms) beats virt's (50ms), so a section virt
@@ -277,7 +280,7 @@ end
 --
 -- Driven by hand rather than through the real events: WinScrolled is emitted
 -- from the redraw path and never fires headlessly, so the debounce race this
--- guards against cannot be staged directly. Wiring on_change here pins the
+-- guards against cannot be staged directly. Wiring the hook here pins the
 -- contract that the race relies on instead.
 T["virt_ expanded sections get their highlights back"] = function()
   local st = open_six()
@@ -285,7 +288,7 @@ T["virt_ expanded sections get their highlights back"] = function()
   local opts = { enabled = true, max_files = 3, max_lines = 1000000, margin = 0, max_expanded = 1 }
 
   hl.attach(st, { margin = 0, debounce_ms = 30 })
-  virt.on_change = function(s)
+  st.hooks.on_shape_change = function(s)
     hl.apply_now(s)
   end
 
@@ -303,11 +306,11 @@ T["virt_ expanded sections get their highlights back"] = function()
   H.eq(st.collapsed[path], nil, "section 6 expanded back once it was near")
   assert(st.ts.ids_by_path[path] ~= nil, "the expanded section got its highlights back")
 
-  virt.on_change = nil
+  st.hooks.on_shape_change = nil
   hl.detach(st)
 end
 
--- auto/tick_of are module-level and keyed by path, but canvas.open always
+-- tick_of is module-level and keyed by path, but canvas.open always
 -- hands back a fresh state.collapsed. Re-opening without an intervening
 -- detach (reachable through M.open's sidebar-redirect branch) therefore
 -- carried the previous canvas's visibility history into the new one, and
@@ -323,7 +326,7 @@ T["virt_ attach to a new canvas forgets the previous one's history"] = function(
     vim.cmd("normal! G")
   end)
   virt.apply(st1, opts)
-  assert(virt.auto_set()["a/one.txt"], "sanity: canvas one auto-collapsed its far (top) sections")
+  assert(H.auto_set(st1)["a/one.txt"], "sanity: canvas one auto-collapsed its far (top) sections")
 
   -- Re-open WITHOUT detaching, and look at the TOP of the new canvas.
   local st2 = canvas.open(six_sections(), {})

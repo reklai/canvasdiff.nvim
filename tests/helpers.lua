@@ -45,6 +45,23 @@ function H.norm_lhs(lhs)
   return vim.fn.keytrans(vim.keycode(lhs))
 end
 
+--- `{[path] = true}` for every collapse the VIRTUALIZER made on its own, read
+--- straight off the state that records it (`state.collapsed[path] == "auto"`).
+---
+--- This is what virt.auto_set() used to return out of a private module table.
+--- Intent lives on the state now, so there is nothing to snapshot -- but tests
+--- still want to assert on "whose collapse is this", and going through one
+--- helper keeps that phrased the same way everywhere.
+function H.auto_set(state)
+  local out = {}
+  for path, intent in pairs(state.collapsed or {}) do
+    if intent == "auto" then
+      out[path] = true
+    end
+  end
+  return out
+end
+
 function H.eq(a, b, msg)
   if not vim.deep_equal(a, b) then
     error((msg or "not equal") .. "\nleft:  " .. vim.inspect(a) .. "\nright: " .. vim.inspect(b), 2)

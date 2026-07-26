@@ -1,7 +1,6 @@
 local canvas = require("galley.canvas")
 local fold = require("galley.fold")
 local config = require("galley.config")
-local virt = require("galley.virt")
 
 local M = {}
 
@@ -28,7 +27,7 @@ function M.goto_file(state, dir, count)
 
   local target
   if config.options.navigate.skip_set_aside then
-    local nav = fold.navigable(state.sections, state, virt.auto_set())
+    local nav = fold.navigable(state.sections, state)
     target = fold.step_clamped(nav, i, dir, count)
   else
     target = math.min(math.max(i + dir * count, 1), n)
