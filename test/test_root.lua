@@ -121,6 +121,30 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   assert(ok, err)
 end
 
+T["root_ setup presents config diagnostics as errors"] = function()
+  local fm = require("canvasdiff")
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    fm.setup({ glyphs = 42 })
+  end, debug.traceback)
+  local reset_ok, reset_err = pcall(fm.setup, {})
+
+  vim.notify = real_notify
+  assert(ok, err)
+  assert(reset_ok, reset_err)
+  H.eq(#messages, 1, "one invalid option produces one user-facing diagnostic")
+  H.eq(messages[1].level, vim.log.levels.ERROR)
+  assert(messages[1].message:find("CanvasDiff: ", 1, true) == 1,
+    "the UI owns the plugin prefix: " .. messages[1].message)
+  assert(messages[1].message:find("glyphs must be", 1, true),
+    "the validation message reaches the user: " .. messages[1].message)
+end
+
 T["root_ Surface never issues unqualified controller teardown"] = function()
   local watch = require("canvasdiff.watch")
   local hl = require("canvasdiff.hl")

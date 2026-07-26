@@ -44,7 +44,11 @@ end
 --- optional -- every code path below works fine against config.defaults
 --- when setup() is never called.
 function App:setup(opts)
-  return config.setup(opts)
+  local options, diagnostics = config.setup(opts)
+  for _, message in ipairs(diagnostics or {}) do
+    ui.err(message)
+  end
+  return options
 end
 
 --- Show which lens the canvas is looking through, in a winbar on its own window.

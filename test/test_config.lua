@@ -5,13 +5,25 @@ local T = {}
 
 --- setup() mutates module state shared by the whole suite; always restore.
 local function with_setup(opts, fn)
-  local real = vim.notify
-  local msgs = {}
-  vim.notify = function(msg, level) msgs[#msgs + 1] = { msg = msg, level = level } end
-  local ok, err = pcall(function() fn(config.setup(opts), msgs) end)
-  vim.notify = real
+  local ok, err = pcall(function()
+    local options, diagnostics = config.setup(opts)
+    fn(options, diagnostics)
+  end)
   config.setup({}) -- back to defaults for everyone else
   assert(ok, err)
+end
+
+T["config_ facade exports exactly the supported domain API"] = function()
+  local names = vim.tbl_keys(config)
+  table.sort(names)
+  H.eq(names, {
+    "ASCII_GLYPHS",
+    "defaults",
+    "glyphs",
+    "options",
+    "setup",
+    "user_opts",
+  })
 end
 
 T["config_ setup is optional and defaults are live without it"] = function()
@@ -52,19 +64,20 @@ end
 -- merges cleanly into an unused corner of the table, every binding silently
 -- falls back to its default, and the user has no idea why.
 T["config_ the old flat keymaps shape is reported, not ignored"] = function()
-  with_setup({ keymaps = { jump = "<C-j>", close = "x" } }, function(_, msgs)
-    H.eq(#msgs, 1, "exactly one message")
-    H.eq(msgs[1].level, vim.log.levels.ERROR)
-    assert(msgs[1].msg:match("jump") and msgs[1].msg:match("close"),
-      "must name the offending keys, got: " .. msgs[1].msg)
-    assert(msgs[1].msg:match("canvas"), "and point at the new shape, got: " .. msgs[1].msg)
+  with_setup({ keymaps = { jump = "<C-j>", close = "x" } }, function(_, diagnostics)
+    H.eq(#diagnostics, 1, "exactly one diagnostic")
+    assert(diagnostics[1]:match("jump") and diagnostics[1]:match("close"),
+      "must name the offending keys, got: " .. diagnostics[1])
+    assert(diagnostics[1]:match("canvas"),
+      "and point at the new shape, got: " .. diagnostics[1])
   end)
 end
 
 T["config_ the new nested shape is not mistaken for the old one"] = function()
-  with_setup({ keymaps = { canvas = { jump = "<C-j>", close = "x" } } }, function(_, msgs)
-    H.eq(#msgs, 0, "a valid config must be silent")
-  end)
+  with_setup({ keymaps = { canvas = { jump = "<C-j>", close = "x" } } },
+    function(_, diagnostics)
+      H.eq(#diagnostics, 0, "a valid config must have no diagnostics")
+    end)
 end
 
 T["config_ user_opts keeps the raw table for health to diff"] = function()
@@ -93,7 +106,11 @@ end
 
 T["config_ a glyph table overrides only the slots it names"] = function()
   local render = require("canvasdiff.canvas").format
+  local glyphs = config.glyphs
+  assert(rawequal(render.glyphs, glyphs), "canvas facade exposes the config-owned table")
   config.setup({ glyphs = { file = "|", stale = " !" } })
+  assert(rawequal(config.glyphs, glyphs), "setup must preserve live glyph-table identity")
+  assert(rawequal(render.glyphs, glyphs), "formatters retain that same live table")
   H.eq(render.glyphs.file, "|")
   H.eq(render.glyphs.stale, " !")
   H.eq(render.glyphs.folded, "▸", "untouched slots keep their default")
@@ -143,17 +160,18 @@ T["config_ the ascii preset separates staged from stale in the TEXT"] = function
 end
 
 T["config_ a typo'd glyph name is reported, not silently ignored"] = function()
-  with_setup({ glyphs = { fyle = "|" } }, function(_, msgs)
+  with_setup({ glyphs = { fyle = "|" } }, function(_, diagnostics)
     local said = false
-    for _, m in ipairs(msgs) do
-      if tostring(m.msg):find("unknown glyph", 1, true) then said = true end
+    for _, message in ipairs(diagnostics) do
+      if tostring(message):find("unknown glyph", 1, true) then said = true end
     end
-    assert(said, "a misspelled glyph slot must be reported: " .. vim.inspect(msgs))
+    assert(said,
+      "a misspelled glyph slot must be reported: " .. vim.inspect(diagnostics))
   end)
-  with_setup({ glyphs = 42 }, function(_, msgs)
+  with_setup({ glyphs = 42 }, function(_, diagnostics)
     local said = false
-    for _, m in ipairs(msgs) do
-      if tostring(m.msg):find("glyphs must be", 1, true) then said = true end
+    for _, message in ipairs(diagnostics) do
+      if tostring(message):find("glyphs must be", 1, true) then said = true end
     end
     assert(said, "a non-table, non-\"ascii\" value must be reported")
   end)

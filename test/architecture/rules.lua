@@ -20,14 +20,13 @@ R.domains = {
 -- list in the same commit that moves behind a domain facade; new flat modules
 -- are never added here.
 --
--- cmd/config/jump temporarily call the UI facade to preserve their existing
+-- cmd/jump temporarily call the UI facade to preserve their existing
 -- notification behavior. They may leave this ledger only when those calls
--- become returned diagnostics presented by App: input/config -> ui is forbidden
+-- become returned outcomes presented by App: input -> ui is forbidden
 -- once the paths acquire their final domain classification.
 R.legacy_paths = {
   "lua/canvasdiff/cmd.lua",
   "lua/canvasdiff/collect.lua",
-  "lua/canvasdiff/config.lua",
   "lua/canvasdiff/git.lua",
   "lua/canvasdiff/hl.lua",
   "lua/canvasdiff/jump.lua",

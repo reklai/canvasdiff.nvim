@@ -178,6 +178,8 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
     ["canvasdiff.canvas"] = { rel = "lua/canvasdiff/canvas.lua" },
     ["canvasdiff.canvas.format"] = { rel = "lua/canvasdiff/canvas/format.lua" },
     ["canvasdiff.canvas.Page"] = { rel = "lua/canvasdiff/canvas/Page.lua" },
+    ["canvasdiff.config"] = { rel = "lua/canvasdiff/config.lua" },
+    ["canvasdiff.config.settings"] = { rel = "lua/canvasdiff/config/settings.lua" },
     ["canvasdiff.diff"] = { rel = "lua/canvasdiff/diff.lua" },
     ["canvasdiff.diff.model"] = { rel = "lua/canvasdiff/diff/model.lua" },
     ["canvasdiff.input"] = { rel = "lua/canvasdiff/input.lua" },
@@ -265,13 +267,49 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
     diff_internal[1]
   )
 
+  local config_internal = policy.edge_violations({
+    nodes = nodes,
+    edges = {
+      {
+        from = "canvasdiff.canvas",
+        from_path = nodes["canvasdiff.canvas"].rel,
+        line = 7,
+        to = "canvasdiff.config.settings",
+        to_path = nodes["canvasdiff.config.settings"].rel,
+      },
+    },
+  })
+  H.eq(#config_internal, 1)
+  assert(
+    config_internal[1]:find("must target facade canvasdiff.config", 1, true),
+    config_internal[1]
+  )
+
+  local config_presentation = policy.edge_violations({
+    nodes = nodes,
+    edges = {
+      {
+        from = "canvasdiff.config",
+        from_path = nodes["canvasdiff.config"].rel,
+        line = 8,
+        to = "canvasdiff.ui",
+        to_path = nodes["canvasdiff.ui"].rel,
+      },
+    },
+  })
+  H.eq(#config_presentation, 1)
+  assert(
+    config_presentation[1]:find("forbidden dependency", 1, true),
+    config_presentation[1]
+  )
+
   local input_presentation = policy.edge_violations({
     nodes = nodes,
     edges = {
       {
         from = "canvasdiff.input",
         from_path = nodes["canvasdiff.input"].rel,
-        line = 7,
+        line = 9,
         to = "canvasdiff.ui",
         to_path = nodes["canvasdiff.ui"].rel,
       },
@@ -289,7 +327,7 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
       {
         from = "canvasdiff.canvas.Page",
         from_path = nodes["canvasdiff.canvas.Page"].rel,
-        line = 8,
+        line = 10,
         to = "canvasdiff.ui",
         to_path = nodes["canvasdiff.ui"].rel,
       },
