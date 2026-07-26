@@ -802,6 +802,23 @@ T["sidebar_fold cycle honors a count"] = function()
   done(st)
 end
 
+-- The file branch has guarded against a dead canvas since it landed; the dir
+-- branch splices the canvas too and never did. The sidebar outlives a wiped
+-- canvas buffer (its WinClosed pattern watches state.win, not state.buf), so
+-- <CR> on a dir row reached nvim_buf_get_extmark_by_id on an invalid buffer.
+T["sidebar_fold select on a dir survives a wiped canvas buffer"] = function()
+  local st = open_ab()
+  local buf = st.buf
+  vim.api.nvim_win_call(st.win, function() vim.cmd("enew") end)
+  vim.api.nvim_buf_delete(buf, { force = true })
+
+  vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sidebar_buf()), { A_DIR_ROW, 0 })
+  local ok, err = pcall(sidebar.select, st)
+  H.eq(ok, true, "select must not throw on a wiped canvas buffer: " .. tostring(err))
+  H.eq(st.folded, {}, "and must not record a fold it could not apply")
+  sidebar.close()
+end
+
 T["sidebar_fold a nested fold hides only its own subtree"] = function()
   local st = canvas.open({
     big_section("lua/mod/a.lua", "a"),

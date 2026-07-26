@@ -262,6 +262,15 @@ function S.select(state)
   end
 
   if e.kind == "dir" then
+    -- Buffer validity, deliberately NOT the file branch's window check: this
+    -- branch splices the canvas BUFFER, which is the right thing to do even
+    -- while a jump excursion has the window showing a real file (resplice
+    -- classifies that as "none" and skips view correction). A wiped buffer is
+    -- the case that must bail -- resolving anchors against it throws -- and it
+    -- has to bail before recording a fold it cannot apply.
+    if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+      return
+    end
     state.folded[e.path] = not state.folded[e.path] or nil
     -- Ascending order (resync_visibility's contract): each correction after
     -- the first is a no-op, and folding the directory you happen to be
