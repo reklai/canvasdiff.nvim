@@ -555,6 +555,67 @@ function M.set_collapsed(state, i, collapsed, intent)
   resplice(state, i)
 end
 
+--- Bring the canvas to `desired` with the fewest possible splices.
+---
+--- Both lists are path-sorted, so this is a sorted merge-walk: a section whose
+--- old_text AND new_text both match is never touched at all, so its anchors, its
+--- highlight marks and its rows survive untouched, and the niri invariant rests
+--- entirely on the splice primitives below.
+---
+--- That "never touched" property is the whole reason this is separate from
+--- render_all. It is what makes a live file-watch update cheap, and it is what makes
+--- swapping the LENS non-destructive -- most files look identical through two
+--- lenses, so pivoting mostly splices nothing and moves nothing.
+---
+--- Returns true when it had to fall back to a full render_all, which the caller
+--- needs to know because that is the case where the canvas may now be the
+--- empty-state placeholder rather than sections.
+---
+--- The caller owns the follow-up sync of the other UI pieces (highlighting,
+--- sidebar, scrollbar, virtualizer), mirroring resync_visibility's contract.
+function M.reconcile_sections(state, desired)
+  -- 0 <-> N transitions: the empty canvas holds a placeholder line, not sections,
+  -- so there is nothing for a splice to target. Full re-render instead.
+  if #state.sections == 0 or #desired == 0 then
+    if #state.sections ~= 0 or #desired ~= 0 then
+      M.render_all(state, desired)
+      return true
+    end
+    return false
+  end
+
+  local i, j = 1, 1
+  while i <= #state.sections or j <= #desired do
+    local cur = state.sections[i]
+    local des = desired[j]
+    if cur and des and cur.path == des.path then
+      if cur.old_text ~= des.old_text or cur.new_text ~= des.new_text then
+        M.replace_section(state, i, des)
+      end
+      i, j = i + 1, j + 1
+    elseif cur and (not des or cur.path < des.path) then
+      if #state.sections == 1 then
+        -- Deleting the last remaining section would leave the placeholder-line
+        -- empty canvas, which splices can't target; finish with a full render of
+        -- whatever is desired instead.
+        M.render_all(state, desired)
+        return true
+      end
+      M.replace_section(state, i, nil) -- delete shrinks the list; keep i
+    else
+      M.insert_section(state, i, des)
+      i, j = i + 1, j + 1
+    end
+  end
+
+  -- Once, at the END of the walk -- never per-delete inside it. This pass deletes
+  -- and inserts in one merge, so dropping "src/" the moment its last OLD section
+  -- went would un-fold a sibling inserted a step later. Pruning a key that hides
+  -- nothing changes no section's rendered form, so there is nothing to re-splice.
+  state.folded = fold.prune(state.sections, state.folded)
+  return false
+end
+
 --- Re-splice sections so the buffer matches the current visibility predicate,
 --- for when `state.folded` changed rather than `state.collapsed`. `indices`
 --- defaults to every section, which is what revealing a directory needs (it

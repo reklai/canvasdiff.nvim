@@ -15,6 +15,7 @@ local session = require("galley.session")
 local util = require("galley.util")
 local keys = require("galley.keys")
 local fold = require("galley.fold")
+local lens = require("galley.lens")
 
 local M = {}
 
@@ -230,16 +231,27 @@ function M.open(opts)
     return
   end
 
-  -- Load any saved session BEFORE collect, so a restored base is honored
-  -- from the very first collect.files call -- not just after the fact.
+  -- Load any saved session BEFORE collect, so a restored lens is honored from the
+  -- very first collect.files call -- not just after the fact.
+  --
+  -- Precedence, most to least specific: an explicit lens from the caller; the older
+  -- `base` string a command passed; the lens the session saved; the base an OLDER
+  -- session saved (payloads predating lenses); the configured default.
   local sess = config.options.session.enabled and session.load(root) or nil
-  local base = opts.base or (sess and sess.base) or config.options.base
+  local l = opts.lens
+    or (opts.base and lens.from_base(opts.base))
+    or (sess and lens.valid(sess.lens) and sess.lens)
+    or (sess and sess.base and lens.from_base(sess.base))
+    or lens.from_base(config.options.base)
 
-  local sections = model.build(collect.files(root, base), config.options.context)
+  local sections = model.build(collect.files(root, l), config.options.context)
 
   local st = canvas.open(sections, {})
   st.root = root
-  st.base = base
+  st.lens = l
+  -- Kept alongside, for the session payload and for anything still speaking the
+  -- older vocabulary. nil for `staged` and branch lenses, which it cannot express.
+  st.base = lens.to_base(l)
   st.prev_buf = prev_buf
   state = st
 
@@ -436,59 +448,121 @@ function M.toggle()
   end
 end
 
---- Full re-collect + re-render of the live canvas state, if any exists yet.
+--- Re-collect against whatever the state is now pointed at and splice the
+--- difference in, rather than rebuilding the buffer.
+---
+--- This is what makes the canvas *dynamic* instead of merely re-renderable.
+--- render_all recreates every anchor, rewrites every line and restores no view, so
+--- anything routed through it throws away where you were looking.
+--- reconcile_sections leaves every section whose content is unchanged completely
+--- untouched, and most files look identical through two lenses, so a pivot typically
+--- splices nothing and moves nothing at all.
+---
+--- Shared by the lens pivot, M.refresh and watch -- they are one operation ("go and
+--- see what is true now"), differing only in what prompted it.
+local function pivot(st)
+  if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
+    return
+  end
+  local desired = model.build(collect.files(st.root, lens.of(st)), config.options.context)
+  local full = canvas.reconcile_sections(st, desired)
+  if full and #desired == 0 then
+    show_empty_message(st)
+  end
+  sync_after_collapse(st)
+  virt.apply(st, config.options.virt)
+end
+
+--- Re-collect and splice in whatever changed: the manual version of the pass
+--- `watch` runs on save and focus, for when you don't trust what is on screen.
+---
+--- NON-DESTRUCTIVE, and that is the point of it being on a bare `r`. This used to
+--- call render_all, which recreated every anchor, rewrote every line and restored
+--- no view -- so the key you pressed to make the canvas trustworthy was also the
+--- key that lost your place in it. Refreshing is the most ordinary thing you can
+--- ask of a diff view; it has no business violating the invariant the rest of the
+--- plugin is built to hold.
+---
+--- There is deliberately no companion "hard rebuild" action. A reconcile only
+--- splices what it BELIEVES differs, so a state/buffer divergence survives any
+--- number of refreshes -- but close() + open() already recovers from exactly that,
+--- and it RESTORES your position through the session file, which a bare render_all
+--- does not. A rebuild verb was written, measured against close+open, found
+--- strictly worse on every axis, and deleted. Don't add it back without measuring:
+--- test_e2e's "refresh cannot repair a divergent buffer, close+open can" pins both
+--- halves of that result.
 function M.refresh()
   if not state then
     return
   end
-  local sections = model.build(collect.files(state.root, state.base), config.options.context)
-  canvas.render_all(state, sections)
-  state.sections = sections
-  if #sections == 0 then
-    show_empty_message(state)
-  end
-  hl.apply_now(state)
-  sidebar.refresh(state)
-  scrollbar.update(state)
-  virt.apply(state, config.options.virt)
+  pivot(state)
 end
 
-local function base_label(base)
-  return base == "index" and "index (unstaged)" or "HEAD"
-end
-
---- Set the diff base explicitly to "HEAD" or "index", opening the canvas if
---- it isn't showing.
+--- Point the canvas at a different comparison, opening it if it isn't showing.
 ---
---- Idempotent, which is the whole point: commands get put inside user
---- mappings, and `:Galley unstaged` must always land unstaged. A toggle in a
---- mapping is a coin flip. Opening rather than warning is likewise the only
---- sensible reading of a command that names a state.
-function M.set_base(base)
+--- Idempotent, which is the whole point: commands get put inside user mappings, and
+--- `:Galley unstaged` must always land unstaged. A toggle in a mapping is a coin
+--- flip. Opening rather than warning is likewise the only sensible reading of a
+--- command that names a state.
+function M.set_lens(l)
+  if not lens.valid(l) then
+    util.warn("not a lens")
+    return
+  end
   if not (state and canvas_showing(state)) then
-    M.open({ base = base })
+    M.open({ lens = l })
     return
   end
-  if state.base == base then
+  if lens.same(lens.of(state), l) then
     return
   end
-  state.base = base
-  M.refresh()
-  util.notify("diff base = worktree vs " .. base_label(base))
+  state.lens = l
+  state.base = lens.to_base(l)
+  pivot(state)
+  util.notify("showing " .. l.label)
 end
 
---- Flip the diff base between "worktree vs HEAD" and "worktree vs index"
---- (unstaged-only review) and refresh the live canvas. Canvas not currently
---- showing (never opened, or closed again) ⇒ notify and return.
+--- Step through the three named lenses: all → unstaged → staged → all.
 ---
---- Deliberately still warns rather than opening: this is the keymap's entry
---- point, and a keypress on no canvas is a mistake, not a request to open one.
+--- This is what the `base` keymap runs, and it is the gesture the canvas is built
+--- around -- one key to ask "what am I actually looking at" from three angles.
+--- Warns rather than opening: a keypress on no canvas is a mistake, not a request.
+function M.cycle_lens(delta)
+  if not (state and canvas_showing(state)) then
+    util.warn("no live diff canvas")
+    return
+  end
+  M.set_lens(lens.step(lens.of(state), delta or 1))
+end
+
+--- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.
+--- The new side stays the worktree, so this is still somewhere you can work.
+function M.set_branch(ref)
+  local l = lens.branch(ref)
+  if not l then
+    util.warn("no ref given")
+    return
+  end
+  M.set_lens(l)
+end
+
+--- Set the diff base to "HEAD" or "index" -- the older two-value vocabulary, which
+--- `:Galley all` / `:Galley unstaged` still speak.
+function M.set_base(base)
+  M.set_lens(lens.from_base(base))
+end
+
+--- Flip between "worktree vs HEAD" and "worktree vs index" (unstaged-only review).
+---
+--- Kept as the exact two-value flip for user mappings that want precisely that; the
+--- `B` key runs M.cycle_lens, which also reaches the staged view. Warns rather than
+--- opening, for the same reason cycle_lens does.
 function M.toggle_base()
   if not (state and canvas_showing(state)) then
     util.warn("no live diff canvas")
     return
   end
-  M.set_base(state.base == "index" and "HEAD" or "index")
+  M.set_base(lens.to_base(lens.of(state)) == "index" and "HEAD" or "index")
 end
 
 return M

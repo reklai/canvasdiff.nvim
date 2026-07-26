@@ -10,7 +10,7 @@ end, {
   -- "*" rather than "?" so arity errors come from us with a real message,
   -- instead of Vim's generic trailing-characters complaint.
   nargs = "*",
-  desc = "galley diff canvas: :Galley [open|close|toggle|refresh|unstaged|all]",
+  desc = "galley diff canvas: :Galley [open|close|toggle|refresh|all|unstaged|staged]",
   complete = function(arglead)
     return require("galley.cmd").complete(arglead)
   end,

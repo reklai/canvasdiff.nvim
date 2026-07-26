@@ -262,6 +262,81 @@ T["watch_reconcile while hidden then jump.back stays coherent"] = function()
   end
 end
 
+-- state.collapsed is pruned when a section leaves the canvas; state.folded was
+-- not, so a fold outlived the directory it described. Commit (or revert)
+-- everything under src/ and the key survived -- invisibly, since the sidebar
+-- only draws a dir row for a directory that still has sections -- and the next
+-- edit to any file under src/ came back as a placeholder that ]f steps over.
+T["watch_reconcile a fold dies with the last change under it"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["src/a.txt"] = bigtext(80, "a"),
+      ["src/b.txt"] = bigtext(80, "b"),
+      ["top.txt"] = bigtext(80, "t"),
+    },
+    worktree = {
+      ["src/a.txt"] = bigtext(80, "a"):gsub("a line 40", "a line 40 changed"),
+      ["src/b.txt"] = bigtext(80, "b"):gsub("b line 40", "b line 40 changed"),
+      ["top.txt"] = bigtext(80, "t"):gsub("t line 40", "t line 40 changed"),
+    },
+  })
+  local st = open_state(root)
+  H.eq(#st.sections, 3, "sanity: src/a.txt, src/b.txt, top.txt")
+
+  st.folded = { ["src/"] = true }
+  canvas.resync_visibility(st)
+  local s, e = canvas.section_rows(st, 1)
+  H.eq(e - s, 1, "sanity: the fold took effect")
+
+  -- Revert both src/ files, the way committing them would: their sections go
+  -- away through the incremental merge-walk, not a full render_all.
+  write_file(root, "src/a.txt", bigtext(80, "a"))
+  write_file(root, "src/b.txt", bigtext(80, "b"))
+  watch.reconcile(st)
+  H.eq(#st.sections, 1, "sanity: only top.txt is left")
+  H.eq(st.folded, {}, "the fold went with the changes it described")
+
+  -- And a brand-new change under src/ arrives readable, not folded.
+  write_file(root, "src/a.txt", bigtext(80, "a"):gsub("a line 7", "a line 7 changed"))
+  watch.reconcile(st)
+  H.eq(#st.sections, 2, "sanity: src/a.txt is back")
+  H.eq(st.sections[1].path, "src/a.txt")
+  local s2, e2 = canvas.section_rows(st, 1)
+  assert(e2 - s2 > 1, "the file you just changed must be readable, not a placeholder")
+end
+
+-- The fold pruning is deliberately ONE pass at the end of the merge-walk, not
+-- per-delete inside it. This is the case that pins that down: a reconcile where
+-- every old section under src/ goes away AND a new one arrives. Pruning as the
+-- last old section was deleted would drop the key mid-walk and un-fold the file
+-- inserted a step later -- so the directory the user is looking at as `▸ src/`
+-- would suddenly show an expanded file under it.
+T["watch_reconcile a fold survives a pass that replaces its whole subtree"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["src/a.txt"] = bigtext(80, "a"),
+      ["top.txt"] = bigtext(80, "t"),
+    },
+    worktree = {
+      ["src/a.txt"] = bigtext(80, "a"):gsub("a line 40", "a line 40 changed"),
+      ["top.txt"] = bigtext(80, "t"):gsub("t line 40", "t line 40 changed"),
+    },
+  })
+  local st = open_state(root)
+  st.folded = { ["src/"] = true }
+  canvas.resync_visibility(st)
+
+  -- Revert the only old src/ file and introduce a different one, so a single
+  -- reconcile both empties and refills the folded directory.
+  write_file(root, "src/a.txt", bigtext(80, "a"))
+  write_file(root, "src/b.txt", bigtext(80, "b"))
+  watch.reconcile(st)
+
+  H.eq(st.folded, { ["src/"] = true }, "src/ still has a change, so the fold stands")
+  H.eq(st.sections[1].path, "src/b.txt")
+  local s, e = canvas.section_rows(st, 1)
+  H.eq(e - s, 1, "and the file that replaced it obeys the fold that is still on screen")
+end
 T["watch_start stops itself when the canvas buffer is wiped"] = function()
   local root = fixture()
   local st = open_state(root)

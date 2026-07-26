@@ -1,6 +1,7 @@
 local canvas = require("galley.canvas")
 local viewport = require("galley.viewport")
 local fold = require("galley.fold")
+local lens = require("galley.lens")
 
 local M = {}
 
@@ -33,7 +34,13 @@ function M.save(state)
       return
     end
 
-    local data = { version = VERSION, base = state.base }
+    -- `lens` is the truth; `base` is written alongside as a courtesy to readers
+    -- that only know the older two-value vocabulary, and is nil for the `staged`
+    -- and branch lenses it cannot express. VERSION deliberately stays 1: M.load
+    -- rejects a mismatch outright, so bumping it would silently discard every
+    -- session saved before lenses existed, and `lens` is purely additive.
+    local l = lens.of(state)
+    local data = { version = VERSION, base = lens.to_base(l), lens = l }
 
     -- Auto-collapsed (virt) paths are module intent, not user intent -- never
     -- persist them as if the user had collapsed them. state.collapsed records

@@ -7,6 +7,7 @@ local hl = require("galley.hl")
 local sidebar = require("galley.sidebar")
 local scrollbar = require("galley.scrollbar")
 local util = require("galley.util")
+local lens = require("galley.lens")
 
 local M = {}
 
@@ -88,6 +89,16 @@ function M.enter(state, opts)
     return
   end
 
+  -- The staged lens's new side is the index, which is not a file you can open --
+  -- editing the worktree copy instead would silently put you in a buffer whose
+  -- content is NOT what the canvas is showing. Name the way out rather than just
+  -- refusing: unstaging moves that content back into the worktree, where it is
+  -- editable again.
+  if not lens.editable(lens.of(state)) then
+    util.warn("staged view is not editable — unstage it to edit, or press B for the worktree")
+    return
+  end
+
   local section = state.sections[i]
   -- We showed "no diff shown" for this file; dropping the user into a buffer
   -- of raw zip bytes would be a worse answer than declining. `:edit` it by
@@ -156,7 +167,7 @@ function M.back()
   local state = ex.state
   local abs_path = vim.fs.joinpath(state.root, ex.path)
   local content = read_current_content(ex.buf, abs_path)
-  local old = git.show(state.root, state.base == "index" and ":0" or "HEAD", ex.path)
+  local old = git.show(state.root, lens.of(state).old, ex.path)
   local new_section = model.build_section(ex.path, old or "", content, ex.status, config.options.context)
 
   local idx

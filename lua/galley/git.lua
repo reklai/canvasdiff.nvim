@@ -40,8 +40,28 @@ local function ordinary_status(xy)
   return index_char
 end
 
+-- Porcelain v2's XY pair says two separate things: X is what the INDEX has done
+-- relative to HEAD (i.e. what you staged), Y is what the WORKTREE has done relative
+-- to the index (i.e. what you haven't). "." means "nothing".
+--
+-- Keeping both is what lets the canvas say which kind of change each file is, and it
+-- gives staged-then-changed for free: a file with BOTH set is one you staged and then
+-- modified again -- the reviewed-then-changed signal, in git's own durable
+-- vocabulary rather than our session file's.
+local function xy_pair(xy)
+  local function col(c) return c ~= "." and c or nil end
+  return col(xy:sub(1, 1)), col(xy:sub(2, 2))
+end
+
+--- Every changed file, with both halves of its porcelain-v2 status.
+---
+--- `staged` / `unstaged` are the X and Y columns, nil when that column is ".":
+---   staged only    -> you staged it and haven't touched it since
+---   unstaged only  -> you haven't staged it at all
+---   both           -> you staged it and then changed it again
+---
 --- @param root string
---- @return { path: string, status: string }[]
+--- @return { path: string, status: string, staged: string?, unstaged: string? }[]
 function M.changed_files(root)
   local res = run(root, { "status", "--porcelain=v2", "-z", "--untracked-files=all" })
   if res.code ~= 0 or not res.stdout or res.stdout == "" then
@@ -63,22 +83,32 @@ function M.changed_files(root)
       -- "1 XY sub mH mI mW hH hI path"
       local xy, sub, path = tok:match("^1 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ (.*)$")
       if xy and sub:sub(1, 1) ~= "S" then
-        files[#files + 1] = { path = path, status = ordinary_status(xy) }
+        local staged, unstaged = xy_pair(xy)
+        files[#files + 1] = {
+          path = path, status = ordinary_status(xy),
+          staged = staged, unstaged = unstaged,
+        }
       end
       i = i + 1
     elseif kind == "2" then
       -- "2 XY sub mH mI mW hH hI Xscore newpath" NUL "origpath"
-      local sub, newpath = tok:match("^2 %S+ (%S+) %S+ %S+ %S+ %S+ %S+ %S+ (.*)$")
+      local xy, sub, newpath = tok:match("^2 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ %S+ (.*)$")
       -- consume the origpath token unconditionally so it never leaks into
       -- the next iteration as a bogus record.
       i = i + 2
       if sub and sub:sub(1, 1) ~= "S" then
-        files[#files + 1] = { path = newpath, status = "R" }
+        local staged, unstaged = xy_pair(xy)
+        files[#files + 1] = {
+          path = newpath, status = "R",
+          staged = staged, unstaged = unstaged,
+        }
       end
     elseif kind == "?" then
       local path = tok:match("^%? (.*)$")
       if path then
-        files[#files + 1] = { path = path, status = "?" }
+        -- Untracked: nothing staged by definition, and the whole file is the
+        -- unstaged change.
+        files[#files + 1] = { path = path, status = "?", staged = nil, unstaged = "?" }
       end
       i = i + 1
     else

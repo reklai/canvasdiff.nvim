@@ -6,6 +6,7 @@ local hl = require("galley.hl")
 local sidebar = require("galley.sidebar")
 local scrollbar = require("galley.scrollbar")
 local virt = require("galley.virt")
+local lens = require("galley.lens")
 
 local W = {}
 
@@ -152,51 +153,14 @@ function W.reconcile(state)
   if not state or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
-  local desired = model.build(collect.files(state.root, state.base), config.options.context)
+  local desired = model.build(collect.files(state.root, lens.of(state)), config.options.context)
 
-  -- 0 <-> N transitions: the empty canvas holds a placeholder line, not
-  -- sections; splicing against it is meaningless. Full re-render instead.
-  if #state.sections == 0 or #desired == 0 then
-    if #state.sections ~= 0 or #desired ~= 0 then
-      canvas.render_all(state, desired)
-      if #desired == 0 and W.on_empty then
-        W.on_empty()
-      end
-      hl.apply_now(state)
-      sidebar.refresh(state)
-      scrollbar.update(state)
-      virt.apply(state, config.options.virt)
-    end
-    return
-  end
-
-  -- Both lists are sorted by path: sorted merge-walk.
-  local i, j = 1, 1
-  while i <= #state.sections or j <= #desired do
-    local cur = state.sections[i]
-    local des = desired[j]
-    if cur and des and cur.path == des.path then
-      if cur.old_text ~= des.old_text or cur.new_text ~= des.new_text then
-        canvas.replace_section(state, i, des)
-      end
-      i, j = i + 1, j + 1
-    elseif cur and (not des or cur.path < des.path) then
-      if #state.sections == 1 then
-        -- Deleting the last remaining section would leave the
-        -- placeholder-line empty canvas, which splices can't target;
-        -- finish with a full render of whatever is desired instead.
-        canvas.render_all(state, desired)
-        hl.apply_now(state)
-        sidebar.refresh(state)
-        scrollbar.update(state)
-        virt.apply(state, config.options.virt)
-        return
-      end
-      canvas.replace_section(state, i, nil) -- delete shrinks the list; keep i
-    else
-      canvas.insert_section(state, i, des)
-      i, j = i + 1, j + 1
-    end
+  -- The merge-walk itself lives in canvas, because a user-initiated LENS pivot
+  -- needs exactly the same "splice only what actually differs" behaviour and has
+  -- no business routing through the file-watch module to get it.
+  local full = canvas.reconcile_sections(state, desired)
+  if full and #desired == 0 and W.on_empty then
+    W.on_empty()
   end
 
   hl.apply_now(state)

@@ -187,11 +187,24 @@ function M.build_section(path, old_text, new_text, status, context)
   }
 end
 
+--- True when `sec` was staged and then modified again -- git's own durable version of
+--- "you said you were done with this, then changed it". Independent of the lens, and
+--- of our session file's fingerprints, because git tracks it whether or not this
+--- plugin was ever open.
+function M.staged_then_changed(sec)
+  return sec ~= nil and sec.staged ~= nil and sec.unstaged ~= nil
+end
+
 function M.build(files, context)
   local sections = {}
   for _, f in ipairs(files) do
     local s = M.build_section(f.path, f.old_text, f.new_text, f.status, context)
     if s then
+      -- Which kind of change this is, straight off `git status`. build_section is
+      -- pure over the two texts and has no business knowing about the index, so it
+      -- is attached here instead of threaded through it.
+      s.staged = f.staged
+      s.unstaged = f.unstaged
       sections[#sections + 1] = s
     end
   end

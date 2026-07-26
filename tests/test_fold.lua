@@ -190,6 +190,31 @@ T["fold_step_wrapped from a set-aside section wraps its first step"] = function(
   H.eq(fold.step_wrapped({}, 3, 1, 1), nil, "nothing navigable at all")
 end
 
+-- --- F.prune -----------------------------------------------------------
+
+T["fold_prune drops fold keys with no section left under them"] = function()
+  local secs = sections("a/one.txt", "b/two.txt")
+  H.eq(fold.prune(secs, { ["a/"] = true, ["b/"] = true }),
+    { ["a/"] = true, ["b/"] = true }, "both directories still have changes")
+  H.eq(fold.prune(secs, { ["a/"] = true, ["gone/"] = true }), { ["a/"] = true },
+    "a fold over a directory with nothing changed in it is dead weight")
+  H.eq(fold.prune({}, { ["a/"] = true }), {}, "an empty changeset keeps no folds")
+  H.eq(fold.prune(secs, nil), {}, "nil-safe")
+  H.eq(fold.prune(nil, { ["a/"] = true }), {}, "nil-safe on sections too")
+end
+
+T["fold_prune keeps a nested key only while its own subtree survives"] = function()
+  local secs = sections("lua/mod/a.lua")
+  H.eq(fold.prune(secs, { ["lua/"] = true, ["lua/mod/"] = true, ["lua/other/"] = true }),
+    { ["lua/"] = true, ["lua/mod/"] = true },
+    "the ancestor and the live subdir stay; the empty sibling goes")
+end
+
+T["fold_prune never mutates the table it is given"] = function()
+  local original = { ["gone/"] = true }
+  fold.prune(sections("a/one.txt"), original)
+  H.eq(original, { ["gone/"] = true }, "callers assign the result; the input is theirs")
+end
 -- --- F.indices_under ---------------------------------------------------
 
 T["fold_indices_under is ascending and contiguous"] = function()

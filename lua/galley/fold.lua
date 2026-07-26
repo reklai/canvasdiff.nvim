@@ -218,6 +218,32 @@ function F.step_wrapped(nav, i, delta, count)
   return nav[((p - 1 + delta * count) % n) + 1]
 end
 
+--- `folded` minus every key with no section under it any more.
+---
+--- A fold says "I'm done with these changes", so it has to die with them.
+--- Without this, folding "src/" and then committing everything under it leaves
+--- the key behind -- invisible, because the sidebar only draws a dir row for a
+--- directory that still has sections -- and the next edit to any file under
+--- src/ opens as a placeholder that navigation steps over. It is persisted, so
+--- that outlives the Neovim session too.
+---
+--- Returns a new table; never mutates `folded`.
+function F.prune(sections, folded)
+  local out = {}
+  if not folded then
+    return out
+  end
+  for dir in pairs(folded) do
+    for _, sec in ipairs(sections or {}) do
+      if string.sub(sec.path, 1, #dir) == dir then
+        out[dir] = true
+        break
+      end
+    end
+  end
+  return out
+end
+
 --- Indices of the sections under directory `dir` (a fold key, trailing
 --- slash). Ascending, and contiguous in practice because sections are
 --- path-sorted (model.build) and a fold key is a path prefix.

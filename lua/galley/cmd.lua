@@ -13,33 +13,35 @@ local C = {}
 
 --- Words that name an action. Checked before revision parsing, so a branch
 --- named "close" can never hijack the subcommand.
---- @type table<string, { action: string, base: string? }>
+--- @type table<string, { action: string, lens: string? }>
 C.words = {
   open     = { action = "open" },
   close    = { action = "close" },
   toggle   = { action = "toggle" },
   refresh  = { action = "refresh" },
-  -- States, not a flip: see init.set_base.
-  unstaged = { action = "set_base", base = "index" },
-  all      = { action = "set_base", base = "HEAD" },
+  -- Lenses. States, not flips: see init.set_lens.
+  unstaged = { action = "set_lens", lens = "unstaged" },
+  all      = { action = "set_lens", lens = "all" },
+  staged   = { action = "set_lens", lens = "staged" },
 }
 
 --- Completion candidates, in the order they should be offered.
-C.candidate_order = { "open", "close", "toggle", "refresh", "unstaged", "all" }
+C.candidate_order = { "open", "close", "toggle", "refresh", "all", "unstaged", "staged" }
 
--- `git diff --staged` means index-vs-HEAD (the STAGED changes), which is the
--- exact opposite of base="index" (worktree-vs-index, the UNSTAGED changes) and
--- is content this plugin cannot render at all today. Aliasing them would bake
--- a contradiction with git's own vocabulary into the UI permanently, so these
--- are refused by name rather than quietly redirected.
+-- `git diff --staged` (and its `--cached` synonym) means index-vs-HEAD, which the
+-- `staged` lens now renders -- but the flag spelling stays refused rather than
+-- aliased, because `--staged` is one keystroke from `unstaged` and they mean OPPOSITE
+-- things. Quietly accepting it would make a typo silently show the complement of what
+-- was asked for. Refused by name, pointing at the word that works.
 local REFUSED_FLAGS = {
   ["--staged"] = true,
   ["--cached"] = true,
 }
 
 --- @class GalleyParse
---- @field action string  "toggle"|"open"|"close"|"refresh"|"set_base"|"rev"|"error"
+--- @field action string  "toggle"|"open"|"close"|"refresh"|"set_lens"|"rev"|"range"|"error"
 --- @field base string|nil
+--- @field lens string|nil  named lens id, set only when action is "set_lens"
 --- @field rev string|nil
 --- @field errors string[]
 
@@ -66,8 +68,8 @@ function C.parse(fargs)
   if REFUSED_FLAGS[arg] then
     return {
       action = "error",
-      errors = { ("%s means index vs HEAD (the staged changes), which galley cannot show yet."
-        .. " Use 'unstaged' for worktree vs index, or 'all' for worktree vs HEAD"):format(arg) },
+      errors = { ("%s means index vs HEAD — say 'staged' instead."
+        .. " ('unstaged' is worktree vs index, the opposite.)"):format(arg) },
     }
   end
 
@@ -80,11 +82,17 @@ function C.parse(fargs)
 
   local word = C.words[arg]
   if word then
-    return { action = word.action, base = word.base, errors = {} }
+    return { action = word.action, lens = word.lens, errors = {} }
   end
 
-  -- Anything else is treated as a revision spec. Not implemented yet, but
-  -- parsed here so that adding range mode later needs no grammar change.
+  -- Anything else names a revision. A bare ref is a LENS -- "worktree vs main" --
+  -- whose new side is still the worktree, so it stays editable and is supported. A
+  -- RANGE (`main...HEAD`, `v1..v2`) puts a commit on both sides, which would make
+  -- the canvas a read-only viewer and lose the reason to use it; that stays
+  -- unimplemented, and the grammar keeps it distinguishable.
+  if arg:find("%.%.") then
+    return { action = "range", rev = arg, errors = {} }
+  end
   return { action = "rev", rev = arg, errors = {} }
 end
 
@@ -97,20 +105,22 @@ function C.run(parse)
 
   local fm = require("galley")
 
-  if parse.action == "set_base" then
-    fm.set_base(parse.base)
+  if parse.action == "set_lens" then
+    fm.set_lens(require("galley.lens").get(parse.lens))
     return
   end
 
   if parse.action == "rev" then
-    -- Deliberately does NOT fall through to a toggle: silently showing
-    -- worktree-vs-HEAD when the user asked for `main...HEAD` would be worse
-    -- than refusing, because the diff would look plausible and be wrong.
-    if fm.open_rev then
-      fm.open_rev(parse.rev)
-    else
-      util.warn(("revision mode is not implemented yet (got '%s')"):format(parse.rev))
-    end
+    fm.set_branch(parse.rev)
+    return
+  end
+
+  if parse.action == "range" then
+    -- Deliberately does NOT fall through to anything: silently showing
+    -- worktree-vs-HEAD when the user asked for `main...HEAD` would be worse than
+    -- refusing, because the diff would look plausible and be wrong.
+    util.warn(("commit ranges are not supported (got '%s'). A bare ref works:"
+      .. " `:Galley main` shows your worktree against it"):format(parse.rev))
     return
   end
 

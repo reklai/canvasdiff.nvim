@@ -15,7 +15,7 @@ end
 T["cmd_parse each word maps to its action"] = function()
   for word, want in pairs({
     open = "open", close = "close", toggle = "toggle", refresh = "refresh",
-    unstaged = "set_base", all = "set_base",
+    unstaged = "set_lens", all = "set_lens", staged = "set_lens",
   }) do
     H.eq(cmd.parse({ word }).action, want, "'" .. word .. "' should be " .. want)
   end
@@ -23,9 +23,11 @@ end
 
 -- States rather than a flip: a toggle inside a user mapping is a coin flip,
 -- while `:Galley unstaged` must always land unstaged.
-T["cmd_parse unstaged and all carry explicit bases"] = function()
-  H.eq(cmd.parse({ "unstaged" }).base, "index", "unstaged = worktree vs index")
-  H.eq(cmd.parse({ "all" }).base, "HEAD", "all = worktree vs HEAD")
+T["cmd_parse each lens word names its lens"] = function()
+  H.eq(cmd.parse({ "all" }).lens, "all", "worktree vs HEAD")
+  H.eq(cmd.parse({ "unstaged" }).lens, "unstaged", "worktree vs index")
+  -- The one the plugin could not express before lenses: index vs HEAD.
+  H.eq(cmd.parse({ "staged" }).lens, "staged", "index vs HEAD")
 end
 
 T["cmd_parse too many arguments is a named error"] = function()
@@ -58,11 +60,19 @@ end
 
 -- The grammar reserves revision specs now so that adding range mode later is
 -- not a breaking change to the command surface.
-T["cmd_parse anything else parses as a revision"] = function()
-  for _, rev in ipairs({ "HEAD~3", "main...HEAD", "v1.0..v2.0", "deadbeef" }) do
-    local p = cmd.parse({ rev })
-    H.eq(p.action, "rev", rev .. " should parse as a revision")
-    H.eq(p.rev, rev)
+-- A bare ref is a supported lens (worktree vs that ref, still editable). A range
+-- puts a commit on BOTH sides, which would make the canvas read-only and lose the
+-- point of it, so the grammar keeps the two apart.
+T["cmd_parse a bare ref is a lens, a range is not"] = function()
+  for _, ref in ipairs({ "HEAD~3", "main", "deadbeef", "origin/main" }) do
+    local p = cmd.parse({ ref })
+    H.eq(p.action, "rev", ref .. " should parse as a bare ref")
+    H.eq(p.rev, ref)
+  end
+  for _, range in ipairs({ "main...HEAD", "v1.0..v2.0" }) do
+    local p = cmd.parse({ range })
+    H.eq(p.action, "range", range .. " should parse as a range")
+    H.eq(p.rev, range)
   end
 end
 
@@ -75,10 +85,12 @@ end
 -- --- completion --------------------------------------------------------
 
 T["cmd_complete filters by prefix and offers every word"] = function()
-  H.eq(cmd.complete(""), { "open", "close", "toggle", "refresh", "unstaged", "all" })
+  H.eq(cmd.complete(""), { "open", "close", "toggle", "refresh", "all", "unstaged", "staged" })
   H.eq(cmd.complete("c"), { "close" })
   H.eq(cmd.complete("un"), { "unstaged" })
+  H.eq(cmd.complete("s"), { "staged" })
   H.eq(cmd.complete("zzz"), {})
+  H.eq(cmd.complete("re"), { "refresh" })
 end
 
 T["cmd_complete offers no refs while revision mode is unimplemented"] = function()
@@ -101,7 +113,7 @@ local function capture(fn)
   return msgs
 end
 
-T["cmd_run a revision reports and opens nothing"] = function()
+T["cmd_run a commit range reports and opens nothing"] = function()
   local canvas = require("galley.canvas")
   local before = 0
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -111,8 +123,10 @@ T["cmd_run a revision reports and opens nothing"] = function()
   local msgs = capture(function() cmd.run(cmd.parse({ "main...HEAD" })) end)
 
   H.eq(#msgs, 1, "exactly one notification")
-  assert(msgs[1].msg:match("not implemented"), "got: " .. msgs[1].msg)
+  assert(msgs[1].msg:match("not supported"), "got: " .. msgs[1].msg)
   assert(msgs[1].msg:match("main%.%.%.HEAD"), "should quote the revspec, got: " .. msgs[1].msg)
+  -- And it must point at the thing that DOES work, not just refuse.
+  assert(msgs[1].msg:match("bare ref"), "should name the supported form, got: " .. msgs[1].msg)
 
   local after = 0
   for _, b in ipairs(vim.api.nvim_list_bufs()) do

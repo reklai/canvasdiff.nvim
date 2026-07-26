@@ -178,6 +178,133 @@ return {
     H.eq(vim.api.nvim_get_current_buf(), edited_buf, "close() must not swap away the window's current buffer")
     H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "other.txt")
   end,
+  -- `R` (refresh) is the manual version of watch's pass, and it must hold the niri
+  -- invariant: content changing OUTSIDE the viewport never moves what you are
+  -- reading. It used to call render_all, which recreated every anchor and restored
+  -- no view -- so the key you pressed to make the canvas trustworthy was the key
+  -- that lost your place in it.
+  --
+  -- Asserted on TEXT, not on line numbers, because the numbers are SUPPOSED to move
+  -- here: three lines are added to a file that sorts above the cursor, so holding
+  -- the same content under the cursor requires topline to advance by exactly three.
+  -- A line-number assertion would fail on correct behaviour and pass on render_all,
+  -- which leaves the number alone and slides different text underneath it. Verified:
+  -- an earlier version of this check called `R` broken and `R` fine, exactly backwards.
+  ["e2e: R refreshes without moving what you are reading"] = function()
+    local function body(tag, marks)
+      local o = {}
+      for i = 1, 90 do
+        o[i] = tag .. " line " .. i .. ((marks and i % 10 == 0) and " changed" or "")
+      end
+      return table.concat(o, "\n") .. "\n"
+    end
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = body("a"), ["z.txt"] = body("z") },
+      worktree = { ["a.txt"] = body("a", true), ["z.txt"] = body("z", true) },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+
+    -- Park deep in the canvas, well inside the second file (z.txt), which sorts
+    -- AFTER the file that is about to change.
+    local total = vim.api.nvim_buf_line_count(buf)
+    vim.api.nvim_win_call(win, function()
+      vim.fn.winrestview({ topline = math.floor(total * 0.6), lnum = math.floor(total * 0.6) + 4 })
+    end)
+    local function snap()
+      return vim.api.nvim_win_call(win, function()
+        local top, cur = vim.fn.line("w0"), vim.api.nvim_win_get_cursor(win)[1]
+        return {
+          top = top,
+          lnum = cur,
+          top_text = vim.fn.getline(top),
+          cur_text = vim.fn.getline(cur),
+        }
+      end)
+    end
+    local before = snap()
+    assert(before.top > 1, "sanity: parked away from the top of the canvas")
+
+    -- Grow a.txt, which sorts first, so its section grows strictly ABOVE us.
+    local f = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+    f:write(body("a", true) .. "tail1\ntail2\ntail3\n")
+    f:close()
+
+    vim.api.nvim_set_current_win(win)
+    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
+
+    local after = snap()
+    local all = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+    assert(all:find("tail3", 1, true), "`R` must actually pick the new content up")
+    H.eq(after.cur_text, before.cur_text, "the same TEXT is still under the cursor")
+    H.eq(after.top_text, before.top_text, "and the same text is still at the window top")
+    -- Proves the test cannot pass by `R` having done nothing at all: three lines
+    -- landed above us, so the row numbers must have advanced by three.
+    H.eq(after.top - before.top, 3, "topline advanced by exactly the lines inserted above")
+    H.eq(after.lnum - before.lnum, 3, "and so did the cursor row")
+
+    fm.close()
+    vim.fn.delete(root, "rf")
+  end,
+  -- The honest limit of `R`, and the reason there is no hard-rebuild key.
+  --
+  -- A reconcile compares state.sections against freshly-collected truth and skips
+  -- what matches, so it assumes state.sections describes the BUFFER. If those ever
+  -- diverge, no number of refreshes can fix it -- the comparison keeps saying
+  -- "nothing to do". That is a real gap, and it argued for a hard-rebuild verb.
+  --
+  -- It argued wrong: close() + open() repairs the divergence too AND restores your
+  -- position through the session file, which a bare render_all does not. Measured
+  -- three ways on a corrupted buffer -- refresh: not repaired; rebuild: repaired,
+  -- position lost; close+open: repaired, position kept. So this test pins both
+  -- halves: that `R` does NOT claim to repair this, and that the documented
+  -- recovery genuinely does.
+  --
+  -- Note the corruption has to unset 'modifiable' first: nomodifiable blocks
+  -- nvim_buf_set_lines as well as typed keys, so only galley can corrupt galley's
+  -- own buffer. That is itself part of why a user-facing rebuild key is not needed.
+  ["e2e: refresh cannot repair a divergent buffer, close+open can"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a1\na2\na3\na4\na5\na6\na7\na8\n" },
+      worktree = { ["a.txt"] = "A1\na2\na3\na4\nA5\na6\na7\na8\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local buf = vim.api.nvim_get_current_buf()
+
+    -- Desynchronize the buffer from state.sections, the way an internal bug would.
+    vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+    vim.api.nvim_buf_set_lines(buf, 2, 4, false, { "XXX DIVERGED XXX" })
+    vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+    local function diverged(b)
+      return (table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n"))
+        :find("DIVERGED", 1, true) ~= nil
+    end
+    assert(diverged(buf), "sanity: the buffer really is out of sync now")
+
+    -- Refresh cannot see it: state.sections still matches what git reports, so the
+    -- merge-walk finds nothing to splice. Pressing it twice makes the point.
+    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("R"), "x", false)
+    assert(diverged(buf),
+      "refresh must NOT be expected to repair this -- it compares model to git, "
+      .. "not model to buffer. If this ever starts passing, the reconcile learned "
+      .. "to verify against the buffer and this whole test needs rethinking.")
+
+    -- The documented recovery does repair it.
+    fm.close()
+    fm.open()
+    local after = vim.api.nvim_get_current_buf()
+    assert(not diverged(after), "close+open must rebuild the canvas cleanly")
+    assert(vim.api.nvim_buf_line_count(after) > 1, "and leave a real canvas behind")
+
+    vim.fn.delete(root, "rf")
+  end,
   ["e2e: close() before any open() is a safe no-op"] = function()
     -- Force a fresh module instance so its module-level `state` is nil,
     -- regardless of what earlier test cases in this process did.
