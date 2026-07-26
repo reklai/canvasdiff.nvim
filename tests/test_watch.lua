@@ -337,6 +337,72 @@ T["watch_reconcile a fold survives a pass that replaces its whole subtree"] = fu
   local s, e = canvas.section_rows(st, 1)
   H.eq(e - s, 1, "and the file that replaced it obeys the fold that is still on screen")
 end
+
+--- `bigtext(80, tag)` with every 10th line changed: 7 separated hunks, ~57 canvas
+--- rows. Two of these make the buffer far taller than the ~22-row headless window,
+--- which is what lets a section partway down actually BE the topline.
+local function many_hunks(tag)
+  local lines = vim.split(bigtext(80, tag), "\n", { plain = true })
+  for i = 10, 70, 10 do
+    lines[i] = lines[i] .. " changed"
+  end
+  return table.concat(lines, "\n")
+end
+
+-- A folded section re-spliced in place moves no rows -- a placeholder is
+-- replaced by a placeholder -- so nothing about the view needs correcting. The
+-- `collapsed_topline` branch corrected it anyway, forcing lnum to the section's
+-- start row, which stole the cursor whenever the placeholder happened to be the
+-- top visible row. Reachable from any background write: `:w` in another split, a
+-- formatter, FocusGained.
+--
+-- Two things make this discriminating where the existing jump.back test is not:
+-- the placeholder is NOT section one (so start_row + 1 can't be confused with a
+-- clamp to 1), and the cursor sits well below the topline (so "forces lnum" can't
+-- be confused with "forces topline"). Nothing else in the suite sets
+-- lnum ~= topline before a replace_section, which is why this went unnoticed.
+T["watch_reconcile a background edit to a placeholder leaves the cursor alone"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["aaa.txt"] = bigtext(80, "a"),
+      ["src/a.txt"] = bigtext(80, "s"),
+      ["zzz.txt"] = bigtext(80, "z"),
+    },
+    worktree = {
+      ["aaa.txt"] = many_hunks("a"),
+      ["src/a.txt"] = many_hunks("s"),
+      ["zzz.txt"] = many_hunks("z"),
+    },
+  })
+  local st = open_state(root)
+  H.eq(st.sections[2].path, "src/a.txt", "sanity: the middle section is the folded one")
+
+  st.folded = { ["src/"] = true }
+  canvas.resync_visibility(st)
+  local start_row, end_row = canvas.section_rows(st, 2)
+  H.eq(end_row - start_row, 1, "sanity: src/a.txt is a one-row placeholder")
+  assert(start_row > 0, "sanity: it is not section one, so start_row + 1 ~= 1")
+
+  -- Viewport top exactly on the placeholder, cursor five rows below it (inside
+  -- zzz.txt) -- the only geometry in which the branch fires.
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = start_row + 1, lnum = start_row + 6 })
+  end)
+  local before = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+  H.eq(before.topline, start_row + 1, "sanity: the placeholder really is the top row")
+  H.eq(before.lnum, start_row + 6, "sanity: the cursor really is below it")
+
+  -- A background write to the folded-away file.
+  write_file(root, "src/a.txt", many_hunks("s"):gsub("s line 25", "s line 25 also"))
+  watch.reconcile(st)
+
+  local after = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+  H.eq(after.lnum, before.lnum, "a background edit must not move the cursor")
+  H.eq(after.topline, before.topline, "nor the viewport")
+  local s2, e2 = canvas.section_rows(st, 2)
+  H.eq(e2 - s2, 1, "and the section is still its placeholder")
+end
+
 T["watch_start stops itself when the canvas buffer is wiped"] = function()
   local root = fixture()
   local st = open_state(root)

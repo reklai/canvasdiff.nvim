@@ -368,21 +368,15 @@ function M.replace_section(state, i, new_section)
   -- captured view exactly as it was" instead (see below).
   local anchor
   local preserve_view = false
-  -- A collapsed section's entries don't map to buffer rows (only its one
-  -- placeholder line does), so capture_from_entries can't run against it.
-  -- Mirror the plain preserve_view split on whether the viewport top sits
-  -- above the section instead: above it, nothing moved, so preserve as-is;
-  -- otherwise there is nothing sensible to resolve down to but the
-  -- section's own new start row.
-  local collapsed_topline = false
+  -- A section that was already folded needs no correction at all, whatever the
+  -- viewport is doing. Both callers replace the SAME path (watch only when
+  -- cur.path == des.path; jump.back rebuilds ex.path), so a placeholder is being
+  -- replaced by a placeholder: one row for one row, nothing above or below it
+  -- moves. Only the counts in its text change. Correcting anyway is how a
+  -- background write -- `:w` from another split, a formatter -- used to yank the
+  -- cursor to the top of the window whenever the placeholder was the top row.
   if branch == "intersect" and new_section ~= nil then
-    if was_collapsed then
-      if top0 < start_row then
-        preserve_view = true
-      else
-        collapsed_topline = true
-      end
-    elseif top0 < start_row then
+    if was_collapsed or top0 < start_row then
       preserve_view = true
     else
       local top_offset = top0 - start_row + 1
@@ -439,19 +433,12 @@ function M.replace_section(state, i, new_section)
     vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
   elseif branch == "intersect" then
     if new_section ~= nil and preserve_view then
-      -- Viewport top was above the replaced section: nothing above
-      -- start_row moved, so the captured view is still correct as-is.
-      -- Only clamp lnum, in case the cursor itself was inside the replaced
-      -- range and the buffer is now shorter than the cursor's old row.
+      -- Nothing at or above the viewport top moved: either the top sat above the
+      -- replaced section, or the section was folded and the splice swapped one
+      -- placeholder row for another. Either way the captured view is still
+      -- correct. Only clamp lnum, in case the cursor itself was inside the
+      -- replaced range and the buffer is now shorter than the cursor's old row.
       view.lnum = math.min(view.lnum, vim.api.nvim_buf_line_count(state.buf))
-      vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
-    elseif new_section ~= nil and collapsed_topline then
-      -- The replaced section was collapsed and the viewport top sat at or
-      -- below its start row: with no entries to resolve a semantic anchor
-      -- from, scroll to the (still 1-row) section's own start.
-      local topline = start_row + 1
-      view.topline = topline
-      view.lnum = topline
       vim.api.nvim_win_call(state.win, function() vim.fn.winrestview(view) end)
     elseif new_section ~= nil then
       local resolved = viewport.resolve(anchor, new_section.entries) or 1
