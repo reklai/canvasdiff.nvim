@@ -4,7 +4,7 @@ local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
 local virt = require("canvasdiff.virt")
-local motions = require("canvasdiff.motions")
+local motions = require("canvasdiff.input").motions
 
 local T = {}
 

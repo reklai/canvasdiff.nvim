@@ -1,5 +1,6 @@
 local H = require("helpers")
-local keys = require("canvasdiff.keys")
+local input = require("canvasdiff.input")
+local keys = input.keys
 local config = require("canvasdiff.config")
 
 local T = {}
@@ -14,6 +15,39 @@ local function find(entries, action)
     if m.action == action then out[#out + 1] = m.lhs end
   end
   return out
+end
+
+T["input_ facade exports exactly the supported key and motion operations"] = function()
+  local names = vim.tbl_keys(input)
+  table.sort(names)
+  H.eq(names, { "keys", "motions" })
+
+  local key_names = vim.tbl_keys(input.keys)
+  table.sort(key_names)
+  H.eq(key_names, { "collisions", "grouped", "list", "resolved" })
+  for _, name in ipairs(key_names) do
+    H.eq(type(input.keys[name]), "function", "input.keys." .. name .. " is callable")
+  end
+
+  local motion_names = vim.tbl_keys(input.motions)
+  table.sort(motion_names)
+  H.eq(motion_names, { "cycle", "goto_file", "goto_hunk" })
+  for _, name in ipairs(motion_names) do
+    H.eq(type(input.motions[name]), "function",
+      "input.motions." .. name .. " is callable")
+  end
+end
+
+T["input_ legacy keys module path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.keys"] = nil
+  local loaded = pcall(require, "canvasdiff.keys")
+  assert(not loaded, "canvasdiff.keys must not remain as a forwarding module")
+end
+
+T["input_ legacy motions module path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.motions"] = nil
+  local loaded = pcall(require, "canvasdiff.motions")
+  assert(not loaded, "canvasdiff.motions must not remain as a forwarding module")
 end
 
 -- --- K.list ------------------------------------------------------------
