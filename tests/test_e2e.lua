@@ -254,6 +254,103 @@ return {
     H.eq(vim.api.nvim_get_current_buf(), edited_buf, "close() must not swap away the window's current buffer")
     H.eq(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "other.txt")
   end,
+  -- `:q` destroys the canvas window without going through M.close, whose teardown
+  -- sat behind `#wins == 0` -- true forever once the window is gone. So watch kept
+  -- its fs handles and its blocking git reconcile running for the rest of the
+  -- session (its only lifecycle hook is BufWipeout, and the canvas buffer is
+  -- bufhidden=hide, so `:q` hides it and the hook never fires), and the session was
+  -- never saved -- which silently discarded the folds you had set.
+  ["e2e: :q on the canvas saves the session and stops every subsystem"] = function()
+    local root = H.git_fixture({
+      committed = { ["src/a.txt"] = "a\n", ["src/b.txt"] = "b\n", ["top.txt"] = "t\n" },
+      worktree = { ["src/a.txt"] = "ax\n", ["src/b.txt"] = "bx\n", ["top.txt"] = "tx\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    local session = require("galley.session")
+    os.remove(session.path_for(root))
+
+    -- Own tab with a spare non-canvas window, so closing the canvas window neither
+    -- quits Neovim nor leaves a second window showing the canvas.
+    vim.cmd("tabnew")
+    vim.cmd("split")
+    vim.cmd("enew")
+    local spare = vim.api.nvim_get_current_win()
+    vim.cmd("wincmd j")
+    fm.open()
+    local canvas_win = vim.api.nvim_get_current_win()
+    assert(canvas_win ~= spare, "sanity: the canvas took its own window")
+
+    -- Fold src/ the way a user does, through the sidebar's own <CR>.
+    local sbuf
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(b)
+        and vim.api.nvim_buf_get_name(b):find("galley://sidebar", 1, true) then sbuf = b end
+    end
+    assert(sbuf, "sanity: the sidebar is open")
+    local select_cr
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(sbuf, "n")) do
+      if m.lhs == "<CR>" then select_cr = m.callback end
+    end
+    local srow
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)) do
+      if l == "▾ src/" then srow = i break end
+    end
+    assert(srow, "sanity: found the src/ row")
+    vim.api.nvim_win_set_cursor(vim.fn.bufwinid(sbuf), { srow, 0 })
+    select_cr()
+
+    local function group_alive(name)
+      return (pcall(vim.api.nvim_get_autocmds, { group = name }))
+    end
+    for _, g in ipairs({ "galley.watch", "galley.virt", "galley.hl", "galley.session" }) do
+      assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
+    end
+
+    -- The `:q`. nvim_win_close fires WinClosed exactly as `:quit` does.
+    vim.api.nvim_win_close(canvas_win, false)
+    vim.wait(200, function() return not group_alive("galley.watch") end)
+
+    for _, g in ipairs({ "galley.watch", "galley.virt", "galley.hl", "galley.statuscol",
+                         "galley.session" }) do
+      assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")
+    end
+
+    local data = session.load(root)
+    assert(data, "`:q` must save the session, not leave it to a reopen to lose")
+    H.eq(data.folds, { "src/" }, "the fold you set survives `:q`")
+
+    os.remove(session.path_for(root))
+    vim.cmd("tabonly!")
+  end,
+  -- The teardown is deferred and re-checks, so closing one of two windows showing
+  -- the canvas must not tear anything down.
+  ["e2e: closing one of two canvas windows keeps the canvas alive"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n" }, worktree = { ["a.txt"] = "ax\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    local session = require("galley.session")
+
+    vim.cmd("tabnew")
+    fm.open()
+    local first = vim.api.nvim_get_current_win()
+    vim.cmd("split") -- a SECOND window on the same canvas buffer
+    local second = vim.api.nvim_get_current_win()
+    assert(first ~= second)
+
+    vim.api.nvim_win_close(second, false)
+    vim.wait(120, function() return false end)
+
+    assert((pcall(vim.api.nvim_get_autocmds, { group = "galley.watch" })),
+      "the canvas is still on screen in the other window, so nothing may tear down")
+    fm.close()
+    os.remove(session.path_for(root))
+    vim.cmd("tabonly!")
+  end,
   -- `r` (refresh) is the manual version of watch's pass, and it must hold the niri
   -- invariant: content changing OUTSIDE the viewport never moves what you are
   -- reading. It used to call render_all, which recreated every anchor and restored

@@ -48,6 +48,33 @@ function M.setup(opts)
   return config.setup(opts)
 end
 
+--- Stop every subsystem attached to `st` and persist its session -- everything
+--- M.close does EXCEPT putting windows back, because by the time this runs the
+--- window may already be gone.
+---
+--- That separation is the whole point: `:q` destroys the canvas window without
+--- coming through M.close, and watch's only lifecycle hook is BufWipeout on the
+--- canvas buffer -- which is `bufhidden = "hide"`, so `:q` hides it and the hook
+--- never fires. Left unreached, watch keeps its fs_event handles armed and keeps
+--- running a blocking `git status` plus a `git show` per changed file on every
+--- write in the repo, splicing a buffer nobody can see.
+---
+--- Every step is idempotent and nil-safe, so calling this twice is fine.
+local function teardown(st)
+  if config.options.session.enabled then
+    session.save(st)
+  end
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.session")
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.close")
+
+  watch.stop()
+  hl.detach(st)
+  sidebar.close()
+  scrollbar.close()
+  virt.detach()
+  statuscol.detach()
+end
+
 local function show_empty_message(st)
   vim.api.nvim_set_option_value("modifiable", true, { buf = st.buf })
   vim.api.nvim_buf_set_lines(st.buf, 0, -1, false, { EMPTY_MSG })
@@ -309,6 +336,34 @@ function M.open(opts)
     })
   end
 
+  -- `:q` in the canvas window never reaches M.close, so hook the window's death
+  -- and run the teardown from there. Without it the canvas is off screen while
+  -- watch keeps reconciling it on every write and the session is never saved --
+  -- losing whatever you had folded.
+  --
+  -- Deliberately NO `pattern`: hl, scrollbar and statuscol all re-point state.win
+  -- on BufWinEnter without reinstalling their own autocmds, which is exactly how
+  -- the `pattern = tostring(state.win)` hooks in sidebar and scrollbar go stale
+  -- when the canvas moves windows. Reading state.win at fire time cannot.
+  --
+  -- Deferred and re-checked, because another window in this tabpage may still be
+  -- showing the canvas -- and because doing window work from inside WinClosed is
+  -- fragile (the same reason sidebar.lua schedules its own).
+  local close_aug = vim.api.nvim_create_augroup("galley.close", { clear = true })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = close_aug,
+    callback = function(ev)
+      if not (state and tonumber(ev.match) == state.win) then
+        return
+      end
+      vim.schedule(function()
+        if state and not canvas_showing(state) then
+          teardown(state)
+        end
+      end)
+    end,
+  })
+
   -- Restore BEFORE the auto-virtualizer's first pass. A freshly-opened
   -- canvas sits at row 1, so a virt.apply here would auto-collapse whatever
   -- far section the saved view points at -- and restore's view step skips a
@@ -395,7 +450,9 @@ end
 --- through the same fallback chain rather than being handed another window's
 --- history.
 ---
---- No canvas on screen ⇒ no-op. Closing what isn't open is not an error.
+--- No canvas on screen ⇒ nothing to restore, but the teardown still runs. It used
+--- to return early here, which meant that after a `:q` had taken the window there
+--- was no longer any way to reach the teardown at all.
 ---
 --- A stale 'statuscolumn' left on a restored window is harmless: statuscol's
 --- text function returns "" as soon as the window isn't showing the canvas.
@@ -405,21 +462,7 @@ function M.close()
   end
 
   local wins = canvas_wins(state)
-  if #wins == 0 then
-    return
-  end
-
-  if config.options.session.enabled then
-    session.save(state)
-  end
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.session")
-
-  watch.stop()
-  hl.detach(state)
-  sidebar.close()
-  scrollbar.close()
-  virt.detach()
-  statuscol.detach()
+  teardown(state)
 
   for _, win in ipairs(wins) do
     restore_window(win, state)
