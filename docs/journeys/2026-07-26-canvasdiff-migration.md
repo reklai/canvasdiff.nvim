@@ -142,13 +142,13 @@ Keep the backup branch until the entire journey is accepted.
 
 ### Branch-lens contract
 
-The current explicit-ref lens incorrectly enumerates only worktree status.
-Consequences already reproduced:
+The baseline explicit-ref lens enumerated only worktree status. Consequences
+reproduced before the fix:
 
 - A clean checkout compared with an older ref reports zero changed files.
 - A nonexistent ref plus a dirty file can fabricate an empty old side.
 
-Land this as regression-first commits before moving modules:
+This was closed as four regression-first commits before moving modules:
 
 1. Resolve explicit refs to commit OIDs before mutating lens or surface state.
 2. Enumerate committed `A/C/D/M/R/T` changes against that OID with
@@ -168,32 +168,48 @@ rename jump/back, and filenames containing tabs/newlines.
 
 ### Lifecycle contract
 
-Before architecture moves, preserve these existing properties as explicit
-integration tests:
+Before extracting owners, characterize the existing close, wipe, split,
+session-save, and subsystem-stop behavior with integration tests. Then enforce
+the stronger ownership properties while `App` and `Surface` are introduced:
 
 - Closing or wiping any canvas/sidebar window cancels owned work exactly once.
 - A late timer, watcher callback, or jump-back callback becomes a no-op after
   surface disposal.
-- Two canvas windows do not share mutable surface state.
+- Two splits displaying the same review buffer share one Surface and model;
+  closing one split does not dispose it while another split remains.
+- Independent review buffers in different tabs have different Surfaces,
+  controllers, folds, lenses, and teardown effects.
 
-Gate: full suite green and no module-global live surface singleton.
+The stronger ownership and isolation guarantees are Phase 2 outcomes, not
+prerequisites for creating the owner that makes them possible.
+
+Phase 1 gate: every branch-lens fixture passes, collection failures are
+transactional, and the full behavior suite is green.
 
 ## Phase 2 — establish Ghostty-style boundaries under `galley`
 
 Move in dependency order so each commit stays green:
 
-1. Add `lua/galley.lua` as the sole public facade.
-2. Extract `os` process/filesystem/time adapters from Git, session, and watch.
-3. Establish pure `diff` and `source` facades.
-4. Establish `canvas` and `ui` facades; move rendering state into a concrete
+1. Move `tests/` to singular `test/` without changing execution order.
+2. Add a transitional layout/dependency guard whose exact legacy allowlist can
+   only shrink.
+3. Pin the application lifecycle and same-buffer split contract.
+4. Add `lua/galley.lua` as the sole public facade, with `App` as composition
+   and `Surface` as one review buffer's lifetime owner.
+5. Move all live module state, controllers, timers, handles, callbacks, and
+   augroups under their owning Surface. Guard queued callbacks by exact Surface
+   identity and generation.
+6. Support independent Surfaces per review buffer/tab while deliberately
+   sharing one Surface across splits of the same buffer.
+7. Extract `os` process/filesystem/time adapters from Git, session, and watch.
+8. Establish pure `diff` and `source` facades.
+9. Establish `canvas` and `ui` facades; move rendering state into a concrete
    `Canvas` owner.
-5. Establish `input`, `runtime`, and `session` boundaries.
-6. Introduce `App` as dependency composition and `Surface` as one review
-   instance's lifetime owner.
-7. Move `tests/` to singular `test/`, grouped by unit, integration, e2e,
-   architecture, performance, and fault intent.
-8. Delete `util.lua` by moving each function to its natural owner.
-9. Add contributor architecture documentation and the dependency test.
+10. Establish `input`, `runtime`, and `session` boundaries.
+11. Group tests by unit, integration, e2e, architecture, performance, and fault
+    intent as their owning domains move.
+12. Delete `util.lua` by moving each function to its natural owner.
+13. Add contributor architecture documentation and the final dependency test.
 
 No forwarding modules are allowed. A move and all of its callers change
 together.
@@ -201,6 +217,10 @@ together.
 Gate:
 
 - `require("galley")` is the only supported public import.
+- No module-global live Surface/controller singleton remains.
+- Queued callbacks from a disposed/replaced Surface cannot act on its
+  replacement.
+- Independent Surfaces pass isolation and exactly-once teardown tests.
 - Domain-cycle and forbidden-edge tests pass.
 - Pure-domain tests run under plain Lua semantics with a minimal `vim` stub or
   none.
