@@ -2,7 +2,7 @@ local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local motions = require("canvasdiff.input").motions
-local statuscol = require("canvasdiff.statuscol")
+local statuscol = require("canvasdiff.ui").status_column
 local Surface = require("canvasdiff.Surface")
 local virt = require("canvasdiff.runtime").virtualizer
 local config = require("canvasdiff.config")
@@ -280,10 +280,48 @@ T["motions_ 2]h skips one hunk header ahead"] = function()
   assert(two_step[1] > one_step[1], "2]h must land further than a single ]h step")
 end
 
-local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.statuscol'.text()"
+local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.ui.status_column'.text()"
+
+-- Leases are independent, so there is no "detach whatever is current" sweep to
+-- fall back on: every lease belongs to whoever opened it. These tests share one
+-- process-wide canvas buffer, so one leaked lease keeps an armed BufWinEnter
+-- that claims the next test's windows first. Recording every lease this file
+-- creates -- including the ones its own fault injectors attach reentrantly --
+-- is what replaces the old global sweep.
+local tracked_leases = {}
+do
+  local real_attach = statuscol.attach
+  statuscol.attach = function(...)
+    local lease = real_attach(...)
+    if lease then
+      tracked_leases[#tracked_leases + 1] = lease
+    end
+    return lease
+  end
+end
+
+--- Dispose every lease opened so far, newest first.
+local function detach_tracked()
+  for i = #tracked_leases, 1, -1 do
+    pcall(statuscol.detach, tracked_leases[i])
+    tracked_leases[i] = nil
+  end
+end
+
+--- Exact cleanup for one test's named leases. `detach_tracked` is the backstop;
+--- naming them here keeps each test's own ownership legible.
+local function detach_all(...)
+  for i = 1, select("#", ...) do
+    local lease = select(i, ...)
+    if lease then
+      pcall(statuscol.detach, lease)
+    end
+  end
+end
 
 local function with_fake_statuscolumn(callback)
-  statuscol.detach()
+  detach_tracked()
+  local first_tracked = #tracked_leases + 1
   local real_create_group = vim.api.nvim_create_augroup
   local real_delete_group = vim.api.nvim_del_augroup_by_id
   local real_create_autocmd = vim.api.nvim_create_autocmd
@@ -355,7 +393,14 @@ local function with_fake_statuscolumn(callback)
     callback(runtime)
   end, debug.traceback)
   runtime.on_get, runtime.on_set = nil, nil
-  local cleanup_ok, cleanup_err = pcall(statuscol.detach)
+  local cleanup_ok, cleanup_err = true, nil
+  for i = #tracked_leases, first_tracked, -1 do
+    local closed, err = pcall(statuscol.detach, tracked_leases[i])
+    tracked_leases[i] = nil
+    if not closed and cleanup_ok then
+      cleanup_ok, cleanup_err = false, err
+    end
+  end
   vim.api.nvim_create_augroup = real_create_group
   vim.api.nvim_del_augroup_by_id = real_delete_group
   vim.api.nvim_create_autocmd = real_create_autocmd
@@ -382,6 +427,7 @@ local function fake_autocmd(runtime, event, occurrence)
 end
 
 T["statuscol_ stale deferred leave cannot reach replacement"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local primary = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -398,6 +444,9 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
         alive = function() return true end,
         windows = function() return views end,
       })
+      -- Attach queues one reconcile of its own initial claim snapshot.
+      local after_attach_a = #runtime.scheduled
+      H.eq(after_attach_a, 1, "attach queued exactly its snapshot reconcile")
       local leave_a = fake_autocmd(runtime, "BufWinLeave", 1)
       local closed_a = fake_autocmd(runtime, "WinClosed", 1)
       local win_leave_a = fake_autocmd(runtime, "WinLeave", 1)
@@ -407,12 +456,15 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
       local win_new_a = fake_autocmd(runtime, "WinNew", 1)
       vim.api.nvim_set_current_win(primary)
       leave_a()
-      H.eq(#runtime.scheduled, 1, "A captured one deferred leave")
+      H.eq(#runtime.scheduled, after_attach_a + 1, "A captured one deferred leave")
+      local a_leave = after_attach_a + 1
 
+      H.eq(statuscol.detach(lease_a), true, "the owner disposes A")
       local lease_b = statuscol.attach(st, {
         alive = function() return true end,
         windows = function() return views end,
       })
+      local after_attach_b = #runtime.scheduled
       local group_b = runtime.group_order[2]
       H.eq(runtime.options[primary], STATUSCOL_EXPR)
       H.eq(lease_a.disposed, true)
@@ -425,8 +477,8 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
       H.eq(lease_a.last_canvas, nil, "disposed A releases source provenance")
       H.eq(lease_a.focused_win, nil, "disposed A releases focus provenance")
       H.eq(lease_a.aug, nil)
-      H.eq(statuscol.detach(lease_a), false, "stale detach(A) cannot stop B")
-      assert(runtime.groups[group_b], "B's reused group survives stale detach(A)")
+      H.eq(statuscol.detach(lease_a), false, "a disposed A cannot be torn down twice")
+      assert(runtime.groups[group_b], "B's reused group survives a stale detach(A)")
 
       split_pre_a()
       tab_leave_a()
@@ -447,7 +499,7 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
         "held stale global callbacks cannot delete B's reused group")
 
       vim.api.nvim_win_set_buf(primary, foreign)
-      runtime.scheduled[1]()
+      runtime.scheduled[a_leave]()
       H.eq(runtime.options[primary], STATUSCOL_EXPR,
         "A's stale deferred leave cannot restore over B")
 
@@ -457,8 +509,8 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
       local leave_b = fake_autocmd(runtime, "BufWinLeave", 2)
       leave_b()
       vim.api.nvim_win_set_buf(inherited, foreign)
-      H.eq(#runtime.scheduled, 2)
-      runtime.scheduled[2]()
+      H.eq(#runtime.scheduled, after_attach_b + 1)
+      runtime.scheduled[after_attach_b + 1]()
       H.eq(runtime.options[inherited], "primary prior",
         "an untracked inherited split restores its same-tab prior")
 
@@ -477,6 +529,7 @@ T["statuscol_ stale deferred leave cannot reach replacement"] = function()
 end
 
 T["statuscol_ restores every Surface view and preserves user overrides"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local original_tab = vim.api.nvim_get_current_tabpage()
   local primary = st.win
@@ -535,7 +588,7 @@ T["statuscol_ restores every Surface view and preserves user overrides"] = funct
 end
 
 T["statuscol_ plain split restores its exact parent prior"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local first = st.win
   vim.api.nvim_set_current_win(first)
@@ -591,7 +644,7 @@ T["statuscol_ plain split restores its exact parent prior"] = function()
 end
 
 T["statuscol_ floating window restores its exact source prior"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local first = st.win
   vim.api.nvim_set_current_win(first)
@@ -690,7 +743,7 @@ T["statuscol_ floating window restores its exact source prior"] = function()
 end
 
 T["statuscol_ foreign float cannot retain its transient Canvas expression"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -732,7 +785,7 @@ T["statuscol_ foreign float cannot retain its transient Canvas expression"] = fu
 end
 
 T["statuscol_ adopts a child of an excluded raw Canvas view"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local primary = st.win
   vim.api.nvim_set_current_win(primary)
@@ -808,6 +861,7 @@ T["statuscol_ adopts a child of an excluded raw Canvas view"] = function()
 end
 
 T["statuscol_ deferred raw-child reconcile releases its disposed graph"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local primary = st.win
   vim.api.nvim_set_current_win(primary)
@@ -822,6 +876,8 @@ T["statuscol_ deferred raw-child reconcile releases its disposed graph"] = funct
       local lease = statuscol.attach(st, {
         windows = function() return { primary } end,
       })
+      -- Attach queues one reconcile of its own initial claim snapshot.
+      local after_attach = #runtime.scheduled
 
       vim.api.nvim_set_current_win(raw)
       fake_autocmd(runtime, "WinEnter", 1)()
@@ -830,8 +886,9 @@ T["statuscol_ deferred raw-child reconcile releases its disposed graph"] = funct
       child = vim.api.nvim_open_win(st.buf, true, { split = "below" })
       runtime.options[child] = "RAW"
       fake_autocmd(runtime, "WinNew", 1)()
-      H.eq(#runtime.scheduled, 1, "source-less WinNew queued reconciliation")
-      local queued = runtime.scheduled[1]
+      H.eq(#runtime.scheduled, after_attach + 1,
+        "source-less WinNew queued reconciliation")
+      local queued = runtime.scheduled[after_attach + 1]
 
       H.eq(statuscol.detach(lease), true)
       H.eq(lease.state, nil)
@@ -861,8 +918,11 @@ T["statuscol_ deferred raw-child reconcile releases its disposed graph"] = funct
   assert(ok, err)
 end
 
-T["statuscol_ cross-state replacement repairs a late claim write"] = function()
-  statuscol.detach()
+-- Per-window ownership transfer, not lease replacement: attaching C does not
+-- dispose A, but C's claim of `target` still takes that one window -- and with
+-- it A's exact prior -- while A's in-flight write is repaired behind it.
+T["statuscol_ cross-state claim transfers one window and repairs a late write"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -900,22 +960,23 @@ T["statuscol_ cross-state replacement repairs a late claim write"] = function()
     })
 
     vim.api.nvim_set_option_value = function(name, value, spec)
-      if name == "statuscolumn" and spec and spec.win == target then
-        if step == 0 and value == STATUSCOL_EXPR then
-          step = 1
-          lease_b = statuscol.attach({
-            buf = replacement_buf,
-            win = replacement_win,
-          }, {
-            windows = function() return { replacement_win } end,
-          })
-          step = 2
-        elseif step == 2 and value == "OLD" then
-          step = 3
-          lease_c = statuscol.attach(st, {
-            windows = function() return { source, target } end,
-          })
-        end
+      if name == "statuscolumn" and spec and spec.win == target
+          and step == 0 and value == STATUSCOL_EXPR then
+        step = 1
+        -- An unrelated Canvas attaches first, to show the two never interact.
+        lease_b = statuscol.attach({
+          buf = replacement_buf,
+          win = replacement_win,
+        }, {
+          windows = function() return { replacement_win } end,
+        })
+        step = 2
+        -- Then a same-Canvas peer claims both of A's windows out from under
+        -- A's in-flight write, which has not landed yet.
+        lease_c = statuscol.attach(st, {
+          windows = function() return { source, target } end,
+        })
+        step = 3
       end
       return real_set(name, value, spec)
     end
@@ -928,30 +989,34 @@ T["statuscol_ cross-state replacement repairs a late claim write"] = function()
     assert(ok, err)
     assert(lease_b and lease_c, "A's late claim installed B then C")
     H.eq(step, 3)
-    H.eq(lease_a.disposed, true)
-    H.eq(lease_b.disposed, true)
-    H.eq(lease_a.state, nil)
-    H.eq(lease_b.state, nil)
-    H.eq(next(lease_a.touched), nil)
-    H.eq(next(lease_b.touched), nil)
+    H.eq(lease_a.disposed, false, "an independent peer never disposes A")
+    H.eq(lease_b.disposed, false, "a third lease never disposes B either")
+    H.eq(lease_a.touched[target], nil,
+      "A released exactly the one window C claimed from it")
     H.eq(lease_c.priors[target], "OLD",
       "C's target record receives the transferred exact prior")
     H.eq(lease_c.initial_prior, "SOURCE",
       "rebasing the target does not corrupt C's independent fallback")
-    H.eq(lease_c.last_canvas.prior, "OLD",
-      "C's focused provenance follows its rebased target record")
+    if lease_c.last_canvas then
+      assert(rawequal(lease_c.last_canvas.owner.lease, lease_c),
+        "C's provenance references only records C itself owns")
+    end
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = target, scope = "local" }), STATUSCOL_EXPR,
       "C retains ownership after A's orphan repair")
     H.eq(vim.api.nvim_get_option_value(
-      "statuscolumn", { win = replacement_win, scope = "local" }), "NEW",
-      "C's attach cleanly retired the different-Canvas B")
+      "statuscolumn", { win = replacement_win, scope = "local" }), STATUSCOL_EXPR,
+      "B keeps its own different-Canvas window")
 
-    H.eq(statuscol.detach(lease_b), false)
+    H.eq(statuscol.detach(lease_b), true)
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = replacement_win, scope = "local" }), "NEW",
+      "B restores exactly its own window")
     H.eq(statuscol.detach(lease_c), true)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = target, scope = "local" }), "OLD",
       "C inherited A's exact prior instead of an expression fallback")
+    H.eq(statuscol.detach(lease_a), true)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = source, scope = "local" }), "SOURCE")
     H.eq(vim.api.nvim_get_option_value(
@@ -959,7 +1024,7 @@ T["statuscol_ cross-state replacement repairs a late claim write"] = function()
   end, debug.traceback)
 
   vim.api.nvim_set_option_value = real_set
-  pcall(statuscol.detach)
+  detach_all(lease_a, lease_b, lease_c)
   for _, win in ipairs({ target, replacement_win }) do
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
@@ -970,8 +1035,8 @@ T["statuscol_ cross-state replacement repairs a late claim write"] = function()
   assert(verify_ok, verify_err)
 end
 
-T["statuscol_ creation transaction follows reentrant replacements"] = function()
-  statuscol.detach()
+T["statuscol_ creation transaction follows reentrant peers"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -1028,30 +1093,32 @@ T["statuscol_ creation transaction follows reentrant replacements"] = function()
   local verify_ok, verify_err = xpcall(function()
     assert(ok, err)
     assert(lease_b and lease_c, "pre-restore installed B then C")
-    H.eq(lease_a.disposed, true)
-    H.eq(lease_b.disposed, true)
-    H.eq(lease_a.state, nil)
-    H.eq(lease_b.state, nil)
-    H.eq(next(lease_a.leaving), nil)
-    H.eq(next(lease_b.leaving), nil)
+    H.eq(lease_a.disposed, false, "a reentrant peer never disposes A")
+    H.eq(lease_b.disposed, false, "nor B")
 
+    -- Whichever lease ends up owning the children, none of the three may leave
+    -- a transient plugin expression behind in a foreign window.
     H.eq(vim.wait(300, function()
-      return lease_c.touched[child] == nil
-        and lease_c.touched[second_child] == nil
-    end), true, "winning C observes both synchronous foreign final buffers")
-    H.eq(statuscol.detach(lease_c), true)
+      for _, lease in ipairs({ lease_a, lease_b, lease_c }) do
+        if lease.touched[child] ~= nil or lease.touched[second_child] ~= nil then
+          return false
+        end
+      end
+      return true
+    end), true, "every lease observes both synchronous foreign final buffers")
+    detach_all(lease_a, lease_b, lease_c)
     vim.api.nvim_win_set_buf(child, st.buf)
     vim.api.nvim_win_set_buf(second_child, st.buf)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = child, scope = "local" }), "source prior",
-      "A-to-B-to-C transfer cannot strand a transient expression")
+      "an A-to-B-to-C creation chain cannot strand a transient expression")
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = second_child, scope = "local" }), "source prior",
-      "the replacement keeps the real source for an immediate second child")
+      "a reentrant peer keeps the real source for an immediate second child")
   end, debug.traceback)
 
   vim.api.nvim_set_option_value = real_set
-  pcall(statuscol.detach)
+  detach_all(lease_a, lease_b, lease_c)
   for _, win in ipairs({ second_child, child }) do
     if win and vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
@@ -1061,8 +1128,8 @@ T["statuscol_ creation transaction follows reentrant replacements"] = function()
   assert(verify_ok, verify_err)
 end
 
-T["statuscol_ leave transaction follows reentrant replacement"] = function()
-  statuscol.detach()
+T["statuscol_ leave transaction follows a reentrant peer"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local departed = st.win
   vim.api.nvim_set_current_win(departed)
@@ -1115,28 +1182,31 @@ T["statuscol_ leave transaction follows reentrant replacement"] = function()
   local verify_ok, verify_err = xpcall(function()
     assert(ok, err)
     assert(lease_b, "BufLeave pre-restore installed B")
-    H.eq(lease_a.disposed, true)
-    H.eq(next(lease_a.leaving), nil)
+    H.eq(lease_a.disposed, false, "a reentrant peer never disposes A")
     H.eq(vim.wait(300, function()
-      return lease_b.touched[departed] == nil
-        and lease_b.touched[child] == nil
-    end), true, "winning B observes the leave and immediate foreign child")
+      for _, lease in ipairs({ lease_a, lease_b }) do
+        if lease.touched[departed] ~= nil or lease.touched[child] ~= nil then
+          return false
+        end
+      end
+      return true
+    end), true, "both leases observe the leave and the immediate foreign child")
 
-    H.eq(statuscol.detach(lease_b), true)
+    detach_all(lease_a, lease_b)
     vim.api.nvim_win_set_buf(departed, st.buf)
     vim.api.nvim_win_set_buf(child, st.buf)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = departed, scope = "local" }), "departed prior",
-      "reentrant BufLeave transfer restores the hidden Canvas slot")
+      "a reentrant BufLeave peer cannot strand the hidden Canvas slot")
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = source, scope = "local" }), "source prior")
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = child, scope = "local" }), "source prior",
-      "replacement keeps the real source across a nonfocused leave")
+      "a reentrant peer keeps the real source across a nonfocused leave")
   end, debug.traceback)
 
   vim.api.nvim_set_option_value = real_set
-  pcall(statuscol.detach)
+  detach_all(lease_a, lease_b)
   if child and vim.api.nvim_win_is_valid(child) then
     pcall(vim.api.nvim_win_close, child, true)
   end
@@ -1147,8 +1217,8 @@ T["statuscol_ leave transaction follows reentrant replacement"] = function()
   assert(verify_ok, verify_err)
 end
 
-T["statuscol_ creation preflight transfers to its reentrant winner"] = function()
-  statuscol.detach()
+T["statuscol_ creation preflight survives a reentrant peer"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -1184,21 +1254,21 @@ T["statuscol_ creation preflight transfers to its reentrant winner"] = function(
       height = 5,
     })
     assert(lease_b, "WinNew alive preflight installed B")
-    H.eq(lease_a.disposed, true)
-    H.eq(lease_a.state, nil)
-    H.eq(next(lease_a.leaving), nil)
+    H.eq(lease_a.disposed, false, "a preflight peer never disposes A")
     H.eq(vim.wait(300, function()
-      return lease_b.touched[child] == nil
-    end), true, "winning preflight lease observes the foreign final buffer")
+      return lease_a.touched[child] == nil and lease_b.touched[child] == nil
+    end), true, "both preflight leases observe the foreign final buffer")
 
-    H.eq(statuscol.detach(lease_b), true)
+    detach_all(lease_a, lease_b)
+    -- Neovim remembers a window-local option per displayed buffer, so this
+    -- also proves nothing was left remembered for the transient pairing.
     vim.api.nvim_win_set_buf(child, st.buf)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = child, scope = "local" }), "source prior",
-      "alive replacement cannot strand the transient Canvas expression")
+      "an alive-callback peer cannot strand the transient Canvas expression")
   end, debug.traceback)
 
-  pcall(statuscol.detach)
+  detach_all(lease_a, lease_b)
   if child and vim.api.nvim_win_is_valid(child) then
     pcall(vim.api.nvim_win_close, child, true)
   end
@@ -1206,8 +1276,8 @@ T["statuscol_ creation preflight transfers to its reentrant winner"] = function(
   assert(ok, err)
 end
 
-T["statuscol_ leave preflight transfers to its reentrant winner"] = function()
-  statuscol.detach()
+T["statuscol_ leave preflight survives a reentrant peer"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local win = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -1235,27 +1305,25 @@ T["statuscol_ leave preflight transfers to its reentrant winner"] = function()
 
     vim.api.nvim_win_set_buf(win, foreign)
     assert(lease_b, "BufLeave alive preflight installed B")
-    H.eq(lease_a.disposed, true)
-    H.eq(lease_a.state, nil)
-    H.eq(next(lease_a.leaving), nil)
+    H.eq(lease_a.disposed, false, "a preflight peer never disposes A")
     H.eq(vim.wait(300, function()
-      return lease_b.touched[win] == nil
-    end), true, "winning preflight lease observes the completed buffer leave")
+      return lease_a.touched[win] == nil and lease_b.touched[win] == nil
+    end), true, "both preflight leases observe the completed buffer leave")
 
-    H.eq(statuscol.detach(lease_b), true)
+    detach_all(lease_a, lease_b)
     vim.api.nvim_win_set_buf(win, st.buf)
     H.eq(vim.api.nvim_get_option_value(
       "statuscolumn", { win = win, scope = "local" }), "canvas prior",
-      "alive replacement cannot strand the departed Canvas slot")
+      "an alive-callback peer cannot strand the departed Canvas slot")
   end, debug.traceback)
 
-  pcall(statuscol.detach)
+  detach_all(lease_a, lease_b)
   pcall(vim.api.nvim_buf_delete, foreign, { force = true })
   assert(ok, err)
 end
 
 T["statuscol_ suspended child is exact provenance for nested creation"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local first
@@ -1312,7 +1380,7 @@ T["statuscol_ suspended child is exact provenance for nested creation"] = functi
 end
 
 T["statuscol_ duplicate host leave restores its hidden slot before detach"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local first = st.win
   vim.api.nvim_set_current_win(first)
@@ -1358,7 +1426,7 @@ T["statuscol_ duplicate host leave restores its hidden slot before detach"] = fu
 end
 
 T["statuscol_ rapid buffer bounce cancels its stale leave"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local win = st.win
   local foreign = vim.api.nvim_create_buf(false, true)
@@ -1395,7 +1463,7 @@ T["statuscol_ rapid buffer bounce cancels its stale leave"] = function()
 end
 
 T["statuscol_ focus roundtrip preserves source for immediate float"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local source = st.win
   local foreign_buf = vim.api.nvim_create_buf(false, true)
@@ -1454,7 +1522,7 @@ T["statuscol_ focus roundtrip preserves source for immediate float"] = function(
 end
 
 T["statuscol_ tab split restores its exact parent prior"] = function()
-  statuscol.detach()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local original_tab = vim.api.nvim_get_current_tabpage()
   local first = st.win
@@ -1517,6 +1585,7 @@ T["statuscol_ tab split restores its exact parent prior"] = function()
 end
 
 T["statuscol_ fresh tab provenance supersedes a stale split candidate"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local original_tab = vim.api.nvim_get_current_tabpage()
   local first = st.win
@@ -1574,6 +1643,7 @@ T["statuscol_ fresh tab provenance supersedes a stale split candidate"] = functi
 end
 
 T["statuscol_ reentrant restore cannot clobber its winner"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local win = st.win
 
@@ -1600,26 +1670,39 @@ T["statuscol_ reentrant restore cannot clobber its winner"] = function()
     H.eq(statuscol.detach(lease_b), true)
     H.eq(runtime.options[win], "prior")
 
+    -- Attach no longer tears a predecessor down, so the surviving abort case
+    -- is an attach the owner disposes mid-flight. Its partial resources go,
+    -- and the peer installed reentrantly inside its own claim keeps the window.
     local lease_a2 = statuscol.attach(st, callbacks)
-    local lease_b2
+    local victim, lease_b2
     runtime.on_set = function(_, value)
-      if value == "prior" then
+      if value == STATUSCOL_EXPR and victim then
+        H.eq(statuscol.detach(victim), true, "the owner disposes the half-built lease")
         lease_b2 = statuscol.attach(st, callbacks)
       end
     end
-    local ok, err = pcall(statuscol.attach, st, callbacks)
-    H.eq(ok, false, "outer attach aborts when teardown installs a winner")
-    assert(tostring(err):find("superseded", 1, true), tostring(err))
-    assert(lease_b2, "the teardown winner was installed")
-    H.eq(statuscol.detach(lease_a2), false)
+    local ok, err = pcall(statuscol.attach, st, {
+      alive = callbacks.alive,
+      windows = callbacks.windows,
+      claim = function(lease)
+        victim = lease
+        return true
+      end,
+    })
+    H.eq(ok, false, "an attach disposed inside its own first claim aborts")
+    assert(tostring(err):find("disposed", 1, true), tostring(err))
+    assert(lease_b2, "the reentrant peer was installed")
+    H.eq(statuscol.detach(victim), false, "the aborted attach is already terminal")
     H.eq(runtime.options[win], STATUSCOL_EXPR,
-      "aborted outer attach did not orphan or overwrite B")
+      "the aborted attach did not orphan or overwrite its peer")
     H.eq(statuscol.detach(lease_b2), true)
+    H.eq(statuscol.detach(lease_a2), true)
     H.eq(runtime.options[win], "prior")
   end)
 end
 
 T["statuscol_ callback errors are observable except from text"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   local callbacks = {
     alive = function() return true end,
@@ -1645,10 +1728,145 @@ T["statuscol_ callback errors are observable except from text"] = function()
   })
   H.eq(ok, false)
   assert(tostring(err):find("statuscol windows fault", 1, true), tostring(err))
-  H.eq(statuscol.detach(), false, "failed attach leaves no current lease")
+  H.eq(statuscol.detach(nil), false, "there is no unqualified teardown to fall back on")
+end
+
+--- A second complete review on its own buffer and window. `canvas.open` still
+--- resolves one process-wide canvas buffer, so it cannot express two
+--- simultaneous reviews yet; this builds the second one on the same public
+--- render path, which is the shape App produces once it indexes Surfaces by
+--- buffer.
+local function independent_state(tag)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, "canvasdiff://test-canvas/" .. tag)
+  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+  vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
+  vim.cmd("split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  local state = {
+    buf = buf,
+    win = win,
+    sections = {},
+    anchor_ids = {},
+    hl_ids = {},
+    collapsed = {},
+    folded = {},
+    rendered_hidden = {},
+    folded_seen = {},
+  }
+  canvas.render_all(state, three_sections())
+  return state
+end
+
+T["statuscol_ two simultaneous leases render their own canvases"] = function()
+  detach_tracked()
+  local st = canvas.open(three_sections(), {})
+  local first = st.win
+  vim.api.nvim_set_current_win(first)
+  local other = independent_state("statuscol")
+  local second = other.win
+  local lease_a, lease_b
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_option_value(
+      "statuscolumn", "first prior", { win = first, scope = "local" })
+    vim.api.nvim_set_option_value(
+      "statuscolumn", "second prior", { win = second, scope = "local" })
+
+    lease_a = statuscol.attach(st, { windows = function() return { first } end })
+    lease_b = statuscol.attach(other, { windows = function() return { second } end })
+    assert(lease_a.group_name ~= lease_b.group_name, "group names never collide")
+    H.eq(lease_a.disposed, false, "attaching B never disposes A")
+
+    -- One global expression string, two owners. The drawn window is the only
+    -- thing that can decide which lease renders this row, so `text` must reach
+    -- the right one for each.
+    for _, case in ipairs({ { first, lease_a }, { second, lease_b } }) do
+      local win = case[1]
+      H.eq(vim.api.nvim_get_option_value(
+        "statuscolumn", { win = win, scope = "local" }), STATUSCOL_EXPR)
+      vim.g.statusline_winid = win
+      vim.v.lnum = 1
+      H.eq(statuscol.text(), statuscol.render(case[2], win, 1),
+        "the expression resolves through the exact per-window owner")
+    end
+    vim.g.statusline_winid = nil
+
+    -- An unowned window renders nothing rather than guessing an owner.
+    vim.g.statusline_winid = -1
+    H.eq(statuscol.text(), "", "an unowned window has no status column")
+    vim.g.statusline_winid = nil
+
+    H.eq(statuscol.detach(lease_a), true)
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = first, scope = "local" }), "first prior")
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = second, scope = "local" }), STATUSCOL_EXPR,
+      "A teardown never restores over a peer's window")
+    H.eq(statuscol.detach(lease_b), true)
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = second, scope = "local" }), "second prior")
+  end, debug.traceback)
+
+  vim.g.statusline_winid = nil
+  detach_all(lease_a, lease_b)
+  if second ~= first and vim.api.nvim_win_is_valid(second) then
+    pcall(vim.api.nvim_win_close, second, true)
+  end
+  if vim.api.nvim_buf_is_valid(other.buf) then
+    pcall(vim.api.nvim_buf_delete, other.buf, { force = true })
+  end
+  assert(ok, err)
+end
+
+T["statuscol_ a forged shell cannot authenticate as a lease"] = function()
+  detach_tracked()
+  local st = canvas.open(three_sections(), {})
+  local win = st.win
+  local lease
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_option_value(
+      "statuscolumn", "real prior", { win = win, scope = "local" })
+    lease = statuscol.attach(st, { windows = function() return { win } end })
+
+    local copy = {}
+    for k, v in pairs(lease) do
+      copy[k] = v
+    end
+    local forgeries = {
+      copy,
+      setmetatable({}, { __index = lease }),
+      { disposed = false, id = lease.id, group_name = lease.group_name,
+        state = st, callbacks = {}, touched = {}, priors = {}, leaving = {} },
+      "not a table",
+      nil,
+    }
+    for i = 1, 5 do
+      local forged = forgeries[i]
+      H.eq(statuscol.detach(forged), false,
+        "a forged handle cannot tear down a real lease")
+      H.eq(statuscol.render(forged, win, 1), "",
+        "a forged handle renders nothing")
+    end
+
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = win, scope = "local" }), STATUSCOL_EXPR,
+      "the real lease still owns its window")
+    assert(statuscol.render(lease, win, 1) ~= "" or #st.sections == 0,
+      "the real lease still renders")
+    H.eq(statuscol.detach(lease), true)
+    H.eq(vim.api.nvim_get_option_value(
+      "statuscolumn", { win = win, scope = "local" }), "real prior")
+  end, debug.traceback)
+
+  detach_all(lease)
+  assert(ok, err)
 end
 
 T["statuscol_ text maps rows to new-file numbers"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_set_current_win(st.win)
   local lease = statuscol.attach(st, {
@@ -1683,6 +1901,7 @@ T["statuscol_ text maps rows to new-file numbers"] = function()
 end
 
 T["statuscol_ renders for the drawn window even while focus is elsewhere"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_set_current_win(st.win)
   local lease = statuscol.attach(st, {
@@ -1729,6 +1948,7 @@ T["statuscol_ renders for the drawn window even while focus is elsewhere"] = fun
 end
 
 T["statuscol_ never leaks into a foreign buffer"] = function()
+  detach_tracked()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_set_current_win(st.win)
   local lease = statuscol.attach(st, {
@@ -1754,7 +1974,7 @@ T["statuscol_ never leaks into a foreign buffer"] = function()
     return vim.api.nvim_get_option_value("statuscolumn", { win = st.win }) ~= ""
   end)
   H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = st.win }),
-    "%!v:lua.require'canvasdiff.statuscol'.text()",
+    "%!v:lua.require'canvasdiff.ui.status_column'.text()",
     "statuscolumn restored once the canvas is showing again")
 
   statuscol.detach(lease)

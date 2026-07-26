@@ -8,12 +8,12 @@ local input = require("canvasdiff.input")
 local motions = input.motions
 local virt = runtime.virtualizer
 local watch = runtime.watch
-local statuscol = require("canvasdiff.statuscol")
 local session = require("canvasdiff.session")
 local ui = require("canvasdiff.ui")
 local hl = ui.highlight
 local scrollbar = ui.scrollbar
 local sidebar = ui.sidebar
+local statuscol = ui.status_column
 local keys = input.keys
 local diff = require("canvasdiff.diff")
 local fold = diff.fold
@@ -689,14 +689,32 @@ function App:open(opts)
   })
 
   if config.options.statuscolumn.enabled then
-    surface.controllers.statuscol = statuscol.attach(st, {
-      alive = function()
-        return surface:guard(generation)
+    local statuscol_lease = statuscol.attach(st, {
+      claim = function(lease)
+        if not surface:guard(generation) or surface.controllers.statuscol ~= nil then
+          return false
+        end
+        surface.controllers.statuscol = lease
+        return true
+      end,
+      alive = function(lease)
+        return surface:guard(generation) and surface.controllers.statuscol == lease
+      end,
+      release = function(lease)
+        if surface.controllers.statuscol ~= lease then
+          return false
+        end
+        surface.controllers.statuscol = nil
+        return true
       end,
       windows = function()
         return surface:canvas_windows()
       end,
     })
+    if statuscol_lease then
+      assert(surface.controllers.statuscol == statuscol_lease,
+        "status-column claim must publish its returned exact lease")
+    end
   end
 
   if config.options.session.enabled then

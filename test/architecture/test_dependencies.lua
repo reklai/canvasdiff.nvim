@@ -13,6 +13,7 @@ local UI_FACADE = "canvasdiff.ui"
 local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
 local HIGHLIGHT_OWNER = "canvasdiff.ui.highlight"
 local SIDEBAR_OWNER = "canvasdiff.ui.sidebar"
+local STATUS_COLUMN_OWNER = "canvasdiff.ui.status_column"
 
 local function inspect_repo()
   return graph.inspect(graph.root)
@@ -190,6 +191,7 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   assert_inspected_module(inspection, SCROLLBAR_OWNER)
   assert_inspected_module(inspection, HIGHLIGHT_OWNER)
   assert_inspected_module(inspection, SIDEBAR_OWNER)
+  assert_inspected_module(inspection, STATUS_COLUMN_OWNER)
 
   local facade_edges = {}
   local violations = {}
@@ -215,6 +217,8 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   H.eq(facade_edges[SCROLLBAR_OWNER], 1, "the UI facade owns the one scrollbar edge")
   H.eq(facade_edges[HIGHLIGHT_OWNER], 1, "the UI facade owns the one highlighter edge")
   H.eq(facade_edges[SIDEBAR_OWNER], 1, "the UI facade owns the one sidebar edge")
+  H.eq(facade_edges[STATUS_COLUMN_OWNER], 1,
+    "the UI facade owns the one status-column edge")
   assert_no_errors(violations,
     "UI production and test consumers must enter through canvasdiff.ui")
 end
@@ -222,7 +226,7 @@ end
 T.architecture_status_column_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, "canvasdiff.statuscol")
+  assert_inspected_module(inspection, STATUS_COLUMN_OWNER)
 
   local forbidden = {
     [HIGHLIGHT_OWNER] = true,
@@ -234,7 +238,7 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == "canvasdiff.statuscol" and forbidden[edge.to] then
+    if edge.from == STATUS_COLUMN_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
@@ -253,7 +257,7 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     [SIDEBAR_OWNER] = true,
-    ["canvasdiff.statuscol"] = true,
+    [STATUS_COLUMN_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -278,7 +282,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
-    ["canvasdiff.statuscol"] = true,
+    [STATUS_COLUMN_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
@@ -302,7 +306,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
     [WATCH_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     [SIDEBAR_OWNER] = true,
-    ["canvasdiff.statuscol"] = true,
+    [STATUS_COLUMN_OWNER] = true,
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do

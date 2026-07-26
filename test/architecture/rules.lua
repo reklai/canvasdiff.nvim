@@ -27,7 +27,6 @@ R.domains = {
 R.legacy_paths = {
   "lua/canvasdiff/cmd.lua",
   "lua/canvasdiff/jump.lua",
-  "lua/canvasdiff/statuscol.lua",
   "lua/canvasdiff/util.lua",
 }
 

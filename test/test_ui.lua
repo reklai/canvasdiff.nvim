@@ -20,13 +20,44 @@ end
 T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "err", "highlight", "notify", "scrollbar", "sidebar", "warn" })
+  H.eq(names, { "err", "highlight", "notify", "scrollbar", "sidebar",
+    "status_column", "warn" })
 end
 
 T["ui_sidebar legacy sidebar module path is deleted rather than shimmed"] = function()
   package.loaded["canvasdiff.sidebar"] = nil
   local loaded = pcall(require, "canvasdiff.sidebar")
   assert(not loaded, "canvasdiff.sidebar must not remain as a forwarding module")
+end
+
+T["ui_status_column legacy statuscol module path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.statuscol"] = nil
+  local loaded = pcall(require, "canvasdiff.statuscol")
+  assert(not loaded, "canvasdiff.statuscol must not remain as a forwarding module")
+end
+
+-- The status column is drawn by a statusline expression that names the module
+-- resolving it. If the module moves and the expression does not, every claimed
+-- window silently renders nothing -- and no other test would notice, because
+-- Neovim evaluates that string itself.
+T["ui_status_column installs an expression that resolves back to its owner"] = function()
+  local canvas = require("canvasdiff.canvas")
+  local st = canvas.open({}, {})
+  local lease = ui.status_column.attach(st, {
+    windows = function() return { st.win } end,
+  })
+  local installed = vim.api.nvim_get_option_value(
+    "statuscolumn", { win = st.win, scope = "local" })
+  H.eq(ui.status_column.detach(lease), true)
+
+  local module = installed:match("require'([^']+)'")
+  assert(module, "the installed expression must name a module: " .. installed)
+  local loaded, resolved = pcall(require, module)
+  assert(loaded, "the expression's module must resolve: " .. tostring(resolved))
+  assert(rawequal(resolved, ui.status_column),
+    "the expression must resolve to the exact owner the UI facade exposes")
+  assert(installed:find(".text()", 1, true),
+    "and must call its entrypoint: " .. installed)
 end
 
 T["ui_highlight facade exposes the lease operations its owners call"] = function()

@@ -22,6 +22,7 @@ local function group_alive(name)
   if name == "canvasdiff.highlight"
       or name == "canvasdiff.sidebar"
       or name == "canvasdiff.scrollbar"
+      or name == "canvasdiff.status_column"
       or name == "canvasdiff.virt"
       or name == "canvasdiff.watch" then
     for _, autocmd in ipairs(vim.api.nvim_get_autocmds({})) do
@@ -402,7 +403,7 @@ return {
     vim.wait(200, function() return not group_alive("canvasdiff.watch") end)
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.statuscol",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.status_column",
       "canvasdiff.sidebar", "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")

@@ -13,7 +13,7 @@ local RESOURCE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
   "canvasdiff.highlight",
-  "canvasdiff.statuscol",
+  "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.scrollbar",
   "canvasdiff.session",
@@ -28,7 +28,7 @@ local SURFACE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
   "canvasdiff.highlight",
-  "canvasdiff.statuscol",
+  "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.session",
   "canvasdiff.close",
@@ -54,6 +54,7 @@ local function group_alive(name)
   if name == "canvasdiff.highlight"
       or name == "canvasdiff.sidebar"
       or name == "canvasdiff.scrollbar"
+      or name == "canvasdiff.status_column"
       or name == "canvasdiff.virt"
       or name == "canvasdiff.watch" then
     return #controller_groups(name) > 0
@@ -73,9 +74,12 @@ end
 --- use. Normalize those test-only leftovers before characterizing the root
 --- lifecycle, so this file observes only the review it opens itself.
 local function reset_auxiliary_owners()
-  require("canvasdiff.statuscol").detach()
-  for _, name in ipairs(controller_groups("canvasdiff.highlight")) do
-    pcall(vim.api.nvim_del_augroup_by_name, name)
+  -- These owners hold exact leases, so there is no unqualified teardown to
+  -- call: sweep the per-lease groups an earlier unit file left armed.
+  for _, prefix in ipairs({ "canvasdiff.highlight", "canvasdiff.status_column" }) do
+    for _, name in ipairs(controller_groups(prefix)) do
+      pcall(vim.api.nvim_del_augroup_by_name, name)
+    end
   end
 end
 
@@ -370,7 +374,7 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     vim.api.nvim_win_set_buf(remote, ctx.buf)
     surface:adopt_window(remote, remote_landing)
     H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = remote }),
-      "%!v:lua.require'canvasdiff.statuscol'.text()",
+      "%!v:lua.require'canvasdiff.ui.status_column'.text()",
       "a newly-adopted remote host receives the review status column")
 
     -- Explicit close is tab-local. It restores the original host to its own
@@ -395,7 +399,7 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     H.eq(vim.api.nvim_win_get_buf(third), ctx.buf,
       "toggle shows the existing remote review in this tab")
     H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = third }),
-      "%!v:lua.require'canvasdiff.statuscol'.text()")
+      "%!v:lua.require'canvasdiff.ui.status_column'.text()")
     H.eq(ctx.state.surface, surface, "toggle did not create a replacement Surface")
     H.eq(#surface:canvas_windows(), 2)
 
@@ -487,7 +491,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
       { name = "sidebar.close", target = require("canvasdiff.ui").sidebar, method = "close" },
       { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
-      { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
+      { name = "statuscol.detach", target = require("canvasdiff.ui").status_column, method = "detach" },
     }
 
     with_spies(specs, function(counts, calls)
@@ -560,7 +564,7 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local watch = runtime.watch
     local hl = require("canvasdiff.ui").highlight
     local virt = runtime.virtualizer
-    local statuscol = require("canvasdiff.statuscol")
+    local statuscol = require("canvasdiff.ui").status_column
 
     with_spies({
       { name = "session.save", target = session, method = "save" },
@@ -699,7 +703,7 @@ T["lifecycle_ one explicit close performs one complete teardown pass"] = functio
       { name = "sidebar.close", target = require("canvasdiff.ui").sidebar, method = "close" },
       { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
-      { name = "statuscol.detach", target = require("canvasdiff.statuscol"), method = "detach" },
+      { name = "statuscol.detach", target = require("canvasdiff.ui").status_column, method = "detach" },
     }
 
     with_spies(specs, function(counts, calls)

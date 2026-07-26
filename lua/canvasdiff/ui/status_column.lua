@@ -3,25 +3,36 @@ local fold = require("canvasdiff.diff").fold
 
 local M = {}
 
-local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.statuscol'.text()"
-local current = nil
+local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.ui.status_column'.text()"
 local next_id = 0
 
 -- Window-local options can outlive buffers and are inherited by plain splits.
--- The expression string is identical across generations, so ownership needs an
+-- The expression string is identical across every lease, so ownership needs an
 -- exact record rather than a string comparison.
+--
+-- This is the arbitration point, and it is deliberately per WINDOW: two
+-- independent Surfaces may both be live, but exactly one of them owns any one
+-- window's `statuscolumn` slot at a time. Nothing here decides which lease is
+-- "the" status column.
 local owners = {}
 
+-- Lookup-only authentication. Weak keys cannot keep a lease alive and, unlike
+-- trusting a handful of public table fields, cannot be copied onto a forged
+-- shell.
+local LEASE_AUTH = setmetatable({}, { __mode = "k" })
+
 local function exact(lease)
-  return lease ~= nil and current == lease and not lease.disposed
+  return type(lease) == "table"
+    and LEASE_AUTH[lease] == true
+    and not lease.disposed
 end
 
 local function active(lease)
   if not exact(lease) then
     return false
   end
-  local alive = lease.callbacks.alive
-  if alive and not alive() then
+  local alive = lease.callbacks and lease.callbacks.alive
+  if alive and not alive(lease) then
     return false
   end
   return exact(lease)
@@ -272,6 +283,7 @@ local function claim(lease, win, prior_hint, require_inherited)
   end
 
   local record = owners[win]
+  local displaced = record
   if not (record and record.lease == lease) then
     local prior
     if record then
@@ -291,11 +303,24 @@ local function claim(lease, win, prior_hint, require_inherited)
     lease.touched[win] = record
     lease.priors[win] = prior
     remember_prior(lease, win, prior)
+    if displaced and displaced.lease ~= lease then
+      -- One window moves from one live lease to another, carrying the exact
+      -- prior with it. The peer keeps its other windows, but must not keep
+      -- bookkeeping for a slot it no longer owns: a later teardown would
+      -- otherwise try to restore over whoever owns it now.
+      release_record(displaced.lease, win, displaced)
+    end
   end
 
   set_option(win, STATUSCOL_EXPR)
   if owners[win] ~= record or not exact(lease) then
     reconcile_expression_write(win, record)
+    if owners[win] ~= record then
+      -- A peer claimed this window inside our own write. Drop the record we
+      -- provisionally published: retaining it would make teardown try to
+      -- restore a prior over the lease that owns the slot now.
+      release_record(lease, win, record)
+    end
     return false
   end
   if lease.leaving[win] == record then
@@ -533,8 +558,13 @@ local function prepare_leave(lease, win)
 end
 
 local function finish_leave(lease, win, record)
-  if not active(lease) or lease.leaving[win] ~= record
-      or owners[win] ~= record then
+  if not active(lease) or lease.leaving[win] ~= record then
+    return
+  end
+  if owners[win] ~= record then
+    -- A peer claimed this window while the deferred leave was queued. Drop the
+    -- stale record instead of retaining a slot another lease now owns.
+    release_record(lease, win, record)
     return
   end
   lease.leaving[win] = nil
@@ -573,7 +603,14 @@ local function finish_focus_leave(lease)
   end
   local win = vim.api.nvim_get_current_win()
   local record = lease.leaving[win]
-  if not record or owners[win] ~= record or not showing(lease.state, win) then
+  if not record then
+    return
+  end
+  if owners[win] ~= record then
+    release_record(lease, win, record)
+    return
+  end
+  if not showing(lease.state, win) then
     return
   end
 
@@ -679,28 +716,47 @@ function M.render(lease, win, lnum)
 end
 
 --- Fail-closed statuscolumn expression entrypoint.
+---
+--- Neovim evaluates one global expression string for every window that carries
+--- it, so the drawn window is the only thing that can say which lease owns this
+--- row. Resolving through the per-window ownership record -- rather than
+--- through a module-global "current" lease -- is what lets two concurrent
+--- Surfaces each render their own canvas correctly.
 function M.text()
-  local ok, result = pcall(
-    M.render, current, vim.g.statusline_winid, vim.v.lnum)
+  local win = vim.g.statusline_winid
+  local record = type(win) == "number" and owners[win] or nil
+  local lease = record and record.lease or nil
+  if not lease then
+    return ""
+  end
+  local ok, result = pcall(M.render, lease, win, vim.v.lnum)
   return ok and result or ""
 end
 
 --- Exact, idempotent teardown. Invalidate and delete the producer before any
 --- option I/O, which may reentrantly install a replacement.
 function M.detach(expected)
-  local lease = current
-  if not lease or (expected and expected ~= lease) then
+  local lease = expected
+  if not exact(lease) then
     return false
   end
 
+  LEASE_AUTH[lease] = nil
   lease.disposed = true
-  current = nil
   local aug = lease.aug
   lease.aug = nil
+  local group_deleted = false
   if aug then
-    pcall(vim.api.nvim_del_augroup_by_id, aug)
+    group_deleted = pcall(vim.api.nvim_del_augroup_by_id, aug)
+  end
+  if not group_deleted and lease.group_name then
+    -- Per-lease names make this cleanup incapable of touching a peer's group
+    -- even when Neovim has recycled the numeric ID.
+    pcall(vim.api.nvim_del_augroup_by_name, lease.group_name)
   end
 
+  local release = lease.callbacks and lease.callbacks.release
+  local claimed = lease.claimed
   local wins, first_error = {}, nil
   local ok, result = pcall(canvas_windows, lease)
   if ok then
@@ -767,6 +823,15 @@ function M.detach(expected)
   lease.priors = {}
   lease.tab_priors = {}
   lease.initial_prior = nil
+
+  -- Last, so the owner's slot is only cleared once every window this lease
+  -- touched has actually been restored or released.
+  if release and claimed then
+    local released, err = pcall(release, lease)
+    if not released and not first_error then
+      first_error = err
+    end
+  end
   if first_error then
     error(first_error, 0)
   end
@@ -774,18 +839,16 @@ function M.detach(expected)
 end
 
 --- Install one Surface-owned status-column lease.
+---
+--- Attaching never disturbs a peer. Independent Surfaces hold independent
+--- leases; per-window records decide who owns any individual `statuscolumn`
+--- slot, and only a lease's own owner may dispose it.
 function M.attach(state, callbacks)
-  if current then
-    local predecessor = current
-    M.detach(predecessor)
-    if current then
-      error("status-column attach was superseded during predecessor teardown", 0)
-    end
-  end
-
   next_id = next_id + 1
   local lease = {
     id = next_id,
+    group_name = "canvasdiff.status_column." .. next_id,
+    claimed = false,
     state = state,
     callbacks = callbacks or {},
     aug = nil,
@@ -800,11 +863,39 @@ function M.attach(state, callbacks)
     tab_priors = {},
     initial_prior = nil,
   }
-  current = lease
+  -- Publish exact identity before the first external call, so a reentrant
+  -- callback can dispose only this partial lease.
+  LEASE_AUTH[lease] = true
+
+  local claim_owner = lease.callbacks.claim
+  if claim_owner then
+    -- A throwing claim may already have published the lease. Mark it claimed
+    -- before entering owner code so exact teardown can ask release to unlink
+    -- only this identity.
+    lease.claimed = true
+    local ok_claim, claimed = pcall(claim_owner, lease)
+    if not ok_claim then
+      pcall(M.detach, lease)
+      error(claimed, 0)
+    end
+    if not claimed then
+      lease.claimed = false
+      M.detach(lease)
+      return nil
+    end
+  else
+    lease.claimed = true
+  end
 
   local ok, err = pcall(function()
-    lease.aug = vim.api.nvim_create_augroup(
-      "canvasdiff.statuscol", { clear = true })
+    if not active(lease) then
+      error("status-column owner is no longer alive", 0)
+    end
+    lease.aug = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
+    if not exact(lease) then
+      pcall(vim.api.nvim_del_augroup_by_name, lease.group_name)
+      error("status-column attach was disposed while creating its group", 0)
+    end
     vim.api.nvim_create_autocmd("BufWinEnter", {
       group = lease.aug,
       buffer = state.buf,
@@ -974,6 +1065,16 @@ function M.attach(state, callbacks)
         lease.pending_tab = nil
         local win = vim.api.nvim_get_current_win()
 
+        -- Suspend a record belonging to a DIFFERENT lease.
+        --
+        -- Unconditional, because Neovim remembers a window-local option per
+        -- displayed buffer: a peer that claimed this window while it was
+        -- transiently showing the Canvas leaves the expression remembered for
+        -- that (window, buffer) pair, and restoring it after the real buffer
+        -- lands is already too late. Whichever lease observes the creation
+        -- event must write the peer's prior back while the Canvas is still on
+        -- screen -- even when this lease's own provenance does not match, and
+        -- so has nothing of its own to create here.
         local function transfer_replacement()
           local replacement = owners[win]
           if replacement and replacement.lease ~= lease then
@@ -988,9 +1089,8 @@ function M.attach(state, callbacks)
           return
         end
         if not active(lease) or not pending then
-          if not exact(lease) then
-            transfer_replacement()
-          elseif not pending then
+          transfer_replacement()
+          if exact(lease) and not pending then
             reconcile_created(win)
           end
           return
@@ -1004,9 +1104,7 @@ function M.attach(state, callbacks)
             or (pending.kind == "split" and tab ~= pending.tab)
             or (pending.kind == "tab" and tab == pending.tab)
             or (pending.kind == "last" and tab ~= pending.tab) then
-          if not exact(lease) then
-            transfer_replacement()
-          end
+          transfer_replacement()
           return
         end
         local source_value = get_option(pending.source)
@@ -1030,19 +1128,42 @@ function M.attach(state, callbacks)
 
     local wins = canvas_windows(lease)
     if not active(lease) then
-      error("status-column attach was superseded during window discovery", 0)
+      error("status-column attach was disposed during window discovery", 0)
     end
     for _, win in ipairs(wins) do
       claim(lease, win)
       if not exact(lease) then
-        error("status-column attach was superseded during initial claim", 0)
+        error("status-column attach was disposed during initial claim", 0)
       end
     end
     lease.focused_win = vim.api.nvim_get_current_win()
     lease.last_canvas = capture_source(lease, "last")
     if not exact(lease) then
-      error("status-column attach was superseded during source capture", 0)
+      error("status-column attach was disposed during source capture", 0)
     end
+
+    -- The claim above reads one synchronous snapshot. An attach that happens
+    -- inside another window's creation event -- a peer's `alive` callback, for
+    -- instance -- can observe a window still transiently showing the Canvas
+    -- that will hold a foreign buffer by the time the event completes. Nothing
+    -- else would tell this lease about that: BufWinLeave arrives for the
+    -- CURRENT window, and a nonentered float is never current. Reconcile the
+    -- initial claim once the event loop turns.
+    local claimed = {}
+    for _, win in ipairs(wins) do
+      claimed[#claimed + 1] = win
+    end
+    vim.schedule(function()
+      if not active(lease) then
+        return
+      end
+      for _, win in ipairs(claimed) do
+        local record = owners[win]
+        if record and record.lease == lease and not showing(lease.state, win) then
+          restore(lease, win, false)
+        end
+      end
+    end)
   end)
   if not ok then
     pcall(M.detach, lease)
