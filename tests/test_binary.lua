@@ -51,6 +51,20 @@ T["binary_ an unchanged binary file produces no section"] = function()
   H.eq(model.build_section("a.zip", BIN_OLD, BIN_OLD, "M", 3), nil)
 end
 
+T["binary_ a pure binary rename is a one-entry rename section"] = function()
+  local sec = model.build_section(
+    "new.zip", BIN_OLD, BIN_OLD, "R", 3,
+    { old_path = "old.zip", old_rev = "HEAD" })
+  assert(sec, "byte-identical binary blobs still changed identity")
+  H.eq(sec.binary, true)
+  H.eq(sec.rename_only, true)
+  H.eq(sec.old_path, "old.zip")
+  H.eq(sec.old_rev, "HEAD")
+  H.eq(#sec.entries, 1, "no binary notice/content row is needed for an identity-only change")
+  H.eq(render.section_lines(sec), { "▎ old.zip → new.zip  (renamed)" })
+  H.eq(render.placeholder(sec), "▸ old.zip → new.zip  (renamed)")
+end
+
 -- "(+0 −0)" would read as "nothing changed", the opposite of the truth.
 T["binary_ renders as (binary), never as zero counts"] = function()
   local sec = model.build_section("a.zip", BIN_OLD, BIN_NEW, "M", 3)

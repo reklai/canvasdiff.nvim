@@ -112,6 +112,16 @@ T["sidebar_render marks user-folded files with the placeholder glyph"] = functio
   }, "the same ▸ that marks a folded dir and a collapsed section in the canvas")
 end
 
+T["sidebar_render escapes control bytes without changing entry identity"] = function()
+  local path = "dir\t/\nfile.txt"
+  local entries = sidebar.build_entries({ sec(path, 2, 1) }, {})
+  H.eq(entries[2].path, path, "navigation retains the raw git path")
+  H.eq(sidebar.render_lines(entries), {
+    "▾ dir\\t/",
+    "    \\nfile.txt  +2 −1",
+  }, "a path component can never split or tab-align a sidebar row")
+end
+
 -- STALE and STAGED are the SAME character (`●`), so a staged file that has since
 -- changed behind a fold renders `● ●` and the highlight is the only thing telling
 -- the two apart. That makes the span arithmetic load-bearing rather than cosmetic:

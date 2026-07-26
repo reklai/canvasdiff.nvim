@@ -108,7 +108,9 @@ function S.render_lines(entries)
     -- symbol keeps meaning one thing in both windows.
     local mark = e.stale and render.glyphs.stale or ""
     if e.kind == "dir" then
-      lines[i] = indent .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " ")) .. e.name .. mark
+      lines[i] = indent
+        .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
+        .. render.escape_path(e.name) .. mark
     else
       -- Stage state goes BEFORE the stale marker. That ordering does NOT disambiguate
       -- them -- STALE and STAGED are the same `●`, so a trailing ● means "staged" on
@@ -120,7 +122,9 @@ function S.render_lines(entries)
         stage = " " .. stage
       end
       lines[i] = indent .. (e.aside and (render.glyphs.folded .. " ") or "  ")
-        .. e.name .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels) .. stage .. mark
+        .. render.escape_path(e.name)
+        .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
+        .. stage .. mark
     end
   end
   return lines

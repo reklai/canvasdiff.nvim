@@ -40,29 +40,29 @@ local function reset_view(st)
   end)
 end
 
--- Guard. canvas.resplice decides "the buffer already shows the right form" by
--- comparing a section's row span against the line count it should render as.
--- That comparison is only exact because an expanded section can never be one
--- row: build_section returns nil rather than a hunkless section, so entries are
--- always a file_hdr plus at least one hunk header. If that ever changes,
--- resplice starts silently skipping real work.
-T["collapse_ an expanded section is never one row"] = function()
-  local paths = { "a/one.txt", "b/two.txt", "c/three.txt" }
-  for _, path in ipairs(paths) do
-    local sec = big_section(path, "x")
-    assert(sec, path .. " built no section")
-    assert(#render.section_lines(sec) >= 2,
-      path .. " rendered as " .. #render.section_lines(sec)
-        .. " row(s) -- a placeholder is 1 row, so this must be >= 2")
+-- A pure rename invalidates the old row-count shortcut: its expanded header
+-- and collapsed placeholder are both exactly one row. resplice must track the
+-- form, not infer it from height, or both collapse and expand silently no-op.
+T["collapse_ one-row pure rename toggles header and placeholder"] = function()
+  local sec = model.build_section(
+    "new.txt", "same\n", "same\n", "R", 3,
+    { old_path = "old.txt", old_rev = "HEAD" })
+  H.eq(#render.section_lines(sec), 1, "expanded pure rename is header-only")
+  local st = canvas.open({ sec }, {})
+  local function only_line()
+    return vim.api.nvim_buf_get_lines(st.buf, 0, 1, false)[1]
   end
-  -- A one-line file whose only change is that line: the smallest real section.
-  local tiny = model.build_section("t.txt", "a\n", "b\n", "M")
-  assert(tiny, "no section for a single changed line")
-  assert(#render.section_lines(tiny) >= 2,
-    "even the smallest section is more than a placeholder")
-  -- And a hunkless pair genuinely yields no section at all.
-  H.eq(model.build_section("same.txt", "a\n", "a\n", "M"), nil,
-    "identical content builds no section, so there is no 1-row expanded form")
+
+  H.eq(only_line(), "▎ old.txt → new.txt  (renamed)")
+  canvas.set_collapsed(st, 1, true)
+  H.eq(select(2, canvas.section_rows(st, 1)) - (canvas.section_rows(st, 1)), 1,
+    "the placeholder has the same height")
+  H.eq(only_line(), "▸ old.txt → new.txt  (renamed)",
+    "collapse still changes the one-row rendered form")
+
+  canvas.set_collapsed(st, 1, false)
+  H.eq(only_line(), "▎ old.txt → new.txt  (renamed)",
+    "expand restores the one-row file header")
 end
 
 T["collapse_ renders one placeholder row and restores on expand"] = function()

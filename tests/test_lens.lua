@@ -72,21 +72,48 @@ T["lens_collect a worktree new side still prefers unsaved buffer content"] = fun
   vim.fn.delete(root, "rf")
 end
 
-T["lens_collect a staged rename addresses the index by its destination"] = function()
+T["lens_collect a staged rename has distinct all staged and unstaged identities"] = function()
   local root = H.git_fixture({ committed = { ["old.txt"] = "same\n" } })
   local res = vim.system({ "git", "mv", "old.txt", "new.txt" },
     { cwd = root, text = true }):wait()
   assert(res.code == 0, res.stderr)
+  local f = assert(io.open(vim.fs.joinpath(root, "new.txt"), "w"))
+  f:write("worktree edit\n")
+  f:close()
 
-  local files, err = collect.files(root, lens.get("unstaged"))
-  assert(files, err)
-  H.eq(#files, 1, "porcelain still enumerates the staged rename")
-  H.eq(files[1].path, "new.txt")
-  H.eq(files[1].old_path, "new.txt",
-    "the unstaged old side is the index, where the blob already has its destination path")
-  H.eq(files[1].old_text, "same\n")
-  H.eq(files[1].new_text, "same\n",
-    "model.build will correctly drop it from the unstaged-only lens")
+  local all = only(root, lens.get("all"))
+  H.eq({
+    all.path, all.old_path, all.old_rev, all.status,
+    all.old_text, all.new_text,
+  }, {
+    "new.txt", "old.txt", "HEAD", "R",
+    "same\n", "worktree edit\n",
+  }, "all sees the complete HEAD-to-worktree rename and edit")
+
+  local staged = only(root, lens.get("staged"))
+  H.eq({
+    staged.path, staged.old_path, staged.old_rev, staged.status,
+    staged.old_text, staged.new_text,
+  }, {
+    "new.txt", "old.txt", "HEAD", "R",
+    "same\n", "same\n",
+  }, "staged sees the source-to-index-destination pure rename")
+
+  local unstaged = only(root, lens.get("unstaged"))
+  H.eq({
+    unstaged.path, unstaged.old_path, unstaged.old_rev, unstaged.status,
+    unstaged.old_text, unstaged.new_text,
+  }, {
+    "new.txt", "new.txt", ":0", "M",
+    "same\n", "worktree edit\n",
+  }, "unstaged addresses both sides at the destination and sees only the later edit")
+
+  local all_section = assert(collect.sections(root, lens.get("all"), 3)[1])
+  local staged_section = assert(collect.sections(root, lens.get("staged"), 3)[1])
+  local unstaged_section = assert(collect.sections(root, lens.get("unstaged"), 3)[1])
+  H.eq({ all_section.renamed, all_section.rename_only }, { true, nil })
+  H.eq({ staged_section.renamed, staged_section.rename_only }, { true, true })
+  H.eq({ unstaged_section.renamed, unstaged_section.rename_only }, { false, nil })
 
   vim.fn.delete(root, "rf")
 end
@@ -192,6 +219,24 @@ T["lens_branch collect sees clean committed A D M R plus untracked against the r
     by["untracked.txt"].old_text, by["untracked.txt"].new_text,
     by["untracked.txt"].staged, by["untracked.txt"].unstaged },
     { "?", "untracked.txt", "", "not in the index\n", nil, "?" })
+
+  local sections, section_err = collect.sections(root, lens.branch("comparison-base"), 3)
+  assert(sections, section_err)
+  local section_by = {}
+  for _, section in ipairs(sections) do
+    section_by[section.path] = section
+  end
+  H.eq(#sections, 5, "the text-identical committed rename is not dropped")
+  H.eq({
+    section_by["renamed.txt"].old_path,
+    section_by["renamed.txt"].old_rev,
+    section_by["renamed.txt"].status,
+    section_by["renamed.txt"].renamed,
+    section_by["renamed.txt"].rename_only,
+    #section_by["renamed.txt"].entries,
+  }, {
+    "old-name.txt", base_oid, "R", true, true, 1,
+  }, "collection identity reaches a header-only branch-rename section")
 
   vim.fn.delete(root, "rf")
 end
@@ -329,6 +374,37 @@ local function open_lens(root, l)
   st.lens = l
   st.base = lens.to_base(l)
   return st
+end
+
+T["lens_branch control-path pure rename renders as one safe canvas row"] = function()
+  local old_path = "old\tline\n.txt"
+  local new_path = "new\tline\n.txt"
+  local root = H.git_fixture({ committed = { [old_path] = "same\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, (res.stderr or "git command failed"))
+  end
+  sh({ "git", "branch", "comparison-base", "HEAD" })
+  sh({ "git", "mv", "--", old_path, new_path })
+
+  local sections, err = collect.sections(root, lens.branch("comparison-base"), 3)
+  assert(sections, err)
+  H.eq(#sections, 1)
+  H.eq({
+    sections[1].path,
+    sections[1].old_path,
+    sections[1].rename_only,
+    #sections[1].entries,
+  }, {
+    new_path, old_path, true, 1,
+  }, "raw NUL-delimited rename identity reaches the model intact")
+
+  local st = canvas.open(sections, {})
+  H.eq(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), {
+    "▎ old\\tline\\n.txt → new\\tline\\n.txt  (renamed)",
+  }, "literal tabs/newlines cannot split the one-row canvas section")
+
+  vim.fn.delete(root, "rf")
 end
 
 T["lens_staged the canvas renders index vs HEAD, which it never could before"] = function()
@@ -544,11 +620,11 @@ local function watch_splices(st)
   return rec
 end
 
--- THE test for "dynamic". Not "the view looks about right afterwards" -- that can
--- pass while the buffer was torn down and rebuilt underneath. Asserting that no
--- anchor was recreated is what pins the property, and it is the assertion that
--- fails the moment anyone routes a pivot back through render_all.
-T["lens_pivot leaves an unchanged section, and your place in it, untouched"] = function()
+-- THE test for "dynamic". The whole canvas must not be torn down, but a section
+-- whose text is identical through two lenses still needs replacement when its
+-- old_rev changes: jump/back must later rebuild it from the exact source that
+-- produced the visible comparison.
+T["lens_pivot replaces source metadata in place and preserves the viewport"] = function()
   local root = pivot_fixture()
   local st = open_lens(root, lens.get("all"))
   H.eq(st.sections[1].path, "keep.txt", "sanity: keep.txt sorts first")
@@ -563,7 +639,8 @@ T["lens_pivot leaves an unchanged section, and your place in it, untouched"] = f
   local before_text = vim.api.nvim_buf_get_lines(st.buf, start0, end0, false)
   local spliced = watch_splices(st)
 
-  -- Pivot to the unstaged lens. keep.txt is identical through both.
+  -- Pivot to the unstaged lens. keep.txt's text is identical through both,
+  -- while its old source changes from HEAD to the index.
   st.lens = lens.get("unstaged")
   st.base = lens.to_base(st.lens)
   local desired = model.build(collect.files(root, st.lens), 3)
@@ -573,19 +650,19 @@ T["lens_pivot leaves an unchanged section, and your place in it, untouched"] = f
   H.eq(spliced.rendered_all, false,
     "the whole buffer must not be re-rendered -- this is what fails the moment a "
     .. "pivot is routed back through render_all")
-  H.eq(spliced.replaced["keep.txt"], nil,
-    "keep.txt is identical through both lenses, so it must not be touched at all")
+  H.eq(spliced.replaced["keep.txt"], true,
+    "text equality cannot hide its navigation-relevant old_rev change")
   H.eq(spliced.replaced["moved.txt"], true,
-    "while the section that DOES differ is re-spliced -- proving the pivot did work")
+    "the section whose text differs is re-spliced too")
 
   local after_view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
   H.eq(after_view.topline, before_view.topline, "the viewport did not move")
-  H.eq(after_view.lnum, before_view.lnum, "and neither did the cursor")
 
   local s2, e2 = canvas.section_rows(st, 1)
   H.eq({ s2, e2 }, { start0, end0 }, "keep.txt occupies exactly the same rows")
   H.eq(vim.api.nvim_buf_get_lines(st.buf, s2, e2, false), before_text,
     "with exactly the same text")
+  H.eq(st.sections[1].old_rev, ":0", "the replacement publishes the new source revision")
 
   -- And the pivot really did do something: moved.txt differs between the lenses.
   local j

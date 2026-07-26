@@ -285,8 +285,10 @@ function M.render_all(state, sections)
 
   local all_lines = {}
   local starts = {}
+  state.rendered_hidden = {}
   for idx, sec in ipairs(sections) do
     starts[idx] = #all_lines
+    state.rendered_hidden[sec.path] = fold.hidden(state, sec.path)
     for _, l in ipairs(section_lines_for(state, sec)) do
       all_lines[#all_lines + 1] = l
     end
@@ -336,6 +338,10 @@ function M.open(sections, opts)
     hl_ids = {},
     collapsed = {},
     folded = {},
+    -- Actual form currently present in the buffer, independent of row count.
+    -- Normally span == 1 implied "placeholder"; a pure rename's expanded form
+    -- is also one header row, so resplice needs this explicit discriminator.
+    rendered_hidden = {},
     -- `folded_seen[path]` is what a section's content looked like when the user put
     -- it away (model.fingerprint), or `false` for one that arrived already hidden.
     -- fold.stale compares it against the section's content now.
@@ -395,7 +401,11 @@ end
 --- reading). `new_section == nil` deletes the section.
 function M.replace_section(state, i, new_section)
   local replaced_path = state.sections[i] and state.sections[i].path
-  local was_collapsed = replaced_path ~= nil and fold.hidden(state, replaced_path)
+  state.rendered_hidden = state.rendered_hidden or {}
+  local was_collapsed = replaced_path ~= nil and state.rendered_hidden[replaced_path]
+  if was_collapsed == nil and replaced_path ~= nil then
+    was_collapsed = fold.hidden(state, replaced_path)
+  end
   local start_row, end_row_exclusive = M.section_rows(state, i)
   local new_lines = new_section and section_lines_for(state, new_section) or {}
 
@@ -458,9 +468,14 @@ function M.replace_section(state, i, new_section)
   end
 
   if new_section ~= nil then
+    local hidden = fold.hidden(state, new_section.path)
     state.hl_ids[i] = apply_section_hl(state.buf, start_row, new_section,
-      fold.hidden(state, new_section.path))
+      hidden)
     state.sections[i] = new_section
+    if replaced_path and replaced_path ~= new_section.path then
+      state.rendered_hidden[replaced_path] = nil
+    end
+    state.rendered_hidden[new_section.path] = hidden
   else
     pcall(vim.api.nvim_buf_del_extmark, state.buf, ANCHOR_NS, state.anchor_ids[i])
     table.remove(state.anchor_ids, i)
@@ -474,6 +489,9 @@ function M.replace_section(state, i, new_section)
     end
     if replaced_path and state.folded_seen then
       state.folded_seen[replaced_path] = nil
+    end
+    if replaced_path then
+      state.rendered_hidden[replaced_path] = nil
     end
   end
 
@@ -574,6 +592,8 @@ function M.insert_section(state, i, section)
   table.insert(state.anchor_ids, i,
     vim.api.nvim_buf_set_extmark(state.buf, ANCHOR_NS, row, 0, ANCHOR_OPTS))
   table.insert(state.sections, i, section)
+  state.rendered_hidden = state.rendered_hidden or {}
+  state.rendered_hidden[section.path] = fold.hidden(state, section.path)
   table.insert(state.hl_ids, i,
     apply_section_hl(state.buf, row, section, fold.hidden(state, section.path)))
   set_modifiable(state.buf, false)
@@ -638,16 +658,28 @@ local function resplice(state, i)
   -- Already in the desired form -- answered WITHOUT building the lines, because
   -- the no-indices resync_visibility asks this of every section on every <Tab>
   -- over a placeholder and on every session.restore. Rendering a whole
-  -- changeset's worth of strings just to compare a count would make a keypress
-  -- that splices nothing cost a full re-render.
+  -- changeset's worth of strings just to compare would make a keypress that
+  -- splices nothing cost a full re-render.
   --
   -- render.section_lines emits exactly one line per entry, so #entries is the
-  -- expanded height (virt.natural_line_count relies on the same identity).
-  -- Comparing row spans is exact: build_section always emits a file_hdr plus at
-  -- least one hunk_hdr/binary entry, so an expanded section is never one row and
-  -- can never be mistaken for a placeholder.
+  -- expanded height (virt.natural_line_count relies on the same identity). Row
+  -- span alone is no longer a form discriminator: a pure rename deliberately has
+  -- one file-header entry, exactly the same height as its collapsed placeholder.
+  -- rendered_hidden records which of those two one-row forms is actually in the
+  -- buffer. The span check remains as an integrity guard for legacy/test states.
   local want_rows = collapsed and 1 or #sec.entries
-  if end_row_exclusive - start_row == want_rows then return end
+  local have_rows = end_row_exclusive - start_row
+  state.rendered_hidden = state.rendered_hidden or {}
+  local rendered = state.rendered_hidden[sec.path]
+  if have_rows == want_rows and rendered == collapsed then
+    return
+  end
+  if have_rows == want_rows and rendered == nil and #sec.entries > 1 then
+    -- A state created before rendered_hidden existed can still establish the
+    -- unambiguous multi-row/placeholder form without a redundant splice.
+    state.rendered_hidden[sec.path] = collapsed
+    return
+  end
 
   local new_lines = section_lines_for(state, sec)
 
@@ -672,6 +704,7 @@ local function resplice(state, i)
     pcall(vim.api.nvim_buf_del_extmark, state.buf, HL_NS, id)
   end
   state.hl_ids[i] = apply_section_hl(state.buf, start_row, sec, collapsed)
+  state.rendered_hidden[sec.path] = collapsed
   set_modifiable(state.buf, false)
 
   if state.hooks and state.hooks.on_section_replaced then
@@ -724,9 +757,9 @@ end
 --- Bring the canvas to `desired` with the fewest possible splices.
 ---
 --- Both lists are path-sorted, so this is a sorted merge-walk: a section whose
---- old_text AND new_text both match is never touched at all, so its anchors, its
---- highlight marks and its rows survive untouched, and the niri invariant rests
---- entirely on the splice primitives below.
+--- source identity, status and two texts all match is never touched at all, so
+--- its anchors, its highlight marks and its rows survive untouched, and the
+--- niri invariant rests entirely on the splice primitives below.
 ---
 --- That "never touched" property is the whole reason this is separate from
 --- render_all. It is what makes a live file-watch update cheap, and it is what makes
@@ -739,6 +772,25 @@ end
 ---
 --- The caller owns the follow-up sync of the other UI pieces (highlighting,
 --- sidebar, scrollbar, virtualizer), mirroring resync_visibility's contract.
+local RECONCILE_FIELDS = {
+  "old_path",
+  "old_rev",
+  "status",
+  "staged",
+  "unstaged",
+  "old_text",
+  "new_text",
+}
+
+local function same_section(cur, desired)
+  for _, field in ipairs(RECONCILE_FIELDS) do
+    if cur[field] ~= desired[field] then
+      return false
+    end
+  end
+  return true
+end
+
 function M.reconcile_sections(state, desired)
   -- 0 <-> N transitions: the empty canvas holds a placeholder line, not sections,
   -- so there is nothing for a splice to target. Full re-render instead.
@@ -755,7 +807,7 @@ function M.reconcile_sections(state, desired)
     local cur = state.sections[i]
     local des = desired[j]
     if cur and des and cur.path == des.path then
-      if cur.old_text ~= des.old_text or cur.new_text ~= des.new_text then
+      if not same_section(cur, des) then
         M.replace_section(state, i, des)
       end
       i, j = i + 1, j + 1

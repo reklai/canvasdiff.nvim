@@ -73,6 +73,45 @@ function R.is_glyph(name)
   return DEFAULT_GLYPHS[name] ~= nil
 end
 
+--- A filename rendered as one printable buffer-row fragment.
+---
+--- Git paths may contain every byte except NUL and `/` within one component.
+--- In particular, passing a literal newline to nvim_buf_set_lines either splits
+--- a structural row or errors, while a tab makes the tree/header geometry
+--- depend on tabstop. Keep the raw path on the model for identity and I/O; only
+--- this display boundary escapes backslash and ASCII controls.
+function R.escape_path(path)
+  local escaped = {}
+  for i = 1, #(path or "") do
+    local c = path:sub(i, i)
+    local byte = string.byte(c)
+    if c == "\\" then
+      escaped[#escaped + 1] = "\\\\"
+    elseif c == "\n" then
+      escaped[#escaped + 1] = "\\n"
+    elseif c == "\t" then
+      escaped[#escaped + 1] = "\\t"
+    elseif c == "\r" then
+      escaped[#escaped + 1] = "\\r"
+    elseif byte < 32 or byte == 127 then
+      escaped[#escaped + 1] = ("\\x%02X"):format(byte)
+    else
+      escaped[#escaped + 1] = c
+    end
+  end
+  return table.concat(escaped)
+end
+
+--- Display identity for a section. old_path is absent on legacy hand-built
+--- sections and equal to path for ordinary files.
+function R.section_path(section)
+  local new_path = R.escape_path(section.path)
+  if section.old_path and section.old_path ~= section.path then
+    return R.escape_path(section.old_path) .. " → " .. new_path
+  end
+  return new_path
+end
+
 local HL_GROUP = {
   file_hdr = "GalleyFileHeader",
   hunk_hdr = "GalleyHunkHeader",
@@ -94,9 +133,15 @@ function R.section_lines(section)
     if e.kind == "file_hdr" then
       -- "(+0 −0)" on a binary file would read as "nothing changed", which is
       -- the opposite of the truth -- it changed, we just won't show how.
-      local counts = section.binary and "  (binary)"
-        or ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
-      lines[i] = GLYPHS.file .. " " .. e.content .. counts
+      local counts
+      if section.rename_only then
+        counts = "  (renamed)"
+      elseif section.binary then
+        counts = "  (binary)"
+      else
+        counts = ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
+      end
+      lines[i] = GLYPHS.file .. " " .. R.section_path(section) .. counts
     elseif e.kind == "hunk_hdr" then
       lines[i] = e.content
     elseif e.kind == "binary" then
@@ -216,10 +261,13 @@ end
 --- it as no longer matching what the user saw when they set it aside (fold.stale).
 function R.placeholder(section, stale)
   local mark = stale and GLYPHS.stale or ""
-  if section.binary then
-    return GLYPHS.folded .. " " .. section.path .. "  (binary)" .. mark
+  if section.rename_only then
+    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (renamed)" .. mark
   end
-  return GLYPHS.folded .. " " .. section.path
+  if section.binary then
+    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (binary)" .. mark
+  end
+  return GLYPHS.folded .. " " .. R.section_path(section)
     .. ("  (%d hunks, +%d " .. GLYPHS.minus .. "%d)"):format(section.nhunks, section.adds, section.dels)
     .. mark
 end

@@ -15,6 +15,7 @@ local util = require("galley.util")
 local keys = require("galley.keys")
 local fold = require("galley.fold")
 local lens = require("galley.lens")
+local render = require("galley.render")
 
 local M = {}
 
@@ -87,7 +88,7 @@ local function set_winbar(st, text)
     -- knows, but peripherally and only if it is enabled. This keeps the answer on the
     -- canvas itself.
     local here = path_under_top(st)
-    local file = here and ("  │  " .. here) or ""
+    local file = here and ("  │  " .. render.escape_path(here)) or ""
 
     text = ("  galley: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
   end

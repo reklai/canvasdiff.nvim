@@ -63,43 +63,87 @@ local function hunk_header(a, b, c, d)
   return ("@@ -%d,%d +%d,%d @@"):format(a, b, c, d)
 end
 
+--- Attach the identity/source metadata every kind of section carries.
+---
+--- `metadata` is optional so direct model callers keep the compact historical
+--- signature. collect passes its complete file record, which makes old_path and
+--- old_rev available to rendering now and to rename-aware navigation later.
+local function with_metadata(section, path, old_text, new_text, status, metadata)
+  metadata = metadata or {}
+  section.path = path
+  section.old_path = metadata.old_path or path
+  section.old_rev = metadata.old_rev
+  section.status = status
+  section.staged = metadata.staged
+  section.unstaged = metadata.unstaged
+  section.renamed = section.old_path ~= path
+  section.old_text = old_text or ""
+  section.new_text = new_text or ""
+  return section
+end
+
 --- Section shown for a file we refuse to diff. Carries no ctx/add/del
 --- entries at all, which is what keeps every downstream consumer safe without
 --- each needing its own binary check: the word-diff tier only pairs del/add
 --- runs, treesitter highlighting only colors content rows, the statuscolumn
 --- only numbers rows with a new_lnum, and hunk motions only stop at hunk
 --- headers. None of them find anything here.
-local function binary_section(path, old_text, new_text, status)
-  return {
-    path = path, status = status, binary = true,
+local function binary_section(path, old_text, new_text, status, metadata)
+  return with_metadata({
+    binary = true,
     adds = 0, dels = 0, nhunks = 0,
     entries = {
       { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
       { kind = "binary", content = "binary file — no diff shown",
         new_lnum = nil, old_lnum = nil, hunk_idx = nil },
     },
-    old_text = old_text or "", new_text = new_text or "",
-  }
+  }, path, old_text, new_text, status, metadata)
 end
 
-function M.build_section(path, old_text, new_text, status, context)
+--- Build one section.
+---
+--- The optional sixth argument carries source identity without making the pure
+--- diff inputs positional: `{ old_path, old_rev, staged, unstaged }`.
+function M.build_section(path, old_text, new_text, status, context, metadata)
   context = context or DEFAULT_CONTEXT
+  local old = old_text or ""
+  local new = new_text or ""
+  local old_path = metadata and metadata.old_path or path
+  local renamed = old_path ~= path
+  local binary = util.is_binary(old) or util.is_binary(new)
+
+  -- Identity is itself a reviewable change. Git reports a pure rename with
+  -- byte-identical blobs, so differ.hunks quite correctly returns nothing;
+  -- retain it as one header row instead of mistaking "no text delta" for "no
+  -- change". This deliberately precedes the binary branch: an unchanged binary
+  -- rename is safe to show because no blob content ever enters a buffer row.
+  if old == new then
+    if not renamed then
+      return nil
+    end
+    return with_metadata({
+      binary = binary or nil,
+      rename_only = true,
+      adds = 0, dels = 0, nhunks = 0,
+      entries = {
+        { kind = "file_hdr", content = path,
+          new_lnum = nil, old_lnum = nil, hunk_idx = nil },
+      },
+    }, path, old, new, status, metadata)
+  end
 
   -- Binary never gets diffed. vim.text.diff would emit meaningless line noise
   -- for a zip, and the NUL bytes are actively fatal: Vim strings cannot hold
   -- NUL, so one reaching vim.fn.split in the word-diff tier becomes a Blob and
   -- throws E976, taking the whole open() down. git refuses too, printing
   -- "Binary files differ" rather than a patch.
-  if util.is_binary(old_text) or util.is_binary(new_text) then
-    if (old_text or "") == (new_text or "") then
-      return nil
-    end
-    return binary_section(path, old_text, new_text, status)
+  if binary then
+    return binary_section(path, old, new, status, metadata)
   end
 
-  local old_lines = split_lines(old_text)
-  local new_lines = split_lines(new_text)
-  local raw_hunks = differ.hunks(old_text or "", new_text or "")
+  local old_lines = split_lines(old)
+  local new_lines = split_lines(new)
+  local raw_hunks = differ.hunks(old, new)
 
   -- Ghosting deletions needs something real for them to hang off, and a file with no
   -- new side has nothing: a result view of a wholly-deleted file is EMPTY. Every line
@@ -231,11 +275,10 @@ function M.build_section(path, old_text, new_text, status, context)
     end
   end
 
-  return {
-    path = path, status = status, adds = adds, dels = dels, nhunks = #groups,
+  return with_metadata({
+    adds = adds, dels = dels, nhunks = #groups,
     entries = entries,
-    old_text = old_text or "", new_text = new_text or "",
-  }
+  }, path, old, new, status, metadata)
 end
 
 --- Identity of a section's CONTENT, for "has this changed since I last looked at
@@ -262,13 +305,9 @@ end
 function M.build(files, context)
   local sections = {}
   for _, f in ipairs(files) do
-    local s = M.build_section(f.path, f.old_text, f.new_text, f.status, context)
+    local s = M.build_section(
+      f.path, f.old_text, f.new_text, f.status, context, f)
     if s then
-      -- Which kind of change this is, straight off `git status`. build_section is
-      -- pure over the two texts and has no business knowing about the index, so it
-      -- is attached here instead of threaded through it.
-      s.staged = f.staged
-      s.unstaged = f.unstaged
       sections[#sections + 1] = s
     end
   end

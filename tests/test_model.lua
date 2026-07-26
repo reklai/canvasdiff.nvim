@@ -44,6 +44,48 @@ return {
   ["model: unchanged is nil"] = function()
     H.eq(model.build_section("s.txt", "x\n", "x\n", "M"), nil)
   end,
+  ["model: pure rename is one metadata-rich escaped header row"] = function()
+    local old_path = "old\tline\nslash\\name.txt"
+    local new_path = "new\tline\nslash\\name.txt"
+    local sections = model.build({
+      {
+        path = new_path,
+        old_path = old_path,
+        old_rev = "abc123",
+        status = "R",
+        staged = "R",
+        unstaged = "M",
+        old_text = "same body\n",
+        new_text = "same body\n",
+      },
+    }, 3)
+    H.eq(#sections, 1, "identity alone is a reviewable change")
+    local s = sections[1]
+    H.eq({
+      s.path, s.old_path, s.old_rev, s.status, s.staged, s.unstaged,
+      s.renamed, s.rename_only, s.adds, s.dels, s.nhunks,
+    }, {
+      new_path, old_path, "abc123", "R", "R", "M",
+      true, true, 0, 0, 0,
+    })
+    H.eq(#s.entries, 1, "a pure rename has only its file header")
+    H.eq(s.entries[1].content, new_path, "the model retains the raw destination path")
+    H.eq(render.section_lines(s), {
+      "▎ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed)",
+    }, "controls are escaped at the display boundary without changing identity")
+    H.eq(render.placeholder(s),
+      "▸ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed)")
+  end,
+  ["model: a content-changing rename names both paths and keeps counts"] = function()
+    local s = model.build_section(
+      "after.txt", "before\n", "after\n", "R", 3,
+      { old_path = "before.txt", old_rev = "HEAD" })
+    H.eq(s.renamed, true)
+    H.eq(s.rename_only, nil)
+    H.eq(s.old_rev, "HEAD")
+    H.eq(render.section_lines(s)[1], "▎ before.txt → after.txt  (+1 −1)")
+    H.eq(render.placeholder(s), "▸ before.txt → after.txt  (1 hunks, +1 −1)")
+  end,
   ["model: context param overrides default 3"] = function()
     local s = model.build_section("f.txt", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n",
                                             "a\nb\nc\nd\nE\nf\ng\nh\ni\nj\n", "M", 1)

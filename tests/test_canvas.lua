@@ -187,4 +187,47 @@ return {
     H.eq(after.topline, before.topline)
     H.eq(after.lnum, before.lnum)
   end,
+  ["canvas_reconcile replaces on every render or navigation identity field"] = function()
+    local base = {
+      path = "new.txt",
+      old_path = "old.txt",
+      old_rev = "rev-a",
+      status = "R",
+      staged = "R",
+      unstaged = nil,
+      old_text = "before\n",
+      new_text = "after\n",
+    }
+    local cases = {
+      { field = "old_path", value = "older.txt" },
+      { field = "old_rev", value = "rev-b" },
+      { field = "status", value = "M" },
+      { field = "staged", value = "M" },
+      { field = "unstaged", value = "M" },
+      { field = "old_text", value = "different old\n" },
+      { field = "new_text", value = "different new\n" },
+    }
+
+    for _, case in ipairs(cases) do
+      local before_file = vim.deepcopy(base)
+      local after_file = vim.deepcopy(base)
+      after_file[case.field] = case.value
+      local before = assert(model.build({ before_file }, 3)[1])
+      local desired = assert(model.build({ after_file }, 3)[1])
+      local st = canvas.open({ before }, {})
+      local replaced = 0
+      st.hooks = {
+        on_section_replaced = function(path)
+          H.eq(path, "new.txt")
+          replaced = replaced + 1
+        end,
+      }
+
+      local full = canvas.reconcile_sections(st, { desired })
+      H.eq(full, false, case.field .. " must use the in-place reconcile path")
+      H.eq(replaced, 1,
+        case.field .. " changed with identical path and must replace the section")
+      H.eq(st.sections[1][case.field], case.value)
+    end
+  end,
 }

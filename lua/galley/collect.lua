@@ -5,6 +5,46 @@ local model = require("galley.model")
 
 local M = {}
 
+--- The path pair visible through one fixed lens.
+---
+--- Porcelain's rename record names the worktree destination in `path` and the
+--- origin in `old_path`, but those are not the right addresses for every pair
+--- of sides:
+---
+---   all       HEAD old path  -> worktree new path
+---   staged    HEAD old path  -> index new path      (when X == R)
+---   unstaged  index new path -> worktree new path   (when X == R)
+---
+--- The mirror case, Y == R, belongs only to the unstaged comparison: the
+--- staged lens still addresses the index at the origin. Selecting both the
+--- effective new-side path and old-side path here prevents a rename in one
+--- half from turning into a fabricated add/delete in the other.
+local function fixed_paths(l, file)
+  local path = file.path
+  local old_path = path
+  local status = file.status
+
+  if lens.same(l, lens.named.staged) then
+    status = file.staged or status
+    if file.staged == "R" then
+      old_path = file.old_path or path
+    elseif file.unstaged == "R" and file.old_path then
+      path = file.old_path
+      old_path = path
+    end
+  elseif lens.same(l, lens.named.unstaged) then
+    status = file.unstaged or status
+    if file.unstaged == "R" then
+      old_path = file.old_path or path
+    end
+  else
+    -- The all lens sees the complete HEAD -> worktree identity change.
+    old_path = file.old_path or path
+  end
+
+  return path, old_path, status
+end
+
 --- Find a currently-loaded buffer showing `abs_path`, if any.
 local function find_loaded_buf(abs_path)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -127,28 +167,36 @@ function M.files(root, spec)
 
   local files = {}
   for _, f in ipairs(changed) do
-    -- A branch diff's old path is relative to its resolved commit. Porcelain's
-    -- rename origin is NOT used for fixed lenses here: for an already-staged
-    -- rename, the `unstaged` lens's index side is addressed by the NEW path.
-    local old_path = is_branch and (f.old_path or f.path) or f.path
+    local path, old_path, status
+    if is_branch then
+      path = f.path
+      old_path = f.old_path or path
+      status = f.status
+    else
+      path, old_path, status = fixed_paths(l, f)
+    end
     local old_text, old_err = git.show(root, old_rev, old_path)
     if old_text == nil and is_branch and f.status ~= "A" and f.status ~= "?" then
       return nil, ("cannot read old side %s:%s for %s change: %s")
         :format(old_rev, old_path, f.status, old_err or "unknown git error")
     end
     files[#files + 1] = {
-      path = f.path,
+      path = path,
       old_path = old_path,
       old_rev = old_rev,
-      status = f.status,
+      status = status,
       -- Carried through so the canvas can say WHICH KIND of change each file is,
       -- independently of the lens you happen to be looking through.
       staged = f.staged,
       unstaged = f.unstaged,
       old_text = old_text or "",
-      new_text = M.new_side(root, l, f.path, f.status),
+      new_text = M.new_side(root, l, path, status),
     }
   end
+  -- fixed_paths can remap an unstaged-rename destination back to the index
+  -- origin for the staged lens, so porcelain's current-path order is not
+  -- necessarily this lens's effective path order.
+  table.sort(files, function(a, b) return a.path < b.path end)
   return files
 end
 
