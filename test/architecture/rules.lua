@@ -26,7 +26,6 @@ R.domains = {
 -- once the paths acquire their final domain classification.
 R.legacy_paths = {
   "lua/canvasdiff/cmd.lua",
-  "lua/canvasdiff/collect.lua",
   "lua/canvasdiff/hl.lua",
   "lua/canvasdiff/jump.lua",
   "lua/canvasdiff/keys.lua",

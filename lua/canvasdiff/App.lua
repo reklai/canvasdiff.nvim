@@ -4,7 +4,6 @@ local source = require("canvasdiff.source")
 local jump = require("canvasdiff.jump")
 local config = require("canvasdiff.config")
 local hl = require("canvasdiff.hl")
-local collect = require("canvasdiff.collect")
 local watch = require("canvasdiff.watch")
 local sidebar = require("canvasdiff.sidebar")
 local scrollbar = require("canvasdiff.scrollbar")
@@ -417,8 +416,8 @@ function App:open(opts)
     return nil, err
   end
 
-  -- Load any saved session BEFORE collect, so a restored lens is honored from the
-  -- very first collect.files call -- not just after the fact.
+  -- Load any saved session BEFORE collection, so a restored lens is honored
+  -- from the very first source.files call -- not just after the fact.
   --
   -- Precedence, most to least specific: an explicit lens from the caller; the older
   -- `base` string a command passed; the lens the session saved; the base an OLDER
@@ -434,7 +433,7 @@ function App:open(opts)
   -- canvas.open changes the current window or this App's state. In
   -- particular, an invalid/deleted branch ref is an error, not an empty old
   -- side and not an empty canvas.
-  local sections, collect_err = collect.sections(root, l, config.options.context)
+  local sections, collect_err = source.sections(root, l, config.options.context)
   if not sections then
     ui.warn(collect_err)
     return nil, collect_err
@@ -941,7 +940,7 @@ local function pivot(surface, target_lens)
   end
 
   local next_lens = target_lens or lens.of(st)
-  local desired, err = collect.sections(st.root, next_lens, config.options.context)
+  local desired, err = source.sections(st.root, next_lens, config.options.context)
   if not desired then
     return nil, err
   end

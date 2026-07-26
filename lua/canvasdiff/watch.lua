@@ -1,8 +1,8 @@
 local canvas = require("canvasdiff.canvas")
-local collect = require("canvasdiff.collect")
 local config = require("canvasdiff.config")
 local lens = require("canvasdiff.diff").lens
 local system = require("canvasdiff.os")
+local source = require("canvasdiff.source")
 
 local W = {}
 
@@ -109,7 +109,7 @@ function W.reconcile(state, callbacks)
     return fail("no valid canvas state to reconcile")
   end
 
-  local desired, err = collect.sections(
+  local desired, err = source.sections(
     state.root, lens.of(state), config.options.context)
   if not desired then
     -- Transactional failure: no canvas reconciliation and no success callback

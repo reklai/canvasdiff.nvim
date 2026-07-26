@@ -1,5 +1,5 @@
 local H = require("helpers")
-local collect = require("canvasdiff.collect")
+local source = require("canvasdiff.source")
 local model = require("canvasdiff.diff")
 local util = require("canvasdiff.util")
 
@@ -15,7 +15,7 @@ end
 
 --- What the plugin would render for `path`.
 local function canvasdiff_counts(root, path)
-  for _, f in ipairs(collect.files(root, "HEAD")) do
+  for _, f in ipairs(source.files(root, "HEAD")) do
     if f.path == path then
       local sec = model.build_section(f.path, f.old_text, f.new_text, f.status, 3)
       if not sec then return 0, 0 end

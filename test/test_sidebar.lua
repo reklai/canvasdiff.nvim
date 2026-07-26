@@ -466,7 +466,7 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
     worktree = { ["m/a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
   })
   local st = canvas.open(require("canvasdiff.diff").build(
-    require("canvasdiff.collect").files(root), 3), {})
+    require("canvasdiff.source").files(root), 3), {})
   st.root = root
   local lease = assert(sidebar.open(st, { width = 30 }))
   local sbuf = sidebar_buf(lease)

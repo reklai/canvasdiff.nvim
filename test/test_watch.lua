@@ -1,7 +1,7 @@
 local H = require("helpers")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
-local collect = require("canvasdiff.collect")
+local source = require("canvasdiff.source")
 local watch = require("canvasdiff.watch")
 local system = require("canvasdiff.os")
 local lens = model.lens
@@ -46,7 +46,7 @@ local function fixture()
 end
 
 local function open_state(root)
-  local sections = model.build(collect.files(root), 3)
+  local sections = model.build(source.files(root), 3)
   local st = canvas.open(sections, {})
   st.root = root
   return st
@@ -54,7 +54,7 @@ end
 
 T["watch_collect files matches App behavior"] = function()
   local root = fixture()
-  local files = collect.files(root)
+  local files = source.files(root)
   H.eq(#files, 2)
   table.sort(files, function(x, y) return x.path < y.path end)
   H.eq(files[1].path, "b.txt")
@@ -72,7 +72,7 @@ T["watch_reconcile deleted branch ref retains everything and recovers"] = functi
   sh(root, { "git", "commit", "-m", "advance past comparison base" })
 
   local l = lens.branch("comparison-base")
-  local sections, build_err = collect.sections(root, l, 3)
+  local sections, build_err = source.sections(root, l, 3)
   assert(sections, build_err)
   local st = canvas.open(sections, {})
   st.root, st.lens, st.base = root, l, nil
@@ -149,7 +149,7 @@ T["watch_trigger deduplicates identical ref errors and resets after recovery"] =
   sh(root, { "git", "commit", "-m", "advance" })
 
   local l = lens.branch("comparison-base")
-  local sections, build_err = collect.sections(root, l, 3)
+  local sections, build_err = source.sections(root, l, 3)
   assert(sections, build_err)
   local st = canvas.open(sections, {})
   st.root, st.lens, st.base = root, l, nil

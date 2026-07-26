@@ -1,6 +1,5 @@
 local H = require("helpers")
 local source = require("canvasdiff.source")
-local collect = require("canvasdiff.collect")
 local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 
@@ -55,16 +54,16 @@ return {
       end
     end
 
-    H.eq(old_text_for(collect.files(root, "index")), "staged\n")
-    H.eq(old_text_for(collect.files(root, "HEAD")), "head\n")
-    H.eq(old_text_for(collect.files(root, nil)), "head\n")
+    H.eq(old_text_for(source.files(root, "index")), "staged\n")
+    H.eq(old_text_for(source.files(root, "HEAD")), "head\n")
+    H.eq(old_text_for(source.files(root, nil)), "head\n")
   end,
 
   ["base_ fully-staged file disappears in index mode"] = function()
     local root = fully_staged_fixture()
 
     local function has_section(base)
-      local sections = model.build(collect.files(root, base), 3)
+      local sections = model.build(source.files(root, base), 3)
       for _, s in ipairs(sections) do
         if s.path == "g.txt" then
           return true
@@ -168,11 +167,11 @@ return {
   ["base_ staged deletion produces no phantom section in index mode"] = function()
     local root = H.git_fixture({ committed = { ["gone.txt"] = "a\nb\nc\n" } })
     vim.system({ "git", "rm", "-q", "gone.txt" }, { cwd = root }):wait()
-    local files = collect.files(root, "index")
+    local files = source.files(root, "index")
     local sections = model.build(files, 3)
     H.eq(sections, {}, "staged-deleted file must not render a section in index mode")
     -- and in HEAD mode the deletion IS visible (all lines deleted)
-    local head_sections = model.build(collect.files(root, "HEAD"), 3)
+    local head_sections = model.build(source.files(root, "HEAD"), 3)
     H.eq(#head_sections, 1, "HEAD mode: one section for the deleted file")
     assert(head_sections[1].dels > 0, "HEAD mode: deletion section must have dels > 0")
   end,

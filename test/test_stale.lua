@@ -10,7 +10,7 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local collect = require("canvasdiff.collect")
+local source = require("canvasdiff.source")
 local watch = require("canvasdiff.watch")
 local virt = require("canvasdiff.virt")
 local fold = model.fold
@@ -41,7 +41,7 @@ local function open_fixture()
       ["top.txt"] = bigtext(40, "t"):gsub("t line 20", "t line 20 changed"),
     },
   })
-  local st = canvas.open(model.build(collect.files(root), 3), {})
+  local st = canvas.open(model.build(source.files(root), 3), {})
   st.root = root
   return root, st
 end
@@ -62,7 +62,7 @@ local function open_tall_fixture()
     committed = { ["src/a.txt"] = bigtext(80, "a"), ["top.txt"] = bigtext(80, "t") },
     worktree = { ["src/a.txt"] = tall("a"), ["top.txt"] = tall("t") },
   })
-  local st = canvas.open(model.build(collect.files(root), 3), {})
+  local st = canvas.open(model.build(source.files(root), 3), {})
   st.root = root
   return root, st
 end
@@ -130,7 +130,7 @@ T["stale_ a whole-changeset re-render marks it too"] = function()
   -- render_all is still reached by App:open and by reconcile_sections' 0<->N fallback,
   -- so this path is live even though no keymap invokes it directly any more.
   -- (App:refresh reconciles instead, which is why it keeps your place.)
-  canvas.render_all(st, model.build(collect.files(root), 3))
+  canvas.render_all(st, model.build(source.files(root), 3))
 
   local i = index_of(st, "src/a.txt")
   H.eq((select(2, canvas.section_rows(st, i))) - (canvas.section_rows(st, i)), 1,
@@ -312,7 +312,7 @@ T["stale_ pivoting to the staged lens does not fake a change"] = function()
   write("top.txt", bigtext(40, "t"):gsub("t line 10", "t line 10 changed"))
 
   local function open_with(l)
-    local st = canvas.open(model.build(collect.files(root, l), 3), {})
+    local st = canvas.open(model.build(source.files(root, l), 3), {})
     st.root, st.lens, st.base = root, l, lens.to_base(l)
     return st
   end

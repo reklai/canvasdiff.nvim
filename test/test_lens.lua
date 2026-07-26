@@ -1,6 +1,5 @@
 local H = require("helpers")
 local lens = require("canvasdiff.diff").lens
-local collect = require("canvasdiff.collect")
 local source = require("canvasdiff.source")
 
 local T = {}
@@ -21,7 +20,7 @@ local function partly_staged()
 end
 
 local function only(root, spec)
-  local files = collect.files(root, spec)
+  local files = source.files(root, spec)
   H.eq(#files, 1, "fixture has exactly one changed file")
   return files[1]
 end
@@ -108,9 +107,9 @@ T["lens_collect a staged rename has distinct all staged and unstaged identities"
     "same\n", "worktree edit\n",
   }, "unstaged addresses both sides at the destination and sees only the later edit")
 
-  local all_section = assert(collect.sections(root, lens.get("all"), 3)[1])
-  local staged_section = assert(collect.sections(root, lens.get("staged"), 3)[1])
-  local unstaged_section = assert(collect.sections(root, lens.get("unstaged"), 3)[1])
+  local all_section = assert(source.sections(root, lens.get("all"), 3)[1])
+  local staged_section = assert(source.sections(root, lens.get("staged"), 3)[1])
+  local unstaged_section = assert(source.sections(root, lens.get("unstaged"), 3)[1])
   H.eq({ all_section.renamed, all_section.rename_only }, { true, nil })
   H.eq({ staged_section.renamed, staged_section.rename_only }, { true, true })
   H.eq({ unstaged_section.renamed, unstaged_section.rename_only }, { false, nil })
@@ -186,7 +185,7 @@ T["lens_branch collect sees clean committed A D M R plus untracked against the r
   sh({ "git", "commit", "-m", "advance from comparison base" })
   write("untracked.txt", "not in the index\n")
 
-  local files, err = collect.files(root, lens.branch("comparison-base"))
+  local files, err = source.files(root, lens.branch("comparison-base"))
   assert(files, err)
   local by = {}
   local paths = {}
@@ -220,7 +219,7 @@ T["lens_branch collect sees clean committed A D M R plus untracked against the r
     by["untracked.txt"].staged, by["untracked.txt"].unstaged },
     { "?", "untracked.txt", "", "not in the index\n", nil, "?" })
 
-  local sections, section_err = collect.sections(root, lens.branch("comparison-base"), 3)
+  local sections, section_err = source.sections(root, lens.branch("comparison-base"), 3)
   assert(sections, section_err)
   local section_by = {}
   for _, section in ipairs(sections) do
@@ -247,7 +246,7 @@ T["lens_branch invalid ref returns an error instead of fabricating an addition"]
     worktree = { ["dirty.txt"] = "after\n" },
   })
 
-  local files, err = collect.files(root, lens.branch("definitely-missing"))
+  local files, err = source.files(root, lens.branch("definitely-missing"))
   H.eq(files, nil, "an invalid old side is not an empty blob")
   assert(type(err) == "string" and err:find("does not resolve", 1, true),
     "the caller needs to distinguish invalid from an empty valid diff: " .. tostring(err))
@@ -271,7 +270,7 @@ T["lens_branch recreated untracked path replaces the ref-relative deletion"] = f
   f:write("new untracked body\n")
   f:close()
 
-  local files, err = collect.files(root, lens.branch("comparison-base"))
+  local files, err = source.files(root, lens.branch("comparison-base"))
   assert(files, err)
   H.eq(#files, 1, "the same current path must not appear once as D and again as ?")
   H.eq({
@@ -369,7 +368,7 @@ local jump = require("canvasdiff.jump")
 local session = require("canvasdiff.session")
 
 local function open_lens(root, l)
-  local st = canvas.open(model.build(collect.files(root, l), 3), {})
+  local st = canvas.open(model.build(source.files(root, l), 3), {})
   st.root = root
   st.lens = l
   st.base = lens.to_base(l)
@@ -387,7 +386,7 @@ T["lens_branch control-path pure rename renders as one safe canvas row"] = funct
   sh({ "git", "branch", "comparison-base", "HEAD" })
   sh({ "git", "mv", "--", old_path, new_path })
 
-  local sections, err = collect.sections(root, lens.branch("comparison-base"), 3)
+  local sections, err = source.sections(root, lens.branch("comparison-base"), 3)
   assert(sections, err)
   H.eq(#sections, 1)
   H.eq({
@@ -643,7 +642,7 @@ T["lens_pivot replaces source metadata in place and preserves the viewport"] = f
   -- while its old source changes from HEAD to the index.
   st.lens = lens.get("unstaged")
   st.base = lens.to_base(st.lens)
-  local desired = model.build(collect.files(root, st.lens), 3)
+  local desired = model.build(source.files(root, st.lens), 3)
   local full = canvas.reconcile_sections(st, desired)
 
   H.eq(full, false, "a pivot between two populated lenses must not fall back to render_all")
@@ -686,7 +685,7 @@ T["lens_pivot away from a file that only the old lens had lands somewhere real"]
 
   st.lens = lens.get("staged")
   st.base = lens.to_base(st.lens)
-  local desired = model.build(collect.files(root, st.lens), 3)
+  local desired = model.build(source.files(root, st.lens), 3)
   canvas.reconcile_sections(st, desired)
 
   local paths = {}

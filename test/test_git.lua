@@ -17,14 +17,16 @@ local function write(root, rel, content)
 end
 
 return {
-  ["source_ facade exports exactly the repository operations"] = function()
+  ["source_ facade exports exactly repository and collection operations"] = function()
     local names = vim.tbl_keys(source)
     table.sort(names)
     H.eq(names, {
       "changed_files",
       "diff_files",
+      "files",
       "resolve_commit",
       "root",
+      "sections",
       "show",
       "show_head",
     })
@@ -36,6 +38,45 @@ return {
     package.loaded["canvasdiff.git"] = nil
     local loaded = pcall(require, "canvasdiff.git")
     assert(not loaded, "canvasdiff.git must not remain as a forwarding module")
+  end,
+  ["source_ legacy collect module path is deleted rather than shimmed"] = function()
+    package.loaded["canvasdiff.collect"] = nil
+    local loaded = pcall(require, "canvasdiff.collect")
+    assert(not loaded, "canvasdiff.collect must not remain as a forwarding module")
+  end,
+  ["source_ worktree disk reads use the os facade and contain failures"] = function()
+    local root = H.git_fixture({
+      committed = { ["f.txt"] = "old\n" },
+      worktree = { ["f.txt"] = "disk\n" },
+    })
+    local path = vim.fs.joinpath(root, "f.txt")
+    local real_read_file = system.read_file
+    local calls = {}
+
+    local ok, err = xpcall(function()
+      system.read_file = function(next_path)
+        calls[#calls + 1] = next_path
+        return "adapter\n"
+      end
+      local files, collect_err = source.files(root, "HEAD")
+      assert(files, collect_err)
+      H.eq(#files, 1)
+      H.eq(files[1].new_text, "adapter\n")
+      H.eq(calls, { path })
+
+      system.read_file = function(next_path)
+        H.eq(next_path, path)
+        error("injected source disk read failure")
+      end
+      local fallback, fallback_err = source.files(root, "HEAD")
+      assert(fallback, fallback_err)
+      H.eq(fallback[1].new_text, "",
+        "an unreadable worktree path keeps the legacy empty-side semantics")
+    end, debug.traceback)
+
+    system.read_file = real_read_file
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
   end,
   ["git: delegates raw process execution through the os facade"] = function()
     local real_run = system.run

@@ -4,7 +4,6 @@ local model = require("canvasdiff.diff")
 local canvas = require("canvasdiff.canvas")
 local jump = require("canvasdiff.jump")
 local fold = model.fold
-local collect = require("canvasdiff.collect")
 local lens = model.lens
 
 local function sh(root, cmd)
@@ -100,7 +99,7 @@ return {
     sh(root, { "git", "mv", "--", old_path, new_path })
 
     local l = lens.branch("comparison-base")
-    local sections, collect_err = collect.sections(root, l, 3)
+    local sections, collect_err = source.sections(root, l, 3)
     assert(sections, collect_err)
     H.eq(#sections, 1)
     H.eq({
