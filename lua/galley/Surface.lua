@@ -249,10 +249,15 @@ function Surface:dispose(reason)
       watch.stop(lease)
     end
   end)
+  attempt("virt.detach", function()
+    local lease = self.controllers.virt
+    if lease then
+      virt.detach(lease)
+    end
+  end)
   attempt("hl.detach", function() hl.detach(self.state) end)
   attempt("sidebar.close", sidebar.close)
   attempt("scrollbar.close", scrollbar.close)
-  attempt("virt.detach", virt.detach)
   attempt("statuscol.detach", statuscol.detach)
 
   for _, group in ipairs(OWNED_GROUPS) do

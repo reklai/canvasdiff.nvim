@@ -366,7 +366,8 @@ T["stale_ the virtualizer's own collapses are never fingerprinted"] = function()
   vim.api.nvim_win_call(st.win, function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
-  virt.apply(st, { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 1 })
+  local lease = virt.attach(st, { enabled = false })
+  virt.apply(lease, { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 1 })
 
   local auto = H.auto_set(st)
   assert(next(auto), "sanity: virt auto-collapsed something")
@@ -375,7 +376,7 @@ T["stale_ the virtualizer's own collapses are never fingerprinted"] = function()
       "virt's bookkeeping was never a decision the user made, so it cannot go stale: " .. path)
     H.eq(fold.stale(st, path, "ANYTHING"), false, "and fold.stale agrees")
   end
-  virt.detach()
+  virt.detach(lease)
 end
 
 return T

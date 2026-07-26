@@ -206,7 +206,7 @@ end
 
 T["session_ save and load round-trip the payload"] = function()
   local root = H.tmpdir()
-  virt.detach() -- reset module-level auto-set/tick bookkeeping across tests
+  virt.detach() -- reset any current lease before this isolated session state
 
   local st = canvas.open({
     big_section("a/one.txt", "a"),
@@ -406,7 +406,8 @@ T["session_ auto-collapsed sections are not persisted"] = function()
   vim.api.nvim_win_call(st.win, function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
-  virt.apply(st, { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 0 })
+  local lease = virt.attach(st, { enabled = false })
+  virt.apply(lease, { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 0 })
 
   assert(next(H.auto_set(st)) ~= nil, "sanity: virt auto-collapsed something")
   H.eq(H.auto_set(st)["a/one.txt"], nil, "sanity: the user-collapsed path is never claimed by the auto-set")
@@ -415,7 +416,7 @@ T["session_ auto-collapsed sections are not persisted"] = function()
   local data = session.load(root)
   H.eq(data.collapsed, { "a/one.txt" }, "only the user-collapsed path is persisted")
 
-  virt.detach()
+  virt.detach(lease)
   cleanup(root)
 end
 
@@ -435,7 +436,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
   end)
 
   local opts = { enabled = true, max_files = 1, max_lines = 0, margin = 0, max_expanded = 0 }
-  virt.attach(st, opts)
+  local lease = virt.attach(st, opts)
 
   assert(st.collapsed["c/three.txt"], "sanity: virt already auto-collapsed the far section")
   assert(H.auto_set(st)["c/three.txt"], "sanity: it's virt's own auto-set claim")
@@ -449,7 +450,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
     vim.fn.winrestview({ topline = c_row + 1, lnum = c_row + 1 })
   end)
 
-  virt.apply(st, opts)
+  virt.apply(lease, opts)
 
   assert(st.collapsed["c/three.txt"],
     "restored user collapse must survive a virt.apply pass near the section")
@@ -462,7 +463,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
   end
   assert(found, "restored user collapse must still be persisted after session.save")
 
-  virt.detach()
+  virt.detach(lease)
   cleanup(root)
 end
 

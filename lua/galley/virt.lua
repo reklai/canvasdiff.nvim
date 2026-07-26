@@ -3,23 +3,83 @@ local fold = require("galley.fold")
 
 local M = {}
 
--- Tier-1 auto-virtualization: when a changeset is huge, far-from-viewport
--- sections auto-collapse and near ones auto-expand. Which collapses are THIS
--- module's own work is recorded on the state that owns them, as
--- state.collapsed[path] == "auto" (canvas.set_collapsed's `intent`). So a path
--- the user collapsed is never expanded back by the expand pass and never
--- discarded by session.save, with nothing to keep in sync here.
---
--- `tick_of` is per-path last-seen-in-window bookkeeping for the LRU, and IS
--- private to this module -- it describes scroll history, not canvas state.
-local tick_of = {}
-local tick = 0
+-- Tier-1 auto-virtualization: huge changesets keep near-viewport sections
+-- expanded and reduce distant ones to placeholders. Ownership of a collapse is
+-- intentionally canvas state, not lease state:
+-- `state.collapsed[path] == "auto"` means this controller may expand it again;
+-- `"user"` must survive virtualization and is the only kind session persists.
+-- The LRU's `tick`/`tick_of`, by contrast, describe one producer lifetime and
+-- therefore live on its opaque lease.
+local current = nil
+local next_id = 0
 
--- Trigger state: one live watched canvas at a time (mirrors watch.lua's/
--- hl.lua's singleton discipline). All handles are torn down by detach().
-local live = nil
-local live_opts = nil
-local timer = nil
+local function exact(lease)
+  return lease ~= nil and current == lease and not lease.disposed
+end
+
+--- Add the owner's generation fence to the module's exact-lease check.
+--- Recheck after `alive`: it is user code and may replace this lease
+--- reentrantly before returning true.
+local function active(lease)
+  if not exact(lease) then
+    return false
+  end
+  local alive = lease.callbacks.alive
+  if not alive then
+    return true
+  end
+  local ok, result = pcall(alive)
+  return ok and result and exact(lease) or false
+end
+
+local function close_timer(timer)
+  if not timer then
+    return
+  end
+  pcall(function()
+    timer:stop()
+  end)
+  local ok, closing = pcall(function()
+    return timer:is_closing()
+  end)
+  if not ok or not closing then
+    pcall(function()
+      timer:close()
+    end)
+  end
+end
+
+--- Exact, idempotent teardown. The optional no-argument form exists for test
+--- resets and attach replacement; owners should pass their stored lease.
+function M.detach(expected)
+  local lease = current
+  if not lease or (expected and expected ~= lease) then
+    return false
+  end
+
+  -- Invalidate first. Delete this exact group before handle methods: stop/close
+  -- are external calls and may reentrantly attach a replacement whose group
+  -- must not then be deleted by the old teardown.
+  lease.disposed = true
+  current = nil
+  local aug = lease.aug
+  local timer = lease.timer
+  lease.aug = nil
+  lease.timer = nil
+
+  if aug then
+    pcall(vim.api.nvim_del_augroup_by_id, aug)
+  end
+  close_timer(timer)
+
+  -- Auto-collapse intent deliberately stays on state for session filtering.
+  lease.state = nil
+  lease.opts = nil
+  lease.callbacks = {}
+  lease.tick = 0
+  lease.tick_of = {}
+  return true
+end
 
 local function canvas_showing(state)
   return state.win and vim.api.nvim_win_is_valid(state.win)
@@ -27,72 +87,70 @@ local function canvas_showing(state)
 end
 
 local function index_of_path(state, path)
-  for i, sec in ipairs(state.sections) do
-    if sec.path == path then
+  for i, section in ipairs(state.sections) do
+    if section.path == path then
       return i
     end
   end
 end
 
---- The changeset's FULLY-EXPANDED row count: one row per entry in every
---- section (render.section_lines emits exactly that), whatever is collapsed
---- right now. Deliberately NOT nvim_buf_line_count -- the rendered buffer
---- shrinks as this module's own collapses land, so a changeset only just
---- over max_lines would fall back under it on the next apply, deactivate,
---- expand everything back, and leave the canvas oscillating between
---- virtualized and fully rendered on every scroll.
+--- The changeset's fully-expanded row count. Buffer line count cannot be used:
+--- the rendering shrinks as this policy collapses sections, so measuring it
+--- would drop a just-over-threshold canvas back under the threshold on the next
+--- pass, expand everything, and oscillate forever.
 local function natural_line_count(state)
-  local n = 0
-  for _, sec in ipairs(state.sections) do
-    n = n + #sec.entries
+  local count = 0
+  for _, section in ipairs(state.sections) do
+    count = count + #section.entries
   end
-  return n
+  return count
 end
 
---- Fire the state's "canvas changed shape" hook once, at the end of an apply
---- that actually moved something, so the owner can resync the consumers that
---- read state.collapsed (highlighting, sidebar, scrollbar). None of them sees
---- these splices on its own: they land on this module's private debounce, after
---- the other consumers' own scroll handlers have already run, and a collapse
---- fully below the viewport moves no rows and so fires no further WinScrolled to
---- bring them back.
----
---- On `state.hooks` rather than on this module (see sidebar's notify_change for
---- the full reasoning): the callback describes one canvas, so it belongs to that
---- canvas and is gone when it is.
-local function notify_change(state, changed)
-  local hook = changed and state.hooks and state.hooks.on_shape_change
-  if hook then
-    hook(state)
+local function publish(lease, state, changed)
+  if not changed or not active(lease) then
+    return changed
   end
+  local on_change = lease.callbacks.on_change
+  if on_change then
+    -- Raw by design: owner callback failures are observable. Do not touch the
+    -- lease after this call; the callback may dispose or replace it.
+    on_change(state)
+  end
+  return changed
 end
 
---- Apply the AUTO virtualization policy once, synchronously, against the
---- live viewport. No-op unless the canvas is actually showing in state.win.
---- Fires state.hooks.on_shape_change once at the end when the pass moved
---- anything.
-function M.apply(state, opts)
-  opts = opts or {}
-  if not state or not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
-    return
+--- Apply the auto-virtualization policy once. Only the exact current lease may
+--- mutate. Returns true exactly when canvas collapse state changed.
+function M.apply(lease, opts)
+  if not active(lease) then
+    return false
   end
+  if opts ~= nil then
+    lease.opts = opts
+  end
+
+  local state = lease.state
+  opts = lease.opts or {}
+  if not state or not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+    return false
+  end
+  -- Resolve state.win now, never at attach time: Surface may rebind the primary
+  -- window when a sibling split or tab survives.
   if not canvas_showing(state) then
-    return
+    return false
   end
 
   local max_files = opts.max_files or math.huge
   local max_lines = opts.max_lines or math.huge
   local margin = opts.margin or 0
   local max_expanded = opts.max_expanded or math.huge
-
-  local active = opts.enabled ~= false
+  local enabled = opts.enabled ~= false
+  local policy_active = enabled
     and (#state.sections > max_files or natural_line_count(state) > max_lines)
-
   local changed = false
 
-  if not active then
-    -- Collect before expanding: set_collapsed mutates the very table being
-    -- scanned, which the old private auto-set never was.
+  if not policy_active then
+    -- Collect before expanding: set_collapsed mutates this table.
     local mine = {}
     for path, intent in pairs(state.collapsed) do
       if intent == "auto" then
@@ -100,89 +158,98 @@ function M.apply(state, opts)
       end
     end
     for _, path in ipairs(mine) do
-      local idx = index_of_path(state, path)
-      if idx then
-        canvas.set_collapsed(state, idx, false)
+      if not exact(lease) then
+        return changed
+      end
+      local index = index_of_path(state, path)
+      if index then
+        canvas.set_collapsed(state, index, false)
         changed = true
       else
-        -- No section holds this path any more (a render_all swapped the
-        -- changeset out from under it). Nothing to splice; drop the dead claim
-        -- rather than leave it to be mistaken for a collapse of the user's.
+        -- No section owns this path any more. Remove the dead bookkeeping
+        -- claim, but do not publish a shape change because no row moved.
         state.collapsed[path] = nil
       end
+      -- set_collapsed invokes state hooks synchronously; one can replace us.
+      if not exact(lease) then
+        return changed
+      end
     end
-    notify_change(state, changed)
-    return
+    return publish(lease, state, changed)
   end
 
-  tick = tick + 1
+  lease.tick = lease.tick + 1
+  local tick = lease.tick
+  local tick_of = lease.tick_of
 
   local info = vim.api.nvim_win_call(state.win, function()
-    return { top0 = vim.fn.line("w0") - 1, bot0 = vim.fn.line("w$") - 1 }
+    return {
+      top0 = vim.fn.line("w0") - 1,
+      bot0 = vim.fn.line("w$") - 1,
+    }
   end)
   local win_lo, win_hi = info.top0 - margin, info.bot0 + margin
 
-  -- One pass over the ORIGINAL (pre-splice) rows: classify in/out of window,
-  -- record each out-of-window section's distance from the nearest window
-  -- edge, and bump last-seen ticks. Computed up front so later mutating
-  -- passes (which shift rows) never perturb this apply's own window
-  -- classification.
+  -- Classify on the original pre-splice rows so this pass's mutations cannot
+  -- perturb its own viewport decision.
   local in_window = {}
   local distance = {}
-  for i, sec in ipairs(state.sections) do
-    local srow, erow = canvas.section_rows(state, i)
-    local iw = srow <= win_hi and erow > win_lo
-    in_window[i] = iw
-    if iw then
-      tick_of[sec.path] = tick
-    elseif erow <= win_lo then
-      distance[i] = win_lo - erow
+  for i, section in ipairs(state.sections) do
+    local start_row, end_row = canvas.section_rows(state, i)
+    local visible = start_row <= win_hi and end_row > win_lo
+    in_window[i] = visible
+    if visible then
+      tick_of[section.path] = tick
+    elseif end_row <= win_lo then
+      distance[i] = win_lo - end_row
     else
-      distance[i] = srow - win_hi
+      distance[i] = start_row - win_hi
     end
   end
 
-  -- Expand pass: in-window sections the MODULE collapsed get expanded back.
-  -- A user's own collapse reads "user", so it is never touched.
-  for i, sec in ipairs(state.sections) do
-    if in_window[i] and state.collapsed[sec.path] == "auto" then
+  -- Expand only this module's own in-window collapses. A user's collapse reads
+  -- "user" and is never touched.
+  for i, section in ipairs(state.sections) do
+    if not exact(lease) then
+      return changed
+    end
+    if in_window[i] and state.collapsed[section.path] == "auto" then
       canvas.set_collapsed(state, i, false)
       changed = true
+      if not exact(lease) then
+        return changed
+      end
     end
   end
 
-  -- Collapse pass: while too many sections are expanded, evict the
-  -- least-recently-visible one that's fully outside the window. Both this
-  -- count and the candidate filter below use the DERIVED predicate, so a
-  -- section a folded directory already reduced to one row is invisible to this
-  -- module. Counting one as expanded would make it an eviction candidate:
-  -- set_collapsed would record it as "auto" while splicing nothing, the loop
-  -- would decrement having freed zero rows, and the user would inherit a
-  -- collapse on unfold.
   local function count_expanded()
-    local n = 0
-    for _, sec in ipairs(state.sections) do
-      if not fold.hidden(state, sec.path) then
-        n = n + 1
+    local count = 0
+    for _, section in ipairs(state.sections) do
+      -- fold.hidden is the rendered predicate: a directory-folded section is
+      -- already one row and must neither count as expanded nor become an
+      -- auto-collapse candidate that the user would inherit on unfold.
+      if not fold.hidden(state, section.path) then
+        count = count + 1
       end
     end
-    return n
+    return count
   end
 
   local count = count_expanded()
   while count > max_expanded do
-    -- Smallest tick_of wins (nil = 0, oldest); ties broken by largest
-    -- distance from the window, so a section that's never intersected the
-    -- window at all evicts farthest-first, keeping near neighbors expanded
-    -- longer -- consistent with "far sections auto-collapse, near ones
-    -- auto-expand".
-    local best_i, best_tick, best_dist
-    for i, sec in ipairs(state.sections) do
-      if not in_window[i] and not fold.hidden(state, sec.path) then
-        local t = tick_of[sec.path] or 0
-        local d = distance[i] or 0
-        if not best_tick or t < best_tick or (t == best_tick and d > best_dist) then
-          best_tick, best_dist, best_i = t, d, i
+    if not exact(lease) then
+      return changed
+    end
+    local best_i, best_tick, best_distance
+    for i, section in ipairs(state.sections) do
+      if not in_window[i] and not fold.hidden(state, section.path) then
+        -- Oldest visibility tick wins (nil means never seen); ties evict the
+        -- farthest section so near neighbors remain expanded longer.
+        local seen = tick_of[section.path] or 0
+        local far = distance[i] or 0
+        if not best_tick or seen < best_tick
+            or (seen == best_tick and far > best_distance) then
+          best_i, best_tick, best_distance = i, seen, far
         end
       end
     end
@@ -190,76 +257,106 @@ function M.apply(state, opts)
       break
     end
     canvas.set_collapsed(state, best_i, true, "auto")
-    count = count - 1
     changed = true
+    count = count - 1
+    if not exact(lease) then
+      return changed
+    end
   end
 
-  notify_change(state, changed)
+  return publish(lease, state, changed)
 end
 
---- Install a debounced (50ms) WinScrolled trigger for `state` and run one
---- immediate apply. Singleton discipline: re-attaching stops any previous
---- timer/augroup first.
-function M.attach(state, opts)
+local function mark_dirty(lease)
+  if not active(lease) then
+    return
+  end
+
+  local timer = lease.timer
   if timer then
-    timer:stop()
+    pcall(function()
+      timer:stop()
+    end)
+    if not active(lease) then
+      return
+    end
+  else
+    timer = vim.uv.new_timer()
+    if not timer then
+      return
+    end
+    lease.timer = timer
   end
 
-  -- Binding to a DIFFERENT canvas: tick_of is keyed by path, so the previous
-  -- canvas's scroll history describes nothing in this one. Carrying it over
-  -- would let stale visibility ticks outrank everything the new canvas has
-  -- actually seen, so the LRU would keep the farthest section rendered and
-  -- collapse the nearest. (App:open can re-open without an intervening close via
-  -- its sidebar-redirect branch, so this is reachable.) The auto/user
-  -- distinction needs no such care: it lives on the state, and canvas.open
-  -- always hands back a fresh one.
-  if live ~= state then
-    tick_of = {}
-    tick = 0
-  end
-
-  live = state
-  live_opts = opts
-
-  vim.api.nvim_create_augroup("galley.virt", { clear = true })
-  vim.api.nvim_create_autocmd("WinScrolled", {
-    group = "galley.virt",
-    callback = function(ev)
-      local win = tonumber(ev.match)
-      if not (live and win == live.win and vim.api.nvim_win_is_valid(win)
-          and vim.api.nvim_win_get_buf(win) == live.buf) then
+  local scheduled = vim.schedule_wrap(function()
+    if not active(lease) then
+      return
+    end
+    M.apply(lease)
+  end)
+  pcall(function()
+    timer:start(50, 0, function()
+      if not active(lease) then
         return
       end
-      if not timer then
-        timer = vim.uv.new_timer()
-      end
-      timer:stop()
-      timer:start(50, 0, vim.schedule_wrap(function()
-        M.apply(live, live_opts)
-      end))
-    end,
-  })
-
-  M.apply(state, opts)
+      scheduled()
+    end)
+  end)
 end
 
---- Tear everything down: timer, augroup, and the module's own tick bookkeeping.
---- Nil-safe; safe to call when never attached. The shape-change hook needs no
---- clearing -- it lives on the state, so it goes when the state does.
----
---- Note what this deliberately no longer does: forget which collapses were
---- this module's. That lives on the state now, so detaching cannot blur an
---- auto-collapse into one of the user's -- which is what used to make
---- App:close's ordering (save before detach) load-bearing.
-function M.detach()
-  if timer then
-    timer:stop()
+--- Install the scroll producer and run one immediate policy pass.
+function M.attach(state, opts, callbacks)
+  if current then
+    local predecessor = current
+    M.detach(predecessor)
+    if current then
+      error("virtualizer attach was superseded during predecessor teardown", 0)
+    end
   end
-  pcall(vim.api.nvim_del_augroup_by_name, "galley.virt")
-  tick_of = {}
-  tick = 0
-  live = nil
-  live_opts = nil
+
+  next_id = next_id + 1
+  local lease = {
+    id = next_id,
+    state = state,
+    opts = opts or {},
+    callbacks = callbacks or {},
+    timer = nil,
+    aug = nil,
+    tick = 0,
+    tick_of = {},
+    disposed = false,
+  }
+  current = lease
+
+  local ok, err = pcall(function()
+    lease.aug = vim.api.nvim_create_augroup("galley.virt", { clear = true })
+    vim.api.nvim_create_autocmd("WinScrolled", {
+      group = lease.aug,
+      callback = function(ev)
+        if not active(lease) then
+          return
+        end
+        local state_now = lease.state
+        local win = tonumber(ev.match)
+        if win ~= state_now.win or not vim.api.nvim_win_is_valid(win)
+            or vim.api.nvim_win_get_buf(win) ~= state_now.buf then
+          return
+        end
+        mark_dirty(lease)
+      end,
+    })
+    M.apply(lease)
+    if not exact(lease) then
+      error("virtualizer attach was superseded during initial apply", 0)
+    end
+  end)
+  if not ok then
+    -- Exact cleanup cannot tear down a replacement installed reentrantly by a
+    -- failing owner callback.
+    M.detach(lease)
+    error(err, 0)
+  end
+  return lease
 end
 
 return M

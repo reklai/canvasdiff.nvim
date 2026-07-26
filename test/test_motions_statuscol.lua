@@ -120,14 +120,15 @@ T["motions_ ]f stops at an auto-collapsed section"] = function()
   virt.detach()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
-  virt.apply(st, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
+  local lease = virt.attach(st, { enabled = false })
+  virt.apply(lease, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
   local auto = H.auto_set(st)
   assert(auto["b/two.txt"], "sanity: virt auto-collapsed section 2")
 
   put_cursor_in(st, 1, 0)
   motions.goto_file(st, 1, 1)
   H.eq(cursor_section(st), 2, "]f lands on the auto-collapsed section, not past it")
-  virt.detach()
+  virt.detach(lease)
 end
 
 T["motions_ ]f [f still move with every section folded"] = function()

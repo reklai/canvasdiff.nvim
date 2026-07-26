@@ -121,13 +121,19 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   assert(ok, err)
 end
 
-T["root_ Surface never issues an unqualified watch stop"] = function()
+T["root_ Surface never issues unqualified controller teardown"] = function()
   local watch = require("galley.watch")
+  local virt = require("galley.virt")
   local real_stop = watch.stop
-  local stops = 0
+  local real_detach = virt.detach
+  local stops, detaches = 0, 0
   watch.stop = function(...)
     stops = stops + 1
     return real_stop(...)
+  end
+  virt.detach = function(...)
+    detaches = detaches + 1
+    return real_detach(...)
   end
 
   local ok, err = xpcall(function()
@@ -135,12 +141,16 @@ T["root_ Surface never issues an unqualified watch stop"] = function()
     local surface = require("galley.Surface").new(state)
     surface.saved = true
     H.eq(surface.controllers.watch, nil, "this Surface acquired no watch lease")
+    H.eq(surface.controllers.virt, nil, "this Surface acquired no virtualizer lease")
     H.eq(surface:dispose("test"), true)
     H.eq(stops, 0,
       "a lease-less owner must not translate nil into stop-the-current-watch")
+    H.eq(detaches, 0,
+      "a lease-less owner must not translate nil into detach-the-current-virtualizer")
   end, debug.traceback)
 
   watch.stop = real_stop
+  virt.detach = real_detach
   assert(ok, err)
 end
 

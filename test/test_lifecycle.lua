@@ -62,12 +62,17 @@ end
 --- tables at teardown time, so this observes the existing ownership seam
 --- without adding production-only introspection.
 local function with_spies(specs, body)
-  local counts, installed = {}, {}
+  local counts, calls, installed = {}, {}, {}
   for _, spec in ipairs(specs) do
     local original = spec.target[spec.method]
     counts[spec.name] = 0
+    calls[spec.name] = {}
     local wrapper = function(...)
       counts[spec.name] = counts[spec.name] + 1
+      calls[spec.name][#calls[spec.name] + 1] = {
+        n = select("#", ...),
+        ...,
+      }
       return original(...)
     end
     spec.target[spec.method] = wrapper
@@ -80,7 +85,7 @@ local function with_spies(specs, body)
   end
 
   local ok, err = xpcall(function()
-    body(counts)
+    body(counts, calls)
   end, debug.traceback)
 
   for i = #installed, 1, -1 do
@@ -418,6 +423,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
   with_canvas(function(ctx)
     local surface = ctx.surface
     local generation = surface.generation
+    local virt_lease = assert(surface.controllers.virt)
     local disposed_callbacks = 0
     local release = surface.callbacks.on_dispose
     surface.callbacks.on_dispose = function(...)
@@ -435,7 +441,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
       { name = "statuscol.detach", target = require("galley.statuscol"), method = "detach" },
     }
 
-    with_spies(specs, function(counts)
+    with_spies(specs, function(counts, calls)
       -- Keep a normal spare so the canvas WinClosed path can queue without
       -- ending the tab or the headless process.
       vim.api.nvim_set_current_win(ctx.owner)
@@ -460,6 +466,10 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
       for _, spec in ipairs(specs) do
         H.eq(counts[spec.name], 1, spec.name .. " runs exactly once across the race")
       end
+      H.eq(calls["virt.detach"][1].n, 1,
+        "Surface teardown qualifies virtualizer cleanup with one exact lease")
+      assert(rawequal(calls["virt.detach"][1][1], virt_lease),
+        "Surface teardown passes the exact virtualizer lease it acquired")
       H.eq(disposed_callbacks, 1, "the App release callback runs exactly once")
       H.eq(surface.phase, "disposed")
       H.eq(surface.disposed, true)
@@ -475,13 +485,16 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
   with_canvas(function(ctx)
     local old = ctx.surface
     local old_generation = old.generation
+    local old_virt = assert(old.controllers.virt)
     local session = require("galley.session")
     local watch = require("galley.watch")
+    local virt = require("galley.virt")
 
     with_spies({
       { name = "session.save", target = session, method = "save" },
       { name = "watch.stop", target = watch, method = "stop" },
-    }, function(counts)
+      { name = "virt.detach", target = virt, method = "detach" },
+    }, function(counts, calls)
       vim.api.nvim_set_current_win(ctx.owner)
       vim.cmd("vnew")
       local spare = vim.api.nvim_get_current_win()
@@ -495,8 +508,15 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       assert(replacement:is_alive())
       assert(replacement.generation > old_generation,
         "activation generations are monotonically increasing")
+      local replacement_virt = assert(replacement.controllers.virt)
+      assert(replacement_virt ~= old_virt,
+        "a replacement Surface acquires a distinct virtualizer lease")
+      H.eq(calls["virt.detach"][1].n, 1)
+      assert(rawequal(calls["virt.detach"][1][1], old_virt),
+        "replacement retires only the preceding Surface's virtualizer")
       local saves_after_open = counts["session.save"]
       local stops_after_open = counts["watch.stop"]
+      local detaches_after_open = counts["virt.detach"]
 
       local drained = false
       vim.schedule(function() drained = true end)
@@ -510,10 +530,16 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
         "the old queued callback did not persist the replacement")
       H.eq(counts["watch.stop"], stops_after_open,
         "the old queued callback did not stop the replacement watch")
+      H.eq(counts["virt.detach"], detaches_after_open,
+        "the old queued callback did not detach the replacement virtualizer")
       H.eq(#replacement:canvas_windows(), 1)
       assert_groups(true, "on the replacement", SURFACE_GROUPS)
 
       ctx.fm.close()
+      H.eq(counts["virt.detach"], detaches_after_open + 1)
+      H.eq(calls["virt.detach"][2].n, 1)
+      assert(rawequal(calls["virt.detach"][2][1], replacement_virt),
+        "final close detaches the replacement's own lease")
     end)
   end)
 end

@@ -51,6 +51,26 @@ T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
   assert_no_errors(violations, "watch must report model changes through its owner")
 end
 
+T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.hl"] = true,
+    ["galley.scrollbar"] = true,
+    ["galley.sidebar"] = true,
+    ["galley.watch"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.virt" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "virtualizer must report shape changes through its owner")
+end
+
 T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function()
   local nodes = {
     ["galley.canvas.Page"] = { rel = "lua/galley/canvas/Page.lua" },

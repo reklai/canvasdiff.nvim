@@ -122,9 +122,12 @@ end
 
 --- Watch changed the model rather than only its rendered shape, so every
 --- consumer refreshes and the virtualizer re-evaluates the new full size.
-local function sync_after_reconcile(st)
+local function sync_after_reconcile(surface, st)
   sync_after_collapse(st)
-  virt.apply(st, config.options.virt)
+  local lease = surface.controllers.virt
+  if lease then
+    virt.apply(lease, config.options.virt)
+  end
 end
 
 --- Set section i's collapse state on behalf of the USER (the <Tab>/za/<CR>
@@ -366,11 +369,10 @@ function App:open(opts)
   self.surface = surface
   local generation = surface.generation
 
-  -- Before anything that can splice: a fold from the sidebar or a pass of the
-  -- auto-virtualizer reshapes the canvas, and neither the highlight tier nor
-  -- the minimap hears about it on its own. Wired unconditionally and on the
-  -- state itself, so it is not a property of whichever of those two features
-  -- happens to be enabled, and cannot outlive the canvas it describes.
+  -- A sidebar fold reshapes the canvas, and neither the highlight tier nor the
+  -- minimap hears about it on its own. This canvas-local hook remains for that
+  -- synchronous model operation; asynchronous controllers such as the
+  -- virtualizer report through their exact Surface-owned leases below.
   st.hooks = st.hooks or {}
   st.hooks.on_shape_change = function()
     surface:guard(generation, function()
@@ -421,7 +423,7 @@ function App:open(opts)
       end,
       on_change = function()
         surface:guard(generation, function()
-          sync_after_reconcile(st)
+          sync_after_reconcile(surface, st)
         end)
       end,
     })
@@ -562,9 +564,19 @@ function App:open(opts)
   end
 
   if config.options.virt.enabled then
-    -- attach applies immediately, and that first pass can already splice -- the
-    -- on_shape_change hook is already in place from the top of this function.
-    virt.attach(st, config.options.virt)
+    -- Attach applies immediately. Its owner callback is already generation-
+    -- fenced even though the lease is not published on Surface until attach
+    -- returns.
+    surface.controllers.virt = virt.attach(st, config.options.virt, {
+      alive = function()
+        return surface:guard(generation)
+      end,
+      on_change = function(changed_state)
+        surface:guard(generation, function()
+          sync_after_collapse(changed_state)
+        end)
+      end,
+    })
   end
   surface:capture_view(st.win)
   return st
@@ -720,7 +732,8 @@ end
 ---
 --- Shared by the lens pivot, App:refresh and watch -- they are one operation ("go and
 --- see what is true now"), differing only in what prompted it.
-local function pivot(st, target_lens)
+local function pivot(surface, target_lens)
+  local st = surface and surface.state
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
     return nil, "no valid diff canvas"
   end
@@ -745,7 +758,10 @@ local function pivot(st, target_lens)
   end
   set_winbar(st)
   sync_after_collapse(st)
-  virt.apply(st, config.options.virt)
+  local lease = surface.controllers.virt
+  if lease then
+    virt.apply(lease, config.options.virt)
+  end
   return true
 end
 
@@ -772,7 +788,7 @@ function App:refresh()
   if not surface then
     return
   end
-  local ok, err = pivot(surface.state)
+  local ok, err = pivot(surface)
   if not ok then
     util.warn(err)
     return nil, err
@@ -804,7 +820,7 @@ function App:set_lens(l)
     return true
   end
 
-  local ok, err = pivot(surface.state, l)
+  local ok, err = pivot(surface, l)
   if not ok then
     util.warn(err)
     return nil, err

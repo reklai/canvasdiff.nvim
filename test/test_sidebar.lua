@@ -774,7 +774,8 @@ T["sidebar_fold the tree marks what you folded, but not virt's own work"] = func
   -- virt collapsing something is bookkeeping, not a decision the user made,
   -- so it must not churn markers across the tree on every scroll.
   canvas.set_collapsed(st, 3, false)
-  virt.apply(st, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
+  local lease = virt.attach(st, { enabled = false })
+  virt.apply(lease, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
   assert(next(H.auto_set(st)), "sanity: virt auto-collapsed something")
   sidebar.refresh(st)
   for _, line in ipairs(vim.api.nvim_buf_get_lines(sidebar_buf(), 0, -1, false)) do
@@ -783,7 +784,7 @@ T["sidebar_fold the tree marks what you folded, but not virt's own work"] = func
     end
   end
 
-  virt.detach()
+  virt.detach(lease)
   done(st)
 end
 
