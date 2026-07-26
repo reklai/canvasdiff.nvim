@@ -475,7 +475,14 @@ function App:open(opts)
   })
 
   if config.options.statuscolumn.enabled then
-    statuscol.attach(st)
+    surface.controllers.statuscol = statuscol.attach(st, {
+      alive = function()
+        return surface:guard(generation)
+      end,
+      windows = function()
+        return surface:canvas_windows()
+      end,
+    })
   end
 
   if config.options.session.enabled then
@@ -495,10 +502,10 @@ function App:open(opts)
   -- watch keeps reconciling it on every write and the session is never saved --
   -- losing whatever you had folded.
   --
-  -- Deliberately NO `pattern`: hl, scrollbar and statuscol all re-point st.win
-  -- on BufWinEnter without reinstalling their own autocmds, which is exactly how
-  -- the `pattern = tostring(st.win)` hooks in sidebar and scrollbar go stale
-  -- when the canvas moves windows. Reading this App's state at fire time cannot.
+  -- Deliberately NO `pattern`: BufWinEnter can move the Surface's primary host
+  -- without reinstalling this hook. Binding the original scalar window is
+  -- exactly how sidebar/scrollbar cleanup goes stale when the canvas moves.
+  -- Reading the Surface's ownership at fire time cannot.
   --
   -- Deferred and re-checked, because another window in this tabpage may still be
   -- showing the canvas -- and because doing window work from inside WinClosed is
@@ -629,8 +636,9 @@ end
 --- to return early here, which meant that after a `:q` had taken the window there
 --- was no longer any way to reach the teardown at all.
 ---
---- A stale 'statuscolumn' left on a restored window is harmless: statuscol's
---- text function returns "" as soon as the window isn't showing the canvas.
+--- The status-column lease observes each buffer leave and restores that
+--- window's prior local option; final disposal also restores every touched
+--- host before this method swaps its buffer.
 function App:close()
   local surface = active_surface(self)
   if not surface then

@@ -71,6 +71,27 @@ T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
   assert_no_errors(violations, "virtualizer must report shape changes through its owner")
 end
 
+T.architecture_status_column_has_no_peer_controller_edges = function()
+  local inspection = inspect_repo()
+  assert_no_errors(inspection.errors, "architecture dependency scan failed")
+
+  local forbidden = {
+    ["galley.hl"] = true,
+    ["galley.scrollbar"] = true,
+    ["galley.sidebar"] = true,
+    ["galley.virt"] = true,
+    ["galley.watch"] = true,
+  }
+  local violations = {}
+  for _, edge in ipairs(inspection.edges) do
+    if edge.from == "galley.statuscol" and forbidden[edge.to] then
+      violations[#violations + 1] = edge.from .. " -> " .. edge.to
+    end
+  end
+
+  assert_no_errors(violations, "status column must be composed by its Surface owner")
+end
+
 T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function()
   local nodes = {
     ["galley.canvas.Page"] = { rel = "lua/galley/canvas/Page.lua" },

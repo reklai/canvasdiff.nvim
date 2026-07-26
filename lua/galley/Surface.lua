@@ -258,7 +258,12 @@ function Surface:dispose(reason)
   attempt("hl.detach", function() hl.detach(self.state) end)
   attempt("sidebar.close", sidebar.close)
   attempt("scrollbar.close", scrollbar.close)
-  attempt("statuscol.detach", statuscol.detach)
+  attempt("statuscol.detach", function()
+    local lease = self.controllers.statuscol
+    if lease then
+      statuscol.detach(lease)
+    end
+  end)
 
   for _, group in ipairs(OWNED_GROUPS) do
     -- A disabled feature legitimately has no group. Missing groups are not

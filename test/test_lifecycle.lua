@@ -342,8 +342,14 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     local remote_tab = vim.api.nvim_get_current_tabpage()
     local remote = vim.api.nvim_get_current_win()
     local remote_landing = vim.api.nvim_get_current_buf()
+    local remote_statuscol = "%=%l "
+    vim.api.nvim_set_option_value(
+      "statuscolumn", remote_statuscol, { win = remote, scope = "local" })
     vim.api.nvim_win_set_buf(remote, ctx.buf)
     surface:adopt_window(remote, remote_landing)
+    H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = remote }),
+      "%!v:lua.require'galley.statuscol'.text()",
+      "a newly-adopted remote host receives the review status column")
 
     -- Explicit close is tab-local. It restores the original host to its own
     -- landing and leaves the remote review untouched.
@@ -360,15 +366,26 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     vim.cmd("tabnew")
     local third = vim.api.nvim_get_current_win()
     local third_landing = vim.api.nvim_get_current_buf()
+    local third_statuscol = "%=%r "
+    vim.api.nvim_set_option_value(
+      "statuscolumn", third_statuscol, { win = third, scope = "local" })
     ctx.fm.toggle()
     H.eq(vim.api.nvim_win_get_buf(third), ctx.buf,
       "toggle shows the existing remote review in this tab")
+    H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = third }),
+      "%!v:lua.require'galley.statuscol'.text()")
     H.eq(ctx.state.surface, surface, "toggle did not create a replacement Surface")
     H.eq(#surface:canvas_windows(), 2)
 
     ctx.fm.toggle()
     H.eq(vim.api.nvim_win_get_buf(third), third_landing,
       "the second toggle restores this tab's independent landing")
+    assert(vim.wait(500, function()
+      return vim.api.nvim_get_option_value("statuscolumn", { win = third })
+        == third_statuscol
+    end, 10), "the deferred leave restored the third window's prior option")
+    H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = third }),
+      third_statuscol, "leaving the review restores this window's prior option")
     assert(surface:is_alive(), "the remote tab still owns the review")
     H.eq(vim.api.nvim_win_get_buf(remote), ctx.buf)
 
@@ -376,6 +393,12 @@ T["lifecycle_ tab-local close and toggle preserve each window landing"] = functi
     ctx.fm.close()
     H.eq(vim.api.nvim_win_get_buf(remote), remote_landing,
       "the remote tab restores its own prior buffer, not the original tab's")
+    assert(vim.wait(500, function()
+      return vim.api.nvim_get_option_value("statuscolumn", { win = remote })
+        == remote_statuscol
+    end, 10), "final teardown restored the remote window's prior option")
+    H.eq(vim.api.nvim_get_option_value("statuscolumn", { win = remote }),
+      remote_statuscol, "final explicit close restores the remote option")
     assert(surface.disposed, "the remote host was the global final owner")
     vim.cmd("tabonly!")
   end)
@@ -424,6 +447,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
     local surface = ctx.surface
     local generation = surface.generation
     local virt_lease = assert(surface.controllers.virt)
+    local statuscol_lease = assert(surface.controllers.statuscol)
     local disposed_callbacks = 0
     local release = surface.callbacks.on_dispose
     surface.callbacks.on_dispose = function(...)
@@ -470,6 +494,10 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
         "Surface teardown qualifies virtualizer cleanup with one exact lease")
       assert(rawequal(calls["virt.detach"][1][1], virt_lease),
         "Surface teardown passes the exact virtualizer lease it acquired")
+      H.eq(calls["statuscol.detach"][1].n, 1,
+        "Surface teardown qualifies status-column cleanup with one exact lease")
+      assert(rawequal(calls["statuscol.detach"][1][1], statuscol_lease),
+        "Surface teardown passes the exact status-column lease it acquired")
       H.eq(disposed_callbacks, 1, "the App release callback runs exactly once")
       H.eq(surface.phase, "disposed")
       H.eq(surface.disposed, true)
@@ -486,14 +514,17 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local old = ctx.surface
     local old_generation = old.generation
     local old_virt = assert(old.controllers.virt)
+    local old_statuscol = assert(old.controllers.statuscol)
     local session = require("galley.session")
     local watch = require("galley.watch")
     local virt = require("galley.virt")
+    local statuscol = require("galley.statuscol")
 
     with_spies({
       { name = "session.save", target = session, method = "save" },
       { name = "watch.stop", target = watch, method = "stop" },
       { name = "virt.detach", target = virt, method = "detach" },
+      { name = "statuscol.detach", target = statuscol, method = "detach" },
     }, function(counts, calls)
       vim.api.nvim_set_current_win(ctx.owner)
       vim.cmd("vnew")
@@ -511,12 +542,19 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       local replacement_virt = assert(replacement.controllers.virt)
       assert(replacement_virt ~= old_virt,
         "a replacement Surface acquires a distinct virtualizer lease")
+      local replacement_statuscol = assert(replacement.controllers.statuscol)
+      assert(replacement_statuscol ~= old_statuscol,
+        "a replacement Surface acquires a distinct status-column lease")
       H.eq(calls["virt.detach"][1].n, 1)
       assert(rawequal(calls["virt.detach"][1][1], old_virt),
         "replacement retires only the preceding Surface's virtualizer")
+      H.eq(calls["statuscol.detach"][1].n, 1)
+      assert(rawequal(calls["statuscol.detach"][1][1], old_statuscol),
+        "replacement retires only the preceding Surface's status-column controller")
       local saves_after_open = counts["session.save"]
       local stops_after_open = counts["watch.stop"]
       local detaches_after_open = counts["virt.detach"]
+      local statuscol_detaches_after_open = counts["statuscol.detach"]
 
       local drained = false
       vim.schedule(function() drained = true end)
@@ -532,6 +570,8 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
         "the old queued callback did not stop the replacement watch")
       H.eq(counts["virt.detach"], detaches_after_open,
         "the old queued callback did not detach the replacement virtualizer")
+      H.eq(counts["statuscol.detach"], statuscol_detaches_after_open,
+        "the old queued callback did not detach the replacement status column")
       H.eq(#replacement:canvas_windows(), 1)
       assert_groups(true, "on the replacement", SURFACE_GROUPS)
 
@@ -540,6 +580,10 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
       H.eq(calls["virt.detach"][2].n, 1)
       assert(rawequal(calls["virt.detach"][2][1], replacement_virt),
         "final close detaches the replacement's own lease")
+      H.eq(counts["statuscol.detach"], statuscol_detaches_after_open + 1)
+      H.eq(calls["statuscol.detach"][2].n, 1)
+      assert(rawequal(calls["statuscol.detach"][2][1], replacement_statuscol),
+        "final close detaches the replacement's own status-column lease")
     end)
   end)
 end

@@ -124,9 +124,11 @@ end
 T["root_ Surface never issues unqualified controller teardown"] = function()
   local watch = require("galley.watch")
   local virt = require("galley.virt")
+  local statuscol = require("galley.statuscol")
   local real_stop = watch.stop
   local real_detach = virt.detach
-  local stops, detaches = 0, 0
+  local real_statuscol_detach = statuscol.detach
+  local stops, detaches, statuscol_detaches = 0, 0, 0
   watch.stop = function(...)
     stops = stops + 1
     return real_stop(...)
@@ -135,6 +137,10 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
     detaches = detaches + 1
     return real_detach(...)
   end
+  statuscol.detach = function(...)
+    statuscol_detaches = statuscol_detaches + 1
+    return real_statuscol_detach(...)
+  end
 
   local ok, err = xpcall(function()
     local state = {}
@@ -142,15 +148,20 @@ T["root_ Surface never issues unqualified controller teardown"] = function()
     surface.saved = true
     H.eq(surface.controllers.watch, nil, "this Surface acquired no watch lease")
     H.eq(surface.controllers.virt, nil, "this Surface acquired no virtualizer lease")
+    H.eq(surface.controllers.statuscol, nil,
+      "this Surface acquired no status-column lease")
     H.eq(surface:dispose("test"), true)
     H.eq(stops, 0,
       "a lease-less owner must not translate nil into stop-the-current-watch")
     H.eq(detaches, 0,
       "a lease-less owner must not translate nil into detach-the-current-virtualizer")
+    H.eq(statuscol_detaches, 0,
+      "a lease-less owner must not detach the current status-column controller")
   end, debug.traceback)
 
   watch.stop = real_stop
   virt.detach = real_detach
+  statuscol.detach = real_statuscol_detach
   assert(ok, err)
 end
 
