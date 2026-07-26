@@ -5,6 +5,7 @@ local fold = require("galley.fold")
 local render = require("galley.render")
 local model = require("galley.model")
 local lens = require("galley.lens")
+local util = require("galley.util")
 
 local S = {}
 
@@ -209,6 +210,20 @@ local function canvas_showing(state)
     and vim.api.nvim_win_get_buf(state.win) == state.buf
 end
 
+--- Index of the section for `path`, or nil.
+---
+--- By path rather than by an entry's cached `section_i`, because that index is only
+--- valid for the entry list it was built with: any resplice that DELETES a section
+--- shifts every index after it down by one, and a stale index then silently names a
+--- different file.
+local function index_of_path(state, path)
+  for k, sec in ipairs(state.sections or {}) do
+    if sec.path == path then
+      return k
+    end
+  end
+end
+
 --- Move the active-row highlight onto the row for `section_i` (whose file is `path`),
 --- or the deepest visible ancestor dir when a fold hides the file itself.
 local function set_active(state, section_i, path)
@@ -263,6 +278,25 @@ function S.sync(state)
   end
 end
 
+--- Activate the row for `path` outright, without consulting the canvas topline.
+---
+--- What a jump excursion needs, and why S.sync cannot serve it: during an excursion
+--- the canvas is not in its window, so there is no topline to resolve and sync returns
+--- early -- leaving the highlight on whatever file you were reading BEFORE you jumped.
+--- The sidebar is a "where am I in the changeset" locator, and you are still somewhere
+--- in the changeset; pointing confidently at the wrong file is worse than being merely
+--- out of date.
+function S.mark_path(state, path)
+  if not S.is_open() or not path then
+    return
+  end
+  local section_i = index_of_path(state, path)
+  if not section_i then
+    return
+  end
+  set_active(state, section_i, path)
+end
+
 --- Act on the entry under the sidebar cursor: a dir toggles its fold, which
 --- folds its files on the canvas too; a file scrolls the canvas to its section
 --- without changing its fold. Never changes any window's buffer or the focused
@@ -297,15 +331,46 @@ function S.select(state)
     return
   end
 
-  if not (state.win and vim.api.nvim_win_is_valid(state.win)
-      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
-    return -- canvas window closed out from under the sidebar
+  -- Read the path NOW: the resplice below can rebuild side.entries under us, which
+  -- makes `e` an entry from a list that no longer exists.
+  local path = e.path
+
+  -- A jump excursion has the canvas out of its window. Selecting a file in the tree
+  -- plainly means "take me to that file's diff", and you cannot scroll a canvas that
+  -- is not on screen -- so end the excursion first. back() IS the whole return path:
+  -- it regenerates the section from the buffer you were editing, unsaved edits
+  -- included, and splices it in, so navigating away from a jump loses nothing.
+  --
+  -- Lazily required, not at module scope: jump requires sidebar, so a top-level
+  -- require here would be a cycle.
+  --
+  -- This branch used to `return` silently. The tree stayed on screen, Enter did
+  -- nothing at all, and nothing said why -- a dead end you could only escape by
+  -- knowing about Ctrl+Space.
+  if not canvas_showing(state) then
+    require("galley.jump").back()
+    if not canvas_showing(state) then
+      -- back() declines when it has no window to restore into, and says so itself.
+      return
+    end
   end
 
-  -- Scroll there and nothing more. Selecting a folded file does not unfold it:
-  -- navigation and folding are separate verbs, so moving around never rewrites
-  -- the review state the user deliberately set.
-  local start0 = (canvas.section_rows(state, e.section_i))
+  -- Resolved by path rather than `e.section_i`, because back() above may have
+  -- re-spliced: a file reverted while you were editing it loses its section outright
+  -- and every later index shifts down, so the cached index could now name a different
+  -- file. Cheap, and correct in the non-excursion case too.
+  local section_i = index_of_path(state, path)
+  if not section_i then
+    util.notify(path .. " has no changes any more")
+    return
+  end
+
+  -- Scroll there and nothing more. Selecting a folded file does NOT unfold it:
+  -- folded means folded, and the collapse key on the canvas is the only thing that
+  -- changes that. (This used to expand first, on the theory that "take me there"
+  -- implies "let me read it" -- but that made a navigation key silently alter fold
+  -- state.)
+  local start0 = (canvas.section_rows(state, section_i))
   vim.api.nvim_win_call(state.win, function()
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
   end)

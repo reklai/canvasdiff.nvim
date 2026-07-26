@@ -137,6 +137,13 @@ function M.enter(state, opts)
 
   excursion.buf = buf
   last_buf = buf
+
+  -- Follow the jump in the tree. sync() cannot do this -- the canvas is no longer in
+  -- its window, so it has no topline to resolve and bails, leaving the highlight on
+  -- the file you were reading BEFORE the jump. The sidebar answers "where am I in the
+  -- changeset", and during an excursion the answer is this file.
+  sidebar.mark_path(state, section.path)
+
   -- Never map `q` in the real file buffer.
   for _, lhs in ipairs(back_keys) do
     vim.keymap.set("n", lhs, function()

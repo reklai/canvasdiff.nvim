@@ -532,6 +532,90 @@ return {
       "the winbar augroup must be reaped by teardown")
     vim.fn.delete(root, "rf")
   end,
+  -- The excursion half, deliberately on SMALL files so the whole canvas fits one
+  -- window. That is load-bearing for the test, not incidental: with tall files the
+  -- topline is already inside the file you jump into, so the pre-jump sync has already
+  -- highlighted it and removing the follow-the-jump call changes nothing observable.
+  -- Verified: the tall-file version passed with sidebar.mark_path deleted.
+  --
+  -- Here the topline sits in aaa.txt while the cursor is down in zzz.txt, so the two
+  -- answers differ and only a real follow produces zzz.txt.
+  ["e2e: the sidebar follows you into a jump, and Enter in it is not a dead end"] = function()
+    local root = H.git_fixture({
+      committed = { ["aaa.txt"] = "a1\na2\na3\n", ["zzz.txt"] = "z1\nz2\nz3\n" },
+      worktree = { ["aaa.txt"] = "A1\na2\na3\n", ["zzz.txt"] = "Z1\nz2\nz3\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+
+    local NS = vim.api.nvim_create_namespace("galley.sidebar")
+    local function sbwin()
+      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w)):match("galley://sidebar") then
+          return w
+        end
+      end
+    end
+    local function active()
+      local w = sbwin()
+      if not w then return nil end
+      local b = vim.api.nvim_win_get_buf(w)
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(b, NS, 0, -1, { details = true })) do
+        if m[4] and m[4].line_hl_group == "GalleySidebarActive" then
+          return vim.api.nvim_buf_get_lines(b, m[2], m[2] + 1, false)[1]
+        end
+      end
+    end
+    local function wb() return vim.api.nvim_get_option_value("winbar", { win = cwin }) end
+
+    -- Topline at the very top, so the tree's active row resolves to aaa.txt.
+    vim.api.nvim_win_call(cwin, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
+    vim.api.nvim_exec_autocmds("WinScrolled", {})
+    assert((active() or ""):match("aaa"),
+      "sanity: the topline is in aaa.txt, so that is what the tree highlights. got: "
+      .. tostring(active()))
+
+    -- Cursor down into zzz.txt WITHOUT scrolling, then jump.
+    local zline
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+      if l == "+Z1" then zline = i end
+    end
+    assert(zline, "sanity: zzz.txt's change is on the canvas")
+    vim.api.nvim_win_set_cursor(cwin, { zline, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    assert(vim.api.nvim_buf_get_name(0):match("zzz%.txt"), "sanity: editing zzz.txt")
+    assert((active() or ""):match("zzz"),
+      "the tree must follow the jump. It used to keep pointing at the file the TOPLINE "
+      .. "was in -- confidently naming the wrong file. got: " .. tostring(active()))
+
+    -- Enter in the sidebar mid-excursion: ends the excursion and goes there, rather
+    -- than silently doing nothing at all.
+    local sw = sbwin()
+    vim.api.nvim_set_current_win(sw)
+    local arow
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sw), 0, -1, false)) do
+      if l:match("aaa") then arow = i end
+    end
+    assert(arow, "sanity: aaa.txt has a sidebar row")
+    vim.api.nvim_win_set_cursor(sw, { arow, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+
+    local back = false
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_get_buf(w) == cbuf then back = true end
+    end
+    assert(back, "selecting a file mid-excursion must bring the canvas back, not no-op")
+    assert(wb():match("aaa%.txt"),
+      "and the winbar must name where it landed -- a programmatic scroll fires no "
+      .. "WinScrolled, which is why sidebar.sync signals on_locate. got: " .. wb())
+    assert((active() or ""):match("aaa"), "and the active row agrees: " .. tostring(active()))
+
+    fm.close()
+    vim.fn.delete(root, "rf")
+  end,
   -- The file-boundary bar: a full-width tint on each expanded file's header row, so
   -- crossing out of one file and into the next is visible while scrolling rather than
   -- being one more line among diff lines.
