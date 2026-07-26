@@ -227,6 +227,7 @@ function G.source_files(root)
     "--others",
     "--exclude-standard",
     "--",
+    "benchmark",
     "lua",
     "plugin",
     "test",
@@ -282,14 +283,16 @@ function G.inspect(root)
         inspection.modules[module] = file.rel
       end
       inspection.nodes[module] = { module = module, rel = file.rel }
-    elseif file.rel:match("^plugin/") then
+    elseif file.rel:match("^plugin/") or file.rel:match("^benchmark/") then
       local node = "@" .. file.rel
       inspection.nodes[node] = { module = node, rel = file.rel }
     end
   end
 
   for _, file in ipairs(inspection.files) do
-    if file.rel:match("^lua/") or file.rel:match("^plugin/") then
+    if file.rel:match("^lua/")
+        or file.rel:match("^plugin/")
+        or file.rel:match("^benchmark/") then
       local source, read_err = read_file(file.abs)
       if not source then
         inspection.errors[#inspection.errors + 1] = (

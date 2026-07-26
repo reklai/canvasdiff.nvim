@@ -1,5 +1,5 @@
 local H = require("helpers")
-local render = require("canvasdiff.render")
+local render = require("canvasdiff.canvas").format
 local model = require("canvasdiff.diff")
 local scrollbar = require("canvasdiff.scrollbar")
 local canvas = require("canvasdiff.canvas")

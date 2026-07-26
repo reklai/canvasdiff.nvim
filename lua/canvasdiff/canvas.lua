@@ -1,8 +1,22 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
+local config = require("canvasdiff.config")
+local format = require("canvasdiff.canvas.format")
 
 -- The canvas domain's exact public surface. Concrete storage and projection
 -- owners live below this facade; callers outside the domain never import them.
 return {
+  format = {
+    ensure_marker_hl = format.ensure_marker_hl,
+    escape_path = format.escape_path,
+    ghost_lines = format.ghost_lines,
+    glyphs = config.glyphs,
+    marker_spans = format.marker_spans,
+    placeholder = format.placeholder,
+    section_hl = format.section_hl,
+    section_lines = format.section_lines,
+    section_path = format.section_path,
+    stage_mark = format.stage_mark,
+  },
   insert_section = Canvas.insert_section,
   is_canvas_buf = Canvas.is_canvas_buf,
   locate = Canvas.locate,

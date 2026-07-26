@@ -78,7 +78,7 @@ function W.section_marks(section)
       for k = 0, npairs - 1 do
         -- Only the ADD side gets marks now. The deleted line is a virtual line, and
         -- extmarks cannot reach into virtual text -- marking its changed span would
-        -- mean splitting the ghost into chunks in render.ghost_lines instead. Dropped
+        -- mean splitting the ghost into chunks in canvas.format.ghost_lines instead. Dropped
         -- deliberately: the add side is the half that says what the code became, and
         -- the ghost renders whole beside it.
         pair_marks(

@@ -1,77 +1,12 @@
+local config = require("canvasdiff.config")
+
 local R = {}
 
---- Every glyph CanvasDiff draws, in one place, so all of them are configurable through one
---- surface instead of five constants and four inline literals.
----
---- Written into by config.setup from `opts.glyphs`; read LIVE everywhere, never
---- snapshotted. That matters more than it looks: `stale` is used for byte arithmetic
---- (`#glyphs.stale`) when placing its highlight span, so a cached length would put the
---- mark on the wrong columns the moment anyone overrode the glyph.
----
---- `stale` includes its leading space deliberately -- it is appended to a row rather
---- than sitting in a column, and keeping the space inside the value means every
---- `#glyphs.stale` offset stays correct without callers adding 1.
----
---- Width matters here. `● ○ ▎ −` are East Asian Ambiguous and render two cells wide
---- under `ambiwidth=double`, while `▸ ▾ ‒ ❘` stay one cell in both modes. If you
---- override any of these, check `vim.fn.strwidth` under both settings -- see
---- config.ASCII_GLYPHS for a set that is one cell everywhere and needs no font beyond
---- ASCII.
-local GLYPHS = {
-  -- diff row prefixes
-  ctx = " ",
-  del = "-",
-  add = "+",
-  -- structure
-  file = "▎",       -- canvas file header
-  folded = "▸",     -- a folded file or directory, canvas and sidebar alike
-  open = "▾",       -- an expanded directory in the sidebar
-  minus = "−",      -- the − in "+3 −2"; a true MINUS SIGN, not an ASCII hyphen
-  -- sidebar markers
-  -- Two independent facts, so two independent glyphs rather than one tri-state
-  -- symbol: `staged` means the index differs from HEAD, `unstaged` means the worktree
-  -- differs from the index, and both together is the interesting case -- staged, then
-  -- changed again.
-  staged = "●",
-  unstaged = "○",
-  -- Appended to a row, never prefixed: the leading `folded` glyph means the same thing
-  -- on a canvas placeholder and a sidebar row, so nothing may displace it.
-  --
-  -- DELIBERATELY the same character as `staged`, separated by highlight alone. A staged
-  -- file that has since changed renders `● ●`, whose two characters are identical in
-  -- the buffer TEXT -- yanked, echoed or grepped, the row is ambiguous. Chosen
-  -- knowingly over a distinct glyph, so the marker column stays one cell per fact, and
-  -- mitigated by layering a bold attribute over the colour (see R.marker_spans) since
-  -- how well two colours separate is up to the colourscheme. If they are still hard to
-  -- tell apart, `glyphs = { stale = " !" }` is the real fix -- and note the ascii preset
-  -- already does exactly that.
-  stale = " ●",
-  -- minimap
-  scroll_file = "‒",
-  scroll_bar = "❘",
-}
-
-R.glyphs = GLYPHS
+-- Formatting reads the config owner's live glyph table. Keeping the reference
+-- stable makes an override immediately visible without a reverse config -> canvas
+-- dependency or a second copy of presentation state.
+local GLYPHS = config.glyphs
 local PREFIX = GLYPHS
-
--- Pristine copy, so config.setup can start from the defaults every time instead of
--- layering each call's overrides on the last one's -- calling setup twice with
--- different glyph tables would otherwise leave a mix of both.
-local DEFAULT_GLYPHS = vim.deepcopy(GLYPHS)
-
---- Restore every glyph to its shipped default. config.setup calls this before applying
---- overrides; nothing else should need it.
-function R.reset_glyphs()
-  for k, v in pairs(DEFAULT_GLYPHS) do
-    GLYPHS[k] = v
-  end
-end
-
---- Is `name` a glyph slot that exists? Used by config.setup to reject typos loudly
---- rather than silently ignoring `glyphs = { fyle = "|" }`.
-function R.is_glyph(name)
-  return DEFAULT_GLYPHS[name] ~= nil
-end
 
 --- A filename rendered as one printable buffer-row fragment.
 ---

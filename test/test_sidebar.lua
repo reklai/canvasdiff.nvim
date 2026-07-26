@@ -2,7 +2,7 @@ local H = require("helpers")
 local sidebar = require("canvasdiff.sidebar")
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
-local render = require("canvasdiff.render")
+local render = require("canvasdiff.canvas").format
 local virt = require("canvasdiff.virt")
 local motions = require("canvasdiff.motions")
 

@@ -1,7 +1,34 @@
 local ui = require("canvasdiff.ui")
-local render = require("canvasdiff.render")
 
 local M = {}
+
+--- Every glyph CanvasDiff draws, owned by configuration so applying an override
+--- never requires config to depend upward on the canvas presentation domain.
+---
+--- Read live by formatters rather than snapshotted. `stale` is used for byte
+--- arithmetic when placing its highlight span, so a cached value or length would
+--- put the mark on the wrong columns after an override.
+local DEFAULT_GLYPHS = {
+  -- diff row prefixes
+  ctx = " ",
+  del = "-",
+  add = "+",
+  -- structure
+  file = "▎",
+  folded = "▸",
+  open = "▾",
+  minus = "−",
+  -- sidebar markers
+  staged = "●",
+  unstaged = "○",
+  -- Appended to a row, so the leading space is part of the configured value.
+  stale = " ●",
+  -- minimap
+  scroll_file = "‒",
+  scroll_bar = "❘",
+}
+
+M.glyphs = vim.deepcopy(DEFAULT_GLYPHS)
 
 --- A glyph set that needs nothing beyond ASCII, for a restricted font, a Linux
 --- framebuffer console, or anywhere the defaults render as boxes. Pass it as
@@ -22,6 +49,16 @@ M.ASCII_GLYPHS = {
   staged = "*", unstaged = "o", stale = " !",
   scroll_file = "-", scroll_bar = "|",
 }
+
+local function reset_glyphs()
+  for name, glyph in pairs(DEFAULT_GLYPHS) do
+    M.glyphs[name] = glyph
+  end
+end
+
+local function is_glyph(name)
+  return DEFAULT_GLYPHS[name] ~= nil
+end
 
 -- Keymaps are grouped by the buffer they live on, because the same key means
 -- different things in different places: `q` closes the canvas but only the
@@ -188,16 +225,15 @@ function M.setup(opts)
   M.user_opts = vim.deepcopy(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
 
-  -- Glyphs live on `render`, not in M.options, and the reason is that render must stay
-  -- requirable without config: it is pure, the diff model and sidebar build lines with
-  -- it, and its tests call it directly. So the defaults belong there and config only
-  -- pushes overrides in. Reset first, or two setup() calls layer on each other.
+  -- Glyphs are live configuration state rather than part of M.options: formatting
+  -- reads this exact table through the canvas facade. Reset first, or two setup()
+  -- calls would layer their overrides on each other.
   --
   -- `glyphs = "ascii"` selects the preset above; a table overrides individual slots.
   -- Unknown slots are reported rather than ignored: `glyphs = { fyle = "|" }` would
   -- otherwise do nothing at all and look like CanvasDiff failing to honour the option,
   -- which is exactly the failure mode the legacy-keymaps check above exists for.
-  render.reset_glyphs()
+  reset_glyphs()
   local g = opts.glyphs
   if g == "ascii" then
     g = M.ASCII_GLYPHS
@@ -205,12 +241,12 @@ function M.setup(opts)
   if type(g) == "table" then
     local unknown = {}
     for name, value in pairs(g) do
-      if not render.is_glyph(name) then
+      if not is_glyph(name) then
         unknown[#unknown + 1] = tostring(name)
       elseif type(value) ~= "string" then
         ui.err(("glyphs.%s must be a string, got %s"):format(name, type(value)))
       else
-        render.glyphs[name] = value
+        M.glyphs[name] = value
       end
     end
     if #unknown > 0 then

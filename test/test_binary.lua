@@ -1,6 +1,6 @@
 local H = require("helpers")
 local model = require("canvasdiff.diff")
-local render = require("canvasdiff.render")
+local render = require("canvasdiff.canvas").format
 
 local T = {}
 

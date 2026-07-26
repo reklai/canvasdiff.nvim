@@ -1,4 +1,5 @@
 local canvas = require("canvasdiff.canvas")
+local render = canvas.format
 local git = require("canvasdiff.git")
 local jump = require("canvasdiff.jump")
 local config = require("canvasdiff.config")
@@ -16,7 +17,6 @@ local keys = require("canvasdiff.keys")
 local diff = require("canvasdiff.diff")
 local fold = diff.fold
 local lens = diff.lens
-local render = require("canvasdiff.render")
 local Surface = require("canvasdiff.Surface")
 
 local App = {}

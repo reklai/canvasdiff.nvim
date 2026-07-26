@@ -1,4 +1,5 @@
-local render = require("canvasdiff.render")
+local render = require("canvasdiff.canvas.format")
+local glyphs = require("canvasdiff.config").glyphs
 local diff = require("canvasdiff.diff")
 local viewport = diff.anchor
 local fold = diff.fold
@@ -128,12 +129,12 @@ local function apply_section_hl(buf, start_row, section, collapsed)
     -- it back means the highlight cannot disagree with the text. Priority above the
     -- header mark, whose hl_eol fill covers this range too.
     local line = vim.api.nvim_buf_get_lines(buf, start_row, start_row + 1, false)[1] or ""
-    if #line >= #render.glyphs.stale and line:sub(-#render.glyphs.stale) == render.glyphs.stale then
+    if #line >= #glyphs.stale and line:sub(-#glyphs.stale) == glyphs.stale then
       -- Colour, then a bold layer over the same range. The bold is the part that does
       -- not depend on the colourscheme -- see R.marker_spans for why that matters on
       -- the sidebar, and this keeps the canvas placeholder's marker consistent with it.
       for group, prio in pairs({ CanvasDiffStale = 101, CanvasDiffStaleEmphasis = 102 }) do
-        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, #line - #render.glyphs.stale, {
+        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, #line - #glyphs.stale, {
           end_row = start_row,
           end_col = #line,
           hl_group = group,

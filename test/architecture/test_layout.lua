@@ -76,8 +76,9 @@ T.architecture_layout_module_ids_are_unique_and_paths_are_owned = function()
       elseif not file.rel:match("^lua/canvasdiff") then
         errors[#errors + 1] = "production Lua must live in the CanvasDiff package: " .. file.rel
       end
-    elseif file.rel:match("^plugin/") and not rules.classify(file.rel) then
-      errors[#errors + 1] = "unowned plugin entrypoint: " .. file.rel
+    elseif (file.rel:match("^plugin/") or file.rel:match("^benchmark/"))
+        and not rules.classify(file.rel) then
+      errors[#errors + 1] = "unowned Lua entrypoint: " .. file.rel
     end
   end
 
@@ -88,7 +89,9 @@ T.architecture_layout_names_have_one_meaning = function()
   local errors = {}
 
   for _, file in ipairs(graph.source_files(graph.root)) do
-    if file.rel:match("^lua/canvasdiff") or file.rel:match("^plugin/") then
+    if file.rel:match("^lua/canvasdiff")
+        or file.rel:match("^plugin/")
+        or file.rel:match("^benchmark/") then
       local basename = file.rel:match("([^/]+)%.lua$")
       local legacy_util = file.rel == "lua/canvasdiff/util.lua" and rules.legacy[file.rel]
 

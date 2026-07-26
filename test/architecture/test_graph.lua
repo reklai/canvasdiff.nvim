@@ -71,6 +71,7 @@ T.architecture_graph_source_listing_includes_tracked_and_untracked_not_ignored =
   local root = H.git_fixture({
     committed = {
       [".gitignore"] = "lua/ignored.lua\n",
+      ["benchmark/tracked.lua"] = "return\n",
       ["lua/tracked.lua"] = "return {}\n",
       ["plugin/tracked.lua"] = "return\n",
     },
@@ -85,6 +86,7 @@ T.architecture_graph_source_listing_includes_tracked_and_untracked_not_ignored =
   H.eq(vim.tbl_map(function(file)
     return file.rel
   end, files), {
+    "benchmark/tracked.lua",
     "lua/tracked.lua",
     "lua/untracked.lua",
     "plugin/tracked.lua",

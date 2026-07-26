@@ -33,7 +33,6 @@ R.legacy_paths = {
   "lua/canvasdiff/jump.lua",
   "lua/canvasdiff/keys.lua",
   "lua/canvasdiff/motions.lua",
-  "lua/canvasdiff/render.lua",
   "lua/canvasdiff/scrollbar.lua",
   "lua/canvasdiff/session.lua",
   "lua/canvasdiff/sidebar.lua",
@@ -176,6 +175,9 @@ function R.classify(path)
   end
   if path:match("^plugin/[^/]+%.lua$") then
     return "plugin"
+  end
+  if path:match("^benchmark/.+%.lua$") then
+    return "benchmark"
   end
   if path == "lua/canvasdiff.lua" then
     return "root"

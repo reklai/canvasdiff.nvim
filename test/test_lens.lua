@@ -493,7 +493,7 @@ end
 
 -- --- which kind of change is this? ---------------------------------------
 
-local render = require("canvasdiff.render")
+local render = require("canvasdiff.canvas").format
 local sidebar = require("canvasdiff.sidebar")
 
 -- `git status --porcelain=v2` yields an XY pair per file -- X is what the index did,

@@ -464,7 +464,7 @@ local function inspect_canvas(buf, corpus)
   assert(#lines < 10000,
     "small eager fixture unexpectedly exceeded its bounded canvas size")
 
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   local header_prefix = render.glyphs.file .. " "
   local headers = 0
   for _, line in ipairs(lines) do

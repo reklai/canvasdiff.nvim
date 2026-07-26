@@ -191,7 +191,7 @@ end
 T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   local root, st = open_fixture()
   local sidebar = require("canvasdiff.sidebar")
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
   sidebar.refresh(lease) -- fold_src only drives the canvas; the real path is S.select
@@ -244,7 +244,7 @@ end
 T["stale_ the marker is highlighted, in the canvas and in the tree"] = function()
   local root, st = open_fixture()
   local sidebar = require("canvasdiff.sidebar")
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   local lease = assert(sidebar.open(st, { width = 30 }))
   fold_src(st)
 

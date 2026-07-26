@@ -36,6 +36,7 @@ return {
     local names = vim.tbl_keys(canvas)
     table.sort(names)
     H.eq(names, {
+      "format",
       "insert_section",
       "is_canvas_buf",
       "locate",
@@ -47,6 +48,21 @@ return {
       "section_rows",
       "set_collapsed",
       "show",
+    })
+
+    local format_names = vim.tbl_keys(canvas.format)
+    table.sort(format_names)
+    H.eq(format_names, {
+      "ensure_marker_hl",
+      "escape_path",
+      "ghost_lines",
+      "glyphs",
+      "marker_spans",
+      "placeholder",
+      "section_hl",
+      "section_lines",
+      "section_path",
+      "stage_mark",
     })
   end,
   ["canvas: renders sections with anchors, locate works"] = function()

@@ -78,13 +78,12 @@ end
 
 -- --- glyphs -----------------------------------------------------------------
 --
--- Glyphs live on `render`, not in config.options, because render must stay requirable
--- without config (it is pure, model and sidebar build lines with it, its tests call it
--- directly). config only pushes overrides in. These pin that wiring, and the reset --
--- without which two setup() calls layer their overrides on each other.
+-- Glyphs are live state owned by config rather than part of config.options. The
+-- canvas formatting facade exposes the same table for readers. These pin that
+-- ownership and the reset, without which two setup() calls layer overrides.
 
 T["config_ glyphs default to the shipped unicode set"] = function()
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   config.setup({})
   H.eq(render.glyphs.file, "▎")
   H.eq(render.glyphs.folded, "▸")
@@ -93,7 +92,7 @@ T["config_ glyphs default to the shipped unicode set"] = function()
 end
 
 T["config_ a glyph table overrides only the slots it names"] = function()
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   config.setup({ glyphs = { file = "|", stale = " !" } })
   H.eq(render.glyphs.file, "|")
   H.eq(render.glyphs.stale, " !")
@@ -103,7 +102,7 @@ T["config_ a glyph table overrides only the slots it names"] = function()
 end
 
 T["config_ glyphs = 'ascii' selects the preset"] = function()
-  local render = require("canvasdiff.render")
+  local render = require("canvasdiff.canvas").format
   config.setup({ glyphs = "ascii" })
   for name, want in pairs(config.ASCII_GLYPHS) do
     H.eq(render.glyphs[name], want, name .. " must come from the preset")

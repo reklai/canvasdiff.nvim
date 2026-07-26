@@ -1,5 +1,6 @@
+local canvas = require("canvasdiff.canvas")
+local render = canvas.format
 local fold = require("canvasdiff.diff").fold
-local render = require("canvasdiff.render")
 
 local S = {}
 
