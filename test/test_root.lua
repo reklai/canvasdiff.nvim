@@ -35,6 +35,35 @@ local function shown_files()
   return out
 end
 
+-- The root module is the entire supported Lua surface. Pin it before the
+-- App/Surface extraction so moving ownership cannot accidentally expose an
+-- implementation method or drop one of the command-facing compatibility
+-- methods. Ordinary repeated require() calls must also resolve to the one
+-- cached facade; manually evicting package.loaded is not a lifecycle API.
+T["root_ facade is cached and exports exactly the supported API"] = function()
+  local first = require("galley")
+  local second = require("galley")
+  assert(rawequal(first, second), "ordinary require() calls share one facade")
+
+  local names = vim.tbl_keys(first)
+  table.sort(names)
+  H.eq(names, {
+    "close",
+    "cycle_lens",
+    "open",
+    "refresh",
+    "set_base",
+    "set_branch",
+    "set_lens",
+    "setup",
+    "toggle",
+    "toggle_base",
+  })
+  for _, name in ipairs(names) do
+    H.eq(type(first[name]), "function", name .. " is callable")
+  end
+end
+
 -- Regression: the root came only from getcwd(), so `nvim path/to/repo/file`
 -- from a parent directory refused to open with "not inside a git
 -- repository" -- while staring at a file that plainly was in one. It read as
