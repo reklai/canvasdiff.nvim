@@ -32,6 +32,23 @@ local function two_sections(edit_extra)
 end
 
 return {
+  ["canvas: facade exports exactly the supported domain API"] = function()
+    local names = vim.tbl_keys(canvas)
+    table.sort(names)
+    H.eq(names, {
+      "insert_section",
+      "is_canvas_buf",
+      "locate",
+      "open",
+      "reconcile_sections",
+      "render_all",
+      "replace_section",
+      "resync_visibility",
+      "section_rows",
+      "set_collapsed",
+      "show",
+    })
+  end,
   ["canvas: renders sections with anchors, locate works"] = function()
     local st = canvas.open(two_sections(), {})
     local s1, _ = canvas.section_rows(st, 1)

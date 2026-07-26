@@ -20,7 +20,6 @@ R.domains = {
 -- list in the same commit that moves behind a domain facade; new flat modules
 -- are never added here.
 R.legacy_paths = {
-  "lua/canvasdiff/canvas.lua",
   "lua/canvasdiff/cmd.lua",
   "lua/canvasdiff/collect.lua",
   "lua/canvasdiff/config.lua",
