@@ -11,7 +11,7 @@ local virt = require("canvasdiff.virt")
 local motions = require("canvasdiff.motions")
 local statuscol = require("canvasdiff.statuscol")
 local session = require("canvasdiff.session")
-local util = require("canvasdiff.util")
+local ui = require("canvasdiff.ui")
 local keys = require("canvasdiff.keys")
 local diff = require("canvasdiff.diff")
 local fold = diff.fold
@@ -238,7 +238,7 @@ local function reveal(surface, st, i, path, win)
     pcall(vim.api.nvim_win_set_cursor, win, { start0 + 1, 0 })
   end
   sync_after_collapse(surface, st)
-  util.notify("unfolded " .. table.concat(dirs, ", "))
+  ui.notify("unfolded " .. table.concat(dirs, ", "))
   return dirs
 end
 
@@ -409,7 +409,7 @@ function App:open(opts)
   end
   if not root then
     local err = "not inside a git repository (looked in " .. cwd .. ")"
-    util.warn(err)
+    ui.warn(err)
     return nil, err
   end
 
@@ -432,7 +432,7 @@ function App:open(opts)
   -- side and not an empty canvas.
   local sections, collect_err = collect.sections(root, l, config.options.context)
   if not sections then
-    util.warn(collect_err)
+    ui.warn(collect_err)
     return nil, collect_err
   end
 
@@ -521,7 +521,7 @@ function App:open(opts)
       end,
       on_error = function(err)
         surface:guard(generation, function()
-          util.warn(err)
+          ui.warn(err)
         end)
       end,
       on_change = function()
@@ -988,7 +988,7 @@ function App:refresh()
   end
   local ok, err = pivot(surface)
   if not ok then
-    util.warn(err)
+    ui.warn(err)
     return nil, err
   end
   return true
@@ -1003,7 +1003,7 @@ end
 function App:set_lens(l)
   if not lens.valid(l) then
     local err = "not a lens"
-    util.warn(err)
+    ui.warn(err)
     return nil, err
   end
   local surface = active_surface(self)
@@ -1020,10 +1020,10 @@ function App:set_lens(l)
 
   local ok, err = pivot(surface, l)
   if not ok then
-    util.warn(err)
+    ui.warn(err)
     return nil, err
   end
-  util.notify("showing " .. l.label)
+  ui.notify("showing " .. l.label)
   return true
 end
 
@@ -1035,7 +1035,7 @@ end
 function App:cycle_lens(delta)
   local surface = active_surface(self)
   if not (surface and surface:is_showing()) then
-    util.warn("no live diff canvas")
+    ui.warn("no live diff canvas")
     return
   end
   return self:set_lens(lens.step(lens.of(surface.state), delta or 1))
@@ -1047,7 +1047,7 @@ function App:set_branch(ref)
   local l = lens.branch(ref)
   if not l then
     local err = "no ref given"
-    util.warn(err)
+    ui.warn(err)
     return nil, err
   end
   return self:set_lens(l)
@@ -1067,7 +1067,7 @@ end
 function App:toggle_base()
   local surface = active_surface(self)
   if not (surface and surface:is_showing()) then
-    util.warn("no live diff canvas")
+    ui.warn("no live diff canvas")
     return
   end
   return self:set_base(

@@ -4,6 +4,7 @@ local viewport = model.anchor
 local git = require("canvasdiff.git")
 local config = require("canvasdiff.config")
 local util = require("canvasdiff.util")
+local ui = require("canvasdiff.ui")
 local fold = model.fold
 local lens = model.lens
 
@@ -98,7 +99,7 @@ function M.enter(state, opts)
   -- refusing: unstaging moves that content back into the worktree, where it is
   -- editable again.
   if not lens.editable(lens.of(state)) then
-    util.warn("staged view is not editable — unstage it to edit, or press B for the worktree")
+    ui.warn("staged view is not editable — unstage it to edit, or press B for the worktree")
     return
   end
 
@@ -107,7 +108,7 @@ function M.enter(state, opts)
   -- of raw zip bytes would be a worse answer than declining. `:edit` it by
   -- hand if that really is what you want.
   if section.binary then
-    util.warn("binary file — nothing to jump into (" .. section.path .. ")")
+    ui.warn("binary file — nothing to jump into (" .. section.path .. ")")
     return
   end
   local entries = section.entries
@@ -217,7 +218,7 @@ function M.back(opts)
     opts = opts or {}
   end
   if not excursion then
-    util.notify("no active review excursion")
+    ui.notify("no active review excursion")
     return
   end
 
@@ -227,7 +228,7 @@ function M.back(opts)
   -- edits never reached the canvas and there was no second try.
   local win = target_win(excursion.state, opts.win, excursion.win)
   if not win then
-    util.warn("no window to bring the canvas back into — try again from a normal window")
+    ui.warn("no window to bring the canvas back into — try again from a normal window")
     return
   end
 
@@ -245,7 +246,7 @@ function M.back(opts)
     end
   end
   if not idx then
-    util.warn(
+    ui.warn(
       "excursion section for '" .. ex.path .. "' not found in canvas; return not applied"
     )
     return
@@ -260,7 +261,7 @@ function M.back(opts)
   local old_path = metadata.old_path or ex.path
   local old, old_err = git.show(state.root, old_rev, old_path)
   if old == nil and ex.status ~= "A" and ex.status ~= "?" then
-    util.warn(("cannot rebuild excursion old side %s:%s: %s")
+    ui.warn(("cannot rebuild excursion old side %s:%s: %s")
       :format(old_rev, old_path, old_err or "unknown git error"))
     return
   end

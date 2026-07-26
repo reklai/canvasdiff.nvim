@@ -237,13 +237,31 @@ T.architecture_dependencies_policy_rejects_internal_and_reverse_edges = function
     diff_internal[1]
   )
 
+  local input_presentation = policy.edge_violations({
+    nodes = nodes,
+    edges = {
+      {
+        from = "canvasdiff.input",
+        from_path = nodes["canvasdiff.input"].rel,
+        line = 5,
+        to = "canvasdiff.ui",
+        to_path = nodes["canvasdiff.ui"].rel,
+      },
+    },
+  })
+  H.eq(#input_presentation, 1)
+  assert(
+    input_presentation[1]:find("forbidden dependency", 1, true),
+    input_presentation[1]
+  )
+
   local reverse = policy.edge_violations({
     nodes = nodes,
     edges = {
       {
         from = "canvasdiff.canvas.Page",
         from_path = nodes["canvasdiff.canvas.Page"].rel,
-        line = 5,
+        line = 6,
         to = "canvasdiff.ui",
         to_path = nodes["canvasdiff.ui"].rel,
       },

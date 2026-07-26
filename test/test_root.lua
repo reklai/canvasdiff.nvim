@@ -97,10 +97,10 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
   assert(not surface:is_showing(), "a Surface without a canvas buffer is hidden")
   assert(surface:guard(surface.generation), "the current generation passes its guard")
 
-  local util = require("canvasdiff.util")
-  local real_warn = util.warn
+  local ui = require("canvasdiff.ui")
+  local real_warn = ui.warn
   local warnings = {}
-  util.warn = function(msg)
+  ui.warn = function(msg)
     warnings[#warnings + 1] = msg
   end
 
@@ -117,7 +117,7 @@ T["root_ loader has no init shim and App instances own separate Surfaces"] = fun
       "only the App carrying state attempted a refresh")
   end, debug.traceback)
 
-  util.warn = real_warn
+  ui.warn = real_warn
   assert(ok, err)
 end
 

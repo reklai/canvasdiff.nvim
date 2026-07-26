@@ -7,7 +7,7 @@
 -- inside it you press keys rather than typing `:`. Every word here earns its
 -- place by being useful from OUTSIDE the canvas, or inside a user mapping.
 
-local util = require("canvasdiff.util")
+local ui = require("canvasdiff.ui")
 
 local C = {}
 
@@ -99,7 +99,7 @@ end
 --- Execute a parse. Impure.
 function C.run(parse)
   if parse.action == "error" then
-    util.err(parse.errors[1])
+    ui.err(parse.errors[1])
     return
   end
 
@@ -119,7 +119,7 @@ function C.run(parse)
     -- Deliberately does NOT fall through to anything: silently showing
     -- worktree-vs-HEAD when the user asked for `main...HEAD` would be worse than
     -- refusing, because the diff would look plausible and be wrong.
-    util.warn(("commit ranges are not supported (got '%s'). A bare ref works:"
+    ui.warn(("commit ranges are not supported (got '%s'). A bare ref works:"
       .. " `:CanvasDiff main` shows your worktree against it"):format(parse.rev))
     return
   end

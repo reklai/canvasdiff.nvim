@@ -1,4 +1,4 @@
-local util = require("canvasdiff.util")
+local ui = require("canvasdiff.ui")
 local render = require("canvasdiff.render")
 
 local M = {}
@@ -178,7 +178,7 @@ function M.setup(opts)
   opts = opts or {}
   local legacy = legacy_keymaps(opts.keymaps)
   if legacy then
-    util.err(
+    ui.err(
       "keymaps are now grouped by context; found flat key(s): "
         .. table.concat(legacy, ", ")
         .. ". Use keymaps = { canvas = {...}, sidebar = {...}, file = { back = ... } }"
@@ -208,18 +208,18 @@ function M.setup(opts)
       if not render.is_glyph(name) then
         unknown[#unknown + 1] = tostring(name)
       elseif type(value) ~= "string" then
-        util.err(("glyphs.%s must be a string, got %s"):format(name, type(value)))
+        ui.err(("glyphs.%s must be a string, got %s"):format(name, type(value)))
       else
         render.glyphs[name] = value
       end
     end
     if #unknown > 0 then
       table.sort(unknown)
-      util.err("unknown glyph name(s): " .. table.concat(unknown, ", ")
+      ui.err("unknown glyph name(s): " .. table.concat(unknown, ", ")
         .. ". Valid names: " .. table.concat(vim.tbl_keys(M.ASCII_GLYPHS), ", "))
     end
   elseif g ~= nil then
-    util.err('glyphs must be a table or the string "ascii", got ' .. type(g))
+    ui.err('glyphs must be a table or the string "ascii", got ' .. type(g))
   end
 
   return M.options

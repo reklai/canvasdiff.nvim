@@ -6,7 +6,7 @@ local diff = require("canvasdiff.diff")
 local fold = diff.fold
 local model = diff
 local lens = diff.lens
-local util = require("canvasdiff.util")
+local ui = require("canvasdiff.ui")
 
 local S = {}
 
@@ -1193,7 +1193,7 @@ function S.select(lease, side_win)
 
   local section_i = index_of_path(state, path)
   if not section_i then
-    util.notify(path .. " has no changes any more")
+    ui.notify(path .. " has no changes any more")
     return false
   end
   local win = view.canvas_win
