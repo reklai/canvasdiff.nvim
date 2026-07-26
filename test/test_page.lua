@@ -143,4 +143,40 @@ T["page_ encoded round-trip is representation exact"] = function()
   H.eq(restored:rows(3, 2), nil)
 end
 
+T["page_ trusted decode rejects and bypasses instance method shadows"] = function()
+  local page = Page.new({ "alpha", "", "omega" })
+  page.byte_range = function()
+    return 0, 0
+  end
+  H.eq(Page.row(page, 1), "alpha")
+  local ok, err = Page.validate(page)
+  H.eq(ok, nil)
+  assert(err:match("shadows trusted method byte_range"), err)
+  page.byte_range = nil
+
+  page.row = function(_, index)
+    return "forged-" .. index
+  end
+  H.eq(Page.rows(page, 1, 3), { "alpha", "", "omega" })
+  ok, err = Page.validate(page)
+  H.eq(ok, nil)
+  assert(err:match("shadows trusted method row"), err)
+end
+
+T["page_ ownership cannot be forged with a protected metatable"] = function()
+  local page = Page.new({ "alpha", "omega" })
+  local fake = page:encoded()
+  setmetatable(fake, {
+    __metatable = Page,
+    __index = Page,
+  })
+
+  assert(getmetatable(fake) == Page,
+    "the public metatable API should demonstrate the forged identity")
+  local ok, err = Page.validate(fake)
+  H.eq(ok, nil)
+  assert(err:match("not an owned Page"), err)
+  H.eq(Page.validate(page), true)
+end
+
 return T
