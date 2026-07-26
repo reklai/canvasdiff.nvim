@@ -133,8 +133,8 @@ end
 local NS = vim.api.nvim_create_namespace("galley.sidebar")
 local BUFNAME = "galley://sidebar"
 
--- Module-level singleton, mirroring init.lua's state pattern: at most one
--- sidebar, always attached to the one live canvas.
+-- Window-bound singleton: at most one sidebar, always attached to the one
+-- live canvas.
 local side = nil
 
 local function ensure_hl_groups()
@@ -167,7 +167,7 @@ end
 ---
 --- The hook is what wakes the pieces this module cannot reach: without it the
 --- treesitter tier keeps marks on rows that no longer exist and the minimap
---- depicts a canvas that isn't there. init.M.open wires it unconditionally.
+--- depicts a canvas that isn't there. App:open wires it unconditionally.
 ---
 --- The bare `S.refresh` fallback is for a sidebar driven against a hand-built
 --- state (the tests do this): it keeps the tree honest, which is all this module

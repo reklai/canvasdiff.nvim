@@ -51,7 +51,7 @@ local function open_state(root)
   return st
 end
 
-T["watch_collect files matches init behavior"] = function()
+T["watch_collect files matches App behavior"] = function()
   local root = fixture()
   local files = collect.files(root)
   H.eq(#files, 2)

@@ -175,7 +175,7 @@ function M.restore(state, data)
 
   -- One pass over every section, because assigning state.folded above changed
   -- what they should render as without splicing anything. The caller
-  -- (init.M.open) owns the single follow-up sync of the other UI pieces.
+  -- (App:open) owns the single follow-up sync of the other UI pieces.
   pcall(function()
     canvas.resync_visibility(state)
   end)
@@ -210,7 +210,7 @@ function M.restore(state, data)
     -- map to buffer rows, so there is nothing to resolve. save() never
     -- records a view onto one, so this only fires on a stale or hand-written
     -- payload whose collapse/fold set covers its own view path.
-    -- (init.M.open runs this restore BEFORE attaching the auto-virtualizer,
+    -- (App:open runs this restore BEFORE attaching the auto-virtualizer,
     -- precisely so virt can't collapse the target first.)
     if fold.hidden(state, v.path) then
       return

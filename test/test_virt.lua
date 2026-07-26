@@ -312,7 +312,7 @@ end
 
 -- tick_of is module-level and keyed by path, but canvas.open always
 -- hands back a fresh state.collapsed. Re-opening without an intervening
--- detach (reachable through M.open's sidebar-redirect branch) therefore
+-- detach (reachable through App:open's sidebar-redirect branch) therefore
 -- carried the previous canvas's visibility history into the new one, and
 -- those stale ticks outranked everything the new canvas had actually seen --
 -- so the LRU kept the FARTHEST section rendered and collapsed the nearest,

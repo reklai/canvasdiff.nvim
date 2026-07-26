@@ -5,7 +5,7 @@
 -- folded section straight into placeholder form without going through resplice
 -- or replace_section. So the tests below deliberately drive each distinct mutation
 -- path separately: same-path replace (watch's merge-walk), whole-changeset
--- re-render (what M.open and reconcile's 0<->N fallback do), and a section born
+-- re-render (what App:open and reconcile's 0<->N fallback do), and a section born
 -- under a live fold.
 local H = require("helpers")
 local canvas = require("galley.canvas")
@@ -119,9 +119,9 @@ T["stale_ a whole-changeset re-render marks it too"] = function()
 
   write_file(root, "src/a.txt",
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
-  -- render_all is still reached by M.open and by reconcile_sections' 0<->N fallback,
+  -- render_all is still reached by App:open and by reconcile_sections' 0<->N fallback,
   -- so this path is live even though no keymap invokes it directly any more.
-  -- (M.refresh reconciles instead, which is why it keeps your place.)
+  -- (App:refresh reconciles instead, which is why it keeps your place.)
   canvas.render_all(st, model.build(collect.files(root), 3))
 
   local i = index_of(st, "src/a.txt")

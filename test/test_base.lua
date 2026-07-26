@@ -114,7 +114,7 @@ return {
     assert(ok, err)
   end,
 
-  -- `state` deliberately outlives M.close (the canvas buffer is cached), so
+  -- App state deliberately outlives close() (the canvas buffer is cached), so
   -- a bare `if not state` guard still passes once the canvas is gone. The
   -- command would then flip the base of a hidden canvas and re-render it
   -- against a possibly stale root -- announcing a base the next open()

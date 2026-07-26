@@ -441,7 +441,7 @@ T["session_ restored user collapse survives virt's auto-set and persists"] = fun
   assert(H.auto_set(st)["c/three.txt"], "sanity: it's virt's own auto-set claim")
 
   -- A previously-saved USER collapse of that same path, restored onto this
-  -- virt-active canvas (mirrors init.M.open's restore-LAST ordering).
+  -- virt-active canvas (mirrors App:open's restore-LAST ordering).
   session.restore(st, { version = 1, base = "HEAD", collapsed = { "c/three.txt" } })
 
   local c_row = (canvas.section_rows(st, 3))

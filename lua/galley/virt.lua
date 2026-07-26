@@ -209,7 +209,7 @@ function M.attach(state, opts)
   -- canvas's scroll history describes nothing in this one. Carrying it over
   -- would let stale visibility ticks outrank everything the new canvas has
   -- actually seen, so the LRU would keep the farthest section rendered and
-  -- collapse the nearest. (M.open can re-open without an intervening close via
+  -- collapse the nearest. (App:open can re-open without an intervening close via
   -- its sidebar-redirect branch, so this is reachable.) The auto/user
   -- distinction needs no such care: it lives on the state, and canvas.open
   -- always hands back a fresh one.
@@ -250,7 +250,7 @@ end
 --- Note what this deliberately no longer does: forget which collapses were
 --- this module's. That lives on the state now, so detaching cannot blur an
 --- auto-collapse into one of the user's -- which is what used to make
---- init.M.close's ordering (save before detach) load-bearing.
+--- App:close's ordering (save before detach) load-bearing.
 function M.detach()
   if timer then
     timer:stop()

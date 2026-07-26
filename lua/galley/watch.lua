@@ -15,14 +15,14 @@ W.on_empty = nil
 
 --- Assignable callback for a scheduled reconcile failure. The synchronous
 --- W.reconcile API returns the error to its caller; the timer has no caller, so
---- this seam lets init report it without coupling watch to notification policy.
+--- this seam lets App report it without coupling watch to notification policy.
 --- Identical consecutive failures are reported only once.
 W.on_error = nil
 
 local uv = vim.uv
 
--- Trigger state: one live watched canvas at a time (mirrors init's
--- singleton). All handles are torn down by stop().
+-- Trigger state: one live watched canvas at a time. All handles are torn down
+-- by stop().
 local live = nil
 local debounce_ms = 200
 local timer = nil

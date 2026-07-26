@@ -329,7 +329,7 @@ return {
     wipe_buffer(edited_buf)
     remove_fixture(root)
   end,
-  -- `:q` destroys the canvas window without going through M.close, whose teardown
+  -- `:q` destroys the canvas window without going through App:close, whose teardown
   -- sat behind `#wins == 0` -- true forever once the window is gone. So watch kept
   -- its fs handles and its blocking git reconcile running for the rest of the
   -- session (its only lifecycle hook is BufWipeout, and the canvas buffer is
@@ -1053,7 +1053,7 @@ return {
     remove_fixture(root)
   end,
   ["e2e: close() before any open() is a safe no-op"] = function()
-    -- Force a fresh module instance so its module-level `state` is nil,
+    -- Force a fresh root facade so its default App has no state,
     -- regardless of what earlier test cases in this process did.
     package.loaded["galley"] = nil
     local fm = require("galley")

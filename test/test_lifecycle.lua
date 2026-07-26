@@ -57,7 +57,7 @@ local function reset_auxiliary_owners()
 end
 
 --- Temporarily count calls through table methods, restoring every method even
---- when the body fails. init.lua resolves these methods through their module
+--- when the body fails. App resolves these methods through their module
 --- tables at teardown time, so this observes the existing ownership seam
 --- without adding production-only introspection.
 local function with_spies(specs, body)

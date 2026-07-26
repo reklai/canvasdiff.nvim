@@ -19,7 +19,7 @@ C.words = {
   close    = { action = "close" },
   toggle   = { action = "toggle" },
   refresh  = { action = "refresh" },
-  -- Lenses. States, not flips: see init.set_lens.
+  -- Lenses. States, not flips: see the public facade's set_lens.
   unstaged = { action = "set_lens", lens = "unstaged" },
   all      = { action = "set_lens", lens = "all" },
   staged   = { action = "set_lens", lens = "staged" },

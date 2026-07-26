@@ -28,7 +28,6 @@ R.legacy_paths = {
   "lua/galley/fold.lua",
   "lua/galley/git.lua",
   "lua/galley/hl.lua",
-  "lua/galley/init.lua",
   "lua/galley/jump.lua",
   "lua/galley/keys.lua",
   "lua/galley/lens.lua",

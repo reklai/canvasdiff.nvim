@@ -1,6 +1,6 @@
 -- The single source of truth for every keymap the plugin installs.
 --
--- Consumed by init.set_canvas_keymaps and sidebar.open (to install the maps,
+-- Consumed by App's canvas keymaps and sidebar.open (to install the maps,
 -- with a desc), and later by the `?` cheatsheet and the generated helpfile
 -- section. Requires nothing, so tests and the doc generator can load it
 -- standalone.

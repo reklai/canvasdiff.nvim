@@ -72,7 +72,7 @@ end
 ---
 --- PRECONDITION: `state.folded`/`state.collapsed` and the buffer agree about which
 --- sections are one row. Every mutation site guarantees that by calling
---- canvas.resync_visibility (init.reveal, sidebar.select, session.restore) or by
+--- canvas.resync_visibility (App's reveal, sidebar.select, session.restore) or by
 --- going through canvas.set_collapsed. Assigning `state.folded` directly without a
 --- resync makes this compute rows past the end of the buffer and throw out of the
 --- keymap. Deliberately NOT clamped: a divergence like that is a bug worth a

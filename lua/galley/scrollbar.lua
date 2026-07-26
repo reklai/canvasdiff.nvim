@@ -138,7 +138,7 @@ end
 --- `getwininfo().height` excludes it -- and a float opened `relative = "win", row = 0`
 --- lands at the window's origin, i.e. on top of the winbar. So a full-height
 --- right-edge float sized from nvim_win_get_height is one row too tall AND one row
---- too high the moment a winbar exists, which it now does (init sets one to show the
+--- too high the moment a winbar exists, which it now does (App sets one to show the
 --- current lens). Both numbers have to come from getwininfo.
 local function text_geometry(win)
   local info = vim.fn.getwininfo(win)[1]

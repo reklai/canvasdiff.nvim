@@ -4,8 +4,8 @@ local canvas = require("galley.canvas")
 local T = {}
 
 --- Run `fn` in a throwaway tab with `cwd` as the working directory, capturing
---- notifications. Restores cwd, closes the tab, and drops the galley module
---- singleton so the next test starts clean.
+--- notifications. Restores cwd, closes the tab, and drops the cached root
+--- facade so the next test gets a fresh default App.
 local function in_cwd(cwd, fn)
   local old_cwd = vim.fn.getcwd()
   local real = vim.notify
@@ -44,6 +44,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   local first = require("galley")
   local second = require("galley")
   assert(rawequal(first, second), "ordinary require() calls share one facade")
+  H.eq(getmetatable(first), nil, "the public facade is a plain table")
 
   local names = vim.tbl_keys(first)
   table.sort(names)
@@ -62,6 +63,51 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   for _, name in ipairs(names) do
     H.eq(type(first[name]), "function", name .. " is callable")
   end
+end
+
+T["root_ loader has no init shim and App instances own separate state"] = function()
+  local cached = require("galley")
+  package.loaded["galley"] = nil
+  local reloaded = require("galley")
+  assert(not rawequal(cached, reloaded),
+    "manual root eviction reloads a fresh facade and default App")
+
+  package.loaded["galley.init"] = nil
+  local loaded = pcall(require, "galley.init")
+  assert(not loaded, "galley.init must not remain as a second root loader")
+
+  local App = require("galley.App")
+  local first = App.new()
+  local second = App.new()
+  assert(not rawequal(first, second), "each App.new() returns a distinct owner")
+
+  local marker = {}
+  first.state = marker
+  H.eq(first.state, marker, "state is stored on its owning App")
+  H.eq(second.state, nil, "one App's state cannot leak into another App")
+
+  local util = require("galley.util")
+  local real_warn = util.warn
+  local warnings = {}
+  util.warn = function(msg)
+    warnings[#warnings + 1] = msg
+  end
+
+  local ok, err = xpcall(function()
+    local refreshed, refresh_err = first:refresh()
+    H.eq(refreshed, nil)
+    H.eq(refresh_err, "no valid diff canvas",
+      "a method reads the state stored on its receiver")
+
+    local untouched, untouched_err = second:refresh()
+    H.eq(untouched, nil)
+    H.eq(untouched_err, nil, "the other receiver still has no state")
+    H.eq(warnings, { "no valid diff canvas" },
+      "only the App carrying state attempted a refresh")
+  end, debug.traceback)
+
+  util.warn = real_warn
+  assert(ok, err)
 end
 
 -- Regression: the root came only from getcwd(), so `nvim path/to/repo/file`

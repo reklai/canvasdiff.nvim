@@ -17,17 +17,22 @@ local fold = require("galley.fold")
 local lens = require("galley.lens")
 local render = require("galley.render")
 
-local M = {}
+local App = {}
+App.__index = App
 
 local EMPTY_MSG = "-- no changes --"
 
---- Is `st`'s canvas actually live and on screen right now? `state` outlives
---- M.close (the canvas buffer is cached and reopened), so a bare nil check
+function App.new()
+  return setmetatable({}, App)
+end
+
+--- Is `st`'s canvas actually live and on screen right now? App state outlives
+--- App:close (the canvas buffer is cached and reopened), so a bare nil check
 --- is not enough to tell an open canvas from a closed one.
 ---
---- Keys on state.win, which the scrollbar/hl/statuscolumn refresh on
+--- Keys on st.win, which the scrollbar/hl/statuscolumn refresh on
 --- BufWinEnter -- with all three disabled it can go stale, and multi-window
---- canvas display is a documented MVP limitation anyway. Note M.close
+--- canvas display is a documented MVP limitation anyway. Note App:close
 --- deliberately does NOT use this: it tests the CURRENT window instead, for
 --- the reasons in its own docstring.
 local function canvas_showing(st)
@@ -35,16 +40,10 @@ local function canvas_showing(st)
     and vim.api.nvim_win_get_buf(st.win) == st.buf
 end
 
--- The single live canvas excursion state, cached across close()/open() so
--- the canvas buffer content survives being hidden (canvas.lua itself keeps
--- the scratch buffer alive; this just remembers our bookkeeping around it:
--- the git root and the window's previous buffer).
-local state = nil
-
 --- Public setup: merge user options into the config module. Entirely
 --- optional -- every code path below works fine against config.defaults
 --- when setup() is never called.
-function M.setup(opts)
+function App:setup(opts)
   return config.setup(opts)
 end
 
@@ -56,7 +55,7 @@ end
 --- whole premise is pivoting between those, that is the difference between a control
 --- and a guessing game.
 ---
---- `""` clears it, which is what M.close wants -- a leftover winbar on a restored
+--- `""` clears it, which is what App:close wants -- a leftover winbar on a restored
 --- window would claim the file you are editing is a diff canvas.
 ---
 --- The text is a statusline expression, so `%` in a branch ref has to be escaped.
@@ -104,11 +103,11 @@ local function set_winbar(st, text)
 end
 
 --- Stop every subsystem attached to `st` and persist its session -- everything
---- M.close does EXCEPT putting windows back, because by the time this runs the
+--- App:close does EXCEPT putting windows back, because by the time this runs the
 --- window may already be gone.
 ---
 --- That separation is the whole point: `:q` destroys the canvas window without
---- coming through M.close, and watch's only lifecycle hook is BufWipeout on the
+--- coming through App:close, and watch's only lifecycle hook is BufWipeout on the
 --- canvas buffer -- which is `bufhidden = "hide"`, so `:q` hides it and the hook
 --- never fires. Left unreached, watch keeps its fs_event handles armed and keeps
 --- running a blocking `git status` plus a `git show` per changed file on every
@@ -143,7 +142,7 @@ local function show_empty_message(st)
 end
 
 --- Refresh the other live UI pieces after a direct canvas.set_collapsed
---- splice (mirrors what jump.back/M.refresh already do after their own
+--- splice (mirrors what jump.back/App:refresh already do after their own
 --- canvas splices): reapply lazy highlighting and sync sidebar/scrollbar.
 local function sync_after_collapse(st)
   hl.apply_now(st)
@@ -238,14 +237,14 @@ end
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
 --- with no handler here simply installs no map, which is what lets a spec land
 --- before the feature behind it does.
-local function canvas_actions(st, cfg)
+local function canvas_actions(app, st, cfg)
   return {
     jump       = function() open_under_cursor(st, cfg) end,
     collapse   = function() toggle_collapse_under_cursor(st) end,
-    close      = function() M.close() end,
-    refresh    = function() M.refresh() end,
-    lens_next  = function() M.cycle_lens(1) end,
-    lens_prev  = function() M.cycle_lens(-1) end,
+    close      = function() app:close() end,
+    refresh    = function() app:refresh() end,
+    lens_next  = function() app:cycle_lens(1) end,
+    lens_prev  = function() app:cycle_lens(-1) end,
     cycle_next = function() sidebar.cycle(st, 1) end,
     cycle_prev = function() sidebar.cycle(st, -1) end,
     next_file  = function() motions.goto_file(st, 1) end,
@@ -255,9 +254,9 @@ local function canvas_actions(st, cfg)
   }
 end
 
-local function set_canvas_keymaps(st)
+local function set_canvas_keymaps(app, st)
   local cfg = config.options
-  local acts = canvas_actions(st, cfg)
+  local acts = canvas_actions(app, st, cfg)
   for _, m in ipairs(keys.resolved("canvas", cfg.keymaps)) do
     local fn = acts[m.action]
     if fn then
@@ -300,14 +299,14 @@ end
 --- `opts.base` ("HEAD" | "index") overrides both the saved session's base and
 --- the configured default, so a command naming a state can open straight into
 --- it rather than opening and then re-rendering.
-function M.open(opts)
+function App:open(opts)
   opts = opts or {}
   -- Invoked from inside our own sidebar (winfixbuf): the canvas can't be
   -- opened INTO that window. Redirect to the live canvas window if there is
   -- one; otherwise treat the sidebar as an appendage of an open canvas.
   if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
-    if state and canvas_showing(state) then
-      vim.api.nvim_set_current_win(state.win)
+    if self.state and canvas_showing(self.state) then
+      vim.api.nvim_set_current_win(self.state.win)
     else
       return
     end
@@ -342,7 +341,7 @@ function M.open(opts)
     or lens.from_base(config.options.base)
 
   -- Transaction boundary: collection and model construction finish before
-  -- canvas.open changes the current window or the module-level state. In
+  -- canvas.open changes the current window or this App's state. In
   -- particular, an invalid/deleted branch ref is an error, not an empty old
   -- side and not an empty canvas.
   local sections, collect_err = collect.sections(root, l, config.options.context)
@@ -358,7 +357,7 @@ function M.open(opts)
   -- older vocabulary. nil for `staged` and branch lenses, which it cannot express.
   st.base = lens.to_base(l)
   st.prev_buf = prev_buf
-  state = st
+  self.state = st
 
   -- Before anything that can splice: a fold from the sidebar or a pass of the
   -- auto-virtualizer reshapes the canvas, and neither the highlight tier nor
@@ -386,7 +385,7 @@ function M.open(opts)
     show_empty_message(st)
   end
 
-  set_canvas_keymaps(st)
+  set_canvas_keymaps(self, st)
 
   if config.options.highlight.enabled then
     hl.attach(st, config.options.highlight)
@@ -424,8 +423,9 @@ function M.open(opts)
   vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
     group = vim.api.nvim_create_augroup("galley.winbar", { clear = true }),
     callback = function()
-      if state and canvas_showing(state) then
-        set_winbar(state)
+      local current = self.state
+      if current and canvas_showing(current) then
+        set_winbar(current)
       end
     end,
   })
@@ -444,15 +444,15 @@ function M.open(opts)
     })
   end
 
-  -- `:q` in the canvas window never reaches M.close, so hook the window's death
+  -- `:q` in the canvas window never reaches App:close, so hook the window's death
   -- and run the teardown from there. Without it the canvas is off screen while
   -- watch keeps reconciling it on every write and the session is never saved --
   -- losing whatever you had folded.
   --
-  -- Deliberately NO `pattern`: hl, scrollbar and statuscol all re-point state.win
+  -- Deliberately NO `pattern`: hl, scrollbar and statuscol all re-point st.win
   -- on BufWinEnter without reinstalling their own autocmds, which is exactly how
-  -- the `pattern = tostring(state.win)` hooks in sidebar and scrollbar go stale
-  -- when the canvas moves windows. Reading state.win at fire time cannot.
+  -- the `pattern = tostring(st.win)` hooks in sidebar and scrollbar go stale
+  -- when the canvas moves windows. Reading this App's state at fire time cannot.
   --
   -- Deferred and re-checked, because another window in this tabpage may still be
   -- showing the canvas -- and because doing window work from inside WinClosed is
@@ -461,12 +461,14 @@ function M.open(opts)
   vim.api.nvim_create_autocmd("WinClosed", {
     group = close_aug,
     callback = function(ev)
-      if not (state and tonumber(ev.match) == state.win) then
+      local current = self.state
+      if not (current and tonumber(ev.match) == current.win) then
         return
       end
       vim.schedule(function()
-        if state and not canvas_showing(state) then
-          teardown(state)
+        local owned = self.state
+        if owned and not canvas_showing(owned) then
+          teardown(owned)
         end
       end)
     end,
@@ -554,7 +556,7 @@ end
 --- Acts on every window in this tabpage showing the canvas, not just the
 --- current one. Restricting it to the current window meant `:Galley close`
 --- from a neighbouring split was a silent no-op that read as the plugin being
---- broken. `state` is still a single module-level singleton, so only the one
+--- broken. Each App still owns a single state, so only the one
 --- window it remembers a `prev_buf` for gets that buffer back; the others go
 --- through the same fallback chain rather than being handed another window's
 --- history.
@@ -565,16 +567,16 @@ end
 ---
 --- A stale 'statuscolumn' left on a restored window is harmless: statuscol's
 --- text function returns "" as soon as the window isn't showing the canvas.
-function M.close()
-  if not state then
+function App:close()
+  if not self.state then
     return
   end
 
-  local wins = canvas_wins(state)
-  teardown(state)
+  local wins = canvas_wins(self.state)
+  teardown(self.state)
 
   for _, win in ipairs(wins) do
-    restore_window(win, state)
+    restore_window(win, self.state)
   end
 end
 
@@ -589,12 +591,12 @@ end
 --- Being focused inside our own sidebar counts as "the canvas is open": close
 --- it, or just close the sidebar if the canvas it was attached to is already
 --- gone. Never errors.
-function M.toggle()
-  local showing = state and #canvas_wins(state) > 0
+function App:toggle()
+  local showing = self.state and #canvas_wins(self.state) > 0
 
   if sidebar.is_sidebar_win(vim.api.nvim_get_current_win()) then
     if showing then
-      M.close()
+      self:close()
     else
       sidebar.close()
     end
@@ -602,9 +604,9 @@ function M.toggle()
   end
 
   if showing then
-    M.close()
+    self:close()
   else
-    M.open()
+    self:open()
   end
 end
 
@@ -618,7 +620,7 @@ end
 --- untouched, and most files look identical through two lenses, so a pivot typically
 --- splices nothing and moves nothing at all.
 ---
---- Shared by the lens pivot, M.refresh and watch -- they are one operation ("go and
+--- Shared by the lens pivot, App:refresh and watch -- they are one operation ("go and
 --- see what is true now"), differing only in what prompted it.
 local function pivot(st, target_lens)
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
@@ -667,11 +669,11 @@ end
 --- strictly worse on every axis, and deleted. Don't add it back without measuring:
 --- test_e2e's "refresh cannot repair a divergent buffer, close+open can" pins both
 --- halves of that result.
-function M.refresh()
-  if not state then
+function App:refresh()
+  if not self.state then
     return
   end
-  local ok, err = pivot(state)
+  local ok, err = pivot(self.state)
   if not ok then
     util.warn(err)
     return nil, err
@@ -685,24 +687,24 @@ end
 --- `:Galley unstaged` must always land unstaged. A toggle in a mapping is a coin
 --- flip. Opening rather than warning is likewise the only sensible reading of a
 --- command that names a state.
-function M.set_lens(l)
+function App:set_lens(l)
   if not lens.valid(l) then
     local err = "not a lens"
     util.warn(err)
     return nil, err
   end
-  if not (state and canvas_showing(state)) then
-    local opened, err = M.open({ lens = l })
+  if not (self.state and canvas_showing(self.state)) then
+    local opened, err = self:open({ lens = l })
     if not opened then
       return nil, err
     end
     return true
   end
-  if lens.same(lens.of(state), l) then
+  if lens.same(lens.of(self.state), l) then
     return true
   end
 
-  local ok, err = pivot(state, l)
+  local ok, err = pivot(self.state, l)
   if not ok then
     util.warn(err)
     return nil, err
@@ -716,43 +718,43 @@ end
 --- This is what the `base` keymap runs, and it is the gesture the canvas is built
 --- around -- one key to ask "what am I actually looking at" from three angles.
 --- Warns rather than opening: a keypress on no canvas is a mistake, not a request.
-function M.cycle_lens(delta)
-  if not (state and canvas_showing(state)) then
+function App:cycle_lens(delta)
+  if not (self.state and canvas_showing(self.state)) then
     util.warn("no live diff canvas")
     return
   end
-  return M.set_lens(lens.step(lens.of(state), delta or 1))
+  return self:set_lens(lens.step(lens.of(self.state), delta or 1))
 end
 
 --- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.
 --- The new side stays the worktree, so this is still somewhere you can work.
-function M.set_branch(ref)
+function App:set_branch(ref)
   local l = lens.branch(ref)
   if not l then
     local err = "no ref given"
     util.warn(err)
     return nil, err
   end
-  return M.set_lens(l)
+  return self:set_lens(l)
 end
 
 --- Set the diff base to "HEAD" or "index" -- the older two-value vocabulary, which
 --- `:Galley all` / `:Galley unstaged` still speak.
-function M.set_base(base)
-  return M.set_lens(lens.from_base(base))
+function App:set_base(base)
+  return self:set_lens(lens.from_base(base))
 end
 
 --- Flip between "worktree vs HEAD" and "worktree vs index" (unstaged-only review).
 ---
 --- Kept as the exact two-value flip for user mappings that want precisely that; the
---- `B` key runs M.cycle_lens, which also reaches the staged view. Warns rather than
+--- `B` key runs App:cycle_lens, which also reaches the staged view. Warns rather than
 --- opening, for the same reason cycle_lens does.
-function M.toggle_base()
-  if not (state and canvas_showing(state)) then
+function App:toggle_base()
+  if not (self.state and canvas_showing(self.state)) then
     util.warn("no live diff canvas")
     return
   end
-  return M.set_base(lens.to_base(lens.of(state)) == "index" and "HEAD" or "index")
+  return self:set_base(lens.to_base(lens.of(self.state)) == "index" and "HEAD" or "index")
 end
 
-return M
+return App
