@@ -120,14 +120,32 @@ local function canvas_showing(state)
     and vim.api.nvim_win_get_buf(state.win) == state.buf
 end
 
+--- The canvas window's TEXT geometry: how many rows actually hold buffer lines, and
+--- how far down the first of them starts.
+---
+--- Verified empirically: `nvim_win_get_height` INCLUDES the winbar row, while
+--- `getwininfo().height` excludes it -- and a float opened `relative = "win", row = 0`
+--- lands at the window's origin, i.e. on top of the winbar. So a full-height
+--- right-edge float sized from nvim_win_get_height is one row too tall AND one row
+--- too high the moment a winbar exists, which it now does (init sets one to show the
+--- current lens). Both numbers have to come from getwininfo.
+local function text_geometry(win)
+  local info = vim.fn.getwininfo(win)[1]
+  if not info then
+    return { height = 0, row = 0 }
+  end
+  return { height = info.height, row = info.winbar or 0 }
+end
+
 local function float_config(state)
+  local geo = text_geometry(state.win)
   return {
     relative = "win",
     win = state.win,
-    row = 0,
+    row = geo.row,
     col = vim.api.nvim_win_get_width(state.win) - 1,
     width = 1,
-    height = vim.api.nvim_win_get_height(state.win),
+    height = geo.height,
     focusable = false,
     style = "minimal",
     zindex = 40,
@@ -158,7 +176,7 @@ function S.update(state)
 
   -- A squashed window (winminheight=0) reports height 0; a zero-height
   -- float is invalid. Hide and let WinResized/BufWinEnter re-show later.
-  if vim.api.nvim_win_get_height(state.win) < 1 then
+  if text_geometry(state.win).height < 1 then
     hide()
     return
   end
@@ -178,7 +196,7 @@ function S.update(state)
   local info = vim.api.nvim_win_call(state.win, function()
     return { top0 = vim.fn.line("w0") - 1, bot0 = vim.fn.line("w$") - 1 }
   end)
-  local height = vim.api.nvim_win_get_height(state.win)
+  local height = text_geometry(state.win).height
   local hidden = fold.hidden_set(state.sections, state.collapsed, state.folded)
   local cells = S.column(S.line_kinds(state.sections, hidden), height, info.top0, info.bot0)
 

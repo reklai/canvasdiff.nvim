@@ -202,25 +202,16 @@ function S.refresh(state)
   S.sync(state)
 end
 
---- Track the canvas topline: activate the file entry for the section under
---- it, or the deepest visible ancestor dir when folds hide the file.
-function S.sync(state)
-  if not S.is_open() then
-    return
-  end
-  if not (state.win and vim.api.nvim_win_is_valid(state.win)
-      and vim.api.nvim_win_get_buf(state.win) == state.buf) then
-    return -- excursion in progress or canvas hidden
-  end
-  local top0 = vim.api.nvim_win_call(state.win, function()
-    return vim.fn.line("w0") - 1
-  end)
-  local section_i = (canvas.locate(state, top0))
-  if not section_i then
-    return
-  end
-  local path = state.sections[section_i].path
+--- Is the canvas buffer actually in its window? False during a jump excursion, which
+--- has replaced it with a real file, and after the window was closed.
+local function canvas_showing(state)
+  return state and state.win and vim.api.nvim_win_is_valid(state.win)
+    and vim.api.nvim_win_get_buf(state.win) == state.buf
+end
 
+--- Move the active-row highlight onto the row for `section_i` (whose file is `path`),
+--- or the deepest visible ancestor dir when a fold hides the file itself.
+local function set_active(state, section_i, path)
   local best
   for row0m1, e in ipairs(side.entries) do
     if (e.kind == "file" and e.section_i == section_i)
@@ -244,6 +235,31 @@ function S.sync(state)
   -- elsewhere (e.g. the canvas window scrolled).
   if vim.api.nvim_get_current_win() ~= side.win then
     pcall(vim.api.nvim_win_set_cursor, side.win, { best + 1, 0 })
+  end
+end
+
+--- Track the canvas topline: activate the file entry for the section under
+--- it, or the deepest visible ancestor dir when folds hide the file.
+function S.sync(state)
+  if not S.is_open() then
+    return
+  end
+  if not canvas_showing(state) then
+    return -- excursion in progress or canvas hidden
+  end
+  local top0 = vim.api.nvim_win_call(state.win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  local section_i = (canvas.locate(state, top0))
+  if not section_i then
+    return
+  end
+  set_active(state, section_i, state.sections[section_i].path)
+  -- "The canvas viewport moved and this is where it landed." The winbar's sticky
+  -- filename subscribes, because a programmatic scroll (select below, jump.back, a
+  -- motion) fires no WinScrolled and would otherwise leave it naming the wrong file.
+  if state.hooks and state.hooks.on_locate then
+    pcall(state.hooks.on_locate)
   end
 end
 

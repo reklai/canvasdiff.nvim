@@ -48,6 +48,61 @@ function M.setup(opts)
   return config.setup(opts)
 end
 
+--- Show which lens the canvas is looking through, in a winbar on its own window.
+---
+--- Until now the only signal was a one-shot `vim.notify` on change, so once the
+--- message faded there was nothing on screen telling you whether you were looking at
+--- everything, at what you hadn't staged, or at what you had. For a canvas whose
+--- whole premise is pivoting between those, that is the difference between a control
+--- and a guessing game.
+---
+--- `""` clears it, which is what M.close wants -- a leftover winbar on a restored
+--- window would claim the file you are editing is a diff canvas.
+---
+--- The text is a statusline expression, so `%` in a branch ref has to be escaped.
+--- scrollbar.text_geometry accounts for the row this consumes; see the note there.
+--- The path of the section under the canvas topline, or nil when the canvas is not on
+--- screen (a jump excursion, or a closed window) or holds nothing.
+---
+--- Resolved from the topline rather than the cursor, matching the sidebar's active
+--- row exactly, so the two never disagree about which file you are "in".
+local function path_under_top(st)
+  if not canvas_showing(st) or #st.sections == 0 then
+    return nil
+  end
+  local top0 = vim.api.nvim_win_call(st.win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  local i = (canvas.locate(st, top0))
+  return i and st.sections[i] and st.sections[i].path or nil
+end
+
+local function set_winbar(st, text)
+  if not (st and st.win and vim.api.nvim_win_is_valid(st.win)) then
+    return
+  end
+  if text == nil then
+    -- The STICKY part, and the reason this is worth recomputing on scroll: a file
+    -- header scrolls out of view as soon as you are a screen into its diff, and from
+    -- then on nothing IN the canvas says which block you are reading. The sidebar
+    -- knows, but peripherally and only if it is enabled. This keeps the answer on the
+    -- canvas itself.
+    local here = path_under_top(st)
+    local file = here and ("  │  " .. here) or ""
+
+    text = ("  galley: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
+  end
+  -- Skipped when nothing changed, because this runs on every WinScrolled and writing
+  -- 'winbar' forces a redraw of the window. Comparing the resolved string also covers
+  -- the common case of scrolling WITHIN one file, where the text is identical and only
+  -- path_under_top's work was wasted.
+  if st.winbar_text == text then
+    return
+  end
+  st.winbar_text = text
+  pcall(vim.api.nvim_set_option_value, "winbar", text, { win = st.win, scope = "local" })
+end
+
 --- Stop every subsystem attached to `st` and persist its session -- everything
 --- M.close does EXCEPT putting windows back, because by the time this runs the
 --- window may already be gone.
@@ -66,6 +121,9 @@ local function teardown(st)
   end
   pcall(vim.api.nvim_del_augroup_by_name, "galley.session")
   pcall(vim.api.nvim_del_augroup_by_name, "galley.close")
+  -- Left armed, this keeps resolving sections against a torn-down state on every
+  -- scroll in any window.
+  pcall(vim.api.nvim_del_augroup_by_name, "galley.winbar")
 
   watch.stop()
   hl.detach(st)
@@ -73,6 +131,9 @@ local function teardown(st)
   scrollbar.close()
   virt.detach()
   statuscol.detach()
+  -- Before restore_window hands the window back: a leftover winbar would claim
+  -- whatever file lands there is a diff canvas.
+  set_winbar(st, "")
 end
 
 local function show_empty_message(st)
@@ -297,6 +358,21 @@ function M.open(opts)
   -- happens to be enabled, and cannot outlive the canvas it describes.
   st.hooks = st.hooks or {}
   st.hooks.on_shape_change = sync_after_collapse
+  -- Fired by sidebar.sync once it has resolved which section the topline is in --
+  -- i.e. "the canvas viewport moved". WinScrolled alone is not enough: a PROGRAMMATIC
+  -- move (sidebar select, jump.back, a motion) repositions the viewport without one,
+  -- and the winbar would keep naming the file you were previously in.
+  --
+  -- Riding on the sidebar is sound rather than a dependency inversion, because the
+  -- gap it closes only exists when the sidebar does -- selecting a row is the
+  -- programmatic scroll. With the sidebar disabled there is nothing but interactive
+  -- scrolling, which WinScrolled covers.
+  st.hooks.on_locate = function()
+    set_winbar(st)
+  end
+
+  set_winbar(st)
+
   if #sections == 0 then
     show_empty_message(st)
   end
@@ -321,6 +397,26 @@ function M.open(opts)
   if config.options.scrollbar.enabled then
     scrollbar.open(st, config.options.scrollbar)
   end
+
+  -- Keep the winbar's sticky filename tracking the topline. Its own autocmd rather
+  -- than a call inside sidebar.sync, because the winbar has to work when the sidebar
+  -- is disabled -- it is the only in-canvas answer to "which file am I in" once the
+  -- header has scrolled off.
+  --
+  -- Unconditional and grouped with the close hooks so teardown reaps it. set_winbar
+  -- returns early when the resolved text has not changed, which is the common case
+  -- while scrolling inside one file, so the redraw cost is paid only at boundaries.
+  --
+  -- (WinScrolled never fires headlessly -- see the harness notes -- so tests drive
+  -- set_winbar or this callback by hand, as they already do for hl and the minimap.)
+  vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
+    group = vim.api.nvim_create_augroup("galley.winbar", { clear = true }),
+    callback = function()
+      if state and canvas_showing(state) then
+        set_winbar(state)
+      end
+    end,
+  })
 
   if config.options.statuscolumn.enabled then
     statuscol.attach(st)
@@ -520,6 +616,7 @@ local function pivot(st)
   if full and #desired == 0 then
     show_empty_message(st)
   end
+  set_winbar(st)
   sync_after_collapse(st)
   virt.apply(st, config.options.virt)
 end

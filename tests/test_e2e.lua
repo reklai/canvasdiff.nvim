@@ -478,6 +478,60 @@ return {
 
     vim.fn.delete(root, "rf")
   end,
+  -- Orientation: the sidebar and the canvas must never disagree about which file you
+  -- are in, including while a jump excursion has the canvas out of its window.
+  --
+  -- Three defects this covers, all of which were live:
+  --   1. sidebar.sync bails during an excursion, so the active row stayed on the file
+  --      you left -- a locator pointing confidently at the WRONG file.
+  --   2. Enter in the sidebar during an excursion was a silent no-op: the tree sat
+  --      there, nothing happened, nothing said why.
+  --   3. The winbar named only the lens, so once a file's header scrolled off there
+  --      was nothing in the canvas saying which block you were reading.
+  ["e2e: the sidebar and winbar agree about where you are, jumps included"] = function()
+    local function body(tag, marks)
+      local o = {}
+      for i = 1, 60 do
+        o[i] = tag .. " L" .. i .. ((marks and i % 5 == 0) and " ch" or "")
+      end
+      return table.concat(o, "\n") .. "\n"
+    end
+    local root = H.git_fixture({
+      committed = { ["aaa.txt"] = body("aaa"), ["zzz.txt"] = body("zzz") },
+      worktree = { ["aaa.txt"] = body("aaa", true), ["zzz.txt"] = body("zzz", true) },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["galley"] = nil
+    local fm = require("galley")
+    fm.open()
+    local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_set_height(cwin, 12)
+
+    local function wb() return vim.api.nvim_get_option_value("winbar", { win = cwin }) end
+
+    assert(wb():match("aaa%.txt"), "the winbar names the file under the topline: " .. wb())
+
+    -- Scroll deep INSIDE zzz.txt, past its header, then drive the scroll hook by hand
+    -- (WinScrolled never fires headlessly -- see the harness notes).
+    local zrow
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+      if l:match("^▎ zzz%.txt") then zrow = i end
+    end
+    assert(zrow, "sanity: zzz.txt has a header")
+    vim.api.nvim_win_call(cwin, function()
+      vim.fn.winrestview({ topline = zrow + 20, lnum = zrow + 22 })
+    end)
+    vim.api.nvim_exec_autocmds("WinScrolled", {})
+    assert(wb():match("zzz%.txt"),
+      "the winbar follows the topline into the next file, which is the whole point -- "
+      .. "its header has scrolled off by now. got: " .. wb())
+
+    fm.close()
+    -- Left armed, this resolves sections against a dead state on every scroll anywhere.
+    assert(not pcall(vim.api.nvim_get_autocmds, { group = "galley.winbar" }),
+      "the winbar augroup must be reaped by teardown")
+    vim.fn.delete(root, "rf")
+  end,
   -- The file-boundary bar: a full-width tint on each expanded file's header row, so
   -- crossing out of one file and into the next is visible while scrolling rather than
   -- being one more line among diff lines.
