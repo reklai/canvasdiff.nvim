@@ -46,6 +46,7 @@ return {
       "render_all",
       "replace_section",
       "resync_visibility",
+      "schedule",
       "section_rows",
       "set_collapsed",
       "show",

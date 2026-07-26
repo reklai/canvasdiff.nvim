@@ -1,5 +1,6 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
 local Projection = require("canvasdiff.canvas.Projection")
+local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
 local format = require("canvasdiff.canvas.format")
 
@@ -27,6 +28,7 @@ return {
   render_all = Canvas.render_all,
   replace_section = Canvas.replace_section,
   resync_visibility = Canvas.resync_visibility,
+  schedule = Scheduler.create,
   section_rows = Canvas.section_rows,
   set_collapsed = Canvas.set_collapsed,
   show = Canvas.show,
