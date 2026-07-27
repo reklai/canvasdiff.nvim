@@ -38,9 +38,13 @@ At `0c78532`, the implementation tree is clean and the full suite passes
 `677/677`.
 
 - Sections 1 and 2 are **done**.
-- Section 3's ingestion half is done, its logical-text seam is in place, and
-  production readers now go through it. Its page-backed **display** is not
-  built. This is the keystone: it is what the rest of the journey waits on.
+- Section 3's ingestion half is done, its logical-text seam is in place,
+  production readers go through it, and the page-backed **display now
+  exists**: `canvas.paged` renders the same text at the same logical rows as
+  the eager canvas, with the same highlight groups and the same deletion
+  ghosts, and holds no persistent extmark. What remains is the switchover --
+  `App:open` still builds the eager canvas, and `Surface` still owns no
+  Projection or Scheduler.
 - Section 4 is partly closed -- the eager/paged oracle is pinned, and the
   compaction bounds the journey names (one candidate per scheduler step, at
   most eight inspected) are the Scheduler's own constants.

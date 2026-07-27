@@ -83,7 +83,7 @@ need a second harness over `App`/`Surface`.
 
 **Phase 8 live acceptance** is not recorded, and cannot honestly be, because
 six of its eight interactions require the paged canvas to be on the production
-*display* path — opening a million logical rows in the real canvas, searching
+*display* path — it now exists, but nothing routes to it yet — opening a million logical rows in the real canvas, searching
 and yanking across page boundaries, folding while watching the heartbeat, and
 reopening a session against it. `App:open` still renders the eager canvas.
 
@@ -95,12 +95,17 @@ paged view agree byte for byte across folds, splices, re-renders and every
 range boundary, and production highlighting now reads through that seam rather
 than the buffer.
 
-The remaining work is the display itself. It is smaller than the original
-handoff assumed: because the skeleton buffer holds exactly one blank line per
-logical row, extmark row addressing keeps working unchanged, so section
-anchors, fold splices, the sidebar's row mapping, the status column, the
-scrollbar, session view restore and hunk/file motions do not need logical-row
-counterparts — they need the text they read to come from the store. The one
-genuine rewrite is per-section highlighting, which must become ephemeral
-decoration rather than persistent extmarks to honour the zero-per-row-extmark
-invariant at a million rows.
+The display itself is built. `canvas.paged` renders the same text at the same
+logical rows as the eager canvas, byte for byte, expanded and collapsed; it
+carries the same highlight groups on the same rows, emitted per visible row by
+the projection's decoration provider; it draws deletion ghosts as marks bounded
+by the window rather than by the canvas; it folds by splicing only the affected
+section; and `section_rows`, `locate` and `set_collapsed` dispatch to it when a
+state is paged, so the rest of the display stack needs no change — the skeleton
+holds one blank line per logical row, so buffer rows and logical rows are the
+same number.
+
+What remains is the switchover: `App:open` still builds the eager canvas, and
+`Surface` still owns no Projection or Scheduler, so nothing calls
+`Scheduler:touch()` on activity. `replace_section` and `reconcile_sections`
+also need paged counterparts before a live session can refresh.
