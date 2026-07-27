@@ -914,4 +914,116 @@ T["projection_ zz provider faults and mid-cycle splice never leak leases"] =
     end
   end
 
+T["projection_ the decorator styles visible rows and leaves no marks"] =
+  function()
+    with_clean_tab(function()
+      local rows = {}
+      for index = 1, 200 do
+        rows[index] = ("logical-%03d"):format(index)
+      end
+      local list = PageList.new(rows, { max_rows = 8 })
+
+      -- A page-backed canvas has to colour diff rows without persisting a
+      -- single extmark, so the decorator is asked per visible row and its
+      -- answer is drawn ephemerally. Recording every ask is how we prove the
+      -- rows off screen are never asked about at all.
+      local asked = {}
+      local projection = Projection.new(list, {
+        overscan_rows = 2,
+        decorate = function(row0, text)
+          asked[#asked + 1] = { row0 = row0, text = text }
+          if row0 % 2 == 0 then
+            return { hl_group = "DiffAdd", line_hl_group = "DiffAdd" }
+          end
+          return nil
+        end,
+      })
+      local buffer = assert(projection:buffer())
+      API.nvim_set_current_buf(buffer)
+      local window = API.nvim_get_current_win()
+      configure_window(window)
+      put_at_top(window, 1)
+      assert(projection:redraw())
+
+      assert(#asked > 0, "the decorator was never asked about a visible row")
+      local height = API.nvim_win_get_height(window)
+      assert(#asked <= height + 2 * 2 + 2, (
+        "the decorator was asked about %d rows for a %d-row window"
+      ):format(#asked, height))
+      for _, ask in ipairs(asked) do
+        H.eq(ask.text, rows[ask.row0 + 1],
+          ("the decorator saw the wrong text at row %d"):format(ask.row0))
+      end
+
+      -- The text still renders, decorated or not.
+      H.eq(screen_prefix(window, 0, #rows[1]), rows[1])
+      H.eq(screen_prefix(window, 1, #rows[2]), rows[2])
+
+      -- And the two rows genuinely differ on screen: row 0 was styled, row 1
+      -- was not. Comparing attributes is what proves the decoration reached
+      -- the screen rather than merely being requested.
+      local position = API.nvim_win_get_position(window)
+      local styled = vim.fn.screenattr(position[1] + 1, position[2] + 1)
+      local plain = vim.fn.screenattr(position[1] + 2, position[2] + 1)
+      assert(styled ~= plain,
+        "a decorated row and an undecorated row rendered identically")
+
+      assert_no_persistent_marks(projection)
+      H.eq(projection:validate(), true)
+      assert(projection:dispose())
+    end)
+  end
+
+T["projection_ a decorator that misbehaves costs its row and nothing else"] =
+  function()
+    with_clean_tab(function()
+      local rows = {}
+      for index = 1, 120 do
+        rows[index] = ("logical-%03d"):format(index)
+      end
+      local list = PageList.new(rows, { max_rows = 8 })
+
+      -- The decorator is owner code running inside a decoration-provider
+      -- callback, where a throw would take down the provider for every
+      -- projection in the process. So each row is contained on its own.
+      local projection = Projection.new(list, {
+        overscan_rows = 1,
+        decorate = function(row0)
+          if row0 == 0 then
+            error("injected decorator failure")
+          end
+          if row0 == 1 then
+            return "not a table"
+          end
+          return nil
+        end,
+      })
+      local buffer = assert(projection:buffer())
+      API.nvim_set_current_buf(buffer)
+      local window = API.nvim_get_current_win()
+      configure_window(window)
+      put_at_top(window, 1)
+      assert(projection:redraw())
+
+      -- Both bad rows still show their text.
+      H.eq(screen_prefix(window, 0, #rows[1]), rows[1])
+      H.eq(screen_prefix(window, 1, #rows[2]), rows[2])
+      H.eq(screen_prefix(window, 2, #rows[3]), rows[3])
+
+      local reported = projection:last_error()
+      assert(type(reported) == "string" and reported ~= "",
+        "a misbehaving decorator was not reported at all")
+
+      assert_no_persistent_marks(projection)
+      H.eq(projection:validate(), true)
+      assert(projection:dispose())
+    end)
+  end
+
+T["projection_ a decorator that is not a function is refused"] = function()
+  local list = PageList.new({ "one", "two" })
+  local projection, err = Projection.create(list, { decorate = "nope" })
+  assert_rejected(projection, err, "decorate")
+end
+
 return T

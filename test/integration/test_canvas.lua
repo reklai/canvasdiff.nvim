@@ -44,6 +44,7 @@ return {
       "locate",
       "logical",
       "open",
+      "paged",
       "paginate",
       "paginate_stream",
       "project",

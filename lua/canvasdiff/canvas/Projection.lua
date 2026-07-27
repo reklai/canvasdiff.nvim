@@ -613,13 +613,46 @@ local function on_range_impl(
     return false
   end
 
+  -- How a page-backed canvas gets diff colours without a single persistent
+  -- extmark: the owner is asked, per visible row, what this row should look
+  -- like, and the answer is drawn ephemerally alongside the text. The million
+  -- rows that are not on screen are never asked about and cost nothing.
+  --
+  -- The decorator is owner code running inside a decoration-provider callback,
+  -- where a throw would take down the provider for every projection in the
+  -- process. So it is contained per row: a row whose decorator throws or
+  -- answers with the wrong shape renders as plain text, and the fault is
+  -- recorded rather than propagated.
+  local decorate = RAWGET(state, "decorate")
   for index = 1, #rows do
-    SET_EXTMARK(buffer, NAMESPACE, start0 + index - 1, 0, {
+    local row0 = start0 + index - 1
+    local text_hl = "Normal"
+    local line_hl = nil
+    if decorate then
+      local called, style = PCALL(decorate, row0, rows[index])
+      if not called then
+        record_error(state, "projection decorator threw: "
+          .. safe_diagnostic(style))
+      elseif TYPE(style) == "table" then
+        if TYPE(RAWGET(style, "hl_group")) == "string" then
+          text_hl = RAWGET(style, "hl_group")
+        end
+        if TYPE(RAWGET(style, "line_hl_group")) == "string" then
+          line_hl = RAWGET(style, "line_hl_group")
+        end
+      elseif style ~= nil then
+        record_error(state, "projection decorator must answer a table or nil")
+      end
+    end
+    SET_EXTMARK(buffer, NAMESPACE, row0, 0, {
       ephemeral = true,
       priority = 200,
-      virt_text = { { rows[index], "Normal" } },
+      virt_text = { { rows[index], text_hl } },
       virt_text_pos = "overlay",
       hl_mode = "combine",
+      -- A full-width tint, so a diff row's colour reaches past the end of its
+      -- text the way it does on the eager canvas. Nil when the row has none.
+      line_hl_group = line_hl,
     })
   end
   return true
@@ -709,9 +742,14 @@ local function projection_options(opts)
       or chunk_rows > MAX_SKELETON_CHUNK_ROWS then
     return nil, "projection skeleton_chunk_rows must be a bounded positive integer"
   end
+  local decorate = RAWGET(opts, "decorate")
+  if decorate ~= nil and TYPE(decorate) ~= "function" then
+    return nil, "projection decorate must be a function"
+  end
   return {
     overscan_rows = overscan_rows,
     skeleton_chunk_rows = chunk_rows,
+    decorate = decorate,
   }
 end
 
@@ -759,6 +797,7 @@ function Projection.create(text, opts)
     text = text,
     overscan_rows = options.overscan_rows,
     skeleton_chunk_rows = options.skeleton_chunk_rows,
+    decorate = options.decorate,
     leases = {},
     projected_generation = generation,
     projected_rows = logical_rows,

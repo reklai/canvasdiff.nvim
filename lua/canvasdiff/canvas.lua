@@ -1,6 +1,7 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
 local PageList = require("canvasdiff.canvas.PageList")
 local Restore = require("canvasdiff.canvas.compression.restore")
+local Paged = require("canvasdiff.canvas.paged")
 local Projection = require("canvasdiff.canvas.Projection")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
@@ -31,6 +32,15 @@ return {
   -- `compression` is the restore adapter a compacting store must be given.
   compression = Restore.adapter,
   compression_capability = Restore.capability,
+  -- The page-backed canvas: same text at the same logical rows as the eager
+  -- one, but the text lives in the store and the colours are emitted per
+  -- visible row, so a million rows cost no persistent extmark.
+  paged = {
+    render = Paged.render,
+    logical = Paged.logical,
+    locate = Paged.locate,
+    dispose = Paged.dispose,
+  },
   paginate = PageList.create,
   paginate_stream = PageList.from_iterator,
   project = Projection.create,
