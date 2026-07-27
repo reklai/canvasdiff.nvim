@@ -1209,7 +1209,9 @@ function App:toggle()
       end
     end
   else
-    self:open()
+    -- Hand back what was opened, the way `open` does. A caller that toggles
+    -- has no other way to learn whether it opened or closed a review.
+    return self:open()
   end
 end
 

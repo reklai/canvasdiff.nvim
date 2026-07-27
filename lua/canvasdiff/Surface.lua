@@ -324,8 +324,6 @@ function Surface:dispose(reason)
   self.generation = self.generation + 1
   self.reason = reason
 
-  self:save()
-
   local errors = {}
   local function attempt(label, callback)
     local ok, err = pcall(callback)
@@ -333,6 +331,13 @@ function Surface:dispose(reason)
       errors[#errors + 1] = label .. ": " .. tostring(err)
     end
   end
+
+  -- Saving is attempted, not assumed. It ran unprotected here once, and a
+  -- session write that throws -- an unwritable state directory, a full disk --
+  -- aborted disposal before a single augroup was deleted, stranding every
+  -- controller on a review already marked closing. Losing a saved position is
+  -- a bad outcome; leaving live callbacks behind is a worse one.
+  attempt("session.save", function() self:save() end)
 
   -- Producers first, then consumers. Each operation is attempted even when a
   -- sibling teardown is faulty; otherwise one extension error strands a
