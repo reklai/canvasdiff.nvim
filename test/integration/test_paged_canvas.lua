@@ -716,4 +716,36 @@ T["paged_ dispose releases the store and is safe on an eager state"] = function(
     "disposing an eager canvas must be harmless")
 end
 
+T["paged_ the store gets a compactor that activity defers"] = function()
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    assert(paged.scheduler, "a paged canvas has no compactor")
+    local stats = paged.scheduler:stats()
+    assert(stats, "the compactor has no state")
+    H.eq(stats.disposed, false)
+
+    -- Touching is what a user scrolling does, and it must be accepted by both
+    -- kinds of canvas so no activity hook has to know which it has.
+    H.eq(Paged.touch(paged), true)
+    H.eq(Paged.touch(nil), true, "touching a canvas with no store is harmless")
+    H.eq(canvas.touch(paged.state), true)
+    H.eq(canvas.touch(canvas.open(three_sections(), {})), true,
+      "touching an eager canvas is harmless")
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ disposal takes the compactor with the projection"] = function()
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local scheduler = paged.scheduler
+  assert(Paged.dispose(paged))
+  H.eq(paged.scheduler, nil, "disposal kept the compactor")
+  local stats = scheduler:stats()
+  assert(stats and stats.disposed,
+    "the compactor outlived the canvas it belonged to")
+end
+
 return T

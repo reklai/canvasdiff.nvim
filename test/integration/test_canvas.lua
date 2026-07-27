@@ -58,6 +58,7 @@ return {
       "section_rows",
       "set_collapsed",
       "show",
+      "touch",
     })
 
     local format_names = vim.tbl_keys(canvas.format)

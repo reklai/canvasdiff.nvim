@@ -529,6 +529,17 @@ function M.open_paged(sections, opts)
   return state
 end
 
+--- Note activity on a canvas, so a paged one can defer compaction.
+---
+--- Accepts either kind: an eager canvas has nothing to defer, and an activity
+--- hook should not have to know which it is looking at.
+function M.touch(state)
+  if state and state.paged then
+    return paged.touch(state.paged)
+  end
+  return true
+end
+
 --- Release a paged canvas's store and projection.
 ---
 --- The eager canvas has nothing to dispose -- its buffer is the state. A paged

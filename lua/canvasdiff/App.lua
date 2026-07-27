@@ -906,6 +906,9 @@ end
       surface:guard(generation, function(owner)
         owner:canvas_snapshot()
         owner:capture_view(win)
+        -- Activity defers the idle compactor: a user moving through the canvas
+        -- must not be racing a background pass for the same pages.
+        canvas.touch(owner.state)
       end)
     end,
   })

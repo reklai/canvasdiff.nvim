@@ -24,6 +24,7 @@
 local PageList = require("canvasdiff.canvas.PageList")
 local Projection = require("canvasdiff.canvas.Projection")
 local Restore = require("canvasdiff.canvas.compression.restore")
+local Scheduler = require("canvasdiff.canvas.Scheduler")
 local render = require("canvasdiff.canvas.format")
 
 local Paged = {}
@@ -165,6 +166,12 @@ function Paged.render(sections, opts)
   end
   paged.projection = projection
   paged.buffer = projection:buffer()
+
+  -- The bounded idle compactor. Without one the pages stay raw and the store
+  -- costs what the eager canvas cost; with one it settles to a fraction of it
+  -- while the canvas sits open. It is created here and disposed with the
+  -- projection so the two can never outlive each other.
+  paged.scheduler = Scheduler.create(list, opts.scheduler)
 
   -- The state shape the display stack already understands. `paged` is what the
   -- canvas API dispatches on: with it set, `section_rows`, `locate` and
@@ -634,6 +641,24 @@ function Paged.yank(paged, start0, count, opts)
   return text
 end
 
+--- Tell the compactor the canvas is being used.
+---
+--- A user scrolling must not be racing a background compactor for the same
+--- pages, so activity resets the idle timer rather than competing with it.
+--- Silent when there is no scheduler, because an eager canvas has none and
+--- every activity hook would otherwise have to know which kind it has.
+function Paged.touch(paged)
+  local scheduler = paged and paged.scheduler
+  if not scheduler then
+    return true
+  end
+  local ok, err = pcall(function() return scheduler:touch() end)
+  if not ok then
+    return nil, tostring(err)
+  end
+  return true
+end
+
 --- The logical text of a paged canvas, in the shape `canvas.logical` answers.
 ---
 --- Having the same shape is the point: a reader that works against the eager
@@ -676,6 +701,11 @@ function Paged.dispose(paged)
   end
   if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
     pcall(vim.api.nvim_buf_clear_namespace, paged.buffer, GHOST_NS, 0, -1)
+  end
+  local scheduler = paged.scheduler
+  paged.scheduler = nil
+  if scheduler then
+    pcall(function() scheduler:dispose() end)
   end
   local projection = paged.projection
   paged.projection = nil

@@ -48,6 +48,7 @@ return {
     search = Paged.search,
     section_rows = Paged.section_rows,
     set_collapsed = Paged.set_collapsed,
+    touch = Paged.touch,
     yank = Paged.yank,
     dispose = Paged.dispose,
   },
@@ -62,4 +63,5 @@ return {
   section_rows = Canvas.section_rows,
   set_collapsed = Canvas.set_collapsed,
   show = Canvas.show,
+  touch = Canvas.touch,
 }
