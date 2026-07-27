@@ -80,12 +80,21 @@ end
 T["cheatsheet_model omits disabled actions and empty columns"] = function()
   local km = defaults()
   km.sidebar.select = false
-  km.sidebar.close = "x" -- diverge close so Sidebar's only row would be select
-  km.canvas.close = "x"  -- keep them diverged both ways
+  km.sidebar.close = "x" -- diverge close so Sidebar's only row would be close
+  -- canvas.close stays at default "q", genuinely diverging close
   local model = cheatsheet.model(km)
   local where = placement(model)
   H.eq(where.select, nil, "a disabled action must not appear at all")
-  -- Sidebar now has close only (diverged): still present. Disable that too:
+  -- Sidebar now has close only (diverged): column is present with exactly one row
+  local sidebar_present = false
+  for _, col in ipairs(model) do
+    if col.title == "Sidebar" then
+      sidebar_present = true
+      H.eq(#col.sections[1].rows, 1, "Sidebar holds the diverged close row")
+    end
+  end
+  H.eq(sidebar_present, true, "Sidebar column exists when holding a diverged row")
+  -- Now disable that row:
   km.sidebar.close = false
   where = placement(cheatsheet.model(km))
   for _, col in ipairs(cheatsheet.model(km)) do
