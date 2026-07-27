@@ -412,4 +412,44 @@ T["paged_ collapsing a section that does not exist is an ordinary error"] =
     assert(ok, failure)
   end
 
+T["paged_ the canvas API dispatches to the store when the state is paged"] =
+  function()
+    -- The switchover is a flag, not a rewrite: with `state.paged` set, the
+    -- same facade calls the display stack already makes go to the store.
+    local sections = three_sections()
+    local eager_state = canvas.open(sections, {})
+    local paged, err = Paged.render(sections)
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      for index = 1, #sections do
+        local eager_start, eager_end = canvas.section_rows(eager_state, index)
+        local start0, end0 = canvas.section_rows(paged.state, index)
+        H.eq(start0, eager_start, ("section %d starts elsewhere"):format(index))
+        H.eq(end0, eager_end, ("section %d ends elsewhere"):format(index))
+      end
+
+      local start2 = canvas.section_rows(paged.state, 2)
+      local index, offset = canvas.locate(paged.state, start2)
+      H.eq(index, 2, "locate through the facade found the wrong section")
+      H.eq(offset, 0)
+      H.eq(canvas.locate(paged.state, 0), 1)
+
+      -- And folding through the facade splices the store.
+      canvas.set_collapsed(paged.state, 2, true)
+      H.eq(paged.collapsed[2], true, "the facade did not fold the paged section")
+      H.eq(paged.state.collapsed[sections[2].path], "user",
+        "the facade did not record the fold intent")
+
+      local folded = canvas.open(three_sections(), {})
+      canvas.set_collapsed(folded, 2, true)
+      local eager = canvas.logical(folded)
+      local total = eager.row_count()
+      H.eq(paged.list:row_count(), total)
+      H.eq(assert(paged.list:rows(0, total)), assert(eager.rows(0, total)),
+        "folding through the facade disagreed with the eager canvas")
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
 return T

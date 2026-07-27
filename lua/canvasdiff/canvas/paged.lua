@@ -165,6 +165,23 @@ function Paged.render(sections, opts)
   end
   paged.projection = projection
   paged.buffer = projection:buffer()
+
+  -- The state shape the display stack already understands. `paged` is what the
+  -- canvas API dispatches on: with it set, `section_rows`, `locate` and
+  -- `set_collapsed` go to the store instead of to extmark anchors, and every
+  -- other reader keeps working because the skeleton has one row per logical
+  -- row and the buffer is a buffer.
+  paged.state = {
+    buf = paged.buffer,
+    sections = sections,
+    collapsed = {},
+    paged = paged,
+  }
+  for index, section in ipairs(sections) do
+    if collapsed_state[index] then
+      paged.state.collapsed[section.path] = "user"
+    end
+  end
   return paged
 end
 

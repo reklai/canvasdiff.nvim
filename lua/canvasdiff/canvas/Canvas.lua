@@ -1,3 +1,4 @@
+local paged = require("canvasdiff.canvas.paged")
 local render = require("canvasdiff.canvas.format")
 local glyphs = require("canvasdiff.config").glyphs
 local diff = require("canvasdiff.diff")
@@ -476,6 +477,9 @@ end
 --- 0-based [start_row, end_row_exclusive) for section i, resolved live from
 --- extmarks -- never cached.
 function M.section_rows(state, i)
+  if state and state.paged then
+    return paged.section_rows(state.paged, i)
+  end
   return get_row(state, state.anchor_ids[i]), get_row(state, state.anchor_ids[i + 1])
 end
 
@@ -483,6 +487,9 @@ end
 --- 0-based buffer row `row0`. Returns section index and 1-based offset into
 --- that section's entries, or nil if there are no sections.
 function M.locate(state, row0)
+  if state and state.paged then
+    return paged.locate(state.paged, row0)
+  end
   local n = #state.sections
   if n == 0 then return nil end
 
@@ -876,6 +883,13 @@ end
 function M.set_collapsed(state, i, collapsed, intent, preferred_win)
   local sec = state.sections[i]
   if not sec then return end
+  if state.paged then
+    -- The paged canvas splices its own store and keeps its own starts, so it
+    -- neither has anchors to repair nor a view to preserve by row arithmetic.
+    state.collapsed[sec.path] = collapsed and (intent or "user") or nil
+    paged.set_collapsed(state.paged, i, collapsed)
+    return
+  end
   local want = collapsed and (intent or "user") or nil
   if state.collapsed[sec.path] == want then return end
 
