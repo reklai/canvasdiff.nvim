@@ -38,13 +38,16 @@ At `0c78532`, the implementation tree is clean and the full suite passes
 `677/677`.
 
 - Sections 1 and 2 are **done**.
-- Section 3's ingestion half is done, its logical-text seam is in place,
-  production readers go through it, and the page-backed **display now
-  exists**: `canvas.paged` renders the same text at the same logical rows as
-  the eager canvas, with the same highlight groups and the same deletion
-  ghosts, and holds no persistent extmark. What remains is the switchover --
-  `App:open` still builds the eager canvas, and `Surface` still owns no
-  Projection or Scheduler.
+- Section 3 is **done**. Ingestion streams, the logical-text seam is in place
+  and production readers go through it, the page-backed display exists and
+  renders the same text, colours and ghosts as the eager canvas, and the
+  switchover is live: `App:open` chooses by canvas rows, `Surface` releases
+  the store and projection it owns, and CursorMoved defers the compactor.
+  One deliberate gap remains inside it -- treesitter highlighting is not
+  attached to a paged canvas, because it is viewport-bounded at SECTION
+  granularity and a single 24,000-row section produced 8,000 persistent
+  extmarks. Making it row-granular means driving treesitter from the
+  projection's decorator.
 - Section 4 is partly closed -- the eager/paged oracle is pinned, the
   compaction bounds the journey names (one candidate per scheduler step, at
   most eight inspected) are the Scheduler's own constants, and cross-page
@@ -150,7 +153,7 @@ Two findings worth carrying forward:
   is now provisional until the event loop turns -- a second synchronous
   sighting is NOT enough, and that was tried first.
 
-### 3. Put paging and streaming on the production path -- PARTLY DONE (the keystone)
+### 3. Put paging and streaming on the production path -- DONE
 
 The ingestion half is done at `851d2c0` and `55e7be9`:
 

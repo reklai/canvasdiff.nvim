@@ -233,6 +233,7 @@ default. >lua
       scrollbar    = { enabled = true },
       statuscolumn = { enabled = true },
       session      = { enabled = true },
+      paged        = { enabled = true, min_rows = 20000 },
       highlight    = { enabled = true, margin = 100, debounce_ms = 30 },
       watch        = { enabled = true, debounce_ms = 200 },
       virt         = {
@@ -244,6 +245,25 @@ default. >lua
       },
     })
 <
+                                                           *canvasdiff-paged*
+Large reviews~
+
+Above `paged.min_rows` canvas rows, CanvasDiff renders the review from a
+page-backed store instead of writing every line into the buffer. The buffer
+then holds one blank line per row and the text is drawn as you scroll, which
+is what makes a review of a million rows open and scroll at all.
+
+You will notice three differences on such a review:
+
+- Syntax highlighting inside hunks is absent. Diff tints, file bars and
+  deleted-line ghosts all remain.
+- Other plugins that read the buffer's lines see blank lines, because that is
+  genuinely what is in the buffer.
+- `/` and `y` need CanvasDiff's own search and yank, which read the store.
+
+Set `paged = { enabled = false }` to always use the ordinary canvas, at the
+cost of memory on very large reviews. Below the threshold nothing changes.
+
                                                           *canvasdiff-glyphs*
 Glyphs~
 
@@ -343,6 +363,10 @@ Syntax highlighting is missing inside the diff~
 Large reviews feel slow~
     Collapse files you have finished with. If a single file is enormous,
     `virt.max_lines` and `virt.max_files` bound how much is decorated.
+
+Syntax highlighting vanished on one big review~
+    That review crossed `paged.min_rows` and is page-backed. See
+    |canvasdiff-paged|.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

@@ -112,8 +112,17 @@ none of its text. So the paged canvas carries its own chunked search and its
 own linewise yank, reading through the store — which is exactly the capability
 Phase 8 item 2 checks.
 
-What remains is the switchover: `App:open` still builds the eager canvas, and
-`Surface` still owns no Projection or Scheduler, so nothing calls
-`Scheduler:touch()` on activity. `reconcile_sections`, `insert_section` and
-`show` still need paged counterparts, and the canvas keys have to route `/`
-and `y` to the paged implementations before a live session behaves correctly.
+The switchover is live. `App:open` chooses by canvas rows -- exactly, from the
+model, since a section's entries are its rendered rows -- `Surface` releases
+the store and projection it owns, and CursorMoved defers the idle compactor.
+An e2e test opens a real repository through `:CanvasDiff`, asserts the large
+review is paged and the small one is not, and checks the paged canvas carries
+zero persistent extmarks.
+
+One deliberate gap remains inside it: treesitter highlighting is not attached
+to a paged canvas. It is viewport-bounded but at SECTION granularity, and a
+single 24,000-row section produced 8,000 persistent extmarks -- marks that
+scale with the review, which is what the paged canvas exists to prevent.
+Making it row-granular means driving treesitter from the projection's
+decorator. Until then a large review keeps its diff tints, file bars and
+ghosts and loses syntax colour inside hunks.
