@@ -20,7 +20,7 @@ end
 T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "err", "highlight", "notify", "scrollbar", "sidebar",
+  H.eq(names, { "cheatsheet", "err", "highlight", "notify", "scrollbar", "sidebar",
     "status_column", "warn" })
 end
 
