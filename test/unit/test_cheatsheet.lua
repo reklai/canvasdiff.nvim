@@ -36,38 +36,47 @@ local function close_rows(model)
   return seen
 end
 
-T["cheatsheet_model each column is self-contained for its context"] = function()
+T["cheatsheet_model promotes to Global only on identical keys AND desc"] = function()
   local model = cheatsheet.model(defaults())
   local where = placement(model)
+  -- `help` reads identically in both contexts; `back` is global by fiat.
+  H.eq(where.help, "Global")
+  H.eq(where.back, "Global")
   H.eq(where.select, "Sidebar")
   H.eq(where.jump, "Canvas")
   H.eq(where.refresh, "Canvas")
-  -- `back` lives on the file buffer but belongs beside the jump that
-  -- created the excursion, in the Canvas column's Jump section.
-  for _, col in ipairs(model) do
-    if col.title == "Canvas" then
-      for _, sec in ipairs(col.sections) do
-        if sec.name == "Jump" then
-          local actions = {}
-          for _, row in ipairs(sec.rows) do actions[#actions + 1] = row.action end
-          H.eq(actions, { "jump", "back" })
-        end
-      end
-    end
-  end
 end
 
-T["cheatsheet_model a shared key appears per column with its own meaning"] = function()
+T["cheatsheet_model close stays per column with its own meaning"] = function()
   -- `q` closes the whole review on the canvas but only the sidebar when
-  -- pressed there. No merged "Global" row: each column says what the key
-  -- does THERE.
+  -- pressed there. Same key, different meaning: no Global row -- each
+  -- column says what the key does THERE.
   local seen = close_rows(cheatsheet.model(defaults()))
+  H.eq(seen["Global"], nil, "differing descs must keep close out of Global")
   H.eq(seen["Canvas"].keys, { "q" })
   H.eq(seen["Sidebar"].keys, { "q" })
   assert(seen["Canvas"].desc:find("Close the canvas", 1, true),
     "canvas close describes the canvas: " .. seen["Canvas"].desc)
   assert(seen["Sidebar"].desc:find("Close the sidebar", 1, true),
     "sidebar close describes the sidebar: " .. seen["Sidebar"].desc)
+end
+
+T["cheatsheet_model a diverged key demotes a Global action to both columns"] = function()
+  local km = defaults()
+  km.sidebar.help = "g?" -- no longer identical to the canvas binding
+  local seen = {}
+  for _, col in ipairs(cheatsheet.model(km)) do
+    for _, sec in ipairs(col.sections) do
+      for _, row in ipairs(sec.rows) do
+        if row.action == "help" then
+          seen[col.title] = row.keys
+        end
+      end
+    end
+  end
+  H.eq(seen["Global"], nil, "a diverged action must leave Global")
+  H.eq(seen["Canvas"], { "<leader>lh" })
+  H.eq(seen["Sidebar"], { "g?" })
 end
 
 T["cheatsheet_model a per-context override changes only its own column"] = function()
@@ -78,12 +87,12 @@ T["cheatsheet_model a per-context override changes only its own column"] = funct
   H.eq(seen["Sidebar"].keys, { "x" })
 end
 
-T["cheatsheet_model column order is Sidebar, Canvas"] = function()
+T["cheatsheet_model column order is Global, Sidebar, Canvas"] = function()
   local titles = {}
   for _, col in ipairs(cheatsheet.model(defaults())) do
     titles[#titles + 1] = col.title
   end
-  H.eq(titles, { "Sidebar", "Canvas" })
+  H.eq(titles, { "Global", "Sidebar", "Canvas" })
 end
 
 T["cheatsheet_model keeps group sub-headers only in the Canvas column"] = function()
@@ -116,10 +125,9 @@ T["cheatsheet_model omits disabled actions and empty columns"] = function()
       sidebar_rows = #col.sections[1].rows
     end
   end
-  H.eq(sidebar_rows, 2, "Sidebar keeps its remaining rows (close, help)")
-  -- Disable those too and the whole column goes:
+  H.eq(sidebar_rows, 1, "Sidebar keeps its remaining row (close; help sits in Global)")
+  -- Disable that too and the whole column goes:
   km.sidebar.close = false
-  km.sidebar.help = false
   for _, col in ipairs(cheatsheet.model(km)) do
     assert(col.title ~= "Sidebar", "a column with no rows is omitted")
   end

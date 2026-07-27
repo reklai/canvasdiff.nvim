@@ -28,20 +28,23 @@ keybind truth.
   overlay shows exactly the replacement. Multi-key actions render on one row
   (`za c`). Disabled actions (`false` / `{}` / `""`) are omitted entirely.
   This holds for every action including `help` itself.
-- **R3 — layout: two self-contained columns, `Sidebar | Canvas`.**
-  *(Amended 2026-07-28 post-ship: the original design had a third, computed
-  `Global` column for identically-bound shared actions. Removed — a help menu
-  answers "what can I press here?", and a merged row blurred keys whose
-  meaning differs per context: `q` closes the whole review on the canvas but
-  only the sidebar when pressed there.)*
-  - Each column lists everything usable in that window, nothing more. A key
-    bound in both contexts (`q`, the help key) appears in both columns, each
-    row carrying its own context's description.
-  - **Sidebar** — a flat list: `select`, `close`, `help`.
+- **R3 — layout: three columns, `Global | Sidebar | Canvas`.**
+  *(Amended twice on 2026-07-28 post-ship; final form:)* promotion to Global
+  requires the contexts to agree twice over — identical resolved keys AND an
+  identical description. A Global row claims "this key means this
+  everywhere", which is only true when the registry says so in both fields:
+  `q` shares its key but not its meaning (it closes the whole review on the
+  canvas, only the sidebar when pressed there), so `close` lists in each
+  context's own column with that context's description.
+  - **Global** — computed, not hardcoded (default: `help`), plus the
+    file-context `back` binding by fiat, since it applies outside the
+    plugin's own windows. Diverging either the keys or the desc demotes an
+    action into both context columns.
+  - **Sidebar** — a flat list of the rest of its context (defaults: `select`,
+    `close`).
   - **Canvas** — everything else, keeping the `K.specs` group sub-headers
-    (Navigate / Jump / View / Canvas); the file-context `back` binding rides
-    in the Jump section beside the jump that created the excursion, as
-    `K.grouped` already folds it there.
+    (Navigate / Jump / View / Canvas) since it is the largest column; Global
+    and Sidebar columns are flat lists.
 - **R4 — closing.** `q`, `<Esc>`, or the help binding again close the
   overlay (buffer-local on the overlay buffer). Closing the canvas closes
   the overlay with it. The overlay never survives its parent surface.

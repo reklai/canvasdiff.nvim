@@ -10,47 +10,89 @@ local config = require("canvasdiff.config")
 
 local M = {}
 
---- Rows of one grouped() section, in the shape the renderer consumes.
-local function section_rows(items)
-  local rows = {}
-  for _, item in ipairs(items) do
-    rows[#rows + 1] = { keys = item.keys, desc = item.desc, action = item.action }
-  end
-  return rows
-end
-
---- Column model for the overlay: `Sidebar | Canvas`.
----
---- Each column is self-contained: everything you can press in that window,
---- nothing you can't. A key living in both contexts (`q`, the help key)
---- appears in both columns, each row carrying its own context's description
---- -- `q` closes the whole review on the canvas but only the sidebar when
---- pressed there, and a merged "Global" row could only blur that. The
---- file-context `back` binding rides in the Canvas column's Jump section,
---- beside the jump that created the excursion (grouped() already folds it
---- there). The Sidebar column is a flat list; Canvas, the largest column,
---- keeps its group sub-headers. Empty columns are omitted.
-function M.model(keymaps)
-  local out = {}
-
-  local side_rows = {}
-  for _, g in ipairs(keys.grouped({ "sidebar" }, keymaps)) do
-    for _, row in ipairs(section_rows(g.items)) do
-      side_rows[#side_rows + 1] = row
+--- Per-context view of grouped(): action -> row, plus display order.
+local function ctx_actions(ctx, keymaps)
+  local by_action, order = {}, {}
+  for _, g in ipairs(keys.grouped({ ctx }, keymaps)) do
+    for _, item in ipairs(g.items) do
+      by_action[item.action] = { keys = item.keys, desc = item.desc, group = g.name }
+      order[#order + 1] = item.action
     end
   end
-  if #side_rows > 0 then
-    out[#out + 1] = { title = "Sidebar", sections = { { name = nil, rows = side_rows } } }
+  return by_action, order
+end
+
+--- One flat unnamed section, or nothing when there are no rows.
+local function flat_column(title, rows)
+  if #rows == 0 then
+    return nil
+  end
+  return { title = title, sections = { { name = nil, rows = rows } } }
+end
+
+--- Canvas keeps its group sub-headers (it is the largest column); order of
+--- appearance already follows K.group_order via grouped().
+local function grouped_column(title, by_action, order, skip)
+  local sections, index = {}, {}
+  for _, action in ipairs(order) do
+    if not skip[action] then
+      local a = by_action[action]
+      local sec = index[a.group]
+      if not sec then
+        sec = { name = a.group, rows = {} }
+        index[a.group] = sec
+        sections[#sections + 1] = sec
+      end
+      sec.rows[#sec.rows + 1] = { keys = a.keys, desc = a.desc, action = action }
+    end
+  end
+  if #sections == 0 then
+    return nil
+  end
+  return { title = title, sections = sections }
+end
+
+--- Column model for the overlay: `Global | Sidebar | Canvas`.
+---
+--- A Global row claims "this key means this everywhere", so promotion
+--- requires the contexts to agree twice over: identical resolved keys AND an
+--- identical description. `help` qualifies; `close` shares `q` but not its
+--- meaning (it closes the whole review on the canvas, only the sidebar when
+--- pressed there), so it stays in each context's own column with that
+--- context's description. Computed, not hardcoded -- diverging either the
+--- keys or the descs demotes a row honestly. The file-context `back`
+--- binding is global by fiat: it applies outside the plugin's own windows.
+--- Empty columns are omitted.
+function M.model(keymaps)
+  local canvas, canvas_order = ctx_actions("canvas", keymaps)
+  local side, side_order = ctx_actions("sidebar", keymaps)
+  local file, file_order = ctx_actions("file", keymaps)
+
+  local shared, global_rows = {}, {}
+  for _, action in ipairs(canvas_order) do
+    local c, s = canvas[action], side[action]
+    if s and vim.deep_equal(c.keys, s.keys) and c.desc == s.desc then
+      shared[action] = true
+      global_rows[#global_rows + 1] = { keys = c.keys, desc = c.desc, action = action }
+    end
+  end
+  for _, action in ipairs(file_order) do
+    local f = file[action]
+    global_rows[#global_rows + 1] = { keys = f.keys, desc = f.desc, action = action }
   end
 
-  local sections = {}
-  for _, g in ipairs(keys.grouped({ "canvas", "file" }, keymaps)) do
-    sections[#sections + 1] = { name = g.name, rows = section_rows(g.items) }
-  end
-  if #sections > 0 then
-    out[#out + 1] = { title = "Canvas", sections = sections }
+  local side_rows = {}
+  for _, action in ipairs(side_order) do
+    if not shared[action] then
+      local s = side[action]
+      side_rows[#side_rows + 1] = { keys = s.keys, desc = s.desc, action = action }
+    end
   end
 
+  local out = {}
+  out[#out + 1] = flat_column("Global", global_rows)
+  out[#out + 1] = flat_column("Sidebar", side_rows)
+  out[#out + 1] = grouped_column("Canvas", canvas, canvas_order, shared)
   return out
 end
 
