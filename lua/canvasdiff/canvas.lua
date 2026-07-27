@@ -1,5 +1,6 @@
 local Canvas = require("canvasdiff.canvas.Canvas")
 local PageList = require("canvasdiff.canvas.PageList")
+local Restore = require("canvasdiff.canvas.compression.restore")
 local Projection = require("canvasdiff.canvas.Projection")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
@@ -26,7 +27,10 @@ return {
   logical = Canvas.logical,
   open = Canvas.open,
   -- The page-backed store a Projection renders. `paginate_stream` is the
-  -- ingestion entry point: it never materializes every logical row first.
+  -- ingestion entry point: it never materializes every logical row first, and
+  -- `compression` is the restore adapter a compacting store must be given.
+  compression = Restore.adapter,
+  compression_capability = Restore.capability,
   paginate = PageList.create,
   paginate_stream = PageList.from_iterator,
   project = Projection.create,

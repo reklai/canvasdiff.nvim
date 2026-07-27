@@ -36,6 +36,8 @@ return {
     local names = vim.tbl_keys(canvas)
     table.sort(names)
     H.eq(names, {
+      "compression",
+      "compression_capability",
       "format",
       "insert_section",
       "is_canvas_buf",

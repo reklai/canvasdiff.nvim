@@ -444,9 +444,18 @@ local function canvas_extmarks(buf)
   return counts, total
 end
 
+-- Canvas buffers are per-review: one Surface owns one numbered canvas buffer,
+-- so the name is a prefix plus that Surface's id rather than a fixed string.
+-- The benchmark checks the observable name rather than calling the production
+-- predicate, so that a change to how a canvas is identified still has to
+-- survive an independent check here.
+local CANVAS_BUFNAME_PREFIX = "canvasdiff://canvas/"
+
 local function assert_canvas_identity(buf)
-  assert(vim.api.nvim_buf_get_name(buf) == "canvasdiff://canvas",
-    "the real :CanvasDiff open command did not enter the canvas buffer")
+  local name = vim.api.nvim_buf_get_name(buf)
+  assert(name:sub(1, #CANVAS_BUFNAME_PREFIX) == CANVAS_BUFNAME_PREFIX
+    and name:sub(#CANVAS_BUFNAME_PREFIX + 1):match("^%d+$") ~= nil,
+    "the real :CanvasDiff open command did not enter the canvas buffer: " .. name)
   assert(vim.api.nvim_get_option_value("buftype", { buf = buf }) == "nofile",
     "canvas buffer lost buftype=nofile")
   assert(vim.api.nvim_get_option_value("modifiable", { buf = buf }) == false,
@@ -497,15 +506,20 @@ local function inspect_canvas(buf, corpus)
   assert(extmark_total > anchors,
     "eager canvas did not install its line-tier extmarks")
 
+  -- Canvas buffers are per-review now, so this counts the prefix rather than a
+  -- fixed name. One open must still leave exactly one behind: more would mean
+  -- a Surface leaked a buffer, and none would mean the name changed under us.
   local canvas_buffers = 0
   for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(candidate)
-        and vim.api.nvim_buf_get_name(candidate) == "canvasdiff://canvas" then
+    local name = vim.api.nvim_buf_is_valid(candidate)
+      and vim.api.nvim_buf_get_name(candidate) or ""
+    if name:sub(1, #CANVAS_BUFNAME_PREFIX) == CANVAS_BUFNAME_PREFIX then
       canvas_buffers = canvas_buffers + 1
     end
   end
-  assert(canvas_buffers == 1,
-    "open created more than one process-wide canvas buffer")
+  assert(canvas_buffers == 1, (
+    "one open must leave exactly one canvas buffer, found %d"
+  ):format(canvas_buffers))
 
   return {
     buf = buf,
