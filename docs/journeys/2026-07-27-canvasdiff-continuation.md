@@ -34,10 +34,26 @@ Keep these decisions fixed unless the product direction is explicitly changed:
 
 ## Exact checkpoint state
 
-At `64d8504`, the implementation tree was clean and the full suite passed
-`672/672`. Sections 1 and 2 below are **done**. Section 3's ingestion half is
-done and its logical-text seam is in place; its page-backed display is not.
-Sections 5 to 7 have not been started.
+At `0c78532`, the implementation tree is clean and the full suite passes
+`677/677`.
+
+- Sections 1 and 2 are **done**.
+- Section 3's ingestion half is done, its logical-text seam is in place, and
+  production readers now go through it. Its page-backed **display** is not
+  built. This is the keystone: it is what the rest of the journey waits on.
+- Section 4 is partly closed -- the eager/paged oracle is pinned, and the
+  compaction bounds the journey names (one candidate per scheduler step, at
+  most eight inspected) are the Scheduler's own constants.
+- Section 5 is **done**. Every hard gate passes at 1,000,000 rows, three
+  repetitions across four corpora, plus the small-canvas regression gate.
+- Section 6 is partly done. The engine campaign runs 10,000 actions across
+  three seeds, clean, with every invariant asserted after every action. The
+  Git/process, refs, patch-streaming, session-write and Surface-ownership
+  seams need a second harness above the engine.
+- Section 7 is partly done: the help file exists, the identity and
+  ecosystem-name audits pass, `make verify` runs every gate, and the evidence
+  is in `docs/verification/`. Phase 8's live acceptance is **not** recorded,
+  because six of its eight interactions need the paged display first.
 
 Commits since the previous checkpoint:
 
@@ -58,6 +74,15 @@ Commits since the previous checkpoint:
   and render.
 - `64d8504` -- `canvas.logical` states the logical-text contract, and the
   eager/paged oracle is pinned against it.
+- `57c99b3` -- the million-row acceptance lane, and the production restore
+  adapter it needed. Nothing in production had ever built one, so every
+  compaction attempt failed with "adapter is not configured" and the whole
+  compaction tier was unreachable outside tests.
+- `bf44bcb` -- the Phase 7 deliberate-breakage campaign, with an oracle so
+  that correctness is compared rather than assumed.
+- `70f7866` -- `doc/canvasdiff.txt`, and `make verify`.
+- `0c78532` -- production highlighting reads canvas text through the logical
+  seam rather than the buffer.
 
 The architecture ledger is empty and that is a gate, not a milestone:
 nothing classifies as legacy any more, so a new flat module under
@@ -118,7 +143,7 @@ Two findings worth carrying forward:
   is now provisional until the event loop turns -- a second synchronous
   sighting is NOT enough, and that was tried first.
 
-### 3. Put paging and streaming on the production path -- PARTLY DONE
+### 3. Put paging and streaming on the production path -- PARTLY DONE (the keystone)
 
 The ingestion half is done at `851d2c0` and `55e7be9`:
 
@@ -151,9 +176,24 @@ What REMAINS, and what makes it large:
    `row`, `rows` and `export` with the same shape and the same validation
    `Projection` does, and `test/integration/test_logical_text.lua` proves a
    paged view of the same rows agrees byte for byte across folds, splices,
-   re-renders and every range boundary. What remains is to route the
-   production readers through it, and then to build the paged canvas behind
-   it.
+   re-renders and every range boundary. Production readers are routed through
+   it as of `0c78532`.
+
+   **This estimate was too pessimistic, and the correction matters.** The
+   skeleton buffer holds exactly one blank line per logical row -- that is
+   what keeps native scrolling, marks and search positions exact. So extmark
+   ROW ADDRESSING keeps working unchanged. Section anchors, fold splices, the
+   sidebar's row mapping, the status column, the scrollbar, session view
+   restore and hunk/file motions therefore do NOT each need a logical-row
+   counterpart. They need one thing: the text they read to come from the
+   store instead of the buffer, which is what the seam above is for.
+
+   The one genuine rewrite is per-section highlighting. It currently places
+   persistent extmarks per section, and at a million rows that violates the
+   resume contract's zero-persistent-extmark-per-row invariant directly. It
+   has to become ephemeral decoration emitted by the projection's provider
+   for visible rows only. Start there: everything else is a read that already
+   has a seam.
 
 4. `PageList.from_iterator` is the ingestion entry point for step 3 -- it
    takes exactly the `next_row` shape `section_stream` can be adapted into.
@@ -170,7 +210,7 @@ Keep compaction cold, complete-page-only, unpinned, generation-fenced, and
 bounded to one candidate per scheduler step with at most eight inspected
 candidates. Decode/CRC/codec failure must never publish partial or stale state.
 
-### 5. Build the million-row performance lane
+### 5. Build the million-row performance lane -- DONE
 
 The existing `benchmark/run.lua` is the isolated eager small-canvas baseline,
 not the million-row acceptance lane. Preserve it and add a separate
@@ -195,7 +235,7 @@ Hard gates from the journey:
 Also prove resident-cache bounds, repeated open/close and random-jump plateaus,
 and separately report skeleton versus rich/materialized row counts.
 
-### 6. Deliberately break it
+### 6. Deliberately break it -- PARTLY DONE
 
 Implement the named Phase 7 seams across Git/process, refs, patch streaming,
 codec/CRC/offsets, compaction mutation, projection reentry, timers/scheduling,
@@ -206,12 +246,33 @@ action, assert page/anchor invariants, cache bounds, exact Surface ownership,
 and that disposed Surfaces own no callbacks. Record the seed and enough action
 history for exact replay.
 
+**Done at `bf44bcb`, for the engine seams.** `test/fault/chaos.lua` is the
+harness; `test/fault/test_chaos.lua` runs 250 actions across three fixed seeds
+on every `make test`, and `benchmark/chaos/run.lua` runs the full 10,000 across
+three seeds. It carries an oracle -- a plain Lua array beside the store -- so
+correctness is compared rather than assumed, and injected failure is expected
+to be REFUSED rather than survived.
+
+Covered seams: codec/CRC/offsets (a hostile codec that corrupts blocks, lies
+about checksums, refuses to encode, or returns short), compaction mutation
+(splices against a live compactor), projection reentry, timers and scheduling
+(dispose and rebuild under a live store), text encodings (empty rows, NUL
+bytes, invalid UTF-8, CR, wide characters, rows larger than a page budget), UI
+geometry, navigation, and memory (resident caps asserted after every action).
+
+**Not yet covered**, and still required: Git/process failure, refs, patch
+streaming, and filesystem/session writes -- these live above the engine, in the
+source and session domains, and need a second harness over `App`/`Surface`.
+That harness is also where the journey's "exact Surface ownership, and disposed
+Surfaces own no callbacks" assertions belong; the engine campaign cannot make
+them because it never builds a Surface.
+
 The scrollbar still needs the broad Phase 7 creation-return/ID-reuse matrix
 (augroup/buffer/window creation returning after reentrant disposal). Its
 current focused lease checkpoint has no known blocker, but those chaos seams
 remain part of final completion.
 
-### 7. Live acceptance and publication audit
+### 7. Live acceptance and publication audit -- PARTLY DONE
 
 Run every Phase 8 interaction in a real Git fixture and check commands, seeds,
 logs, benchmark JSON, and observed behavior into `docs/verification/`. Finally
@@ -219,6 +280,21 @@ rerun the current ecosystem-name search immediately before publication, prove
 the legacy identity is absent, rerun every unit/integration/e2e/performance/
 fault gate, write the missing final user help (`doc/canvasdiff.txt`), and leave
 the tree clean.
+
+Done: `doc/canvasdiff.txt` exists (`:help canvasdiff-mappings`, which
+`config.settings` already told users to read, now resolves). `make verify` runs
+the suite, the regression gate, the million-row lane and the chaos campaign in
+one command. The retired-identity gate passes -- the pre-rename name survives
+only in the historical journey record. The ecosystem-name audit was rerun on
+2026-07-28: no Neovim plugin uses the name, and the similarly-named projects
+are unrelated to editors. Evidence is in `docs/verification/`.
+
+Not done: **Phase 8 live acceptance**. Six of its eight interactions -- a
+million rows in the real canvas, search and yank across page boundaries,
+folding while watching the heartbeat, lens pivots during writes, and session
+restore against it -- require section 3's paged display, because `App:open`
+still renders the eager canvas. Recording anything else as Phase 8 evidence
+would be recording a session that did not test what Phase 8 names.
 
 ## Commands and hygiene
 
