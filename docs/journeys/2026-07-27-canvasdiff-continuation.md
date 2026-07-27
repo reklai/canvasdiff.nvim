@@ -1,13 +1,18 @@
-# CanvasDiff continuation checkpoint
+# CanvasDiff continuation checkpoint -- CLOSED
 
-Date: 2026-07-27
+Date opened: 2026-07-27. Closed: 2026-07-28.
 
-Implementation checkpoint: `64d8504`
+Opening checkpoint: `64d8504`. Closing checkpoint: `88554e6`.
 
-This is a stopping-point handoff, not a completion claim. The original goal
-remains the full [CanvasDiff migration and million-line journey](2026-07-26-canvasdiff-migration.md),
-including its performance, deliberate-breakage, live-acceptance, and final
-publication gates.
+This began as a stopping-point handoff toward the full
+[CanvasDiff migration and million-line journey](2026-07-26-canvasdiff-migration.md).
+Every section below is now done, and the final completion audit at the end of
+this document records the evidence for each of the original journey's gates.
+
+Two limitations are recorded there deliberately: treesitter highlighting is
+not attached to a paged canvas, and column addressing on a paged canvas is the
+skeleton's. Both are consequences of the design that were measured rather than
+discovered by a user, and both are documented in `doc/canvasdiff.txt`.
 
 ## Resume contract
 
@@ -48,12 +53,13 @@ At `0c78532`, the implementation tree is clean and the full suite passes
   granularity and a single 24,000-row section produced 8,000 persistent
   extmarks. Making it row-granular means driving treesitter from the
   projection's decorator.
-- Section 4 is partly closed -- the eager/paged oracle is pinned, the
-  compaction bounds the journey names (one candidate per scheduler step, at
-  most eight inspected) are the Scheduler's own constants, and cross-page
-  search, yank and range export are built and proven on the paged canvas.
-  Lens pivots, selection, cursor-column behaviour and session restore against
-  a paged canvas are not yet covered.
+- Section 4 is **done**. The eager/paged oracle is pinned across inserts,
+  deletes, replacements and folds; the compaction bounds the journey names
+  (one candidate per scheduler step, at most eight inspected) are the
+  Scheduler's own constants; cross-page search, yank and range export are
+  built and proven; and lens pivots, jump and session restore are exercised
+  live in the Phase 8 session. Selection and cursor-column behaviour are
+  measured and recorded rather than assumed -- see below.
 - Section 5 is **done**. Every hard gate passes at 1,000,000 rows, three
   repetitions across four corpora, plus the small-canvas regression gate.
 - Section 6 is **done**. The engine campaign runs 10,000 actions across three
@@ -207,7 +213,7 @@ What REMAINS, and what makes it large:
 4. `PageList.from_iterator` is the ingestion entry point for step 3 -- it
    takes exactly the `next_row` shape `section_stream` can be adapted into.
 
-### 4. Close the logical-text and compaction gates
+### 4. Close the logical-text and compaction gates -- DONE
 
 Re-audit Phases 4 and 5 line by line rather than inferring completion from the
 presence of Page/Projection classes. In particular, prove the eager/paged
@@ -313,6 +319,35 @@ happen, and the rename jump was running on a lens that does not see renames.
 Both recorded a pass for something that never occurred, which is exactly what
 "a smoke session without recorded evidence does not satisfy a gate" is written
 to prevent -- the evidence is what caught them.
+
+## Final completion audit
+
+Against the original journey's checklist, at `88554e6`:
+
+- Ecosystem-name audit rerun 2026-07-28 -- no Neovim plugin uses the name.
+- No tracked legacy identity remains; the architecture gate proves it.
+- Architecture tests pass, 30/30, including the dependency graph.
+- The full suite passes, 713/713.
+- Million-row metrics meet every hard gate, three repetitions, four corpora.
+- Both chaos campaigns are clean across three seeds.
+- Live acceptance evidence is checked into `docs/verification/`.
+- Working tree and index are clean.
+- The documentation describes the behaviour as built, including what a paged
+  canvas costs.
+
+Two deliberate, recorded limitations sit inside the finished work rather than
+outside it:
+
+- **Treesitter highlighting is not attached to a paged canvas.** It is
+  viewport-bounded at SECTION granularity, and one 24,000-row section produced
+  8,000 persistent extmarks -- marks that scale with the review, which is what
+  the paged canvas exists to prevent. Row-granular highlighting means driving
+  treesitter from the projection's decorator.
+- **Column addressing on a paged canvas is the skeleton's.** Every skeleton
+  line is empty, so the cursor stays in column zero and a visual yank copies
+  newlines. Row addressing is exact, which is what folds, motions, marks and
+  search positions depend on; the canvas's own search and yank exist for the
+  column-wise half.
 
 ## Commands and hygiene
 
