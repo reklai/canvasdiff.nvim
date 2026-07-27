@@ -11,14 +11,15 @@
 -- by the projection's decoration provider, so the rows off screen are never
 -- asked about and cost nothing.
 --
--- What it does NOT yet render is deletion ghosts. The eager canvas draws them
--- as `virt_lines` extmarks so a deleted line costs zero buffer rows. Measured
--- rather than assumed: an EPHEMERAL extmark silently ignores `virt_lines` --
--- no error is raised and no rows appear. Ghosts therefore cannot ride the
--- decorator, and need marks placed for the visible range and removed as it
--- moves. That is bounded by the viewport rather than by the canvas, so it does
--- not reintroduce a per-logical-row structure, but it is a separate mechanism
--- and is not built here.
+-- Deletion ghosts are the one thing the decorator cannot carry. The eager
+-- canvas draws them as `virt_lines` extmarks so a deleted line costs zero
+-- buffer rows. Measured rather than assumed: an EPHEMERAL extmark silently
+-- ignores `virt_lines` -- no error is raised and no rows appear -- while a
+-- persistent one placed outside the provider renders correctly and leaves the
+-- line count untouched. So ghosts are persistent marks maintained for the
+-- VISIBLE RANGE only, by `refresh_ghosts` below. That is bounded by the
+-- window rather than by the canvas, so it does not reintroduce the per-logical
+-- -row structure the whole design exists to avoid.
 
 local PageList = require("canvasdiff.canvas.PageList")
 local Projection = require("canvasdiff.canvas.Projection")
@@ -31,6 +32,11 @@ local Paged = {}
 -- sits BELOW the header's own group, because CanvasDiffFileHeader links to
 -- Title, which is foreground-only, and the two compose rather than fight.
 local FILE_BAR_GROUP = "CanvasDiffFileBar"
+
+-- Ghosts get their own namespace so the whole visible set can be cleared in
+-- one call without touching anything else drawn on the buffer.
+local GHOST_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.paged.ghosts")
+Paged.GHOST_NS = GHOST_NS
 
 --- Which section owns a logical row, by binary search over section starts.
 ---
@@ -162,6 +168,68 @@ function Paged.render(sections, opts)
   return paged
 end
 
+--- Redraw the deletion ghosts for what `window` is currently showing.
+---
+--- Every ghost outside the visible range is removed and every ghost inside it
+--- is placed fresh, so the number of marks on the buffer is bounded by the
+--- window height however large the canvas is. Call it after any redraw and
+--- after any scroll; calling it more often than necessary is wasted work but
+--- never wrong, because it is a full rebuild of a bounded range.
+--- @return integer|nil placed how many ghosts are now on the buffer
+--- @return string|nil error
+function Paged.refresh_ghosts(paged, window, opts)
+  if type(paged) ~= "table" or not paged.buffer then
+    return nil, "paged canvas is unavailable"
+  end
+  local buffer = paged.buffer
+  if not vim.api.nvim_buf_is_valid(buffer) then
+    return nil, "paged canvas buffer is no longer valid"
+  end
+  if type(window) ~= "number" or not vim.api.nvim_win_is_valid(window)
+      or vim.api.nvim_win_get_buf(window) ~= buffer then
+    -- A window that is not showing this canvas has no visible range to draw,
+    -- which is an ordinary state during teardown rather than a fault.
+    vim.api.nvim_buf_clear_namespace(buffer, GHOST_NS, 0, -1)
+    return 0
+  end
+
+  local overscan = (opts and opts.overscan) or 0
+  -- One table, because `nvim_win_call` hands back only its first return value.
+  --
+  -- Note that this range is measured BEFORE the ghosts are placed, and placing
+  -- them changes it: virtual lines occupy screen rows, so fewer logical rows
+  -- fit afterwards. The resulting set is therefore a slight superset of what
+  -- ends up visible, which is what you want -- the extra ghosts belong to the
+  -- rows just below the fold, which are the next ones to be scrolled into.
+  local visible = vim.api.nvim_win_call(window, function()
+    return { vim.fn.line("w0") - 1, vim.fn.line("w$") - 1 }
+  end)
+  local first0, last0 = visible[1], visible[2]
+  local total = paged.list and paged.list:row_count() or 0
+  local start0 = math.max(0, first0 - overscan)
+  local end0 = math.min(total - 1, last0 + overscan)
+
+  vim.api.nvim_buf_clear_namespace(buffer, GHOST_NS, 0, -1)
+  local placed = 0
+  for row0 = start0, end0 do
+    local index, offset = Paged.locate(paged, row0)
+    -- Collapsed sections render one placeholder row and have no entry to
+    -- carry a deletion, so they are skipped rather than mis-indexed.
+    if index and not paged.collapsed[index] then
+      local entry = paged.sections[index].entries[offset + 1]
+      local above = entry and render.ghost_lines(entry, "ghosts")
+      if above then
+        vim.api.nvim_buf_set_extmark(buffer, GHOST_NS, row0, 0, {
+          virt_lines = above,
+          virt_lines_above = true,
+        })
+        placed = placed + 1
+      end
+    end
+  end
+  return placed
+end
+
 --- The logical text of a paged canvas, in the shape `canvas.logical` answers.
 ---
 --- Having the same shape is the point: a reader that works against the eager
@@ -201,6 +269,9 @@ end
 function Paged.dispose(paged)
   if not paged then
     return true
+  end
+  if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
+    pcall(vim.api.nvim_buf_clear_namespace, paged.buffer, GHOST_NS, 0, -1)
   end
   local projection = paged.projection
   paged.projection = nil

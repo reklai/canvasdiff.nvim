@@ -39,6 +39,7 @@ return {
     render = Paged.render,
     logical = Paged.logical,
     locate = Paged.locate,
+    refresh_ghosts = Paged.refresh_ghosts,
     dispose = Paged.dispose,
   },
   paginate = PageList.create,

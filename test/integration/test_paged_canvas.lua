@@ -58,6 +58,10 @@ local function persistent_marks(buffer)
   return total
 end
 
+local function ghost_marks(buffer)
+  return #API.nvim_buf_get_extmarks(buffer, Paged.GHOST_NS, 0, -1, {})
+end
+
 T["paged_ renders the same text as the eager canvas, byte for byte"] = function()
   local sections = three_sections()
   local eager_state = canvas.open(sections, {})
@@ -231,5 +235,97 @@ T["paged_ disposal releases the projection and is idempotent"] = function()
   H.eq(API.nvim_buf_is_valid(buffer), false,
     "disposal left the skeleton buffer behind")
 end
+
+T["paged_ ghosts render for the visible range and stay bounded by it"] =
+  function()
+    -- A deleted line has no row of its own on either canvas: it is drawn as a
+    -- virtual line above the row that replaced it. On a paged canvas that
+    -- cannot be ephemeral -- measured: an ephemeral mark silently ignores
+    -- virt_lines -- so ghosts are persistent marks for the VISIBLE range, and
+    -- what matters is that their number tracks the window rather than the
+    -- canvas.
+    local sections = { section("deep.txt", "d", 400) }
+    local paged, err = Paged.render(sections)
+    assert(paged, err)
+    local original = API.nvim_get_current_buf()
+    local ok, failure = xpcall(function()
+      API.nvim_set_current_buf(paged.buffer)
+      local window = API.nvim_get_current_win()
+      API.nvim_win_set_cursor(window, { 1, 0 })
+      API.nvim_win_call(window, function() vim.cmd("normal! zt") end)
+      assert(paged.projection:redraw())
+
+      local placed = assert(Paged.refresh_ghosts(paged, window))
+      local height = API.nvim_win_get_height(window)
+      local total = paged.list:row_count()
+      assert(total > height * 4,
+        "sanity: the canvas must be much taller than the window")
+      H.eq(ghost_marks(paged.buffer), placed,
+        "refresh_ghosts reported a different count than it placed")
+      assert(placed <= height + 1, (
+        "%d ghosts for a %d-row window is not bounded by the viewport"
+      ):format(placed, height))
+
+      -- Scrolling rebuilds the set rather than adding to it.
+      API.nvim_win_set_cursor(window, { math.floor(total / 2), 0 })
+      API.nvim_win_call(window, function() vim.cmd("normal! zt") end)
+      assert(paged.projection:redraw())
+      local moved = assert(Paged.refresh_ghosts(paged, window))
+      H.eq(ghost_marks(paged.buffer), moved,
+        "scrolling left stale ghosts behind")
+      assert(moved <= height + 1,
+        "the ghost set grew as the canvas was scrolled")
+
+      -- Every ghost sits inside the range the placement was computed from.
+      -- It is measured before the refresh on purpose: placing virtual lines
+      -- occupies screen rows, so fewer logical rows fit afterwards, and the
+      -- set is deliberately a slight superset of what ends up visible.
+      local before = API.nvim_win_call(window, function()
+        return { vim.fn.line("w0") - 1, vim.fn.line("w$") - 1 }
+      end)
+      assert(Paged.refresh_ghosts(paged, window))
+      for _, mark in ipairs(API.nvim_buf_get_extmarks(
+        paged.buffer, Paged.GHOST_NS, 0, -1, {})) do
+        local row0 = mark[2]
+        assert(row0 >= before[1] and row0 <= before[2], (
+          "a ghost was placed at row %d, outside the range %d..%d it was computed from"
+        ):format(row0, before[1], before[2]))
+      end
+    end, debug.traceback)
+    if API.nvim_buf_is_valid(original) then
+      pcall(API.nvim_set_current_buf, original)
+    end
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
+T["paged_ ghosts are cleared for a window that no longer shows the canvas"] =
+  function()
+    local paged, err = Paged.render({ section("deep.txt", "d", 200) })
+    assert(paged, err)
+    local original = API.nvim_get_current_buf()
+    local ok, failure = xpcall(function()
+      API.nvim_set_current_buf(paged.buffer)
+      local window = API.nvim_get_current_win()
+      assert(paged.projection:redraw())
+      assert(Paged.refresh_ghosts(paged, window))
+
+      -- Point the window somewhere else: the canvas is no longer displayed,
+      -- which is an ordinary teardown state, not a fault.
+      local other = API.nvim_create_buf(false, true)
+      API.nvim_win_set_buf(window, other)
+      H.eq(Paged.refresh_ghosts(paged, window), 0,
+        "ghosts survived the canvas leaving the window")
+      H.eq(ghost_marks(paged.buffer), 0)
+
+      H.eq(Paged.refresh_ghosts(paged, -1), 0, "an invalid window is not a fault")
+      H.eq(Paged.refresh_ghosts(nil, window), nil, "a missing canvas is refused")
+    end, debug.traceback)
+    if API.nvim_buf_is_valid(original) then
+      pcall(API.nvim_set_current_buf, original)
+    end
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
 
 return T
