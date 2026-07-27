@@ -28,20 +28,20 @@ keybind truth.
   overlay shows exactly the replacement. Multi-key actions render on one row
   (`za c`). Disabled actions (`false` / `{}` / `""`) are omitted entirely.
   This holds for every action including `help` itself.
-- **R3 — layout: three columns, `Global | Sidebar | Canvas`.**
-  - **Global** — actions available in more than one context with identical
-    keys. Computed, not hardcoded: an action bound in both canvas and sidebar
-    whose resolved key lists are equal is global (defaults: `help`, `close`).
-    The file-context `back` binding also lives here, since it applies outside
-    the plugin's own windows.
-  - **Sidebar** — sidebar-only actions (default: `select`), plus any shared
-    action whose keys the user has diverged between contexts (a diverged
-    action leaves Global and appears in both the Sidebar and Canvas columns
-    with its per-context keys).
-  - **Canvas** — everything else: jump, collapse, file/hunk motions, cycle,
-    lenses, refresh. Within this column, rows keep the existing `K.specs`
-    group sub-headers (Navigate / Jump / View / Canvas) since it is the
-    largest column; Global and Sidebar columns are flat lists.
+- **R3 — layout: two self-contained columns, `Sidebar | Canvas`.**
+  *(Amended 2026-07-28 post-ship: the original design had a third, computed
+  `Global` column for identically-bound shared actions. Removed — a help menu
+  answers "what can I press here?", and a merged row blurred keys whose
+  meaning differs per context: `q` closes the whole review on the canvas but
+  only the sidebar when pressed there.)*
+  - Each column lists everything usable in that window, nothing more. A key
+    bound in both contexts (`q`, the help key) appears in both columns, each
+    row carrying its own context's description.
+  - **Sidebar** — a flat list: `select`, `close`, `help`.
+  - **Canvas** — everything else, keeping the `K.specs` group sub-headers
+    (Navigate / Jump / View / Canvas); the file-context `back` binding rides
+    in the Jump section beside the jump that created the excursion, as
+    `K.grouped` already folds it there.
 - **R4 — closing.** `q`, `<Esc>`, or the help binding again close the
   overlay (buffer-local on the overlay buffer). Closing the canvas closes
   the overlay with it. The overlay never survives its parent surface.

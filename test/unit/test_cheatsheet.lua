@@ -21,42 +21,69 @@ local function placement(model)
   return out
 end
 
-T["cheatsheet_model puts identically-bound shared actions in Global"] = function()
-  local model = cheatsheet.model(defaults())
-  local where = placement(model)
-  -- `close` is `q` on both canvas and sidebar; `back` is global by fiat.
-  H.eq(where.close, "Global")
-  H.eq(where.back, "Global")
-  H.eq(where.select, "Sidebar")
-  H.eq(where.jump, "Canvas")
-  H.eq(where.refresh, "Canvas")
-end
-
-T["cheatsheet_model splits a diverged shared action into both context columns"] = function()
-  local km = defaults()
-  km.sidebar.close = "x" -- no longer identical to canvas `q`
-  local model = cheatsheet.model(km)
+--- The close row of every column, keyed by column title.
+local function close_rows(model)
   local seen = {}
   for _, col in ipairs(model) do
     for _, sec in ipairs(col.sections) do
       for _, row in ipairs(sec.rows) do
         if row.action == "close" then
-          seen[col.title] = row.keys
+          seen[col.title] = row
         end
       end
     end
   end
-  H.eq(seen["Global"], nil, "a diverged action must leave Global")
-  H.eq(seen["Canvas"], { "q" })
-  H.eq(seen["Sidebar"], { "x" })
+  return seen
 end
 
-T["cheatsheet_model column order is Global, Sidebar, Canvas"] = function()
+T["cheatsheet_model each column is self-contained for its context"] = function()
+  local model = cheatsheet.model(defaults())
+  local where = placement(model)
+  H.eq(where.select, "Sidebar")
+  H.eq(where.jump, "Canvas")
+  H.eq(where.refresh, "Canvas")
+  -- `back` lives on the file buffer but belongs beside the jump that
+  -- created the excursion, in the Canvas column's Jump section.
+  for _, col in ipairs(model) do
+    if col.title == "Canvas" then
+      for _, sec in ipairs(col.sections) do
+        if sec.name == "Jump" then
+          local actions = {}
+          for _, row in ipairs(sec.rows) do actions[#actions + 1] = row.action end
+          H.eq(actions, { "jump", "back" })
+        end
+      end
+    end
+  end
+end
+
+T["cheatsheet_model a shared key appears per column with its own meaning"] = function()
+  -- `q` closes the whole review on the canvas but only the sidebar when
+  -- pressed there. No merged "Global" row: each column says what the key
+  -- does THERE.
+  local seen = close_rows(cheatsheet.model(defaults()))
+  H.eq(seen["Canvas"].keys, { "q" })
+  H.eq(seen["Sidebar"].keys, { "q" })
+  assert(seen["Canvas"].desc:find("Close the canvas", 1, true),
+    "canvas close describes the canvas: " .. seen["Canvas"].desc)
+  assert(seen["Sidebar"].desc:find("Close the sidebar", 1, true),
+    "sidebar close describes the sidebar: " .. seen["Sidebar"].desc)
+end
+
+T["cheatsheet_model a per-context override changes only its own column"] = function()
+  local km = defaults()
+  km.sidebar.close = "x"
+  local seen = close_rows(cheatsheet.model(km))
+  H.eq(seen["Canvas"].keys, { "q" })
+  H.eq(seen["Sidebar"].keys, { "x" })
+end
+
+T["cheatsheet_model column order is Sidebar, Canvas"] = function()
   local titles = {}
   for _, col in ipairs(cheatsheet.model(defaults())) do
     titles[#titles + 1] = col.title
   end
-  H.eq(titles, { "Global", "Sidebar", "Canvas" })
+  H.eq(titles, { "Sidebar", "Canvas" })
 end
 
 T["cheatsheet_model keeps group sub-headers only in the Canvas column"] = function()
@@ -80,23 +107,19 @@ end
 T["cheatsheet_model omits disabled actions and empty columns"] = function()
   local km = defaults()
   km.sidebar.select = false
-  km.sidebar.close = "x" -- diverge close so Sidebar's only row would be close
-  -- canvas.close stays at default "q", genuinely diverging close
   local model = cheatsheet.model(km)
   local where = placement(model)
   H.eq(where.select, nil, "a disabled action must not appear at all")
-  -- Sidebar now has close only (diverged): column is present with exactly one row
-  local sidebar_present = false
+  local sidebar_rows
   for _, col in ipairs(model) do
     if col.title == "Sidebar" then
-      sidebar_present = true
-      H.eq(#col.sections[1].rows, 1, "Sidebar holds the diverged close row")
+      sidebar_rows = #col.sections[1].rows
     end
   end
-  H.eq(sidebar_present, true, "Sidebar column exists when holding a diverged row")
-  -- Now disable that row:
+  H.eq(sidebar_rows, 2, "Sidebar keeps its remaining rows (close, help)")
+  -- Disable those too and the whole column goes:
   km.sidebar.close = false
-  where = placement(cheatsheet.model(km))
+  km.sidebar.help = false
   for _, col in ipairs(cheatsheet.model(km)) do
     assert(col.title ~= "Sidebar", "a column with no rows is omitted")
   end
