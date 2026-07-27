@@ -119,4 +119,36 @@ T["cheatsheet_model reflects overridden keys, not defaults"] = function()
   error("refresh must be in the model")
 end
 
+T["cheatsheet_lines lays columns side by side when width allows"] = function()
+  local model = cheatsheet.model(defaults())
+  local lines, spans, width = cheatsheet.lines(model, 200)
+  assert(width <= 200)
+  H.eq(lines[1]:match("Global") ~= nil, true, "first line carries the first column title")
+  H.eq(lines[1]:match("Sidebar") ~= nil, true, "titles share the line when side by side")
+  H.eq(lines[1]:match("Canvas") ~= nil, true)
+  assert(#spans > 0, "titles and keys carry highlight spans")
+  for _, s in ipairs(spans) do
+    assert(lines[s.line + 1] ~= nil and s.col_end <= #lines[s.line + 1],
+      "span must lie inside its line")
+  end
+end
+
+T["cheatsheet_lines stacks columns on a narrow editor"] = function()
+  local model = cheatsheet.model(defaults())
+  local lines = cheatsheet.lines(model, 40)
+  -- Stacking changes the layout, not the longest desc: width may still
+  -- exceed 40 (toggle clamps the WINDOW; long lines scroll off, spec R5).
+  H.eq(lines[1]:match("Sidebar"), nil, "titles no longer share a line")
+  local joined = table.concat(lines, "\n")
+  assert(joined:find("Global") and joined:find("Sidebar") and joined:find("Canvas"),
+    "all columns still present, vertically")
+end
+
+T["cheatsheet_lines one row per action with keys joined by spaces"] = function()
+  local model = cheatsheet.model(defaults())
+  local joined = table.concat((cheatsheet.lines(model, 200)), "\n")
+  assert(joined:find("za c", 1, true), "multi-key collapse renders on one row")
+  assert(joined:find("Re-scan", 1, true), "descs render next to their keys")
+end
+
 return T
