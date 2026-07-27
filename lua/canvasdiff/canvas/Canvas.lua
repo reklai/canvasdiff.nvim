@@ -101,12 +101,35 @@ local function create_buf()
   return buf
 end
 
+--- The canvas's own text reader, expressed once.
+---
+--- Production highlighting asks this rather than the buffer, so that swapping
+--- in a page-backed store changes one function instead of every caller. It
+--- resolves `M.logical` at call time because that is defined below.
+local function row_reader(state)
+  return function(row0)
+    return M.logical(state).row(row0)
+  end
+end
+
 --- Full-line highlight extmarks for one section, starting at buffer row
 --- `start_row` (0-based). Returns the created extmark ids so the caller can
 --- track them and delete them precisely later (see replace_section notes on
 --- why row-range clearing is not safe here). `collapsed` renders the section
 --- as its single placeholder row instead, with one file-header-styled mark.
-local function apply_section_hl(buf, start_row, section, collapsed)
+---
+--- `read_row` is how this function learns what text is at a logical row.
+---
+--- It exists because a page-backed canvas has no text in its buffer at all:
+--- the skeleton holds one blank line per logical row so that scrolling, marks
+--- and extmark addressing stay exact, and the text is supplied by a decoration
+--- provider. Reading through a supplied function rather than calling
+--- `nvim_buf_get_lines` directly is what lets the same highlighting code serve
+--- both, so the seam is here rather than in a future fork of this function.
+local function apply_section_hl(buf, start_row, section, collapsed, read_row)
+  read_row = read_row or function(row0)
+    return vim.api.nvim_buf_get_lines(buf, row0, row0 + 1, false)[1]
+  end
   if collapsed then
     local ids = { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
       end_row = start_row + 1,
@@ -119,7 +142,7 @@ local function apply_section_hl(buf, start_row, section, collapsed)
     -- taking it as a parameter: every caller here runs after the splice, so reading
     -- it back means the highlight cannot disagree with the text. Priority above the
     -- header mark, whose hl_eol fill covers this range too.
-    local line = vim.api.nvim_buf_get_lines(buf, start_row, start_row + 1, false)[1] or ""
+    local line = read_row(start_row) or ""
     if #line >= #glyphs.stale and line:sub(-#glyphs.stale) == glyphs.stale then
       -- Colour, then a bold layer over the same range. The bold is the part that does
       -- not depend on the colourscheme -- see R.marker_spans for why that matters on
@@ -385,7 +408,8 @@ function M.render_all(state, sections)
   local anchor_ids, hl_ids = {}, {}
   for idx, sec in ipairs(sections) do
     anchor_ids[idx] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, starts[idx], 0, ANCHOR_OPTS)
-    hl_ids[idx] = apply_section_hl(buf, starts[idx], sec, fold.hidden(state, sec.path))
+    hl_ids[idx] = apply_section_hl(
+      buf, starts[idx], sec, fold.hidden(state, sec.path), row_reader(state))
   end
   local eof_row = #sections > 0 and #all_lines or 0
   anchor_ids[#sections + 1] = vim.api.nvim_buf_set_extmark(buf, ANCHOR_NS, eof_row, 0, ANCHOR_OPTS)
@@ -568,8 +592,8 @@ function M.replace_section(state, i, new_section)
 
   if new_section ~= nil then
     local hidden = fold.hidden(state, new_section.path)
-    state.hl_ids[i] = apply_section_hl(state.buf, start_row, new_section,
-      hidden)
+    state.hl_ids[i] = apply_section_hl(
+      state.buf, start_row, new_section, hidden, row_reader(state))
     state.sections[i] = new_section
     if replaced_path and replaced_path ~= new_section.path then
       state.rendered_hidden[replaced_path] = nil
@@ -694,7 +718,8 @@ function M.insert_section(state, i, section)
   state.rendered_hidden = state.rendered_hidden or {}
   state.rendered_hidden[section.path] = fold.hidden(state, section.path)
   table.insert(state.hl_ids, i,
-    apply_section_hl(state.buf, row, section, fold.hidden(state, section.path)))
+    apply_section_hl(state.buf, row, section, fold.hidden(state, section.path),
+      row_reader(state)))
   set_modifiable(state.buf, false)
 
   -- View correction, same synchronous tick.
@@ -803,7 +828,8 @@ local function resplice(state, i, preferred_win)
   for _, id in ipairs(state.hl_ids[i] or {}) do
     pcall(vim.api.nvim_buf_del_extmark, state.buf, HL_NS, id)
   end
-  state.hl_ids[i] = apply_section_hl(state.buf, start_row, sec, collapsed)
+  state.hl_ids[i] = apply_section_hl(
+    state.buf, start_row, sec, collapsed, row_reader(state))
   state.rendered_hidden[sec.path] = collapsed
   set_modifiable(state.buf, false)
 
