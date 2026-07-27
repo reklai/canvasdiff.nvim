@@ -228,8 +228,15 @@ function M.toggle()
   local model = M.model(km)
   local max_width = math.max(20, vim.o.columns - 8)
   local lines, spans, width = M.lines(model, max_width)
+
+  -- Handle empty case: if no keybinds are configured, show a placeholder.
+  if #lines == 0 then
+    lines = { "No keybinds configured -- q or <Esc> closes" }
+    spans = {}
+  end
+
   width = math.min(math.max(width, 1), max_width)
-  local height = math.min(#lines, math.max(3, vim.o.lines - 6))
+  local height = math.max(1, math.min(#lines, math.max(3, vim.o.lines - 6)))
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })

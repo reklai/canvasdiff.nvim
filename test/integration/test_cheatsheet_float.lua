@@ -1,5 +1,6 @@
 local H = require("helpers")
 local cheatsheet = require("canvasdiff.ui").cheatsheet
+local config = require("canvasdiff.config")
 
 local T = {}
 
@@ -38,6 +39,41 @@ T["cheatsheet_close is safe when nothing is open"] = function()
   cheatsheet.close()
   cheatsheet.close()
   H.eq(cheatsheet.is_open(), false)
+end
+
+T["cheatsheet_toggle with all keybinds disabled opens showing placeholder message"] = function()
+  -- Create keymaps with all actions disabled.
+  local empty_km = {
+    canvas = {
+      jump = false, collapse = false, next_file = false, prev_file = false,
+      next_hunk = false, prev_hunk = false, cycle_next = false, cycle_prev = false,
+      refresh = false, lens_next = false, lens_prev = false, close = false,
+    },
+    sidebar = { select = false, close = false },
+    file = { back = false },
+  }
+
+  -- Save and replace the keymaps.
+  local original_km = config.options.keymaps
+  config.options.keymaps = empty_km
+
+  -- Verify the model is empty.
+  local model = cheatsheet.model(empty_km)
+  H.eq(model, {}, "model is empty when all actions are disabled")
+
+  -- Toggle should still open with a placeholder message.
+  cheatsheet.toggle()
+  H.eq(cheatsheet.is_open(), true, "overlay opens even with no keybinds")
+
+  -- Check that the placeholder message is present.
+  local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+  local joined = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  assert(joined:find("No keybinds"), "placeholder message appears when no keybinds are configured")
+
+  -- Close and restore.
+  cheatsheet.close()
+  H.eq(cheatsheet.is_open(), false, "overlay closes normally")
+  config.options.keymaps = original_km
 end
 
 return T
