@@ -118,6 +118,12 @@ M.defaults = {
       -- read-only buffer. Accepted: macros are an editing tool, and this buffer
       -- cannot be edited.
       close      = "q",
+      -- The one leader-key default in the plugin, accepted deliberately: a
+      -- help binding exists for the user who does not know the other keys
+      -- yet, so it must not shadow anything they might reach for (`?` is
+      -- backward search, and search works fine in a read-only buffer).
+      -- Like every default it is replaceable -- `help = "g?"` frees it.
+      help       = "<leader>lh",
     },
     sidebar = {
       -- Double-click, not single: <LeftMouse> is how you position the cursor,
@@ -126,6 +132,7 @@ M.defaults = {
       -- not fold in one window and change the comparison in the other.
       select = { "<CR>", "za", "c", "<2-LeftMouse>" },
       close  = "q",
+      help   = "<leader>lh",
     },
     -- Set on the real file's buffer for the duration of a jump, then removed.
     --

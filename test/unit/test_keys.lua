@@ -178,6 +178,14 @@ T["keys_collisions is empty for the defaults"] = function()
   end
 end
 
+T["keys_help resolves in both contexts and stays collision-free"] = function()
+  H.eq(find(keys.resolved("canvas", defaults()), "help"), { "<leader>lh" })
+  H.eq(find(keys.resolved("sidebar", defaults()), "help"), { "<leader>lh" })
+  for _, ctx in ipairs({ "canvas", "sidebar", "file" }) do
+    H.eq(keys.collisions(ctx, defaults()), {}, "help must not contest a key in " .. ctx)
+  end
+end
+
 -- --- installed maps ----------------------------------------------------
 
 T["keys_install every canvas mapping is registered with a desc"] = function()

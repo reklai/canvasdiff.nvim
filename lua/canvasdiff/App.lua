@@ -454,6 +454,7 @@ local function canvas_actions(app, surface, st, cfg)
     collapse   = owned_action(surface, generation,
       function(_, win) toggle_collapse_under_cursor(surface, st, win) end),
     close      = owned_action(surface, generation, function() app:close() end),
+    help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
@@ -1110,6 +1111,10 @@ end
 --- window's prior local option; final disposal also restores every touched
 --- host before this method swaps its buffer.
 function App:close()
+  -- The overlay never survives the canvas (spec R4). toggle() closes through
+  -- here too, so one hook covers both paths.
+  ui.cheatsheet.close()
+
   local surface = active_surface(self)
   if not surface then
     return

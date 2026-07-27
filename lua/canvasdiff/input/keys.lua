@@ -36,6 +36,9 @@ K.specs = {
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
+
+  { ctx = "canvas",  action = "help", group = "Canvas",  desc = "Show keybind cheatsheet" },
+  { ctx = "sidebar", action = "help", group = "Sidebar", desc = "Show keybind cheatsheet" },
 }
 
 --- Display order of the cheatsheet / helpfile sections.

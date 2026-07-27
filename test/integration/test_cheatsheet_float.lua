@@ -76,4 +76,50 @@ T["cheatsheet_toggle with all keybinds disabled opens showing placeholder messag
   config.options.keymaps = original_km
 end
 
+T["cheatsheet_help key is installed on the canvas and closing the canvas closes the overlay"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a1\n" },
+    worktree = { ["a.txt"] = "A1\n" },
+  })
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.open()
+  local buf = vim.api.nvim_get_current_buf()
+
+  local help
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if m.lhs == H.norm_lhs("<leader>lh") then help = m end
+  end
+  assert(help, "<leader>lh must be installed on the canvas buffer")
+  help.callback()
+  H.eq(cheatsheet.is_open(), true, "the help key opens the overlay")
+
+  fm.close()
+  H.eq(cheatsheet.is_open(), false, "closing the canvas closes the overlay (spec R4)")
+  vim.api.nvim_set_current_dir(old_cwd)
+end
+
+T["cheatsheet_overlay reflects an overridden help key and closes on it"] = function()
+  local fm = require("canvasdiff")
+  fm.setup({ keymaps = { canvas = { help = "g?" }, sidebar = { help = "g?" } } })
+  cheatsheet.toggle()
+  local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+  local joined = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  assert(joined:find("g?", 1, true), "the overlay lists the user's key, not the default")
+  assert(not joined:find("<leader>lh", 1, true), "the replaced default is gone")
+
+  local closed
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if m.lhs == "g?" then
+      m.callback()
+      closed = true
+    end
+  end
+  assert(closed, "the overridden help key must close the open overlay")
+  H.eq(cheatsheet.is_open(), false)
+  fm.setup({}) -- restore defaults for the rest of the suite
+end
+
 return T

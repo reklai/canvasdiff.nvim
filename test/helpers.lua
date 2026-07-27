@@ -73,8 +73,12 @@ end
 --- That API case-normalizes modifier notation (`<C-n>` comes back `<C-N>`)
 --- while leaving `<CR>`, `<Tab>`, `]f`, `za` and friends untouched, so a
 --- literal comparison passes or fails depending on which keys the test
---- happens to use. Put BOTH sides through this.
+--- happens to use. `<leader>` is expanded here for the same reason: the
+--- mapping engine substitutes it at keymap.set time, replace_termcodes does
+--- not. Put BOTH sides through this.
 function H.norm_lhs(lhs)
+  local leader = vim.g.mapleader or "\\"
+  lhs = lhs:gsub("<[Ll]eader>", leader:gsub("%%", "%%%%"))
   return vim.fn.keytrans(vim.keycode(lhs))
 end
 

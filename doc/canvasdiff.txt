@@ -169,11 +169,13 @@ On the canvas~
     <Tab>  /  <S-Tab>       Next / previous lens
     r                       Refresh
     q                       Close the review
+    <leader>lh              Show keybind cheatsheet
 
 In the sidebar~
 
     <CR>, za, c, <2-LeftMouse>      Select this entry
     q                               Close the review
+    <leader>lh                      Show keybind cheatsheet
 
 Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
 cursor, and stealing it would make the tree impossible to browse.
@@ -219,10 +221,12 @@ default. >lua
           lens_prev  = "<S-Tab>",
           refresh    = "r",
           close      = "q",
+          help       = "<leader>lh",
         },
         sidebar = {
           select = { "<CR>", "za", "c", "<2-LeftMouse>" },
           close  = "q",
+          help   = "<leader>lh",
         },
         file = {
           back = "<C-Space>",

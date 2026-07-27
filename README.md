@@ -350,10 +350,12 @@ require("canvasdiff").setup({
       lens_next  = "<Tab>",  -- cycle the lens forward (all / unstaged / staged)
       lens_prev  = "<S-Tab>",-- and back
       close      = "q",      -- close the canvas
+      help       = "<leader>lh", -- show the keybind cheatsheet
     },
     sidebar = {
       select = { "<CR>", "za", "c", "<2-LeftMouse>" }, -- scroll here / fold a dir
       close  = "q",          -- close the sidebar (canvas stays open)
+      help   = "<leader>lh", -- show the keybind cheatsheet
     },
     file = {
       -- Set on the jumped-to file buffer; the only way back.

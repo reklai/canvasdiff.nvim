@@ -7,6 +7,7 @@ local fold = diff.fold
 local model = diff
 local lens = diff.lens
 local notifications = require("canvasdiff.ui.notifications")
+local cheatsheet = require("canvasdiff.ui.cheatsheet")
 
 local S = {}
 
@@ -932,6 +933,11 @@ local function create_view(lease, tab, host_win, observed)
       close = function()
         if view_active(lease, view) then
           close_view(lease, view, true)
+        end
+      end,
+      help = function()
+        if view_active(lease, view) then
+          cheatsheet.toggle()
         end
       end,
     }
