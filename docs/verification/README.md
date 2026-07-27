@@ -17,7 +17,8 @@ one never dirties the tree.
 | Artifact | Gate |
 | --- | --- |
 | `eager-baseline.json` | the frozen small-canvas baseline the regression gate compares against |
-| `chaos-campaign.json` | the Phase 7 deliberate-breakage campaign |
+| `chaos-campaign.json` | the Phase 7 deliberate-breakage campaigns, both harnesses |
+| `live-acceptance.json` | the Phase 8 live acceptance session |
 
 The million-row lane's artifact is not checked in: it is machine-specific by
 construction (RSS budgets against the host allocator), so a committed copy
@@ -81,50 +82,34 @@ CanvasDiff. The only similarly-named projects are unrelated to editors:
 same problem space are `diffview.nvim` and `codediff.nvim`, both differently
 named. Rerun immediately before publication.
 
-### Not yet satisfied
+**Phase 8 live acceptance** — all eight interactions, in a real Git fixture,
+through the real entry points, with what was observed recorded rather than
+asserted and discarded.
 
-**Phase 8 live acceptance** is not recorded, and cannot honestly be, because
-six of its eight interactions require the paged canvas to be on the production
-*display* path — it now exists, but nothing routes to it yet — opening a million logical rows in the real canvas, searching
-and yanking across page boundaries, folding while watching the heartbeat, and
-reopening a session against it. `App:open` still renders the eager canvas.
+```sh
+make bench-acceptance
+```
 
-What exists today is the layer beneath: the page store, projection and
-scheduler are proven at a million rows by the lane above, `canvas.logical`
-gives the display stack a text seam with the same shape and validation the
-projection uses, `test/integration/test_logical_text.lua` proves an eager and a
-paged view agree byte for byte across folds, splices, re-renders and every
-range boundary, and production highlighting now reads through that seam rather
-than the buffer.
+From the recorded session: a 30,011-row review opens page-backed over 118
+pages with 30,011 skeleton rows; paging from the first row to the last takes
+1,365 steps with a worst step of 1.1 ms; the canvas finds a needle at row
+17,782 where Neovim's own `search()` returns 0 and the buffer line is the
+empty string; a 2,000-row yank produces 85,512 bytes matching the store byte
+for byte; folding and unfolding a 30,000-row file restores it exactly and
+moves the heap by 124 KB; every lens applies (`staged` correctly shows one
+section, the others three); a jump into a rename lands in `renamed_to.txt`
+with `old_path` `renamed_from.txt` and returns to the canvas; both window
+close orders leave one window; and injected Git and session failures are
+contained.
 
-The display itself is built. `canvas.paged` renders the same text at the same
-logical rows as the eager canvas, byte for byte, expanded and collapsed; it
-carries the same highlight groups on the same rows, emitted per visible row by
-the projection's decoration provider; it draws deletion ghosts as marks bounded
-by the window rather than by the canvas; it folds by splicing only the affected
-section; and `section_rows`, `locate` and `set_collapsed` dispatch to it when a
-state is paged, so the rest of the display stack needs no change — the skeleton
-holds one blank line per logical row, so buffer rows and logical rows are the
-same number.
+## Not yet satisfied
 
-It also has what a blank skeleton takes away. Measured rather than inferred: a
-needle at logical row 6 leaves buffer line 6 as the empty string, Neovim's own
-`search()` returns 0, and yanking a nine-row canvas produced nine bytes and
-none of its text. So the paged canvas carries its own chunked search and its
-own linewise yank, reading through the store — which is exactly the capability
-Phase 8 item 2 checks.
+Nothing in the journey's gate list is outstanding. Two things inside the work
+are deliberate, recorded choices rather than completed items:
 
-The switchover is live. `App:open` chooses by canvas rows -- exactly, from the
-model, since a section's entries are its rendered rows -- `Surface` releases
-the store and projection it owns, and CursorMoved defers the idle compactor.
-An e2e test opens a real repository through `:CanvasDiff`, asserts the large
-review is paged and the small one is not, and checks the paged canvas carries
-zero persistent extmarks.
-
-One deliberate gap remains inside it: treesitter highlighting is not attached
-to a paged canvas. It is viewport-bounded but at SECTION granularity, and a
-single 24,000-row section produced 8,000 persistent extmarks -- marks that
-scale with the review, which is what the paged canvas exists to prevent.
-Making it row-granular means driving treesitter from the projection's
-decorator. Until then a large review keeps its diff tints, file bars and
-ghosts and loses syntax colour inside hunks.
+- **Treesitter highlighting on a paged canvas** is not attached. It is
+  viewport-bounded at SECTION granularity, and one 24,000-row section produced
+  8,000 persistent extmarks. Making it row-granular means driving treesitter
+  from the projection's decorator.
+- **`long-line` and `mixed` carry no memory gate**, for the reason given
+  above: their plateau is the allocator's, not the engine's.

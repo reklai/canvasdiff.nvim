@@ -60,10 +60,9 @@ At `0c78532`, the implementation tree is clean and the full suite passes
   seeds and the Surface campaign runs against a real Git fixture, injecting
   Git-process and session-write failure. The second harness found a real
   disposal bug on its first run.
-- Section 7 is partly done: the help file exists, the identity and
-  ecosystem-name audits pass, `make verify` runs every gate, and the evidence
-  is in `docs/verification/`. Phase 8's live acceptance is **not** recorded,
-  because six of its eight interactions need the paged display first.
+- Section 7 is **done**: the help file exists, the identity and
+  ecosystem-name audits pass, `make verify` runs every gate including Phase 8,
+  and the evidence is in `docs/verification/`.
 
 Commits since the previous checkpoint:
 
@@ -287,7 +286,7 @@ The scrollbar still needs the broad Phase 7 creation-return/ID-reuse matrix
 current focused lease checkpoint has no known blocker, but those chaos seams
 remain part of final completion.
 
-### 7. Live acceptance and publication audit -- PARTLY DONE
+### 7. Live acceptance and publication audit -- DONE
 
 Run every Phase 8 interaction in a real Git fixture and check commands, seeds,
 logs, benchmark JSON, and observed behavior into `docs/verification/`. Finally
@@ -304,12 +303,16 @@ only in the historical journey record. The ecosystem-name audit was rerun on
 2026-07-28: no Neovim plugin uses the name, and the similarly-named projects
 are unrelated to editors. Evidence is in `docs/verification/`.
 
-Not done: **Phase 8 live acceptance**. Six of its eight interactions -- a
-million rows in the real canvas, search and yank across page boundaries,
-folding while watching the heartbeat, lens pivots during writes, and session
-restore against it -- require section 3's paged display, because `App:open`
-still renders the eager canvas. Recording anything else as Phase 8 evidence
-would be recording a session that did not test what Phase 8 names.
+**Phase 8 live acceptance is recorded** at `benchmark/acceptance/run.lua`,
+with the session in `docs/verification/live-acceptance.json`. All eight
+interactions run against a real Git fixture through the real entry points.
+
+Two of them only became honest after being fixed: passing a lens NAME to
+`set_lens` was refused with "not a lens" and the pivot silently did not
+happen, and the rename jump was running on a lens that does not see renames.
+Both recorded a pass for something that never occurred, which is exactly what
+"a smoke session without recorded evidence does not satisfy a gate" is written
+to prevent -- the evidence is what caught them.
 
 ## Commands and hygiene
 

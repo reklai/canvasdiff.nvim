@@ -1,0 +1,137 @@
+{
+    "profile": "phase8-v1",
+    "environment": {
+        "nvim_version": "0.12.4+v0.12.4",
+        "jit": "LuaJIT 2.1.1785005726",
+        "lua": "Lua 5.1"
+    },
+    "seed": 20260728,
+    "status": "ok",
+    "interactions": [
+        {
+            "observations": {
+                "worst_step_ms": 1.562097,
+                "steps": 1365,
+                "paged": true,
+                "heap_delta_bytes": 20424687,
+                "logical_rows": 30011,
+                "skeleton_rows": 30011,
+                "pages": 118,
+                "window_height": 22,
+                "whole_walk_ms": 306.15283
+            },
+            "name": "1. open a large review and page from first row to last"
+        },
+        {
+            "observations": {
+                "needle_found_by_canvas": true,
+                "native_search_result": 0,
+                "skeleton_line_at_needle": "",
+                "yanked_rows": 2000,
+                "yanked_bytes": 85512,
+                "yank_matches_oracle": true,
+                "needle_text": "+huge line 17777 of the acceptance fixture ACCEPTANCE_NEEDLE",
+                "register_type": "V",
+                "needle_row": 17782
+            },
+            "name": "2. search across page boundaries and yank a multi-page range"
+        },
+        {
+            "observations": {
+                "heap_folded_bytes": 22263640,
+                "resident_pages": 7,
+                "heap_delta_bytes": 132684,
+                "rows_before": 30011,
+                "rows_folded": 30007,
+                "rows_restored": 30011,
+                "restored_exactly": true,
+                "heap_before_bytes": 22130956
+            },
+            "name": "3. fold and unfold a huge file while watching memory"
+        },
+        {
+            "observations": {
+                "pivots": [
+                    {
+                        "rows": 30011,
+                        "lens": "all",
+                        "applied_lens": "all",
+                        "sections": 3,
+                        "paged": true
+                    },
+                    {
+                        "rows": 1,
+                        "lens": "staged",
+                        "applied_lens": "staged",
+                        "sections": 1,
+                        "paged": true
+                    },
+                    {
+                        "rows": 30011,
+                        "lens": "unstaged",
+                        "applied_lens": "unstaged",
+                        "sections": 3,
+                        "paged": true
+                    }
+                ]
+            },
+            "name": "4. pivot every lens while the worktree is being written"
+        },
+        {
+            "observations": {
+                "returned_to_canvas": true,
+                "returned_to": "canvasdiff://projection/2",
+                "found": true,
+                "entered": true,
+                "buffer_name": "/tmp/canvasdiff-acceptance-6025397974726/renamed_to.txt",
+                "section_row": 30006,
+                "old_path": "renamed_from.txt",
+                "renamed": true
+            },
+            "name": "5. jump into a rename, and come back"
+        },
+        {
+            "observations": {
+                "orders": [
+                    {
+                        "survived": true,
+                        "order": "canvas-first",
+                        "windows_left": 1
+                    },
+                    {
+                        "survived": true,
+                        "order": "origin-first",
+                        "windows_left": 1
+                    }
+                ]
+            },
+            "name": "6. close canvas and origin windows in both orders"
+        },
+        {
+            "observations": {
+                "git_failure_contained": true,
+                "session_failure_contained": true,
+                "compression": {
+                    "codec": "lz4-block-v1",
+                    "available": true
+                }
+            },
+            "name": "7. kill Git and make the session unwritable"
+        },
+        {
+            "observations": {
+                "rows": 30011,
+                "reopened": true,
+                "sections": 3,
+                "paged": true
+            },
+            "name": "8. reopen the review after closing it"
+        }
+    ],
+    "schema_version": 1,
+    "benchmark": "canvasdiff.live_acceptance",
+    "fixture": {
+        "big_rows": 30000,
+        "root": "/tmp/canvasdiff-acceptance-6025397974726"
+    }
+}

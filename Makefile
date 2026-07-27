@@ -1,5 +1,5 @@
 .PHONY: test unit integration e2e fault architecture \
-	bench-eager bench-paged bench-chaos bench-regression verify
+	bench-eager bench-paged bench-chaos bench-regression bench-acceptance verify
 
 # FILTER is a Lua pattern matched against test NAMES; SUITE selects one intent
 # directory under test/. They compose: `make test SUITE=fault FILTER='^hl_'`.
@@ -48,9 +48,16 @@ bench-regression: bench-eager
 	$(NVIM_BENCH) -l benchmark/regression.lua \
 		docs/verification/eager-baseline.json $(OUT)-eager.json 10
 
+# Phase 8: the eight live interactions in a real Git fixture, with the
+# observations recorded as evidence rather than asserted and discarded.
+bench-acceptance:
+	NVIM_LOG_FILE=$(OUT)-acceptance.log $(NVIM_BENCH) \
+		-l benchmark/acceptance/run.lua $(OUT)-acceptance.json
+
 # Everything a publication audit has to show, in one command.
 verify:
 	$(MAKE) test
 	$(MAKE) bench-regression
 	$(MAKE) bench-paged
 	$(MAKE) bench-chaos
+	$(MAKE) bench-acceptance

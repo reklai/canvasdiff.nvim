@@ -1,103 +1,193 @@
 {
     "actions_per_seed": 10000,
+    "requirements": {
+        "minimum_distinct_actions": 10,
+        "minimum_seeds": 3,
+        "minimum_actions_per_seed": 10000
+    },
+    "environment": {
+        "dirty": true,
+        "nvim_version": "0.12.4+v0.12.4",
+        "revision": "cb26cd71524acac67bc68823686d1ef0e1d7f8c1",
+        "jit": "LuaJIT 2.1.1785005726",
+        "lua": "Lua 5.1"
+    },
     "status": "ok",
     "failures": [],
-    "environment": {
-        "dirty": false,
-        "nvim_version": "0.12.4+v0.12.4",
-        "jit": "LuaJIT 2.1.1785005726",
-        "lua": "Lua 5.1",
-        "revision": "bf44bcbf025a8134855d2af40fb457503fa838dd"
-    },
-    "requirements": {
-        "minimum_actions_per_seed": 10000,
-        "minimum_distinct_actions": 10,
-        "minimum_seeds": 3
-    },
     "runs": [
         {
             "seed": 20260727,
-            "refusals": {
-                "corrupt_codec": 478
-            },
-            "status": "ok",
-            "completed_actions": 10000,
-            "distinct_actions": 12,
-            "final_rows": 1347,
-            "exit_code": 0,
+            "harness": "engine",
             "counts": {
-                "splice": 840,
+                "reentrant_read": 814,
+                "scheduler_cycle": 872,
+                "redraw": 588,
                 "touch": 858,
                 "viewport": 951,
-                "resize": 1019,
-                "redraw": 588,
+                "read_row": 792,
+                "splice": 840,
                 "compact_step": 763,
                 "corrupt_codec": 584,
                 "projection_cycle": 994,
                 "read_range": 925,
-                "read_row": 792,
-                "reentrant_read": 814,
-                "scheduler_cycle": 872
+                "resize": 1019
             },
+            "exit_code": 0,
+            "status": "ok",
             "campaign_status": "ok",
-            "wall_ns": 5303161130,
-            "signal": 0
+            "refusals": {
+                "corrupt_codec": 478
+            },
+            "wall_ns": 5523524080,
+            "signal": 0,
+            "completed_actions": 10000,
+            "final_rows": 1347,
+            "distinct_actions": 12
         },
         {
             "seed": 990001,
-            "refusals": {
-                "corrupt_codec": 465
-            },
-            "status": "ok",
-            "completed_actions": 10000,
-            "distinct_actions": 12,
-            "final_rows": 1458,
-            "exit_code": 0,
+            "harness": "engine",
             "counts": {
+                "reentrant_read": 820,
+                "scheduler_cycle": 879,
                 "splice": 841,
                 "touch": 842,
                 "viewport": 965,
-                "resize": 1034,
+                "read_row": 784,
                 "redraw": 591,
                 "compact_step": 748,
                 "corrupt_codec": 574,
                 "projection_cycle": 984,
                 "read_range": 938,
-                "read_row": 784,
-                "reentrant_read": 820,
-                "scheduler_cycle": 879
+                "resize": 1034
             },
+            "exit_code": 0,
+            "status": "ok",
             "campaign_status": "ok",
-            "wall_ns": 5666470621,
-            "signal": 0
+            "refusals": {
+                "corrupt_codec": 465
+            },
+            "wall_ns": 5835800029,
+            "signal": 0,
+            "completed_actions": 10000,
+            "final_rows": 1458,
+            "distinct_actions": 12
         },
         {
             "seed": 4242,
-            "refusals": {
-                "corrupt_codec": 473
-            },
-            "status": "ok",
-            "completed_actions": 10000,
-            "distinct_actions": 12,
-            "final_rows": 1370,
-            "exit_code": 0,
+            "harness": "engine",
             "counts": {
-                "splice": 831,
+                "reentrant_read": 814,
+                "scheduler_cycle": 877,
+                "redraw": 595,
                 "touch": 851,
                 "viewport": 939,
-                "resize": 1030,
-                "redraw": 595,
+                "splice": 831,
+                "read_row": 792,
                 "compact_step": 765,
                 "corrupt_codec": 581,
                 "projection_cycle": 992,
                 "read_range": 933,
-                "read_row": 792,
-                "reentrant_read": 814,
-                "scheduler_cycle": 877
+                "resize": 1030
             },
+            "exit_code": 0,
+            "status": "ok",
             "campaign_status": "ok",
-            "wall_ns": 5743043991,
-            "signal": 0
+            "refusals": {
+                "corrupt_codec": 473
+            },
+            "wall_ns": 5888929851,
+            "signal": 0,
+            "completed_actions": 10000,
+            "final_rows": 1370,
+            "distinct_actions": 12
+        },
+        {
+            "seed": 20260727,
+            "harness": "surface",
+            "counts": {
+                "git_fails": 12,
+                "jump_back": 21,
+                "refresh": 9,
+                "session_unwritable": 17,
+                "open": 14,
+                "split_window": 12,
+                "toggle": 14,
+                "write_file": 18,
+                "close": 20,
+                "set_lens": 14,
+                "close_window": 15,
+                "cycle_lens": 20
+            },
+            "exit_code": 0,
+            "status": "ok",
+            "campaign_status": "ok",
+            "refusals": {
+                "session": 17,
+                "git": 12
+            },
+            "wall_ns": 587015027,
+            "signal": 0,
+            "completed_actions": 200,
+            "distinct_actions": 12
+        },
+        {
+            "seed": 990001,
+            "harness": "surface",
+            "counts": {
+                "git_fails": 15,
+                "jump_back": 19,
+                "refresh": 12,
+                "session_unwritable": 20,
+                "open": 14,
+                "split_window": 13,
+                "toggle": 19,
+                "write_file": 21,
+                "close": 20,
+                "set_lens": 12,
+                "close_window": 14,
+                "cycle_lens": 14
+            },
+            "exit_code": 0,
+            "status": "ok",
+            "campaign_status": "ok",
+            "refusals": {
+                "session": 20,
+                "git": 15
+            },
+            "wall_ns": 509115902,
+            "signal": 0,
+            "completed_actions": 200,
+            "distinct_actions": 12
+        },
+        {
+            "seed": 4242,
+            "harness": "surface",
+            "counts": {
+                "git_fails": 21,
+                "jump_back": 13,
+                "refresh": 24,
+                "session_unwritable": 9,
+                "set_lens": 22,
+                "split_window": 11,
+                "toggle": 15,
+                "write_file": 12,
+                "close": 14,
+                "open": 16,
+                "close_window": 14,
+                "cycle_lens": 17
+            },
+            "exit_code": 0,
+            "status": "ok",
+            "campaign_status": "ok",
+            "refusals": {
+                "session": 9,
+                "git": 21
+            },
+            "wall_ns": 639373537,
+            "signal": 0,
+            "completed_actions": 200,
+            "distinct_actions": 12
         }
     ],
     "schema_version": 1,
