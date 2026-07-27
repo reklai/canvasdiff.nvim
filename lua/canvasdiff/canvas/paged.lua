@@ -168,6 +168,82 @@ function Paged.render(sections, opts)
   return paged
 end
 
+--- The logical row range one section occupies, end-exclusive.
+---
+--- The eager canvas resolves this from extmark anchors, which drift with every
+--- edit and have to be repaired. A paged canvas keeps the starts array
+--- authoritative and rewrites it on every splice, so there is nothing to
+--- drift.
+--- @return integer|nil start0
+--- @return integer|nil end0
+function Paged.section_rows(paged, index)
+  local starts = paged and paged.starts
+  if type(starts) ~= "table" or type(index) ~= "number"
+      or starts[index] == nil then
+    return nil
+  end
+  local start0 = starts[index]
+  local end0 = starts[index + 1] or (paged.list and paged.list:row_count() or start0)
+  return start0, end0
+end
+
+--- Collapse or expand one section, splicing the store rather than rebuilding.
+---
+--- This is where paging has to earn itself: folding a file in a million-row
+--- review must cost the rows of THAT file, not a re-render of the canvas. The
+--- splice replaces exactly the section's rows, and every later section's start
+--- shifts by the difference.
+--- @return boolean|nil changed
+--- @return string|nil error
+function Paged.set_collapsed(paged, index, collapsed, opts)
+  if type(paged) ~= "table" or type(paged.starts) ~= "table" then
+    return nil, "paged canvas is unavailable"
+  end
+  local section = paged.sections and paged.sections[index]
+  if not section then
+    return nil, "no such section"
+  end
+  collapsed = collapsed and true or false
+  if paged.collapsed[index] == collapsed then
+    return false
+  end
+
+  local start0, end0 = Paged.section_rows(paged, index)
+  if not start0 then
+    return nil, "section has no rows"
+  end
+  local stale_for = (opts and opts.stale) or function() return false end
+  local replacement = collapsed
+    and { render.placeholder(section, stale_for(section) and true or false) }
+    or render.section_lines(section)
+
+  local spliced, splice_err =
+    paged.list:splice(start0, end0 - start0, replacement)
+  if not spliced then
+    return nil, "could not splice the paged canvas: " .. tostring(splice_err)
+  end
+
+  -- Only after the store agrees: a failed splice must leave the maps
+  -- describing what the store still holds, not what was asked for.
+  local delta = #replacement - (end0 - start0)
+  for later = index + 1, #paged.starts do
+    paged.starts[later] = paged.starts[later] + delta
+  end
+  paged.collapsed[index] = collapsed
+  paged.styles[index] = section_styles(section, collapsed)
+
+  -- The skeleton has to grow or shrink with the store before anything reads a
+  -- row through it, and the ghosts of the rows that just moved are stale.
+  local refreshed, refresh_err = paged.projection:refresh()
+  if not refreshed then
+    return nil, "could not refresh the projection: " .. tostring(refresh_err)
+  end
+  if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
+    vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  return true
+end
+
 --- Redraw the deletion ghosts for what `window` is currently showing.
 ---
 --- Every ghost outside the visible range is removed and every ghost inside it

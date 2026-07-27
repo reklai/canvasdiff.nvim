@@ -328,4 +328,88 @@ T["paged_ ghosts are cleared for a window that no longer shows the canvas"] =
     assert(ok, failure)
   end
 
+T["paged_ section_rows agrees with the eager canvas for every section"] =
+  function()
+    local sections = three_sections()
+    local eager_state = canvas.open(sections, {})
+    local paged, err = Paged.render(sections)
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      for index = 1, #sections do
+        local eager_start, eager_end = canvas.section_rows(eager_state, index)
+        local start0, end0 = Paged.section_rows(paged, index)
+        H.eq(start0, eager_start, ("section %d starts elsewhere"):format(index))
+        H.eq(end0, eager_end, ("section %d ends elsewhere"):format(index))
+      end
+      H.eq(Paged.section_rows(paged, #sections + 1), nil,
+        "a section that does not exist has no rows")
+      H.eq(Paged.section_rows(paged, "one"), nil,
+        "a non-numeric index has no rows")
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
+T["paged_ collapsing splices only that section and keeps the rest exact"] =
+  function()
+    -- The point of paging: folding one file must cost that file's rows, not a
+    -- re-render. Correctness is checked against an eager canvas told to do the
+    -- same thing.
+    local sections = three_sections()
+    local paged, err = Paged.render(sections)
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      local before = assert(paged.list:rows(0, paged.list:row_count()))
+      local start0, end0 = Paged.section_rows(paged, 2)
+
+      H.eq(Paged.set_collapsed(paged, 2, true), true)
+
+      local eager_state = canvas.open(three_sections(), {})
+      canvas.set_collapsed(eager_state, 2, true)
+      local eager = canvas.logical(eager_state)
+      local total = eager.row_count()
+      H.eq(paged.list:row_count(), total, "collapsing produced a different size")
+      H.eq(assert(paged.list:rows(0, total)), assert(eager.rows(0, total)),
+        "a collapsed paged canvas disagrees with the eager one")
+
+      -- The rows before the spliced section are untouched, byte for byte.
+      H.eq(assert(paged.list:rows(0, start0)),
+        vim.list_slice(before, 1, start0),
+        "collapsing disturbed the sections above it")
+
+      -- And the starts moved by exactly the difference.
+      local new_start = Paged.section_rows(paged, 3)
+      H.eq(new_start, start0 + 1,
+        "the section after a collapse did not move to where its rows are")
+
+      -- Expanding again returns exactly what was there.
+      H.eq(Paged.set_collapsed(paged, 2, false), true)
+      H.eq(assert(paged.list:rows(0, paged.list:row_count())), before,
+        "expanding did not restore the original text")
+      local restored_start, restored_end = Paged.section_rows(paged, 2)
+      H.eq(restored_start, start0)
+      H.eq(restored_end, end0)
+
+      -- Asking for the state it is already in is not a change and not an error.
+      H.eq(Paged.set_collapsed(paged, 2, false), false)
+      H.eq(paged.projection:validate(), true)
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
+T["paged_ collapsing a section that does not exist is an ordinary error"] =
+  function()
+    local paged, err = Paged.render(three_sections())
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      local changed, message = Paged.set_collapsed(paged, 99, true)
+      H.eq(changed, nil)
+      assert(type(message) == "string" and message ~= "", tostring(message))
+      H.eq(Paged.set_collapsed(nil, 1, true), nil, "a missing canvas is refused")
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
 return T
