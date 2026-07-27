@@ -637,4 +637,83 @@ T["paged_ yank refuses a bad range or register"] = function()
   assert(ok, failure)
 end
 
+T["paged_ open_paged produces a state the eager code path drives"] = function()
+  -- The switchover in one test: build a paged review through the canvas
+  -- facade, then drive it with the SAME calls the eager path uses, and check
+  -- every answer against an eager canvas told to do the same thing.
+  local sections = three_sections()
+  local original = API.nvim_get_current_buf()
+  local state, err = canvas.open_paged(sections, {})
+  assert(state, err)
+  local ok, failure = xpcall(function()
+    H.eq(state.paged ~= nil, true, "open_paged did not produce a paged state")
+    H.eq(API.nvim_buf_is_valid(state.buf), true)
+    H.eq(API.nvim_win_get_buf(state.win), state.buf,
+      "the paged canvas is not in its window")
+    H.eq(#state.anchor_ids, 0, "a paged canvas has nothing to anchor")
+
+    local eager = canvas.open(three_sections(), {})
+    local function agrees(label)
+      local mine = canvas.logical(state)
+      local theirs = canvas.logical(eager)
+      H.eq(mine.row_count(), theirs.row_count(), label .. ": row counts")
+      local total = theirs.row_count()
+      H.eq(assert(mine.rows(0, total)), assert(theirs.rows(0, total)),
+        label .. ": text")
+      for index = 1, #state.sections do
+        local a, b = canvas.section_rows(state, index)
+        local c, d = canvas.section_rows(eager, index)
+        H.eq({ a, b }, { c, d }, label .. ": section " .. index .. " rows")
+      end
+    end
+    agrees("as opened")
+
+    canvas.set_collapsed(state, 2, true)
+    canvas.set_collapsed(eager, 2, true)
+    agrees("after collapsing")
+
+    canvas.set_collapsed(state, 2, false)
+    canvas.set_collapsed(eager, 2, false)
+    agrees("after expanding again")
+
+    -- reconcile_sections is built entirely on render_all, replace_section and
+    -- insert_section, so it comes for free once those dispatch -- which is
+    -- exactly the claim being checked here.
+    local desired = {
+      section("a/one.txt", "a", 25),
+      section("b/two.txt", "b"),
+      section("d/four.txt", "d", 18),
+    }
+    canvas.reconcile_sections(state, desired)
+    canvas.reconcile_sections(eager, vim.deepcopy(desired))
+    agrees("after reconciling a change, a deletion and an insertion")
+    H.eq(#state.sections, 3)
+    H.eq(state.sections[3].path, "d/four.txt")
+
+    canvas.render_all(state, three_sections())
+    canvas.render_all(eager, three_sections())
+    agrees("after a full re-render")
+
+    -- The invariant, through the production path.
+    H.eq(persistent_marks(state.buf), 0,
+      "driving the paged canvas through the facade persisted a mark")
+  end, debug.traceback)
+  canvas.dispose(state)
+  if API.nvim_buf_is_valid(original) then
+    pcall(API.nvim_set_current_buf, original)
+  end
+  assert(ok, failure)
+end
+
+T["paged_ dispose releases the store and is safe on an eager state"] = function()
+  local state = assert(canvas.open_paged(three_sections(), {}))
+  local buffer = state.buf
+  H.eq(canvas.dispose(state), true)
+  H.eq(state.paged, nil, "dispose kept the store")
+  H.eq(API.nvim_buf_is_valid(buffer), false, "dispose left the skeleton behind")
+  H.eq(canvas.dispose(state), true, "disposing twice must be harmless")
+  H.eq(canvas.dispose(canvas.open(three_sections(), {})), true,
+    "disposing an eager canvas must be harmless")
+end
+
 return T

@@ -400,6 +400,125 @@ function Paged.refresh_ghosts(paged, window, opts)
   return placed
 end
 
+--- Render the section list from scratch, in place.
+---
+--- The store is spliced wholesale rather than rebuilt so the projection keeps
+--- its identity: rebuilding would hand out a new buffer, and every window,
+--- lease and mapping pointing at the old one would be pointing at nothing.
+--- @return boolean|nil rendered
+--- @return string|nil error
+function Paged.render_all(paged, sections, opts)
+  if type(paged) ~= "table" or not paged.list then
+    return nil, "paged canvas is unavailable"
+  end
+  if type(sections) ~= "table" then
+    return nil, "paged canvas requires a section list"
+  end
+  opts = opts or {}
+  local collapsed_for = opts.collapsed or function() return false end
+  local stale_for = opts.stale or function() return false end
+
+  local rows = {}
+  local starts = {}
+  local styles = {}
+  local collapsed_state = {}
+  for index, section in ipairs(sections) do
+    local collapsed = collapsed_for(section.path) and true or false
+    collapsed_state[index] = collapsed
+    starts[index] = #rows
+    styles[index] = section_styles(section, collapsed)
+    local lines = collapsed
+      and { render.placeholder(section, stale_for(section) and true or false) }
+      or render.section_lines(section)
+    for _, line in ipairs(lines) do
+      rows[#rows + 1] = line
+    end
+  end
+  if #rows == 0 then
+    rows[1] = ""
+  end
+
+  local spliced, splice_err =
+    paged.list:splice(0, paged.list:row_count(), rows)
+  if not spliced then
+    return nil, "could not re-render the paged canvas: " .. tostring(splice_err)
+  end
+
+  paged.sections = sections
+  paged.starts = starts
+  paged.styles = styles
+  paged.collapsed = collapsed_state
+  if paged.state then
+    paged.state.sections = sections
+  end
+
+  local refreshed, refresh_err = paged.projection:refresh()
+  if not refreshed then
+    return nil, "could not refresh the projection: " .. tostring(refresh_err)
+  end
+  if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
+    vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  return true
+end
+
+--- Insert `section` before position `index`, splicing in only its rows.
+--- @return boolean|nil inserted
+--- @return string|nil error
+function Paged.insert_section(paged, index, section, opts)
+  if type(paged) ~= "table" or not paged.list then
+    return nil, "paged canvas is unavailable"
+  end
+  if type(section) ~= "table" then
+    return nil, "a section is required"
+  end
+  local count = #paged.sections
+  if type(index) ~= "number" or index < 1 or index > count + 1 then
+    return nil, "insert position is outside the canvas"
+  end
+
+  opts = opts or {}
+  local collapsed_for = opts.collapsed or function() return false end
+  local stale_for = opts.stale or function() return false end
+  local collapsed = collapsed_for(section.path) and true or false
+  local lines = collapsed
+    and { render.placeholder(section, stale_for(section) and true or false) }
+    or render.section_lines(section)
+
+  -- Inserting into an empty canvas replaces the blank row that stands in for
+  -- one, rather than pushing it down and leaving it there forever.
+  local empty = count == 0
+  local at = empty and 0
+    or (index <= count and paged.starts[index] or paged.list:row_count())
+  local delete_count = empty and paged.list:row_count() or 0
+
+  local spliced, splice_err = paged.list:splice(at, delete_count, lines)
+  if not spliced then
+    return nil, "could not splice the paged canvas: " .. tostring(splice_err)
+  end
+
+  table.insert(paged.sections, index, section)
+  table.insert(paged.starts, index, at)
+  table.insert(paged.styles, index, section_styles(section, collapsed))
+  table.insert(paged.collapsed, index, collapsed)
+  local delta = #lines - delete_count
+  for later = index + 1, #paged.starts do
+    paged.starts[later] = paged.starts[later] + delta
+  end
+  if paged.state then
+    paged.state.sections = paged.sections
+  end
+
+  local refreshed, refresh_err = paged.projection:refresh()
+  if not refreshed then
+    return nil, "could not refresh the projection: " .. tostring(refresh_err)
+  end
+  if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
+    vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  return true
+end
+
 --- Find the next row matching `pattern`, reading through the store.
 ---
 --- A paged canvas cannot use Neovim's own search, and the reason is the whole

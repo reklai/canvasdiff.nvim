@@ -26,7 +26,9 @@ return {
   is_canvas_buf = Canvas.is_canvas_buf,
   locate = Canvas.locate,
   logical = Canvas.logical,
+  dispose = Canvas.dispose,
   open = Canvas.open,
+  open_paged = Canvas.open_paged,
   -- The page-backed store a Projection renders. `paginate_stream` is the
   -- ingestion entry point: it never materializes every logical row first, and
   -- `compression` is the restore adapter a compacting store must be given.
@@ -37,9 +39,11 @@ return {
   -- visible row, so a million rows cost no persistent extmark.
   paged = {
     render = Paged.render,
+    insert_section = Paged.insert_section,
     logical = Paged.logical,
     locate = Paged.locate,
     refresh_ghosts = Paged.refresh_ghosts,
+    render_all = Paged.render_all,
     replace_section = Paged.replace_section,
     search = Paged.search,
     section_rows = Paged.section_rows,
