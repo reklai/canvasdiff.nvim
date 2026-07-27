@@ -56,10 +56,10 @@ At `0c78532`, the implementation tree is clean and the full suite passes
   a paged canvas are not yet covered.
 - Section 5 is **done**. Every hard gate passes at 1,000,000 rows, three
   repetitions across four corpora, plus the small-canvas regression gate.
-- Section 6 is partly done. The engine campaign runs 10,000 actions across
-  three seeds, clean, with every invariant asserted after every action. The
-  Git/process, refs, patch-streaming, session-write and Surface-ownership
-  seams need a second harness above the engine.
+- Section 6 is **done**. The engine campaign runs 10,000 actions across three
+  seeds and the Surface campaign runs against a real Git fixture, injecting
+  Git-process and session-write failure. The second harness found a real
+  disposal bug on its first run.
 - Section 7 is partly done: the help file exists, the identity and
   ecosystem-name audits pass, `make verify` runs every gate, and the evidence
   is in `docs/verification/`. Phase 8's live acceptance is **not** recorded,
@@ -245,7 +245,7 @@ Hard gates from the journey:
 Also prove resident-cache bounds, repeated open/close and random-jump plateaus,
 and separately report skeleton versus rich/materialized row counts.
 
-### 6. Deliberately break it -- PARTLY DONE
+### 6. Deliberately break it -- DONE
 
 Implement the named Phase 7 seams across Git/process, refs, patch streaming,
 codec/CRC/offsets, compaction mutation, projection reentry, timers/scheduling,
@@ -270,12 +270,17 @@ about checksums, refuses to encode, or returns short), compaction mutation
 bytes, invalid UTF-8, CR, wide characters, rows larger than a page budget), UI
 geometry, navigation, and memory (resident caps asserted after every action).
 
-**Not yet covered**, and still required: Git/process failure, refs, patch
-streaming, and filesystem/session writes -- these live above the engine, in the
-source and session domains, and need a second harness over `App`/`Surface`.
-That harness is also where the journey's "exact Surface ownership, and disposed
-Surfaces own no callbacks" assertions belong; the engine campaign cannot make
-them because it never builds a Surface.
+**The second harness exists** at `cb26cd7`: `test/fault/chaos_surface.lua`
+drives the real entry points against a real Git fixture -- open, close,
+toggle, refresh, lens pivots, window splits and closes, worktree writes -- and
+injects Git-process and session-write failures, asserting after every action
+that no augroup outlives the Surface that owned it and that no two live
+Surfaces claim one canvas buffer. Both campaigns run in `benchmark/chaos/`.
+
+It earned itself on its first campaign by finding a real bug: `Surface:dispose`
+called `self:save()` unprotected, so a session write that threw aborted
+disposal before a single augroup was deleted and left every controller alive
+on a review already marked closing.
 
 The scrollbar still needs the broad Phase 7 creation-return/ID-reuse matrix
 (augroup/buffer/window creation returning after reentrant disposal). Its

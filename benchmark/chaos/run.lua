@@ -16,6 +16,10 @@ local BENCHMARK = "canvasdiff.chaos_campaign"
 local PROFILE = "paged-engine-chaos-v1"
 local WORKER_SCHEMA = 1
 local DEFAULT_ACTIONS = 10000
+-- The Surface campaign runs real Git per action, so it is measured in
+-- hundreds rather than thousands. Ten thousand of these would take hours and
+-- test the same seams ten thousand times.
+local DEFAULT_SURFACE_ACTIONS = 200
 local DEFAULT_SEEDS = { 20260727, 990001, 4242 }
 local MINIMUM_SEEDS = 3
 local MINIMUM_DISTINCT_ACTIONS = 10
@@ -201,10 +205,10 @@ local function fail(message)
   aggregate.failures[#aggregate.failures + 1] = message
 end
 
-local function launch(seed, result_path, log_path)
+local function launch(seed, result_path, log_path, harness, count)
   return vim.system({
     vim.v.progpath, "--headless", "--clean", "-n", "-i", "NONE",
-    "-l", worker_path, result_path, tostring(seed), tostring(actions),
+    "-l", worker_path, result_path, tostring(seed), tostring(count), harness,
   }, {
     cwd = repo_root,
     text = true,
@@ -226,7 +230,7 @@ local function launch(seed, result_path, log_path)
 end
 
 --- Everything a worker claims is untrusted until it is shaped correctly.
-local function validate(payload, seed)
+local function validate(payload, seed, expected_actions)
   local problems = {}
   local function require_field(name, predicate, description)
     if not predicate(payload[name]) then
@@ -240,22 +244,25 @@ local function validate(payload, seed)
   require_field("profile", function(v) return v == PROFILE end, PROFILE)
   require_field("seed", function(v) return v == seed end, "seed " .. seed)
   require_field("status", function(v) return v == "ok" end, "ok")
-  require_field("completed_actions", integer, "an integer action count")
+  require_field("completed_actions",
+    function(v) return v == expected_actions end,
+    ("exactly %d actions"):format(expected_actions))
   require_field("distinct_actions", integer, "an integer distinct-action count")
-  require_field("final_rows", integer, "an integer row count")
   if type(payload.counts) ~= "table" then
     problems[#problems + 1] = "counts is not an action histogram"
   end
   return problems
 end
 
-local function judge(payload)
+local function judge(payload, harness)
   local verdicts = {}
-  if payload.completed_actions ~= actions then
+  if payload.completed_actions ~= harness.count then
     verdicts[#verdicts + 1] = ("completed %s of %d actions")
-      :format(tostring(payload.completed_actions), actions)
+      :format(tostring(payload.completed_actions), harness.count)
   end
-  if (payload.distinct_actions or 0) < MINIMUM_DISTINCT_ACTIONS then
+  local minimum_distinct = harness.name == "surface" and 6
+    or MINIMUM_DISTINCT_ACTIONS
+  if (payload.distinct_actions or 0) < minimum_distinct then
     verdicts[#verdicts + 1] = ("only %d distinct actions ran; the campaign did not reach its seams")
       :format(payload.distinct_actions or 0)
   end
@@ -275,21 +282,29 @@ local function judge(payload)
   end
 
   -- The store must not have drained to nothing: a campaign that ends on an
-  -- empty store spent its second half proving very little.
-  if (payload.final_rows or 0) < 100 then
+  -- empty store spent its second half proving very little. Only the engine
+  -- campaign has a store of its own.
+  if harness.name == "engine" and (payload.final_rows or 0) < 100 then
     verdicts[#verdicts + 1] = ("the store drained to %d rows")
       :format(payload.final_rows or 0)
   end
   return verdicts
 end
 
+local HARNESSES = {
+  { name = "engine", count = actions },
+  { name = "surface", count = DEFAULT_SURFACE_ACTIONS },
+}
+
+for _, harness in ipairs(HARNESSES) do
 for _, seed in ipairs(seeds) do
-  local slug = ("seed-%d"):format(seed)
+  local slug = ("%s-seed-%d"):format(harness.name, seed)
   local result_path = vim.fs.joinpath(isolated_root, slug .. ".json")
   local log_path = vim.fs.joinpath(isolated_root, slug .. ".log")
-  local completed = launch(seed, result_path, log_path)
+  local completed = launch(seed, result_path, log_path, harness.name, harness.count)
 
   local record = {
+    harness = harness.name,
     seed = seed,
     exit_code = completed.code,
     signal = completed.signal,
@@ -317,13 +332,13 @@ for _, seed in ipairs(seeds) do
       record.history = payload.history
     end
 
-    local problems = validate(payload, seed)
+    local problems = validate(payload, seed, harness.count)
     if #problems > 0 then
       record.status = "fail"
       record.error = record.error or table.concat(problems, "; ")
       fail(("seed %d: %s"):format(seed, table.concat(problems, "; ")))
     else
-      local verdicts = judge(payload)
+      local verdicts = judge(payload, harness)
       record.status = #verdicts == 0 and "ok" or "fail"
       if #verdicts > 0 then
         record.gate_failures = verdicts
@@ -334,10 +349,10 @@ for _, seed in ipairs(seeds) do
     end
   end
   aggregate.runs[#aggregate.runs + 1] = record
-  print(("seed %-12d %-6s %s actions, %s distinct, %s rows"):format(
-    seed, record.status or "fail",
-    tostring(record.completed_actions), tostring(record.distinct_actions),
-    tostring(record.final_rows)))
+  print(("%-8s seed %-10d %-6s %s actions, %s distinct"):format(
+    harness.name, seed, record.status or "fail",
+    tostring(record.completed_actions), tostring(record.distinct_actions)))
+end
 end
 
 -- Different seeds must not have produced the same campaign, or the seed is
@@ -345,7 +360,7 @@ end
 local histograms = {}
 for _, record in ipairs(aggregate.runs) do
   if record.counts then
-    local encoded = vim.json.encode(record.counts)
+    local encoded = (record.harness or "engine") .. vim.json.encode(record.counts)
     if histograms[encoded] then
       fail(("seeds %d and %d ran identical campaigns")
         :format(histograms[encoded], record.seed))

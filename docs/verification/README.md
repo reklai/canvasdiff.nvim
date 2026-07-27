@@ -50,10 +50,18 @@ sequential scroll and random jump p95 under 1.5 ms against 16 ms, heartbeat gap
 make bench-paged
 ```
 
-**Chaos campaign (engine seams)** — 10,000 actions across three seeds (30,000
-actions total), every invariant asserted after every action, clean. Covers the
-codec/CRC/offset, compaction-mutation, projection-reentry, timer/scheduling,
-text-encoding, UI-geometry, navigation and memory seams.
+**Chaos campaigns** — two harnesses, three seeds each, every invariant asserted
+after every action.
+
+The *engine* campaign runs 10,000 actions per seed over the codec/CRC/offset,
+compaction-mutation, projection-reentry, timer/scheduling, text-encoding,
+UI-geometry, navigation and memory seams.
+
+The *Surface* campaign drives the real entry points against a real Git fixture
+— open, close, toggle, refresh, lens pivots, window splits and closes, worktree
+writes — injecting Git-process and session-write failure, and asserts that no
+augroup outlives the Surface that owned it and that no two live Surfaces claim
+one canvas buffer. It found a real disposal bug on its first campaign.
 
 ```sh
 make bench-chaos
@@ -74,12 +82,6 @@ same problem space are `diffview.nvim` and `codediff.nvim`, both differently
 named. Rerun immediately before publication.
 
 ### Not yet satisfied
-
-**Chaos above the engine.** The campaign builds stores, projections and
-schedulers, never a `Surface`, so it cannot assert the journey's "exact Surface
-ownership, and disposed Surfaces own no callbacks". The Git/process, refs,
-patch-streaming and filesystem/session-write seams are likewise above it. Those
-need a second harness over `App`/`Surface`.
 
 **Phase 8 live acceptance** is not recorded, and cannot honestly be, because
 six of its eight interactions require the paged canvas to be on the production

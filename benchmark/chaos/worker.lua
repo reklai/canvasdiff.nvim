@@ -15,6 +15,7 @@ local repo_root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(script)))
 local output_path = _G.arg and _G.arg[1] and absolute(_G.arg[1]) or nil
 local seed = tonumber(_G.arg and _G.arg[2])
 local actions = tonumber(_G.arg and _G.arg[3])
+local harness = _G.arg and _G.arg[4] or "engine"
 
 local result = {
   schema_version = 1,
@@ -22,6 +23,7 @@ local result = {
   profile = "paged-engine-chaos-v1",
   seed = seed,
   requested_actions = actions,
+  harness = harness,
   status = "fail",
 }
 
@@ -55,7 +57,13 @@ local ok, failure = xpcall(function()
   package.path = repo_root .. "/test/?.lua;"
     .. repo_root .. "/test/?/init.lua;" .. package.path
 
-  local Chaos = require("fault.chaos")
+  assert(harness == "engine" or harness == "surface",
+    "harness must be engine or surface")
+  -- The two campaigns test different layers and neither subsumes the other:
+  -- the engine one drives stores and projections, the surface one drives the
+  -- real entry points against a real Git fixture.
+  local Chaos = require(harness == "surface"
+    and "fault.chaos_surface" or "fault.chaos")
 
   local started = uv.hrtime()
   local campaign = Chaos.run({
