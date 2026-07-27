@@ -1,0 +1,348 @@
+*canvasdiff.txt*   A modal review canvas for Git changes         *canvasdiff*
+
+==============================================================================
+CONTENTS                                                  *canvasdiff-contents*
+
+    1. Introduction ......................... |canvasdiff-introduction|
+    2. Requirements ......................... |canvasdiff-requirements|
+    3. Quick start .......................... |canvasdiff-quickstart|
+    4. The canvas ........................... |canvasdiff-canvas|
+    5. Lenses ............................... |canvasdiff-lenses|
+    6. Commands ............................. |canvasdiff-commands|
+    7. Mappings ............................. |canvasdiff-mappings|
+    8. Configuration ........................ |canvasdiff-configuration|
+    9. Sessions ............................. |canvasdiff-sessions|
+   10. Lua API .............................. |canvasdiff-api|
+   11. Troubleshooting ...................... |canvasdiff-troubleshooting|
+
+==============================================================================
+1. INTRODUCTION                                       *canvasdiff-introduction*
+
+CanvasDiff renders every changed file in your repository into ONE buffer -- the
+canvas -- and lets you move through the whole review by file and by hunk
+without opening a file at a time.
+
+The canvas is modal. It is a `nofile` buffer that is not modifiable, so once
+you are inside it you press single keys rather than typing `:`. That is why
+the command surface below is small: every word in it earns its place by being
+useful from OUTSIDE the canvas, or inside your own mapping.
+
+Two things are worth knowing before you start:
+
+- The new side of a diff is your worktree, so it stays editable. Press
+  <CR> on any line to jump to that exact line in the real file, edit it, and
+  press CTRL-Space to come back to where you were on the canvas.
+- Reviews are independent. Two repositories open at once own separate
+  canvases, separate sidebars, and separate sessions; closing one never
+  disturbs the other.
+
+==============================================================================
+2. REQUIREMENTS                                       *canvasdiff-requirements*
+
+- Neovim 0.10 or newer.
+- `git` on your `PATH`.
+
+Optional, each degrading to a plain canvas rather than an error:
+
+- Tree-sitter parsers, for syntax highlighting inside the diff.
+- An `lz4` shared library, for compacting very large canvases in memory. Its
+  absence costs memory, never correctness.
+
+==============================================================================
+3. QUICK START                                          *canvasdiff-quickstart*
+
+No setup call is required. With `git` on your path, inside a repository: >vim
+
+    :CanvasDiff
+<
+That opens the canvas on your unstaged changes. From there:
+
+    j / k           move a line, as usual
+    ]h  [h          next / previous hunk
+    ]f  [f          next / previous file
+    c               collapse or expand the file under the cursor
+    <Tab>           next lens (what you are comparing)
+    <CR>            jump to this line in the real file
+    CTRL-Space      (in the real file) come back to the canvas
+    q               close the review
+
+To change defaults, call `setup()` once: >lua
+
+    require("canvasdiff").setup({
+      context = 5,
+      sidebar = { width = 40 },
+    })
+<
+==============================================================================
+4. THE CANVAS                                               *canvasdiff-canvas*
+
+The canvas buffer is named `canvasdiff://canvas/N`, where N identifies the
+review. It is `buftype=nofile`, not modifiable, and carries no undo history,
+which is why ordinary editing keys are free to be used as review commands.
+
+Alongside it you may see:
+
+sidebar~
+    A file tree of everything in the review. Selecting an entry moves the
+    canvas to that file. Toggle it off with `sidebar = { enabled = false }`.
+
+status column~
+    Per-line markers showing added, removed and context lines.
+
+scrollbar~
+    A density map of where the changes are in the whole review, not just in
+    the visible window.
+
+Files are collapsible. Collapsing a file keeps it in the review and in the
+sidebar; it just stops taking up canvas rows. This is the fastest way to work
+through a large change: collapse each file as you finish with it.
+
+==============================================================================
+5. LENSES                                                   *canvasdiff-lenses*
+
+A lens is what the canvas is comparing. There are three named lenses:
+
+    all         HEAD vs your worktree -- everything you have changed
+    unstaged    the index vs your worktree -- what is not staged yet
+    staged      HEAD vs the index -- what you have staged
+
+Press <Tab> to move forward through them and <S-Tab> to move back, or name one
+directly: >vim
+
+    :CanvasDiff staged
+<
+A bare revision is also a lens: `:CanvasDiff main` shows your worktree against
+`main`. The new side is still your worktree, so it stays editable and jumping
+into it still works.
+
+                                                       *canvasdiff-no-ranges*
+Commit RANGES (`main...HEAD`, `v1..v2`) are refused rather than approximated.
+A range puts a commit on both sides, which would make the canvas a read-only
+viewer and remove the reason to use it. Refusing is deliberate: silently
+showing worktree-vs-HEAD instead would produce a diff that looks plausible and
+is wrong.
+
+`--staged` and `--cached` are likewise refused by name rather than accepted as
+synonyms, because `--staged` is one keystroke away from `unstaged` and the two
+mean OPPOSITE things.
+
+==============================================================================
+6. COMMANDS                                               *canvasdiff-commands*
+
+                                                                *:CanvasDiff*
+:CanvasDiff             Toggle the review: open it, or close it if it is
+                        already open.
+
+:CanvasDiff open        Open the review. Reopening an existing review
+                        refreshes it in place.
+
+:CanvasDiff close       Close the review, saving your position.
+
+:CanvasDiff toggle      Same as `:CanvasDiff` with no argument.
+
+:CanvasDiff refresh     Re-collect from Git and splice in what changed, so the
+                        same TEXT stays under your cursor.
+
+:CanvasDiff all         Switch to the `all` lens.
+:CanvasDiff unstaged    Switch to the `unstaged` lens.
+:CanvasDiff staged      Switch to the `staged` lens.
+
+:CanvasDiff {revision}  Compare your worktree against {revision}.
+
+Completion is available for every word above. At most one argument is
+accepted; anything else reports what was wrong rather than guessing.
+
+==============================================================================
+7. MAPPINGS                                               *canvasdiff-mappings*
+
+Mappings are grouped by the buffer they apply to, because the three buffers
+have genuinely different constraints. Every one of them is configurable; see
+|canvasdiff-configuration|.
+
+On the canvas~
+                                                        *canvasdiff-canvas-maps*
+    <CR>, <2-LeftMouse>     Jump to this line in the real file
+    za, c                   Collapse or expand this file
+    ]f  /  [f               Next / previous file
+    ]h  /  [h               Next / previous hunk
+    CTRL-N  /  CTRL-P       Cycle to the next / previous file
+    <Tab>  /  <S-Tab>       Next / previous lens
+    r                       Refresh
+    q                       Close the review
+
+In the sidebar~
+
+    <CR>, za, c, <2-LeftMouse>      Select this entry
+    q                               Close the review
+
+Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
+cursor, and stealing it would make the tree impossible to browse.
+
+In a file you jumped to~
+                                                          *canvasdiff-jump-back*
+    CTRL-Space              Return to the canvas
+
+This one mapping is set on the real file's buffer only for the duration of the
+jump, and removed afterwards. Everything else in that buffer -- macros,
+operators, your own mappings -- keeps working, because it is a buffer you are
+actually editing.
+
+There is deliberately no second key for it. If your terminal does not transmit
+CTRL-Space, the jump loop has no exit, and a loud failure is better than a
+subtly half-working one. To bind your own: >lua
+
+    require("canvasdiff").setup({
+      keymaps = { file = { back = "<C-g>" } },
+    })
+<
+==============================================================================
+8. CONFIGURATION                                     *canvasdiff-configuration*
+
+Call `setup()` with any subset of the table below. Anything you omit keeps its
+default. >lua
+
+    require("canvasdiff").setup({
+      context = 3,
+      base = "HEAD",
+
+      keymaps = {
+        canvas = {
+          jump       = { "<CR>", "<2-LeftMouse>" },
+          collapse   = { "za", "c" },
+          next_file  = "]f",
+          prev_file  = "[f",
+          next_hunk  = "]h",
+          prev_hunk  = "[h",
+          cycle_next = "<C-n>",
+          cycle_prev = "<C-p>",
+          lens_next  = "<Tab>",
+          lens_prev  = "<S-Tab>",
+          refresh    = "r",
+          close      = "q",
+        },
+        sidebar = {
+          select = { "<CR>", "za", "c", "<2-LeftMouse>" },
+          close  = "q",
+        },
+        file = {
+          back = "<C-Space>",
+        },
+      },
+
+      sidebar      = { enabled = true, width = 32 },
+      scrollbar    = { enabled = true },
+      statuscolumn = { enabled = true },
+      session      = { enabled = true },
+      highlight    = { enabled = true, margin = 100, debounce_ms = 30 },
+      watch        = { enabled = true, debounce_ms = 200 },
+      virt         = {
+        enabled      = true,
+        max_files    = 200,
+        max_lines    = 100000,
+        margin       = 100,
+        max_expanded = 20,
+      },
+    })
+<
+                                                          *canvasdiff-glyphs*
+Glyphs~
+
+The markers CanvasDiff draws default to Unicode. For a terminal or font that
+cannot render them: >lua
+
+    require("canvasdiff").setup({ glyphs = "ascii" })
+<
+Or override individual slots with a table. An unknown slot name is REPORTED
+rather than ignored, because a silently-dropped option looks exactly like the
+plugin failing to honour it.
+
+                                                          *canvasdiff-legacy*
+Options that no longer exist are reported the same way. In particular, keymaps
+used to be one flat table; passing that shape now warns and tells you the
+grouped shape to use, instead of silently falling back to every default.
+
+==============================================================================
+9. SESSIONS                                               *canvasdiff-sessions*
+
+Closing a review records where you were: the lens, the file, the line, and
+which files you had collapsed. Reopening restores it.
+
+State is written under |stdpath()| `"state"`, one record per repository, so two
+repositories never share a position. Disable it with
+`session = { enabled = false }`.
+
+Because close-then-open restores your position, it is also the repair for a
+canvas that has somehow diverged from what Git reports -- press `q`, then
+`:CanvasDiff`. That is why there is no separate hard-rebuild key.
+
+==============================================================================
+10. LUA API                                                    *canvasdiff-api*
+
+Every function below is on the `canvasdiff` module: >lua
+
+    local canvasdiff = require("canvasdiff")
+<
+canvasdiff.setup({opts})                                *canvasdiff.setup()*
+        Merge {opts} into the configuration. Optional; defaults apply if it is
+        never called.
+
+canvasdiff.open({opts})                                  *canvasdiff.open()*
+        Open a review in the current window's repository.
+
+canvasdiff.close()                                      *canvasdiff.close()*
+        Close the review that owns the current window, saving its position.
+
+canvasdiff.toggle()                                    *canvasdiff.toggle()*
+        Open, or close if already open.
+
+canvasdiff.refresh()                                  *canvasdiff.refresh()*
+        Re-collect from Git and splice in what changed.
+
+canvasdiff.set_lens({lens})                          *canvasdiff.set_lens()*
+        Set the lens to `"all"`, `"unstaged"` or `"staged"`.
+
+canvasdiff.cycle_lens({delta})                     *canvasdiff.cycle_lens()*
+        Move {delta} steps through the named lenses. Wraps.
+
+canvasdiff.set_branch({ref})                        *canvasdiff.set_branch()*
+        Compare the worktree against {ref}.
+
+canvasdiff.set_base({base})                           *canvasdiff.set_base()*
+canvasdiff.toggle_base()                           *canvasdiff.toggle_base()*
+        Set or toggle the base revision.
+
+canvasdiff.jump_back({opts})                        *canvasdiff.jump_back()*
+        Return to the canvas from a file you jumped into. `opts.win` selects
+        the window when it is not the current one.
+
+==============================================================================
+11. TROUBLESHOOTING                                *canvasdiff-troubleshooting*
+
+Nothing opens~
+    You are probably not inside a Git worktree. CanvasDiff reports this rather
+    than opening an empty canvas.
+
+CTRL-Space does nothing~
+    Your terminal is not transmitting it. Bind another key; see
+    |canvasdiff-jump-back|.
+
+Shifted or modified keys do nothing~
+    Classic terminal encoding cannot carry a modifier on every key. This is
+    why the defaults avoid Shift-Space, which arrives as a bare Space almost
+    everywhere. <S-Tab> and CTRL-Space are not affected.
+
+A configured mapping never appears~
+    Check for the flat pre-1.0 keymaps shape, which warns on `setup()`, and
+    for a misspelled key -- `canvas.colapse` is accepted by the merge and then
+    never found. Misspelled glyph slots are reported for the same reason.
+
+Syntax highlighting is missing inside the diff~
+    No Tree-sitter parser is installed for that filetype. The canvas still
+    renders; only the syntax tier is absent.
+
+Large reviews feel slow~
+    Collapse files you have finished with. If a single file is enormous,
+    `virt.max_lines` and `virt.max_files` bound how much is decorated.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

@@ -1,0 +1,111 @@
+{
+    "actions_per_seed": 10000,
+    "status": "ok",
+    "failures": [],
+    "environment": {
+        "dirty": false,
+        "nvim_version": "0.12.4+v0.12.4",
+        "jit": "LuaJIT 2.1.1785005726",
+        "lua": "Lua 5.1",
+        "revision": "bf44bcbf025a8134855d2af40fb457503fa838dd"
+    },
+    "requirements": {
+        "minimum_actions_per_seed": 10000,
+        "minimum_distinct_actions": 10,
+        "minimum_seeds": 3
+    },
+    "runs": [
+        {
+            "seed": 20260727,
+            "refusals": {
+                "corrupt_codec": 478
+            },
+            "status": "ok",
+            "completed_actions": 10000,
+            "distinct_actions": 12,
+            "final_rows": 1347,
+            "exit_code": 0,
+            "counts": {
+                "splice": 840,
+                "touch": 858,
+                "viewport": 951,
+                "resize": 1019,
+                "redraw": 588,
+                "compact_step": 763,
+                "corrupt_codec": 584,
+                "projection_cycle": 994,
+                "read_range": 925,
+                "read_row": 792,
+                "reentrant_read": 814,
+                "scheduler_cycle": 872
+            },
+            "campaign_status": "ok",
+            "wall_ns": 5303161130,
+            "signal": 0
+        },
+        {
+            "seed": 990001,
+            "refusals": {
+                "corrupt_codec": 465
+            },
+            "status": "ok",
+            "completed_actions": 10000,
+            "distinct_actions": 12,
+            "final_rows": 1458,
+            "exit_code": 0,
+            "counts": {
+                "splice": 841,
+                "touch": 842,
+                "viewport": 965,
+                "resize": 1034,
+                "redraw": 591,
+                "compact_step": 748,
+                "corrupt_codec": 574,
+                "projection_cycle": 984,
+                "read_range": 938,
+                "read_row": 784,
+                "reentrant_read": 820,
+                "scheduler_cycle": 879
+            },
+            "campaign_status": "ok",
+            "wall_ns": 5666470621,
+            "signal": 0
+        },
+        {
+            "seed": 4242,
+            "refusals": {
+                "corrupt_codec": 473
+            },
+            "status": "ok",
+            "completed_actions": 10000,
+            "distinct_actions": 12,
+            "final_rows": 1370,
+            "exit_code": 0,
+            "counts": {
+                "splice": 831,
+                "touch": 851,
+                "viewport": 939,
+                "resize": 1030,
+                "redraw": 595,
+                "compact_step": 765,
+                "corrupt_codec": 581,
+                "projection_cycle": 992,
+                "read_range": 933,
+                "read_row": 792,
+                "reentrant_read": 814,
+                "scheduler_cycle": 877
+            },
+            "campaign_status": "ok",
+            "wall_ns": 5743043991,
+            "signal": 0
+        }
+    ],
+    "schema_version": 1,
+    "benchmark": "canvasdiff.chaos_campaign",
+    "seeds": [
+        20260727,
+        990001,
+        4242
+    ],
+    "profile": "paged-engine-chaos-v1"
+}
