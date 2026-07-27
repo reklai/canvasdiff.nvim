@@ -45,9 +45,12 @@ At `0c78532`, the implementation tree is clean and the full suite passes
   ghosts, and holds no persistent extmark. What remains is the switchover --
   `App:open` still builds the eager canvas, and `Surface` still owns no
   Projection or Scheduler.
-- Section 4 is partly closed -- the eager/paged oracle is pinned, and the
+- Section 4 is partly closed -- the eager/paged oracle is pinned, the
   compaction bounds the journey names (one candidate per scheduler step, at
-  most eight inspected) are the Scheduler's own constants.
+  most eight inspected) are the Scheduler's own constants, and cross-page
+  search, yank and range export are built and proven on the paged canvas.
+  Lens pivots, selection, cursor-column behaviour and session restore against
+  a paged canvas are not yet covered.
 - Section 5 is **done**. Every hard gate passes at 1,000,000 rows, three
   repetitions across four corpora, plus the small-canvas regression gate.
 - Section 6 is partly done. The engine campaign runs 10,000 actions across

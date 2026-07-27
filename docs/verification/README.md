@@ -105,7 +105,15 @@ state is paged, so the rest of the display stack needs no change — the skeleto
 holds one blank line per logical row, so buffer rows and logical rows are the
 same number.
 
+It also has what a blank skeleton takes away. Measured rather than inferred: a
+needle at logical row 6 leaves buffer line 6 as the empty string, Neovim's own
+`search()` returns 0, and yanking a nine-row canvas produced nine bytes and
+none of its text. So the paged canvas carries its own chunked search and its
+own linewise yank, reading through the store — which is exactly the capability
+Phase 8 item 2 checks.
+
 What remains is the switchover: `App:open` still builds the eager canvas, and
 `Surface` still owns no Projection or Scheduler, so nothing calls
-`Scheduler:touch()` on activity. `replace_section` and `reconcile_sections`
-also need paged counterparts before a live session can refresh.
+`Scheduler:touch()` on activity. `reconcile_sections`, `insert_section` and
+`show` still need paged counterparts, and the canvas keys have to route `/`
+and `y` to the paged implementations before a live session behaves correctly.
