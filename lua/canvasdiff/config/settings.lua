@@ -172,6 +172,18 @@ M.defaults = {
   session = {
     enabled = true,
   },
+  -- The page-backed canvas. Below `min_rows` the eager canvas is cheaper and
+  -- simpler -- its text IS the buffer, so search, yank and every plugin that
+  -- reads buffer lines work with no help from us. Above it the eager canvas
+  -- stops being viable at all, because the text and one extmark per
+  -- highlighted row both scale with the review.
+  --
+  -- The threshold is in canvas ROWS, not files: one enormous file is the case
+  -- that hurts, and a hundred small ones is not.
+  paged = {
+    enabled = true,
+    min_rows = 20000,
+  },
 }
 
 M.options = vim.deepcopy(M.defaults)

@@ -396,6 +396,15 @@ function Surface:dispose(reason)
   -- explicit-close path restores each host window to its landing buffer AFTER
   -- disposal, and deleting the buffer synchronously would make Neovim pick a
   -- replacement for those windows first.
+  -- The store and its projection, before the buffer they live on. A paged
+  -- canvas owns both; an eager one owns neither, and `canvas.dispose` is
+  -- harmless on it. Disposing the projection also deletes the skeleton
+  -- buffer, which is why this runs before the deferred buffer reclamation
+  -- below rather than after it.
+  attempt("canvas.dispose", function()
+    canvas.dispose(self.state)
+  end)
+
   local canvas_buf = self.state and self.state.buf or nil
   if canvas_buf then
     vim.schedule(function()

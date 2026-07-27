@@ -1065,4 +1065,81 @@ return {
     assert(ok, "close() with no prior open() must not throw")
     H.eq(vim.api.nvim_get_current_buf(), buf_before, "close() must not touch the current buffer when nothing was ever opened")
   end,
+
+  ["e2e: a large review opens paged, and a small one does not"] = function()
+    -- The switchover, through the real command. A review below the threshold
+    -- must stay eager, because the eager canvas is simpler and every plugin
+    -- that reads buffer lines works on it unaided; a review above it must go
+    -- paged, because the eager canvas is not viable there at all.
+    local function body(tag, edited)
+      local out = {}
+      for index = 1, 12000 do
+        out[index] = ("%s line %d"):format(tag, index)
+        if edited and index % 3 == 0 then
+          out[index] = out[index] .. " changed"
+        end
+      end
+      return table.concat(out, "\n") .. "\n"
+    end
+
+    local dir = H.git_fixture({
+      committed = { ["big.txt"] = body("b"), ["small.txt"] = "s1\ns2\n" },
+      worktree = { ["big.txt"] = body("b", true), ["small.txt"] = "s1\nS2\n" },
+    })
+    vim.api.nvim_set_current_dir(dir)
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local canvas = require("canvasdiff.canvas")
+    -- Configure the threshold rather than build a fixture large enough to
+    -- cross the default one: the switchover is what is under test, not how
+    -- many rows the default happens to be.
+    fm.setup({ paged = { enabled = true, min_rows = 5000 } })
+
+    local state = assert(fm.open())
+    local ok, failure = xpcall(function()
+      assert(state.paged, "a review of this size must open paged")
+      assert(canvas.is_canvas_buf(state.buf) == false,
+        "a paged canvas uses the projection's skeleton buffer")
+
+      -- It behaves like a canvas: sections resolve, rows resolve, and the text
+      -- is really there even though the buffer lines are blank.
+      assert(#state.sections >= 2, "both changed files are in the review")
+      local logical = canvas.logical(state)
+      assert(logical.row_count() > 5000,
+        "the paged canvas is smaller than the threshold that selected it")
+      local first = assert(logical.row(0))
+      assert(first:find("big.txt", 1, true),
+        "the first row is not the first file's header: " .. first)
+      H.eq(vim.api.nvim_buf_get_lines(state.buf, 0, 1, false)[1], "",
+        "the skeleton is not blank, so nothing is being paged")
+
+      -- And it holds no persistent extmark, which is the whole point.
+      local marks = 0
+      for _, namespace in pairs(vim.api.nvim_get_namespaces()) do
+        local read, found = pcall(
+          vim.api.nvim_buf_get_extmarks, state.buf, namespace, 0, -1, {})
+        if read then marks = marks + #found end
+      end
+      H.eq(marks, 0, "the paged canvas persisted an extmark")
+    end, debug.traceback)
+    fm.close()
+    assert(ok, failure)
+
+    -- The same repository with only the small file changed stays eager.
+    local small_dir = H.git_fixture({
+      committed = { ["small.txt"] = "s1\ns2\n" },
+      worktree = { ["small.txt"] = "s1\nS2\n" },
+    })
+    vim.api.nvim_set_current_dir(small_dir)
+    local small = assert(fm.open())
+    local small_ok, small_failure = xpcall(function()
+      H.eq(small.paged, nil, "a small review must not be paged")
+      assert(canvas.is_canvas_buf(small.buf),
+        "a small review still uses the eager canvas buffer")
+    end, debug.traceback)
+    fm.close()
+    fm.setup({ paged = { enabled = true, min_rows = 20000 } })
+    assert(small_ok, small_failure)
+  end,
+
 }

@@ -570,6 +570,35 @@ function App:open(opts)
     or lens.from_base(config.options.base)
 
   -- Transaction boundary: collection and model construction finish before
+--- Choose the canvas the review actually needs.
+---
+--- Below the threshold the eager canvas is cheaper AND simpler: its text is
+--- the buffer, so search, yank and every plugin that reads buffer lines work
+--- with no help from us. Above it the eager canvas is not viable at all --
+--- both its text and its one-extmark-per-highlighted-row scale with the
+--- review -- so the paged canvas takes over.
+---
+--- The row count is exact rather than estimated: a section's entries ARE its
+--- rendered rows, so this costs a walk over the model and no rendering.
+local function open_canvas(sections)
+  local settings = config.options.paged or {}
+  if settings.enabled == false then
+    return canvas.open(sections, {})
+  end
+  local rows = 0
+  for _, section in ipairs(sections) do
+    rows = rows + #(section.entries or {})
+  end
+  if rows < (settings.min_rows or 20000) then
+    return canvas.open(sections, {})
+  end
+  -- A paged canvas that cannot be built is a reason to fall back, not a
+  -- reason to fail the review: the eager one still renders it correctly, just
+  -- expensively.
+  local state = canvas.open_paged(sections, {})
+  return state or canvas.open(sections, {})
+end
+
   -- canvas.open changes the current window or this App's state. In
   -- particular, an invalid/deleted branch ref is an error, not an empty old
   -- side and not an empty canvas.
@@ -609,7 +638,7 @@ function App:open(opts)
     previous:dispose("replaced")
   end
 
-  local st = canvas.open(sections, {})
+  local st = open_canvas(sections)
   st.root = root
   st.lens = l
   -- Kept alongside, for the session payload and for anything still speaking the
@@ -674,7 +703,20 @@ function App:open(opts)
 
   set_canvas_keymaps(self, surface, st)
 
-  if config.options.highlight.enabled then
+  -- Treesitter highlighting is deliberately NOT attached to a paged canvas.
+  --
+  -- It is viewport-bounded, but at SECTION granularity: a section that
+  -- intersects the viewport is highlighted whole. That is right for an eager
+  -- canvas, where a section is a file; on a paged canvas a single 24,000-row
+  -- section produced 8,000 persistent extmarks -- marks that scale with the
+  -- review, which is precisely what the paged canvas exists to prevent.
+  --
+  -- Making it row-granular means driving treesitter from the projection's
+  -- decorator for visible rows only, which is a separate piece of work. Until
+  -- then a large review keeps its diff tints, file bars and ghosts and loses
+  -- syntax colour inside hunks -- a visible loss, chosen over silently
+  -- reintroducing the structure the design forbids.
+  if config.options.highlight.enabled and not st.paged then
     local hl_lease = hl.attach(st, config.options.highlight, {
       claim = function(lease)
         if not surface:guard(generation) or surface.controllers.hl ~= nil then
