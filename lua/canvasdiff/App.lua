@@ -659,6 +659,12 @@ end
       end
     end,
     on_dispose = function(owner)
+      -- The overlay never survives the canvas (spec R4). Every teardown
+      -- reason -- explicit close, `:q` on the last window, a replacing
+      -- open -- funnels through here, so this is the one place that also
+      -- catches the paths that never reach App:close (e.g. a `:q`-killed
+      -- canvas going straight through WinClosed -> dispose("last_window")).
+      ui.cheatsheet.close()
       -- Unregisters by exact identity, so a late callback from an older
       -- review can never evict its replacement from the index.
       forget(self, owner)

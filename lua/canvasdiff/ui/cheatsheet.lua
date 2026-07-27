@@ -230,9 +230,13 @@ function M.toggle()
   local lines, spans, width = M.lines(model, max_width)
 
   -- Handle empty case: if no keybinds are configured, show a placeholder.
+  -- `width` was computed by M.lines over the (empty) real lines above, so it
+  -- must be recomputed from the placeholder actually being shown -- otherwise
+  -- the float clamps to a 1-wide sliver (spec R4 finding).
   if #lines == 0 then
     lines = { "No keybinds configured -- q or <Esc> closes" }
     spans = {}
+    width = #lines[1]
   end
 
   width = math.min(math.max(width, 1), max_width)

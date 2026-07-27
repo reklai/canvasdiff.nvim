@@ -14,7 +14,7 @@ T["cheatsheet_toggle opens a centered float and toggle closes it again"] = funct
   local buf = vim.api.nvim_win_get_buf(win)
   local joined = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
   assert(joined:find("Canvas"), "overlay shows the Canvas column")
-  assert(joined:find("q", 1, true), "overlay lists the close key")
+  assert(joined:find("q", 1, true), "overlay lists the close action's key")
 
   cheatsheet.toggle()
   H.eq(cheatsheet.is_open(), false)
@@ -66,9 +66,18 @@ T["cheatsheet_toggle with all keybinds disabled opens showing placeholder messag
   H.eq(cheatsheet.is_open(), true, "overlay opens even with no keybinds")
 
   -- Check that the placeholder message is present.
-  local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
   local joined = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  local placeholder = "No keybinds configured -- q or <Esc> closes"
   assert(joined:find("No keybinds"), "placeholder message appears when no keybinds are configured")
+
+  -- The float must be sized to fit the placeholder line, not the (zero)
+  -- width the model would have produced before the placeholder swap-in.
+  local width = vim.api.nvim_win_get_config(win).width
+  assert(width >= #placeholder,
+    ("placeholder float must be wide enough for its own text (got %d, need >= %d)")
+      :format(width, #placeholder))
 
   -- Close and restore.
   cheatsheet.close()
@@ -98,6 +107,31 @@ T["cheatsheet_help key is installed on the canvas and closing the canvas closes 
 
   fm.close()
   H.eq(cheatsheet.is_open(), false, "closing the canvas closes the overlay (spec R4)")
+  vim.api.nvim_set_current_dir(old_cwd)
+end
+
+T["cheatsheet_overlay closes when the surface is disposed without going through App:close"] = function()
+  -- A `:q` on the canvas window tears the review down through the WinClosed
+  -- autocmd straight into Surface:dispose("last_window"), never reaching
+  -- App:close. WinClosed is unreliable in headless tests, so exercise the
+  -- disposal path directly instead of relying on the autocmd firing.
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a1\n" },
+    worktree = { ["a.txt"] = "A1\n" },
+  })
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local st = fm.open()
+
+  cheatsheet.toggle()
+  H.eq(cheatsheet.is_open(), true, "the overlay is open before disposal")
+
+  st.surface:dispose("last_window")
+  H.eq(cheatsheet.is_open(), false,
+    "the overlay must not survive a disposal path that bypasses App:close (spec R4)")
+
   vim.api.nvim_set_current_dir(old_cwd)
 end
 
