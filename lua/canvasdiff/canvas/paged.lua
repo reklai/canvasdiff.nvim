@@ -261,6 +261,83 @@ function Paged.set_collapsed(paged, index, collapsed, opts)
   return true
 end
 
+--- Replace one section, or delete it when `section` is nil.
+---
+--- The same splice `set_collapsed` performs, over a different set of rows, and
+--- it is what refresh and the file watcher need: re-rendering a review because
+--- one file changed is exactly the cost paging exists to avoid.
+--- @return boolean|nil changed
+--- @return string|nil error
+function Paged.replace_section(paged, index, section, opts)
+  if type(paged) ~= "table" or type(paged.starts) ~= "table" then
+    return nil, "paged canvas is unavailable"
+  end
+  if paged.sections[index] == nil then
+    return nil, "no such section"
+  end
+
+  local start0, end0 = Paged.section_rows(paged, index)
+  if not start0 then
+    return nil, "section has no rows"
+  end
+
+  local replacement = {}
+  local collapsed = false
+  if section ~= nil then
+    local collapsed_for = (opts and opts.collapsed) or function() return false end
+    local stale_for = (opts and opts.stale) or function() return false end
+    collapsed = collapsed_for(section.path) and true or false
+    replacement = collapsed
+      and { render.placeholder(section, stale_for(section) and true or false) }
+      or render.section_lines(section)
+  end
+
+  -- A canvas with no rows at all cannot exist -- the eager one always has at
+  -- least a blank line -- so deleting the last section leaves one behind.
+  local removing_last = section == nil and #paged.sections == 1
+  if removing_last then
+    replacement = { "" }
+  end
+
+  local spliced, splice_err =
+    paged.list:splice(start0, end0 - start0, replacement)
+  if not spliced then
+    return nil, "could not splice the paged canvas: " .. tostring(splice_err)
+  end
+
+  local delta = #replacement - (end0 - start0)
+  if section == nil and not removing_last then
+    table.remove(paged.sections, index)
+    table.remove(paged.starts, index)
+    table.remove(paged.styles, index)
+    table.remove(paged.collapsed, index)
+    for later = index, #paged.starts do
+      paged.starts[later] = paged.starts[later] + delta
+    end
+  else
+    if section ~= nil then
+      paged.sections[index] = section
+      paged.styles[index] = section_styles(section, collapsed)
+      paged.collapsed[index] = collapsed
+    end
+    for later = index + 1, #paged.starts do
+      paged.starts[later] = paged.starts[later] + delta
+    end
+  end
+  if paged.state then
+    paged.state.sections = paged.sections
+  end
+
+  local refreshed, refresh_err = paged.projection:refresh()
+  if not refreshed then
+    return nil, "could not refresh the projection: " .. tostring(refresh_err)
+  end
+  if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
+    vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  return true
+end
+
 --- Redraw the deletion ghosts for what `window` is currently showing.
 ---
 --- Every ghost outside the visible range is removed and every ghost inside it

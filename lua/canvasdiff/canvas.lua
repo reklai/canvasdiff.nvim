@@ -40,6 +40,7 @@ return {
     logical = Paged.logical,
     locate = Paged.locate,
     refresh_ghosts = Paged.refresh_ghosts,
+    replace_section = Paged.replace_section,
     section_rows = Paged.section_rows,
     set_collapsed = Paged.set_collapsed,
     dispose = Paged.dispose,

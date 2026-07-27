@@ -452,4 +452,87 @@ T["paged_ the canvas API dispatches to the store when the state is paged"] =
     assert(ok, failure)
   end
 
+T["paged_ replacing a section splices only its rows"] = function()
+  local sections = three_sections()
+  local paged, err = Paged.render(sections)
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    local before = assert(paged.list:rows(0, paged.list:row_count()))
+    local start0 = Paged.section_rows(paged, 2)
+
+    local bigger = section("b/two.txt", "b", 60)
+    H.eq(Paged.replace_section(paged, 2, bigger), true)
+
+    local eager_state = canvas.open(three_sections(), {})
+    canvas.replace_section(eager_state, 2, bigger)
+    local eager = canvas.logical(eager_state)
+    local total = eager.row_count()
+    H.eq(paged.list:row_count(), total, "the replacement produced a different size")
+    H.eq(assert(paged.list:rows(0, total)), assert(eager.rows(0, total)),
+      "a replaced paged section disagrees with the eager canvas")
+
+    -- Everything above the replaced section is untouched.
+    H.eq(assert(paged.list:rows(0, start0)), vim.list_slice(before, 1, start0),
+      "replacing disturbed the sections above it")
+    H.eq(paged.sections[2], bigger, "the section list was not updated")
+    H.eq(paged.state.sections[2], bigger, "the state's section list went stale")
+    H.eq(paged.projection:validate(), true)
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ deleting a section removes it and closes the gap"] = function()
+  local sections = three_sections()
+  local paged, err = Paged.render(sections)
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    H.eq(Paged.replace_section(paged, 1, nil), true)
+
+    local eager_state = canvas.open(three_sections(), {})
+    canvas.replace_section(eager_state, 1, nil)
+    local eager = canvas.logical(eager_state)
+    local total = eager.row_count()
+    H.eq(#paged.sections, 2, "the deleted section is still in the list")
+    H.eq(paged.sections[1].path, "b/two.txt")
+    H.eq(paged.list:row_count(), total, "deletion produced a different size")
+    H.eq(assert(paged.list:rows(0, total)), assert(eager.rows(0, total)),
+      "a deletion disagrees with the eager canvas")
+    H.eq(Paged.section_rows(paged, 1), 0,
+      "the section that moved up did not move to row zero")
+    H.eq(canvas.locate(paged.state, 0), 1)
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ deleting the last section leaves a canvas that still exists"] =
+  function()
+    local paged, err = Paged.render({ section("only.txt", "o", 20) })
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      H.eq(Paged.replace_section(paged, 1, nil), true)
+      -- The eager canvas cannot have a zero-line buffer either.
+      H.eq(paged.list:row_count(), 1, "the canvas vanished entirely")
+      H.eq(paged.list:row(0), "")
+      H.eq(paged.projection:validate(), true)
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
+T["paged_ replacing a section that does not exist is an ordinary error"] =
+  function()
+    local paged, err = Paged.render(three_sections())
+    assert(paged, err)
+    local ok, failure = xpcall(function()
+      local changed, message = Paged.replace_section(paged, 99, nil)
+      H.eq(changed, nil)
+      assert(type(message) == "string" and message ~= "", tostring(message))
+      H.eq(Paged.replace_section(nil, 1, nil), nil, "a missing canvas is refused")
+    end, debug.traceback)
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
 return T
