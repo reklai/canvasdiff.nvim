@@ -10,42 +10,42 @@
     "interactions": [
         {
             "observations": {
-                "worst_step_ms": 1.562097,
-                "steps": 1365,
+                "heap_delta_bytes": 20455631,
+                "worst_step_ms": 1.242658,
                 "paged": true,
-                "heap_delta_bytes": 20424687,
                 "logical_rows": 30011,
                 "skeleton_rows": 30011,
                 "pages": 118,
                 "window_height": 22,
-                "whole_walk_ms": 306.15283
+                "steps": 1365,
+                "whole_walk_ms": 313.329491
             },
             "name": "1. open a large review and page from first row to last"
         },
         {
             "observations": {
-                "needle_found_by_canvas": true,
                 "native_search_result": 0,
-                "skeleton_line_at_needle": "",
+                "needle_row": 17782,
                 "yanked_rows": 2000,
                 "yanked_bytes": 85512,
                 "yank_matches_oracle": true,
                 "needle_text": "+huge line 17777 of the acceptance fixture ACCEPTANCE_NEEDLE",
                 "register_type": "V",
-                "needle_row": 17782
+                "skeleton_line_at_needle": "",
+                "needle_found_by_canvas": true
             },
             "name": "2. search across page boundaries and yank a multi-page range"
         },
         {
             "observations": {
-                "heap_folded_bytes": 22263640,
-                "resident_pages": 7,
-                "heap_delta_bytes": 132684,
-                "rows_before": 30011,
                 "rows_folded": 30007,
                 "rows_restored": 30011,
                 "restored_exactly": true,
-                "heap_before_bytes": 22130956
+                "heap_before_bytes": 22167100,
+                "heap_folded_bytes": 22299364,
+                "resident_pages": 7,
+                "heap_delta_bytes": 132264,
+                "rows_before": 30011
             },
             "name": "3. fold and unfold a huge file while watching memory"
         },
@@ -53,24 +53,24 @@
             "observations": {
                 "pivots": [
                     {
-                        "rows": 30011,
                         "lens": "all",
                         "applied_lens": "all",
                         "sections": 3,
+                        "rows": 30011,
                         "paged": true
                     },
                     {
-                        "rows": 1,
                         "lens": "staged",
                         "applied_lens": "staged",
                         "sections": 1,
+                        "rows": 1,
                         "paged": true
                     },
                     {
-                        "rows": 30011,
                         "lens": "unstaged",
                         "applied_lens": "unstaged",
                         "sections": 3,
+                        "rows": 30011,
                         "paged": true
                     }
                 ]
@@ -79,14 +79,14 @@
         },
         {
             "observations": {
+                "buffer_name": "/tmp/canvasdiff-acceptance-6172146197744/renamed_to.txt",
+                "section_row": 30006,
+                "old_path": "renamed_from.txt",
+                "renamed": true,
                 "returned_to_canvas": true,
                 "returned_to": "canvasdiff://projection/2",
                 "found": true,
-                "entered": true,
-                "buffer_name": "/tmp/canvasdiff-acceptance-6025397974726/renamed_to.txt",
-                "section_row": 30006,
-                "old_path": "renamed_from.txt",
-                "renamed": true
+                "entered": true
             },
             "name": "5. jump into a rename, and come back"
         },
@@ -121,9 +121,9 @@
         {
             "observations": {
                 "rows": 30011,
-                "reopened": true,
+                "paged": true,
                 "sections": 3,
-                "paged": true
+                "reopened": true
             },
             "name": "8. reopen the review after closing it"
         }
@@ -132,6 +132,6 @@
     "benchmark": "canvasdiff.live_acceptance",
     "fixture": {
         "big_rows": 30000,
-        "root": "/tmp/canvasdiff-acceptance-6025397974726"
+        "root": "/tmp/canvasdiff-acceptance-6172146197744"
     }
 }

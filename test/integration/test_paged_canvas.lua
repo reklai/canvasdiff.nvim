@@ -748,4 +748,55 @@ T["paged_ disposal takes the compactor with the projection"] = function()
     "the compactor outlived the canvas it belonged to")
 end
 
+T["paged_ the cursor column and visual selection are the skeleton's, not the text's"] =
+  function()
+    -- Recorded because it is a real consequence users will meet, not an
+    -- oversight. Every skeleton line is empty, so the cursor cannot leave
+    -- column zero and a visual yank copies newlines. Row addressing is exact
+    -- -- which is what folds, motions, marks and search positions depend on --
+    -- and everything COLUMN-wise is not. The canvas's own search and yank
+    -- exist for precisely this reason.
+    local sections = { section("f.txt", "alpha", 60) }
+    local paged, err = Paged.render(sections)
+    assert(paged, err)
+    local original = API.nvim_get_current_buf()
+    local ok, failure = xpcall(function()
+      API.nvim_set_current_buf(paged.buffer)
+      local window = API.nvim_get_current_win()
+      assert(paged.projection:redraw())
+
+      local row0 = 3
+      local text = assert(paged.list:row(row0))
+      assert(#text > 12, "sanity: the row must be long enough to move within")
+      H.eq(API.nvim_buf_get_lines(paged.buffer, row0, row0 + 1, false)[1], "",
+        "the skeleton is not blank, so this test proves nothing")
+
+      API.nvim_win_set_cursor(window, { row0 + 1, 0 })
+      API.nvim_win_call(window, function() vim.cmd("normal! 10l") end)
+      H.eq(API.nvim_win_get_cursor(window), { row0 + 1, 0 },
+        "the cursor moved along a line that has no characters")
+
+      -- Even asked directly, the column clamps to the empty line.
+      pcall(API.nvim_win_set_cursor, window, { row0 + 1, 12 })
+      H.eq(API.nvim_win_get_cursor(window)[2], 0,
+        "a column was accepted on an empty line")
+
+      -- A visual yank copies the skeleton, which is why the canvas has its own.
+      API.nvim_win_call(window, function() vim.cmd("normal! Vjjy") end)
+      H.eq(vim.fn.getreg('"'), "\n\n\n",
+        "a visual yank returned something other than the blank skeleton")
+
+      -- And the canvas's own yank over the same rows returns the real text.
+      local mine = assert(Paged.yank(paged, row0, 3, { register = "z" }))
+      H.eq(mine, table.concat(assert(paged.list:rows(row0, 3)), "\n") .. "\n",
+        "the canvas yank did not return its own rows")
+      assert(#mine > 3, "the canvas yank returned blanks too")
+    end, debug.traceback)
+    if API.nvim_buf_is_valid(original) then
+      pcall(API.nvim_set_current_buf, original)
+    end
+    Paged.dispose(paged)
+    assert(ok, failure)
+  end
+
 return T

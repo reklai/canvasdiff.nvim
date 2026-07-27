@@ -62,8 +62,15 @@ local ok, failure = xpcall(function()
   -- The two campaigns test different layers and neither subsumes the other:
   -- the engine one drives stores and projections, the surface one drives the
   -- real entry points against a real Git fixture.
-  local Chaos = require(harness == "surface"
-    and "fault.chaos_surface" or "fault.chaos")
+  -- Two static requires, not one computed name: the architecture scan reads
+  -- the dependency graph out of the source, and a require whose argument is an
+  -- expression is a dependency it cannot see.
+  local Chaos
+  if harness == "surface" then
+    Chaos = require("fault.chaos_surface")
+  else
+    Chaos = require("fault.chaos")
+  end
 
   local started = uv.hrtime()
   local campaign = Chaos.run({

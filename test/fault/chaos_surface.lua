@@ -239,7 +239,7 @@ end
 ACTIONS.git_fails = function(world)
   -- Kill Git for one operation. A review must refuse or survive; it must not
   -- half-apply a collection it could not finish.
-  local system = require("canvasdiff.os.process")
+  local system = require("canvasdiff.os")
   local real = system.run
   system.run = function()
     return { code = 128, stdout = "", stderr = "injected git failure" }

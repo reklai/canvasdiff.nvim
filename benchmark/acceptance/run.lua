@@ -294,7 +294,7 @@ local ok, failure = xpcall(function()
   observe("6. close canvas and origin windows in both orders", { orders = orders })
 
   -- 7. Hostility: kill Git, and make the session unwritable.
-  local process = require("canvasdiff.os.process")
+  local process = require("canvasdiff.os")
   local real_run = process.run
   process.run = function()
     return { code = 128, stdout = "", stderr = "injected git failure" }

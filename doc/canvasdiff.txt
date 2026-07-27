@@ -260,6 +260,9 @@ You will notice three differences on such a review:
 - Other plugins that read the buffer's lines see blank lines, because that is
   genuinely what is in the buffer.
 - `/` and `y` need CanvasDiff's own search and yank, which read the store.
+- The cursor stays in column 0 and a visual yank copies empty lines, for the
+  same reason. Row addressing is exact -- folds, motions, marks and search
+  positions are all unaffected -- but column addressing is not.
 
 Set `paged = { enabled = false }` to always use the ordinary canvas, at the
 cost of memory on very large reviews. Below the threshold nothing changes.
