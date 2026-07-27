@@ -400,6 +400,121 @@ function Paged.refresh_ghosts(paged, window, opts)
   return placed
 end
 
+--- Find the next row matching `pattern`, reading through the store.
+---
+--- A paged canvas cannot use Neovim's own search, and the reason is the whole
+--- design: the buffer holds one BLANK line per logical row, so `/` matches
+--- nothing and reports "pattern not found" on a canvas that plainly contains
+--- the text. Measured, not assumed -- a needle at logical row 6 leaves buffer
+--- line 6 as the empty string, and `search()` returns 0.
+---
+--- The scan is chunked rather than whole-canvas: a million-row search must not
+--- decode a million rows at once, and stopping at the first match usually
+--- means decoding very few.
+--- @return integer|nil row0 the matching logical row
+--- @return string|nil error
+function Paged.search(paged, pattern, opts)
+  if type(paged) ~= "table" or not paged.list then
+    return nil, "paged canvas is unavailable"
+  end
+  if type(pattern) ~= "string" or pattern == "" then
+    return nil, "search pattern must be a non-empty string"
+  end
+  local compiled, regex_err = pcall(vim.regex, pattern)
+  if not compiled then
+    return nil, "invalid search pattern: " .. tostring(regex_err)
+  end
+  local regex = regex_err
+
+  opts = opts or {}
+  local total = paged.list:row_count()
+  if total == 0 then
+    return nil, "the canvas has no rows"
+  end
+  local from0 = opts.from0 or 0
+  if type(from0) ~= "number" or from0 % 1 ~= 0 then
+    return nil, "search start must be an integer row"
+  end
+  local backward = opts.backward and true or false
+  local wrap = opts.wrap ~= false
+
+  -- Visit every row exactly once, starting just past `from0` and wrapping,
+  -- so a search that finds nothing terminates rather than looping.
+  local visited = 0
+  local cursor = backward and (from0 - 1) or (from0 + 1)
+  local CHUNK = 256
+  while visited < total do
+    if cursor < 0 or cursor >= total then
+      if not wrap then
+        return nil
+      end
+      cursor = cursor < 0 and (total - 1) or 0
+    end
+    local start0 = backward and math.max(0, cursor - CHUNK + 1) or cursor
+    local count = backward and (cursor - start0 + 1)
+      or math.min(CHUNK, total - cursor)
+    local rows, rows_err = paged.list:rows(start0, count)
+    if not rows then
+      return nil, "could not read the canvas: " .. tostring(rows_err)
+    end
+    if backward then
+      for index = #rows, 1, -1 do
+        if regex:match_str(rows[index]) then
+          return start0 + index - 1
+        end
+        visited = visited + 1
+        if visited >= total then
+          return nil
+        end
+      end
+      cursor = start0 - 1
+    else
+      for index = 1, #rows do
+        if regex:match_str(rows[index]) then
+          return start0 + index - 1
+        end
+        visited = visited + 1
+        if visited >= total then
+          return nil
+        end
+      end
+      cursor = start0 + #rows
+    end
+  end
+  return nil
+end
+
+--- Put a range of the canvas into a register, as text rather than as blanks.
+---
+--- Same reason as `search`: yanking on the skeleton buffer copies empty lines,
+--- because that is what is in it. Measured -- yanking a 9-row canvas produced
+--- 9 bytes and none of the text.
+--- @return string|nil text what was placed in the register
+--- @return string|nil error
+function Paged.yank(paged, start0, count, opts)
+  if type(paged) ~= "table" or not paged.projection then
+    return nil, "paged canvas is unavailable"
+  end
+  opts = opts or {}
+  local text, export_err = paged.projection:export(start0, count, {
+    terminal_eol = true,
+  })
+  if not text then
+    return nil, "could not export the canvas: " .. tostring(export_err)
+  end
+  local register = opts.register or '"'
+  if type(register) ~= "string" or #register ~= 1 then
+    return nil, "register must be a single character"
+  end
+  -- Linewise, because a range of canvas rows is a range of lines. `V` is what
+  -- makes a later `p` put them on their own lines rather than inline.
+  local set, set_err = pcall(vim.fn.setreg, register, text, "V")
+  if not set then
+    return nil, "could not set register: " .. tostring(set_err)
+  end
+  return text
+end
+
 --- The logical text of a paged canvas, in the shape `canvas.logical` answers.
 ---
 --- Having the same shape is the point: a reader that works against the eager

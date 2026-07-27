@@ -535,4 +535,106 @@ T["paged_ replacing a section that does not exist is an ordinary error"] =
     assert(ok, failure)
   end
 
+T["paged_ search finds text that the buffer does not contain"] = function()
+  -- The gap this closes, measured: on a paged canvas the buffer holds one
+  -- BLANK line per logical row, so Neovim's own `/` matches nothing on a
+  -- canvas that plainly contains the text.
+  local sections = { section("f.txt", "alpha", 300) }
+  local paged, err = Paged.render(sections)
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    local total = paged.list:row_count()
+    local rows = assert(paged.list:rows(0, total))
+    local needle
+    for index, row in ipairs(rows) do
+      if row:find("changed", 1, true) then
+        needle = index - 1
+        break
+      end
+    end
+    assert(needle, "sanity: the fixture must contain a changed line")
+
+    -- Neovim itself cannot find it, because the buffer line really is blank.
+    H.eq(API.nvim_buf_get_lines(paged.buffer, needle, needle + 1, false)[1], "",
+      "the skeleton is not blank, so this test proves nothing")
+
+    H.eq(Paged.search(paged, "changed"), needle,
+      "the paged canvas could not find its own text")
+
+    -- Searching from the match moves on to the next one, and wraps.
+    local next_match = Paged.search(paged, "changed", { from0 = needle })
+    assert(next_match and next_match > needle, "search did not advance")
+    local wrapped = Paged.search(paged, "changed", { from0 = total - 1 })
+    assert(wrapped ~= nil and wrapped < total, "search did not wrap")
+
+    -- Backwards too.
+    local back = Paged.search(paged, "changed", {
+      from0 = next_match, backward = true,
+    })
+    H.eq(back, needle, "backward search found the wrong row")
+
+    -- A pattern that matches nothing terminates rather than looping.
+    H.eq(Paged.search(paged, "ABSENT_NEEDLE_XYZ"), nil)
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ search refuses what it cannot search"] = function()
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    H.eq(Paged.search(paged, ""), nil, "an empty pattern is refused")
+    H.eq(Paged.search(paged, 7), nil, "a non-string pattern is refused")
+    H.eq(Paged.search(nil, "x"), nil, "a missing canvas is refused")
+    local found, message = Paged.search(paged, "x", { from0 = 1.5 })
+    H.eq(found, nil)
+    assert(type(message) == "string" and message ~= "", tostring(message))
+    -- An unmatchable-but-valid pattern is simply not found, not an error.
+    local absent, absent_err = Paged.search(paged, "ZZZ_NOT_HERE")
+    H.eq(absent, nil)
+    H.eq(absent_err, nil)
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ yank puts real text in the register, not blank lines"] = function()
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    local total = paged.list:row_count()
+    local text = assert(Paged.yank(paged, 0, total, { register = "z" }))
+    H.eq(vim.fn.getreg("z"), text, "the register did not receive the export")
+    H.eq(vim.fn.getregtype("z"), "V", "a range of canvas rows must be linewise")
+
+    local rows = assert(paged.list:rows(0, total))
+    H.eq(text, table.concat(rows, "\n") .. "\n",
+      "the yanked text is not the canvas text")
+    assert(#text > total,
+      "the yank produced roughly one byte per row, which means blank lines")
+
+    -- A partial range yanks exactly that range.
+    local part = assert(Paged.yank(paged, 2, 3, { register = "z" }))
+    H.eq(part, table.concat(vim.list_slice(rows, 3, 5), "\n") .. "\n")
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
+T["paged_ yank refuses a bad range or register"] = function()
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    H.eq(Paged.yank(paged, 0, paged.list:row_count() + 1), nil,
+      "yanking past the end is refused")
+    H.eq(Paged.yank(paged, -1, 1), nil, "a negative start is refused")
+    H.eq(Paged.yank(paged, 0, 1, { register = "toolong" }), nil,
+      "a multi-character register is refused")
+    H.eq(Paged.yank(nil, 0, 1), nil, "a missing canvas is refused")
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
+
 return T
