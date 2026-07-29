@@ -105,3 +105,45 @@ Injected write-then-throw set, delete failure, and inspection failure all
 recover on a later setup without deleting foreign mappings. `git diff --check`
 passed. The documented command-only lazy-loading limitation remains the only
 known residual concern.
+
+## Controller repair round 2
+
+Independent review found three remaining ownership-boundary gaps:
+
+- a 51-byte lhs later in a list passed local validation, so an earlier valid
+  lhs was installed before Neovim rejected the long entry;
+- a same-callback, same-behavior reinstall had different observable call-site
+  provenance but was still deleted as owned;
+- replaceable public Lua get/delete wrappers could run user code between the
+  final ownership check and deletion.
+
+Red regressions reproduced each issue: the valid prefix remained installed
+after the long-lhs failure, a reinstall with a distinct `sid`/`lnum` was
+removed, and the monkeypatched public getter was called three times.
+
+Repairs:
+
+- Complete-list validation now applies Neovim's 50-byte lhs limit after
+  termcode expansion, before any mutation.
+- Established ownership records snapshot every stable field returned by
+  `nvim_get_keymap()` except the separately compared callback. This includes
+  behavior, mode/buffer attributes and `sid`/`lnum`/`scriptversion`
+  provenance, so even an otherwise identical foreign reinstall survives.
+- Production reconciliation captures raw native get/set/delete functions at
+  module load. The final authentication/delete pair cannot enter replaceable
+  public Lua wrappers.
+- `App.new()` accepts explicit keymap effects for fault testing. A second-entry
+  write-then-throw, delete failure and inspection failure all retain a
+  conservative authenticated ledger and recover on a later synchronization.
+
+Repair verification:
+
+```text
+keys_global focused: 11/11 passed
+architecture: 30/30 passed
+NVIM_LOG_FILE=/tmp/canvasdiff-task4-r2-full.log make test
+814/814 passed
+```
+
+`git diff --check` passed. The documented command-only lazy-loading limitation
+remains the only known residual concern.

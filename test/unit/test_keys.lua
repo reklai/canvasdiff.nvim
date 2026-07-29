@@ -388,6 +388,7 @@ T["keys_global compare validates a complete list before mutating any lhs"] = fun
     { value = { lhs, "" }, fragment = "empty" },
     { value = { lhs, 42 }, fragment = "string" },
     { value = { lhs, lhs }, fragment = "same lhs" },
+    { value = { lhs, string.rep("x", 51) }, fragment = "maximum" },
     { value = 42, fragment = "string or list" },
     { value = { named = lhs }, fragment = "dense list" },
   }
@@ -404,6 +405,82 @@ T["keys_global compare validates a complete list before mutating any lhs"] = fun
   end
   fm.setup({ keymaps = { global = { compare = false } } })
   delete_global(lhs)
+  config.setup({})
+end
+
+T["keys_global compare preserves a same-callback same-behavior foreign reinstall"] = function()
+  local fm = require("canvasdiff")
+  local lhs = "gVp"
+  delete_global(lhs)
+  fm.setup({ keymaps = { global = { compare = lhs } } })
+  local installed = assert(global_map(lhs))
+
+  vim.keymap.set("n", lhs, installed.callback, {
+    desc = installed.desc,
+    noremap = true,
+    silent = true,
+  })
+  local takeover = assert(global_map(lhs))
+  assert(rawequal(takeover.callback, installed.callback))
+  assert(takeover.lnum ~= installed.lnum or takeover.sid ~= installed.sid,
+    "the foreign call site must have distinct observable provenance")
+
+  fm.setup({ keymaps = { global = { compare = false } } })
+  local survived = assert(global_map(lhs),
+    "same callback and behavior do not erase foreign call-site provenance")
+  assert(rawequal(survived.callback, installed.callback))
+  delete_global(lhs)
+  config.setup({})
+end
+
+T["keys_global compare deletion bypasses reentrant public get and delete wrappers"] = function()
+  local fm = require("canvasdiff")
+  local get_lhs, del_lhs = "gVg", "gVd"
+  delete_global(get_lhs)
+  delete_global(del_lhs)
+
+  fm.setup({ keymaps = { global = { compare = get_lhs } } })
+  local real_get = vim.api.nvim_get_keymap
+  local stale = real_get("n")
+  local get_calls = 0
+  local get_foreign = function() end
+  vim.api.nvim_get_keymap = function(mode)
+    get_calls = get_calls + 1
+    if get_calls == 2 then
+      vim.keymap.set("n", get_lhs, get_foreign, { desc = "Stale-get takeover" })
+      return stale
+    end
+    return real_get(mode)
+  end
+  local get_ok, get_err = pcall(function()
+    fm.setup({ keymaps = { global = { compare = false } } })
+  end)
+  vim.api.nvim_get_keymap = real_get
+  assert(get_ok, get_err)
+  H.eq(get_calls, 0,
+    "production authentication must use the captured native getter, not a Lua wrapper")
+  H.eq(global_map(get_lhs), nil, "the original owned mapping is removed")
+
+  fm.setup({ keymaps = { global = { compare = del_lhs } } })
+  local real_del = vim.keymap.del
+  local del_calls = 0
+  local del_foreign = function() end
+  vim.keymap.del = function(mode, target, opts)
+    del_calls = del_calls + 1
+    vim.keymap.set("n", del_lhs, del_foreign, { desc = "Delete takeover" })
+    return real_del(mode, target, opts)
+  end
+  local del_ok, del_err = pcall(function()
+    fm.setup({ keymaps = { global = { compare = false } } })
+  end)
+  vim.keymap.del = real_del
+  assert(del_ok, del_err)
+  H.eq(del_calls, 0,
+    "no reentrant Lua delete wrapper may run after final authentication")
+  H.eq(global_map(del_lhs), nil, "the original owned mapping is removed")
+
+  delete_global(get_lhs)
+  delete_global(del_lhs)
   config.setup({})
 end
 
@@ -442,64 +519,81 @@ T["keys_global compare coalesces notification reentry so the newest setup owns t
 end
 
 T["keys_global compare retains recoverable ownership across set and delete failures"] = function()
-  local fm = require("canvasdiff")
-  local set_lhs, del_lhs, get_lhs = "gRf", "gRd", "gRg"
+  local App = require("canvasdiff.App")
+  local set_lhs, later_set_lhs = "gRf", "gRh"
+  local del_lhs, get_lhs = "gRd", "gRg"
   delete_global(set_lhs)
+  delete_global(later_set_lhs)
   delete_global(del_lhs)
   delete_global(get_lhs)
 
-  local real_set = vim.keymap.set
-  vim.keymap.set = function(mode, lhs, callback, opts)
-    real_set(mode, lhs, callback, opts)
-    if lhs == set_lhs then error("injected write-then-throw") end
-  end
-  local set_ok, set_err = pcall(function()
-    capture_notifications(function()
-      fm.setup({ keymaps = { global = { compare = set_lhs } } })
-    end)
-  end)
-  vim.keymap.set = real_set
-  assert(set_ok, set_err)
-  assert(global_map(set_lhs), "the injected setter wrote before it failed")
-  fm.setup({ keymaps = { global = { compare = false } } })
-  H.eq(global_map(set_lhs), nil, "the failed set remains authenticated for cleanup")
+  local native_get = vim.api.nvim_get_keymap
+  local native_set = vim.api.nvim_set_keymap
+  local native_del = vim.api.nvim_del_keymap
+  local fail_set_lhs, fail_del, fail_get = nil, false, false
+  local app = App.new({
+    global_keymap_effects = {
+      get = function(mode)
+        if fail_get then error("injected keymap inspection failure") end
+        return native_get(mode)
+      end,
+      set = function(mode, lhs, callback, opts)
+        local native_opts = vim.deepcopy(opts)
+        native_opts.callback = callback
+        native_set(mode, lhs, "", native_opts)
+        if lhs == fail_set_lhs then error("injected write-then-throw") end
+      end,
+      del = function(mode, lhs)
+        if fail_del then error("injected delete failure") end
+        return native_del(mode, lhs)
+      end,
+    },
+  })
 
-  fm.setup({ keymaps = { global = { compare = del_lhs } } })
-  assert(global_map(del_lhs))
-  local real_del = vim.keymap.del
-  vim.keymap.del = function(mode, lhs, opts)
-    if lhs == del_lhs then error("injected delete failure") end
-    return real_del(mode, lhs, opts)
-  end
-  local del_ok, del_err = pcall(function()
-    capture_notifications(function()
-      fm.setup({ keymaps = { global = { compare = false } } })
-    end)
+  config.setup({
+    keymaps = { global = { compare = { set_lhs, later_set_lhs } } },
+  })
+  fail_set_lhs = later_set_lhs
+  capture_notifications(function()
+    app:sync_global_keymaps()
   end)
-  vim.keymap.del = real_del
-  assert(del_ok, del_err)
+  fail_set_lhs = nil
+  assert(global_map(set_lhs), "the earlier setter succeeded before the later failure")
+  assert(global_map(later_set_lhs), "the injected later setter wrote before it failed")
+  config.setup({ keymaps = { global = { compare = false } } })
+  app:sync_global_keymaps()
+  H.eq(global_map(set_lhs), nil, "the earlier set remains authenticated for cleanup")
+  H.eq(global_map(later_set_lhs), nil,
+    "the failed later set remains authenticated for cleanup")
+
+  config.setup({ keymaps = { global = { compare = del_lhs } } })
+  app:sync_global_keymaps()
+  assert(global_map(del_lhs))
+  config.setup({ keymaps = { global = { compare = false } } })
+  fail_del = true
+  capture_notifications(function()
+    app:sync_global_keymaps()
+  end)
+  fail_del = false
   assert(global_map(del_lhs), "a failed delete leaves the map and ledger intact")
-  fm.setup({ keymaps = { global = { compare = false } } })
+  app:sync_global_keymaps()
   H.eq(global_map(del_lhs), nil, "a later setup retries cleanup")
 
-  fm.setup({ keymaps = { global = { compare = get_lhs } } })
+  config.setup({ keymaps = { global = { compare = get_lhs } } })
+  app:sync_global_keymaps()
   assert(global_map(get_lhs))
-  local real_get = vim.api.nvim_get_keymap
-  vim.api.nvim_get_keymap = function()
-    error("injected keymap inspection failure")
-  end
-  local get_ok, get_err = pcall(function()
-    capture_notifications(function()
-      fm.setup({ keymaps = { global = { compare = false } } })
-    end)
+  config.setup({ keymaps = { global = { compare = false } } })
+  fail_get = true
+  capture_notifications(function()
+    app:sync_global_keymaps()
   end)
-  vim.api.nvim_get_keymap = real_get
-  assert(get_ok, get_err)
+  fail_get = false
   assert(global_map(get_lhs), "an inspection failure performs no unauthenticated delete")
-  fm.setup({ keymaps = { global = { compare = false } } })
+  app:sync_global_keymaps()
   H.eq(global_map(get_lhs), nil, "the candidate ledger survives for a later cleanup")
 
   delete_global(set_lhs)
+  delete_global(later_set_lhs)
   delete_global(del_lhs)
   delete_global(get_lhs)
   config.setup({})

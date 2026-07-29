@@ -22,6 +22,14 @@ local lens = diff.lens
 local viewport = diff.anchor
 local Surface = require("canvasdiff.Surface")
 
+-- Capture Neovim's raw global-map operations at module load. The final
+-- authenticate/delete pair must not pass through replaceable Lua wrappers:
+-- one can otherwise publish a foreign takeover between the snapshot and the
+-- deletion it delegates.
+local native_get_keymap = vim.api.nvim_get_keymap
+local native_set_keymap = vim.api.nvim_set_keymap
+local native_del_keymap = vim.api.nvim_del_keymap
+
 local App = {}
 App.__index = App
 
@@ -29,7 +37,17 @@ local EMPTY_MSG = "-- no changes --"
 local STALE_COMPARE = {}
 local buf_dir
 
-function App.new()
+function App.new(opts)
+  opts = opts or {}
+  local effects = opts.global_keymap_effects or {
+    get = native_get_keymap,
+    set = function(mode, lhs, callback, map_opts)
+      local native_opts = vim.deepcopy(map_opts)
+      native_opts.callback = callback
+      return native_set_keymap(mode, lhs, "", native_opts)
+    end,
+    del = native_del_keymap,
+  }
   -- Reviews are indexed by their own canvas buffer, which is the only identity
   -- that cannot drift: windows move between tabs, a review may have none on
   -- screen for a while, and two reviews of the same repository are legal.
@@ -41,6 +59,7 @@ function App.new()
     global_map_epoch = 0,
     global_map_syncing = false,
     global_map_pending = false,
+    global_map_effects = effects,
   }, App)
 end
 
@@ -52,8 +71,8 @@ local function global_lhs(lhs)
   return vim.keycode(lhs)
 end
 
-local function current_global_map(lhs)
-  local ok, maps = pcall(vim.api.nvim_get_keymap, "n")
+local function current_global_map(app, lhs)
+  local ok, maps = pcall(app.global_map_effects.get, "n")
   if not ok then
     return nil, tostring(maps)
   end
@@ -70,7 +89,7 @@ local function map_flag(value)
   return value == true or (type(value) == "number" and value ~= 0)
 end
 
-local function map_metadata(map)
+local function map_behavior(map)
   local rhs = map.rhs
   if rhs == "" then rhs = nil end
   return {
@@ -85,6 +104,36 @@ local function map_metadata(map)
   }
 end
 
+local MAP_FLAG_FIELDS = {
+  abbr = true,
+  expr = true,
+  noremap = true,
+  nowait = true,
+  replace_keycodes = true,
+  script = true,
+  silent = true,
+}
+
+--- Complete stable observable identity from nvim_get_keymap(), excluding only
+--- callback (compared by rawequal separately). Provenance fields such as
+--- sid/lnum/scriptversion are intentional: reinstalling our callback from a
+--- different call site is a foreign takeover, even with identical behavior.
+local function map_identity(map)
+  local out = {}
+  for name, value in pairs(map) do
+    if name ~= "callback" then
+      if MAP_FLAG_FIELDS[name] then
+        out[name] = map_flag(value)
+      elseif (name == "rhs" or name == "lhsrawalt") and value == "" then
+        out[name] = nil
+      else
+        out[name] = value
+      end
+    end
+  end
+  return out
+end
+
 local function expected_record(lhs, request, callback)
   return {
     lhs = lhs,
@@ -92,7 +141,7 @@ local function expected_record(lhs, request, callback)
     -- control and terminal keycodes, even though it is not suitable for lookup.
     installed_lhs = vim.fn.keytrans(lhs),
     callback = callback,
-    metadata = {
+    expected_behavior = {
       desc = request.desc,
       rhs = nil,
       noremap = true,
@@ -107,12 +156,16 @@ end
 
 --- Ownership is deliberately observable, not inferred from lhs or a
 --- CanvasDiff-looking description. A user can replace our lhs at any time;
---- exact callback identity plus every behavior-affecting keymap field is the
+--- exact callback identity plus the complete stable keymap API identity is the
 --- authority to remove it on the next setup.
 local function owns_global_map(record, map)
-  return map
-    and rawequal(map.callback, record.callback)
-    and vim.deep_equal(map_metadata(map), record.metadata)
+  if not (map and rawequal(map.callback, record.callback)) then
+    return false
+  end
+  if record.identity then
+    return vim.deep_equal(map_identity(map), record.identity)
+  end
+  return vim.deep_equal(map_behavior(map), record.expected_behavior)
 end
 
 local function record_from_map(record, map)
@@ -120,7 +173,7 @@ local function record_from_map(record, map)
     lhs = record.lhs,
     installed_lhs = map.lhs or record.installed_lhs,
     callback = record.callback,
-    metadata = map_metadata(map),
+    identity = map_identity(map),
   }
 end
 
@@ -145,10 +198,10 @@ end
 --- Refresh candidates against observable editor state. If inspection itself
 --- fails, retaining the candidate is conservative: it still grants no future
 --- mutation authority unless a later successful inspection authenticates it.
-local function refresh_global_ledger(candidates)
+local function refresh_global_ledger(app, candidates)
   local out = {}
   for _, record in ipairs(compact_candidates(candidates)) do
-    local map, err = current_global_map(record.lhs)
+    local map, err = current_global_map(app, record.lhs)
     if err then
       return compact_candidates(candidates), err
     end
@@ -234,6 +287,11 @@ local function desired_global_maps()
       return nil, nil, ("invalid global compare lhs %q: %s")
         :format(mapping.lhs, tostring(lhs))
     end
+    if #lhs > 50 then
+      return nil, nil,
+        ("global compare lhs %q exceeds Neovim's 50-byte maximum after termcode expansion")
+          :format(mapping.lhs)
+    end
     if desired[lhs] then
       return nil, nil, ("global compare mappings %q and %q resolve to the same lhs")
         :format(desired[lhs].configured_lhs, mapping.lhs)
@@ -248,7 +306,7 @@ local function desired_global_maps()
 end
 
 local function settle_global_ledger(app, candidates, diagnostic)
-  local ledger, inspect_err = refresh_global_ledger(candidates)
+  local ledger, inspect_err = refresh_global_ledger(app, candidates)
   app.global_maps = ledger
   if inspect_err then
     return {
@@ -279,7 +337,7 @@ local function reconcile_global_keymaps(app)
 
   local kept = {}
   for _, record in ipairs(app.global_maps) do
-    local map, inspect_err = current_global_map(record.lhs)
+    local map, inspect_err = current_global_map(app, record.lhs)
     if inspect_err then
       return settle_global_ledger(app, candidates, {
         kind = "error",
@@ -300,7 +358,7 @@ local function reconcile_global_keymaps(app)
   for _, lhs in ipairs(desired_order) do
     if not kept[lhs] then
       local request = desired[lhs]
-      local occupied, inspect_err = current_global_map(lhs)
+      local occupied, inspect_err = current_global_map(app, lhs)
       if inspect_err then
         return settle_global_ledger(app, candidates, {
           kind = "error",
@@ -323,7 +381,8 @@ local function reconcile_global_keymaps(app)
         end
         local tentative = expected_record(lhs, request, callback)
         candidates[#candidates + 1] = tentative
-        local set_ok, set_err = pcall(vim.keymap.set, "n", request.configured_lhs, callback, {
+        local set_ok, set_err = pcall(app.global_map_effects.set,
+          "n", request.configured_lhs, callback, {
           desc = request.desc,
           noremap = true,
           silent = true,
@@ -344,7 +403,7 @@ local function reconcile_global_keymaps(app)
 
   for _, record in ipairs(app.global_maps) do
     if not desired[record.lhs] then
-      local map, inspect_err = current_global_map(record.lhs)
+      local map, inspect_err = current_global_map(app, record.lhs)
       if inspect_err then
         return settle_global_ledger(app, candidates, {
           kind = "error",
@@ -355,7 +414,8 @@ local function reconcile_global_keymaps(app)
         return settle_global_ledger(app, candidates)
       end
       if owns_global_map(record, map) then
-        local del_ok, del_err = pcall(vim.keymap.del, "n", record.installed_lhs)
+        local del_ok, del_err = pcall(
+          app.global_map_effects.del, "n", record.installed_lhs)
         if not del_ok then
           return settle_global_ledger(app, candidates, {
             kind = "error",
