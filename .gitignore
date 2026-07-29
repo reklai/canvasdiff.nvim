@@ -1,3 +1,4 @@
 .superpowers/
+.worktrees/
 *.log
 doc/tags
