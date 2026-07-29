@@ -36,6 +36,14 @@ T["input_ facade exports exactly the supported key and motion operations"] = fun
     H.eq(type(input.motions[name]), "function",
       "input.motions." .. name .. " is callable")
   end
+
+  local jump_names = vim.tbl_keys(input.jump)
+  table.sort(jump_names)
+  H.eq(jump_names, { "back", "cancel", "enter", "last_buf", "store" })
+  for _, name in ipairs(jump_names) do
+    H.eq(type(input.jump[name]), "function",
+      "input.jump." .. name .. " is callable")
+  end
 end
 
 T["input_ legacy keys module path is deleted rather than shimmed"] = function()

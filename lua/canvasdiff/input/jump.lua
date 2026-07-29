@@ -32,6 +32,23 @@ function M.last_buf(store)
   return nil
 end
 
+--- Consume an excursion without rebuilding its editable worktree side.
+--- Used when the owner pivots to a read-only lens: retaining the old return
+--- mapping would let a later keypress splice worktree content into that lens.
+function M.cancel(store)
+  local excursion = store and store.excursion
+  if not excursion then
+    return false
+  end
+  store.excursion = nil
+  if excursion.back_keys and excursion.buf then
+    for _, lhs in ipairs(excursion.back_keys) do
+      pcall(vim.keymap.del, "n", lhs, { buffer = excursion.buf })
+    end
+  end
+  return true
+end
+
 --- @class CanvasDiffJump
 --- @field ok boolean
 --- @field diagnostic { level: "warn"|"info", message: string }|nil

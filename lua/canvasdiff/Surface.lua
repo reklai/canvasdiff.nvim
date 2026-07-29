@@ -311,6 +311,17 @@ function Surface:save()
   return true
 end
 
+--- Tear down a Surface that was constructed but never published.
+--- It has no user-visible lifetime to persist, so mark the save gate consumed
+--- before routing through the same exact controller/canvas cleanup as dispose.
+function Surface:abort(reason)
+  if not self:is_alive() then
+    return false
+  end
+  self.saved = true
+  return self:dispose(reason or "aborted")
+end
+
 --- Terminal, exactly-once teardown for one review lifetime.
 function Surface:dispose(reason)
   if not self:is_alive() then

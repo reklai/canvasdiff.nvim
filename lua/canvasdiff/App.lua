@@ -614,6 +614,21 @@ local function open_canvas(sections)
   return state or canvas.open(sections, {})
 end
 
+local function discard_unpublished_canvas(st, win, restore_buf)
+  if not st then
+    return
+  end
+  if vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_buf_is_valid(restore_buf)
+      and vim.api.nvim_win_get_buf(win) == st.buf then
+    pcall(vim.api.nvim_win_set_buf, win, restore_buf)
+  end
+  canvas.dispose(st)
+  if st.buf and vim.api.nvim_buf_is_valid(st.buf) then
+    pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
+  end
+end
+
   -- canvas.open changes the current window or this App's state. In
   -- particular, an invalid/deleted branch ref is an error, not an empty old
   -- side and not an empty canvas.
@@ -653,10 +668,20 @@ end
     for _, host in ipairs(previous:canvas_windows()) do
       displaced[#displaced + 1] = host
     end
-    previous:dispose("replaced")
+  end
+  if opts._guard and not opts._guard() then
+    return nil, STALE_COMPARE
   end
 
   local st = open_canvas(sections)
+  if opts._guard and not opts._guard(st.buf) then
+    discard_unpublished_canvas(st, win, prev_buf)
+    return nil, STALE_COMPARE
+  end
+
+  if previous then
+    previous:dispose("replaced")
+  end
   st.root = root
   st.lens = l
   -- Kept alongside, for the session payload and for anything still speaking the
@@ -687,6 +712,15 @@ end
       forget(self, owner)
     end,
   }, ownership)
+  if opts._guard and not opts._guard(st.buf) then
+    if vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_buf_is_valid(prev_buf)
+        and vim.api.nvim_win_get_buf(win) == st.buf then
+      pcall(vim.api.nvim_win_set_buf, win, prev_buf)
+    end
+    surface:abort("stale_compare")
+    return nil, STALE_COMPARE
+  end
   self.surfaces[st.buf] = surface
   self.opened[#self.opened + 1] = surface
 
@@ -1258,6 +1292,71 @@ end
 ---
 --- Shared by the lens pivot, App:refresh and watch -- they are one operation ("go and
 --- see what is true now"), differing only in what prompted it.
+local function capture_pivot(surface, st)
+  local views = {}
+  for _, win in ipairs(surface:canvas_snapshot().canvas) do
+    local ok, view = pcall(vim.api.nvim_win_call, win, vim.fn.winsaveview)
+    if ok then
+      views[win] = view
+    end
+  end
+  return {
+    lens = st.lens,
+    base = st.base,
+    sections = vim.deepcopy(st.sections or {}),
+    collapsed = vim.deepcopy(st.collapsed or {}),
+    folded = vim.deepcopy(st.folded or {}),
+    folded_seen = vim.deepcopy(st.folded_seen or {}),
+    rendered_hidden = vim.deepcopy(st.rendered_hidden or {}),
+    views = views,
+  }
+end
+
+local function rollback_pivot(surface, st, snapshot, transaction)
+  while true do
+    st.lens = snapshot.lens
+    st.base = snapshot.base
+    st.collapsed = vim.deepcopy(snapshot.collapsed)
+    st.folded = vim.deepcopy(snapshot.folded)
+    st.folded_seen = vim.deepcopy(snapshot.folded_seen)
+    st.rendered_hidden = vim.deepcopy(snapshot.rendered_hidden)
+    canvas.render_all(st, vim.deepcopy(snapshot.sections))
+    if #snapshot.sections == 0 then
+      show_empty_message(st)
+    end
+
+    -- Restoration itself renders and restores window state, both re-entrant
+    -- editor boundaries. If a newer nested picker commits there, restart from
+    -- its checkpoint instead of resuming the obsolete snapshot over it.
+    local checkpoint = surface.compare_checkpoint
+    if checkpoint and checkpoint.transaction > transaction then
+      snapshot = checkpoint.snapshot
+      transaction = checkpoint.transaction
+    else
+      st.folded_seen = vim.deepcopy(snapshot.folded_seen)
+      st.rendered_hidden = vim.deepcopy(snapshot.rendered_hidden)
+      local superseded
+      for win, view in pairs(snapshot.views) do
+        if canvas_showing(st, win) then
+          pcall(vim.api.nvim_win_call, win, function()
+            vim.fn.winrestview(view)
+          end)
+        end
+        checkpoint = surface.compare_checkpoint
+        if checkpoint and checkpoint.transaction > transaction then
+          snapshot = checkpoint.snapshot
+          transaction = checkpoint.transaction
+          superseded = true
+          break
+        end
+      end
+      if not superseded then
+        return
+      end
+    end
+  end
+end
+
 local function pivot(surface, target_lens, guard)
   local st = surface and surface.state
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
@@ -1273,25 +1372,95 @@ local function pivot(surface, target_lens, guard)
     return nil, err
   end
 
-  -- Collection succeeded, so the candidate comparison is now safe to publish.
-  -- It is assigned before reconciliation because folded placeholders and
-  -- newly-inserted folded sections record the active lens while they render.
+  if guard and not guard() then
+    return nil, STALE_COMPARE
+  end
+
+  local transaction
+  if guard and target_lens then
+    surface.compare_epoch = (surface.compare_epoch or 0) + 1
+    transaction = surface.compare_epoch
+    surface.compare_depth = (surface.compare_depth or 0) + 1
+  end
+  local snapshot = transaction and capture_pivot(surface, st) or nil
+  local function finish(ok, err)
+    if transaction then
+      surface.compare_depth = surface.compare_depth - 1
+      if surface.compare_depth == 0 then
+        surface.compare_checkpoint = nil
+      end
+    end
+    return ok, err
+  end
+  local function stale()
+    if not (guard and not guard()) then
+      return false
+    end
+    if snapshot then
+      local restore = snapshot
+      local restore_transaction = transaction
+      local checkpoint = surface.compare_checkpoint
+      if checkpoint and checkpoint.transaction > transaction then
+        restore = checkpoint.snapshot
+        restore_transaction = checkpoint.transaction
+      end
+      rollback_pivot(surface, st, restore, restore_transaction)
+      snapshot = nil
+    end
+    return true
+  end
+  if stale() then
+    return finish(nil, STALE_COMPARE)
+  end
+
+  -- Fold rendering and folded_seen are lens-dependent, so reconciliation must
+  -- see the candidate lens. The snapshot above makes this publication
+  -- provisional until every re-entrant boundary below has retained ownership.
   if target_lens then
     st.lens = target_lens
     st.base = lens.to_base(target_lens)
   end
 
   local full = canvas.reconcile_sections(st, desired)
+  if stale() then
+    return finish(nil, STALE_COMPARE)
+  end
+
   if full and #desired == 0 then
     show_empty_message(st)
+    if stale() then
+      return finish(nil, STALE_COMPARE)
+    end
   end
   refresh_winbars(surface)
+  if stale() then
+    return finish(nil, STALE_COMPARE)
+  end
   sync_after_collapse(surface, st)
+  if stale() then
+    return finish(nil, STALE_COMPARE)
+  end
   local lease = surface.controllers.virt
   if lease then
     virt.apply(lease, config.options.virt)
+    if stale() then
+      return finish(nil, STALE_COMPARE)
+    end
   end
-  return true
+  if transaction and surface.compare_depth > 1 then
+    local committed = capture_pivot(surface, st)
+    if stale() then
+      return finish(nil, STALE_COMPARE)
+    end
+    local checkpoint = surface.compare_checkpoint
+    if not checkpoint or transaction > checkpoint.transaction then
+      surface.compare_checkpoint = {
+        transaction = transaction,
+        snapshot = committed,
+      }
+    end
+  end
+  return finish(true)
 end
 
 --- Re-collect and splice in whatever changed: the manual version of the pass
@@ -1358,8 +1527,15 @@ function App:set_lens(l)
   return true
 end
 
-local function set_owned_lens(surface, l, guard)
-  if lens.same(lens.of(surface.state), l) then
+local function set_owned_lens(surface, l, guard, on_commit)
+  if guard and not guard() then
+    return nil
+  end
+  if lens.same(lens.of(surface.state), l)
+      and not (guard and (surface.compare_depth or 0) > 0) then
+    if on_commit then
+      on_commit()
+    end
     return true
   end
   local ok, err = pivot(surface, l, guard)
@@ -1369,6 +1545,12 @@ local function set_owned_lens(surface, l, guard)
     end
     ui.warn(err)
     return nil, err
+  end
+  if guard and not guard() then
+    return nil
+  end
+  if on_commit then
+    on_commit()
   end
   ui.notify("showing " .. l.label)
   return true
@@ -1504,7 +1686,7 @@ local function format_branch(item)
   return item.name .. " [" .. table.concat(labels, "] [") .. "]"
 end
 
-local function compare_origin_alive(app, request)
+local function compare_origin_alive(app, request, unpublished_buf)
   if app.compare_request ~= request.token
       or not vim.api.nvim_win_is_valid(request.win) then
     return false
@@ -1515,6 +1697,10 @@ local function compare_origin_alive(app, request)
       and request.surface:guard(request.generation)
   end
   return owner == nil
+    and (
+      vim.api.nvim_win_get_buf(request.win) == request.buf
+      or vim.api.nvim_win_get_buf(request.win) == unpublished_buf
+    )
 end
 
 --- Pick a merge-base comparison without changing refs or repository state.
@@ -1526,19 +1712,39 @@ function App:compare()
   self.compare_request = self.compare_request + 1
   local token = self.compare_request
   local win = vim.api.nvim_get_current_win()
+  local request = {
+    token = token,
+    win = win,
+    buf = vim.api.nvim_win_get_buf(win),
+  }
   local surface = surface_for_window(self, win)
+  if self.compare_request ~= token then
+    return
+  end
+  request.surface = surface
+  request.generation = surface and surface.generation or nil
+
   local root = surface and surface.state.root or source.root(vim.fn.getcwd())
+  if not compare_origin_alive(self, request) then
+    return
+  end
   if not root then
-    local ok, buf = pcall(vim.api.nvim_win_get_buf, win)
-    local dir = ok and buf_dir(buf) or nil
+    local dir = buf_dir(request.buf)
     root = dir and source.root(dir) or nil
+    if not compare_origin_alive(self, request) then
+      return
+    end
   end
   if not root then
     ui.warn("not inside a git repository")
     return
   end
+  request.root = root
 
   local branches, err = source.branches(root)
+  if not compare_origin_alive(self, request) then
+    return
+  end
   if not branches then
     ui.warn(err)
     return nil, err
@@ -1551,13 +1757,6 @@ function App:compare()
   end
   local comparisons = comparison_choices(branches)
 
-  local request = {
-    token = token,
-    win = win,
-    surface = surface,
-    generation = surface and surface.generation or nil,
-    root = root,
-  }
   vim.ui.select(bases, {
     prompt = "CanvasDiff base:",
     kind = "canvasdiff_branch_base",
@@ -1577,11 +1776,27 @@ function App:compare()
       vim.api.nvim_win_call(request.win, function()
         if compare_origin_alive(self, request) then
           local target = lens.range(base.ref, other.ref, "...")
-          local guard = function()
-            return compare_origin_alive(self, request)
+          local guard = function(unpublished_buf)
+            return compare_origin_alive(self, request, unpublished_buf)
           end
-          if request.surface and request.surface:is_showing() then
-            set_owned_lens(request.surface, target, guard)
+          if request.surface then
+            local changed = set_owned_lens(
+              request.surface, target, guard, function()
+                jump.cancel(request.surface.excursion)
+              end)
+            if changed and guard()
+                and not canvas_showing(request.surface.state, request.win) then
+              local landing = vim.api.nvim_win_get_buf(request.win)
+              if canvas.show(request.surface.state, request.win) and guard() then
+                request.surface:adopt_window(request.win, landing)
+                request.surface:capture_view(request.win)
+                set_winbar(request.surface.state, nil, request.win)
+                local side_lease = request.surface.controllers.sidebar
+                if side_lease then
+                  sidebar.reconcile(side_lease)
+                end
+              end
+            end
           else
             self:open({
               lens = target,

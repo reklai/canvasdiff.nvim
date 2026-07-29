@@ -15,6 +15,7 @@ return {
   },
   jump = {
     back = jump.back,
+    cancel = jump.cancel,
     enter = jump.enter,
     last_buf = jump.last_buf,
     store = jump.store,
