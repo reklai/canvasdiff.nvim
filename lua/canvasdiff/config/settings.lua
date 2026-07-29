@@ -59,9 +59,11 @@ local function is_glyph(name)
   return DEFAULT_GLYPHS[name] ~= nil
 end
 
--- Keymaps are grouped by the buffer they live on, because the same key means
--- different things in different places: `q` closes the canvas but only the
--- sidebar when pressed there, and `<Tab>`/`za`/`<CR>` are each claimed twice.
+-- Keymaps are grouped by the context they live in. `global` is process-wide;
+-- the other contexts name the buffer that receives the mapping, because the
+-- same key means different things in different places: `q` closes the canvas
+-- but only the sidebar when pressed there, and `<Tab>`/`za`/`<CR>` are each
+-- claimed twice.
 -- A flat table would need sidebar_select_alt-style names to disambiguate.
 --
 -- Every value takes a single key or a list of them, so an action can own more
@@ -70,6 +72,12 @@ end
 -- `collapse = "<Tab>"` really does drop `za`. `false` or `{}` disables.
 M.defaults = {
   keymaps = {
+    global = {
+      -- The only process-wide default. App installs it conservatively: an
+      -- existing user/plugin mapping wins, and setup only removes callbacks
+      -- whose exact identity and metadata still prove CanvasDiff ownership.
+      compare = "<leader>lb",
+    },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" },
       -- Vim's own fold key first, plus `c` for collapse -- the action you press
@@ -119,8 +127,8 @@ M.defaults = {
       -- read-only buffer. Accepted: macros are an editing tool, and this buffer
       -- cannot be edited.
       close      = "q",
-      -- The one leader-key default in the plugin, accepted deliberately: a
-      -- help binding exists for the user who does not know the other keys
+      -- The canvas's leader-key default, accepted deliberately: a help binding
+      -- exists for the user who does not know the other keys
       -- yet, so it must not shadow anything they might reach for (`?` is
       -- backward search, and search works fine in a read-only buffer).
       -- Like every default it is replaceable -- `help = "g?"` frees it.
@@ -242,7 +250,8 @@ function M.setup(opts)
     report(
       "keymaps are now grouped by context; found flat key(s): "
         .. table.concat(legacy, ", ")
-        .. ". Use keymaps = { canvas = {...}, sidebar = {...}, file = { back = ... } }"
+        .. ". Use keymaps = { global = {...}, canvas = {...},"
+        .. " sidebar = {...}, file = { back = ... } }"
         .. " -- see :help canvasdiff-mappings"
     )
   end

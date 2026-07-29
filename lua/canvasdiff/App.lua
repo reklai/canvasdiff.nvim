@@ -33,7 +33,140 @@ function App.new()
   -- Reviews are indexed by their own canvas buffer, which is the only identity
   -- that cannot drift: windows move between tabs, a review may have none on
   -- screen for a while, and two reviews of the same repository are legal.
-  return setmetatable({ surfaces = {}, opened = {}, compare_request = 0 }, App)
+  return setmetatable({
+    surfaces = {},
+    opened = {},
+    compare_request = 0,
+    global_maps = {},
+  }, App)
+end
+
+--- Canonical raw form used by nvim_get_keymap(). Unlike keytrans(), this keeps
+--- a Space leader as an actual space (the API's lhs is `" lb"`, not
+--- `"<Space>lb"`). Unlike retaining the configured string, it freezes the
+--- current <leader> expansion for reconciliation after mapleader changes.
+local function global_lhs(lhs)
+  return vim.keycode(lhs)
+end
+
+local function current_global_map(lhs)
+  for _, map in ipairs(vim.api.nvim_get_keymap("n")) do
+    -- Control keys use lhsrawalt while printable and termcode sequences use
+    -- lhsraw, so both are part of Neovim's observable canonical identity.
+    if map.lhsraw == lhs or map.lhsrawalt == lhs then
+      return map
+    end
+  end
+end
+
+--- Ownership is deliberately observable, not inferred from lhs or a
+--- CanvasDiff-looking description. A user can replace our lhs at any time;
+--- callback identity plus the installed metadata is the authority to remove
+--- it on the next setup.
+local function owns_global_map(record, map)
+  return map
+    and rawequal(map.callback, record.callback)
+    and map.desc == record.desc
+    and map.noremap == 1
+    and map.silent == 1
+end
+
+-- Notification memory is not ownership: it grants no delete/replace
+-- authority. It only prevents repeated setup calls and root-module reloads
+-- from warning about the same still-live foreign callback over and over.
+local warned_collision_callbacks = setmetatable({}, { __mode = "k" })
+local warned_collision_mappings = {}
+
+local function report_global_collision(request, lhs, occupied)
+  local callback = occupied.callback
+  if type(callback) == "function" then
+    if warned_collision_callbacks[callback] then
+      return
+    end
+    warned_collision_callbacks[callback] = true
+  else
+    local signature = table.concat({
+      lhs,
+      tostring(occupied.rhs),
+      tostring(occupied.sid),
+      tostring(occupied.lnum),
+      tostring(occupied.desc),
+    }, "\0")
+    if warned_collision_mappings[signature] then
+      return
+    end
+    warned_collision_mappings[signature] = true
+  end
+  ui.warn(("global mapping %s was not installed because %s is already mapped; "
+    .. "the existing mapping was left unchanged")
+    :format(request.configured_lhs, vim.fn.keytrans(lhs)))
+end
+
+--- Reconcile the process-wide actions for this exact App instance.
+---
+--- Existing foreign maps always win. Records are per App, so a second instance
+--- (including one created by a module reload) sees the first instance's
+--- callback as foreign and cannot delete or replace it.
+function App:sync_global_keymaps()
+  local desired, desired_order = {}, {}
+  for _, mapping in ipairs(keys.resolved("global", config.options.keymaps)) do
+    local lhs = global_lhs(mapping.lhs)
+    -- Two configured spellings can expand to the same sequence. Install the
+    -- first once instead of manufacturing a self-collision.
+    if not desired[lhs] then
+      desired[lhs] = {
+        configured_lhs = mapping.lhs,
+        desc = mapping.desc,
+      }
+      desired_order[#desired_order + 1] = lhs
+    end
+  end
+
+  local kept = {}
+  for _, record in ipairs(self.global_maps) do
+    local map = current_global_map(record.lhs)
+    if desired[record.lhs] and owns_global_map(record, map) then
+      kept[record.lhs] = record
+    elseif owns_global_map(record, map) then
+      -- Delete only after re-reading and authenticating what currently owns
+      -- the lhs; descriptions alone are intentionally insufficient.
+      pcall(vim.keymap.del, "n", record.installed_lhs)
+    end
+  end
+
+  local next_records = {}
+  for _, lhs in ipairs(desired_order) do
+    local record = kept[lhs]
+    if not record then
+      local request = desired[lhs]
+      local occupied = current_global_map(lhs)
+      if occupied then
+        report_global_collision(request, lhs, occupied)
+      else
+        local callback = function()
+          return self:compare()
+        end
+        vim.keymap.set("n", request.configured_lhs, callback, {
+          desc = request.desc,
+          noremap = true,
+          silent = true,
+        })
+        local installed = current_global_map(lhs)
+        if installed and rawequal(installed.callback, callback) then
+          record = {
+            lhs = lhs,
+            installed_lhs = installed.lhs,
+            callback = callback,
+            desc = request.desc,
+          }
+        end
+      end
+    end
+    if record then
+      next_records[#next_records + 1] = record
+    end
+  end
+  self.global_maps = next_records
 end
 
 --- Forget a review, whoever disposed it.
@@ -143,6 +276,7 @@ function App:setup(opts)
   for _, message in ipairs(diagnostics or {}) do
     ui.err(message)
   end
+  self:sync_global_keymaps()
   return options
 end
 

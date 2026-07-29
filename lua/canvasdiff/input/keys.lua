@@ -17,6 +17,8 @@ local K = {}
 --- group  section header in the cheatsheet and the helpfile
 --- desc   `desc=` on vim.keymap.set, and the cheatsheet text
 K.specs = {
+  { ctx = "global", action = "compare", group = "Global", desc = "Compare two branches or revisions" },
+
   { ctx = "canvas", action = "next_file",  group = "Navigate", desc = "Next file (lands on folded ones too)" },
   { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (lands on folded ones too)" },
   { ctx = "canvas", action = "next_hunk",  group = "Navigate", desc = "Next hunk (a folded file counts as one)" },
@@ -44,7 +46,7 @@ K.specs = {
 }
 
 --- Display order of the cheatsheet / helpfile sections.
-K.group_order = { "Navigate", "Jump", "View", "Canvas", "Sidebar" }
+K.group_order = { "Global", "Navigate", "Jump", "View", "Canvas", "Sidebar" }
 
 --- Normalize a config value to a list of lhs strings.
 --- nil / false / "" / {} all mean "disabled" and yield {}.

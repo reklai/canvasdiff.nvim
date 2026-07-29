@@ -27,6 +27,7 @@ T["config_ facade exports exactly the supported domain API"] = function()
 end
 
 T["config_ setup is optional and defaults are live without it"] = function()
+  H.eq(config.options.keymaps.global.compare, "<leader>lb")
   H.eq(config.options.keymaps.canvas.close, "q")
   H.eq(config.options.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
   H.eq(config.options.keymaps.file.back, "<C-Space>")
@@ -47,7 +48,14 @@ T["config_ a list override replaces rather than merges"] = function()
 end
 
 T["config_ disabling survives the merge"] = function()
-  with_setup({ keymaps = { canvas = { close = false }, sidebar = { close = {} } } }, function(opts)
+  with_setup({
+    keymaps = {
+      global = { compare = false },
+      canvas = { close = false },
+      sidebar = { close = {} },
+    },
+  }, function(opts)
+    H.eq(opts.keymaps.global.compare, false)
     H.eq(opts.keymaps.canvas.close, false)
     H.eq(opts.keymaps.sidebar.close, {})
   end)
@@ -55,6 +63,7 @@ end
 
 T["config_ unrelated contexts are untouched by a partial override"] = function()
   with_setup({ keymaps = { canvas = { help = "g?" } } }, function(opts)
+    H.eq(opts.keymaps.global.compare, "<leader>lb")
     H.eq(opts.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
     H.eq(opts.keymaps.file.back, "<C-Space>")
   end)
@@ -70,6 +79,8 @@ T["config_ the old flat keymaps shape is reported, not ignored"] = function()
       "must name the offending keys, got: " .. diagnostics[1])
     assert(diagnostics[1]:match("canvas"),
       "and point at the new shape, got: " .. diagnostics[1])
+    assert(diagnostics[1]:match("global"),
+      "and include the global context in the replacement shape, got: " .. diagnostics[1])
   end)
 end
 

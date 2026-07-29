@@ -14,3 +14,7 @@ end, {
     return require("canvasdiff").command_complete(arglead)
   end,
 })
+
+-- Instantiate the root owner now so its conservative default global mapping is
+-- available before the first :CanvasDiff command. setup() can rebind/disable it.
+require("canvasdiff")

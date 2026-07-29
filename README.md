@@ -11,13 +11,15 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
   "your-name/canvasdiff.nvim", -- adjust to wherever this repo lives
-  cmd = "CanvasDiff",
   opts = {}, -- optional; see Configuration below
 }
 ```
 
 `opts = {}` (or omitting `opts`/`config` entirely) is enough — the plugin
 works with its defaults even if `setup()` is never called.
+Load CanvasDiff at startup if you want its built-in global `<leader>lb` mapping
+available immediately; a `cmd = "CanvasDiff"`-only lazy spec cannot expose a
+mapping until that command has loaded the plugin.
 
 ## Usage
 
@@ -48,6 +50,10 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
 - Press **r** to refresh: re-scan the repo and splice in whatever changed, without
   moving what you were reading. (`watch` already does this on save and focus — `r` is
   for when you want it now.)
+- Press **s** on a file in the canvas or sidebar to move that whole file between
+  unstaged and staged. Any unstaged content is staged; a staged-only file is
+  unstaged without changing its worktree. A mixed file is staged first, so repeated
+  presses form a predictable stage → unstage cycle.
 - Press `<C-n>` / `<C-p>` to jump straight to the next/previous file's diff,
   wrapping around at either end. Focus stays in the canvas.
 
@@ -273,9 +279,12 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff open        " open it
 :CanvasDiff close       " close it
 :CanvasDiff refresh     " re-scan and splice in what changed, keeping your place
+:CanvasDiff compare     " choose two branches/revisions and compare them
 :CanvasDiff all         " everything: worktree vs HEAD   (the default)
 :CanvasDiff unstaged    " what you haven't staged: worktree vs index
 :CanvasDiff staged      " what you have staged: index vs HEAD
+:CanvasDiff main..topic " compare the two commit tips (read-only)
+:CanvasDiff main...topic " merge-base(main, topic) vs topic (read-only)
 ```
 
 All of them complete with `<Tab>`.
@@ -290,7 +299,7 @@ The canvas always compares two sides, and the **lens** is which pair:
 | `unstaged` | the index | your worktree | plain `git diff` |
 | `staged` | `HEAD` | the index | `git diff --staged` |
 
-`B` cycles through the three; the commands **set** one, so they're safe in a
+`<Tab>` cycles through the three; the commands **set** one, so they're safe in a
 mapping — `:CanvasDiff unstaged` always lands unstaged, which a toggle can't
 promise. Any of them will open the canvas if it isn't showing, and the current
 lens is always named in the canvas's winbar.
@@ -310,11 +319,27 @@ with this, then changed it".
 > spelling, and `--cached` means the same thing in git. The flag form reported
 > an error before `staged` existed; it now points at the word.
 
-A bare revision such as `:CanvasDiff main` is a supported branch lens: it
-shows the editable worktree against that ref. A commit range such as
-`:CanvasDiff main...HEAD` would put commits on both sides and make the canvas
-read-only, so ranges are rejected with a message that points back to the
-supported bare-ref form.
+A bare revision such as `:CanvasDiff main` remains a worktree lens: it shows
+your editable worktree against that ref. Ranges compare committed content and
+are therefore read-only:
+
+- `A..B` compares the two tips directly: A vs B.
+- `A...B` compares `merge-base(A, B)` vs B, showing what B introduced since
+  the histories diverged.
+- Either omitted endpoint means `HEAD`, so `main..` is `main..HEAD` and
+  `...topic` is `HEAD...topic`.
+
+`:CanvasDiff compare` (or the default global `<leader>lb`) opens two
+`vim.ui.select` pickers: first the base, then the comparison ref. Base choices
+prioritize `origin/HEAD`, other remote HEADs, then local `main`/`master`; the
+second picker puts the current branch (or detached HEAD) first. Full ref
+identities stay internal, and the picker never checks out, fetches, or mutates
+a branch.
+
+Stage cycling is file-level and follows Git's current XY state, not a stale
+screen snapshot. Staging is refused while a modified loaded buffer aliases the
+target path, so unsaved text cannot be silently replaced by disk content.
+Ranges are read-only and decline staging and file jumps.
 
 If the current directory isn't inside a git repository, `:CanvasDiff open`
 notifies you and does nothing further (it never errors).
@@ -333,10 +358,12 @@ last looked. Set `session.enabled = false` to turn this off entirely.
 
 ```lua
 require("canvasdiff").setup({
-  -- Grouped by the buffer each key lives on, because the same key means
-  -- different things in different places (`q` closes the canvas, but only the
-  -- sidebar when pressed there). Every value takes one key or a list of them.
+  -- Grouped by context. `global` is process-wide; the others name the buffer
+  -- each key lives on. Every value takes one key or a list of them.
   keymaps = {
+    global = {
+      compare = "<leader>lb", -- choose two refs and open their read-only diff
+    },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" }, -- open the file under the cursor
       collapse   = { "za", "c" },     -- fold this file away / bring it back
@@ -347,6 +374,7 @@ require("canvasdiff").setup({
       cycle_next = "<C-n>",  -- scroll to the next file's diff (wraps)
       cycle_prev = "<C-p>",  -- scroll to the previous file's diff (wraps)
       refresh    = "r",      -- re-scan, splice in what changed, keep your place
+      stage_cycle = "s",     -- stage this file, or unstage it when staged-only
       lens_next  = "<Tab>",  -- cycle the lens forward (all / unstaged / staged)
       lens_prev  = "<S-Tab>",-- and back
       close      = "q",      -- close the canvas
@@ -354,6 +382,7 @@ require("canvasdiff").setup({
     },
     sidebar = {
       select = { "<CR>", "za", "c", "<2-LeftMouse>" }, -- scroll here / fold a dir
+      stage_cycle = "s",     -- same file-level stage cycle
       close  = "q",          -- close the sidebar (canvas stays open)
       help   = "<leader>lh", -- show the keybind cheatsheet
     },
@@ -408,6 +437,7 @@ keymaps = { canvas  = { collapse = "za" } }            -- one key: drops `c`
 keymaps = { canvas  = { jump = { "<CR>", "o" } } }    -- a different pair
 keymaps = { canvas  = { close = false } }             -- disable it
 keymaps = { sidebar = { close = {} } }                -- also disables
+keymaps = { global  = { compare = false } }           -- disable global compare
 ```
 
 An override **replaces** the list rather than merging into it, so
@@ -425,12 +455,14 @@ have about a second between taps).
 | `next_hunk` / `prev_hunk` | `]h` / `[h` | tap **]** then **h** / **[** then **h** | Cursor to the next/previous hunk header, clamping. A folded file counts as one stop; takes a count |
 | `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | hold **Ctrl** + **N** / **P** | Scroll to the next/previous file's diff, wrapping. Lands on folded files too; takes a count |
 | `refresh` | `r` | **r** | Re-scan the repo and splice in what changed — **keeps the same text under your cursor** |
+| `stage_cycle` | `s` | **s** | Stage every unstaged change in this file; if it is staged-only, unstage it |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens forward / back: all ⇄ unstaged ⇄ staged |
 | `close` | `q` | **q** | Close the canvas, restore the previous buffer |
 
 | Sidebar | Default | How you press it | Action |
 | --- | --- | --- | --- |
 | `select` | `<CR>`, `za`, `c`, `<2-LeftMouse>` | **Enter**, **z** then **a**, just **c**, or **double-click** | Scroll the canvas to the file (without unfolding it), or fold the directory — which folds its files on the canvas too |
+| `stage_cycle` | `s` | **s** | Stage or unstage this file with the same cycle as the canvas |
 | `close` | `q` | **q** | Close the sidebar (canvas stays open) |
 
 | File buffer (during a jump) | Default | How you press it | Action |
@@ -489,12 +521,20 @@ compositors commonly intercept it, and `q` is not one *here* even though it clos
 canvas — this is a real file you are editing, so macros and every other normal-mode key
 have to keep working. That asymmetry is the whole reason keymaps are grouped by buffer.
 
-### Suggested global mappings
+### Global mappings
 
-The plugin installs **nothing** outside its own buffers — your leader namespace is
-yours. If you want the canvas and its lenses reachable from anywhere, this is the
-block to copy (lazy.nvim; adjust the prefixes to taste). With which-key installed,
-**Space l** becomes a self-documenting menu.
+The plugin installs one process-wide default: **`<leader>lb` opens the branch/revision
+comparison picker**. It is registered with a description for `:map`, which-key, and
+keymap pickers. CanvasDiff never replaces an existing global map: if that lhs is
+already occupied it leaves it untouched and reports the collision. Repeated
+`setup()` calls remove or rebind only the exact callback and metadata still owned by
+that CanvasDiff App instance, so a user/plugin takeover is preserved.
+
+Change or disable it with `keymaps.global.compare = "..."`, `false`, `""`, or `{}`.
+String and list forms work like every other CanvasDiff mapping.
+
+If you also want canvas/lens entry points globally, add them in your plugin manager
+(lazy.nvim example; adjust the prefixes to taste):
 
 ```lua
 keys = {
@@ -519,8 +559,9 @@ bare single keys for the actions you press dozens of times in a sweep.
 > `timeoutlen` after the second Space to see whether another key is coming, and the
 > toggle feels broken. A separate prefix costs nothing and avoids that entirely.
 
-Every mapping is registered with a `desc`, so they show up in `:map`,
-which-key.nvim and telescope keymaps without extra configuration.
+Every CanvasDiff mapping is registered with a `desc`. The in-canvas cheatsheet also
+lists `<leader>lb` in its **Global** column; it does not pretend the mapping is local
+to the canvas or sidebar.
 
 Diff content is highlighted lazily: only sections within `margin` rows of
 the current viewport get real treesitter syntax highlighting (using

@@ -1,6 +1,7 @@
 local App = require("canvasdiff.App")
 
 local app = App.new()
+app:sync_global_keymaps()
 
 return {
   setup = function(opts)

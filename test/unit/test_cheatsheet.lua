@@ -45,6 +45,23 @@ T["cheatsheet_model promotes to Global only on identical keys AND desc"] = funct
   H.eq(where.select, "Sidebar")
   H.eq(where.jump, "Canvas")
   H.eq(where.refresh, "Canvas")
+  H.eq(where.compare, "Global")
+end
+
+T["cheatsheet_model labels the process-wide compare mapping as Global"] = function()
+  local model = cheatsheet.model(defaults())
+  for _, col in ipairs(model) do
+    if col.title == "Global" then
+      for _, row in ipairs(col.sections[1].rows) do
+        if row.action == "compare" then
+          H.eq(row.keys, { "<leader>lb" })
+          assert(row.desc:find("Compare", 1, true))
+          return
+        end
+      end
+    end
+  end
+  error("the global compare action must be discoverable in cheatsheet metadata")
 end
 
 T["cheatsheet_model close stays per column with its own meaning"] = function()

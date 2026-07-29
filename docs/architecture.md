@@ -83,6 +83,31 @@ exactly one lease owns any one window or extmark ID at a time, and a lease that
 loses one releases its own bookkeeping for it rather than restoring over the
 new owner later.
 
+The process-wide compare keymap follows the same identity rule without becoming
+a controller lease. Each `App` retains the exact Lua callback and installed
+metadata for its own global maps. `setup()` removes or rebinds a mapping only
+when `nvim_get_keymap()` still reports that callback and metadata; an occupied
+lhs, a user/plugin takeover, another App, and a module reload are all foreign.
+Configured `<leader>` notation is canonicalized at installation time, so a
+later leader change can retire the old owned sequence without confusing it
+with the newly requested one.
+
+## Git comparison and mutation boundaries
+
+Named lenses (`all`, `unstaged`, `staged`) and bare refs can have a worktree or
+index side. `A..B` and `A...B` resolve both sides to commits and are marked
+read-only: two-dot compares tips, while three-dot replaces A with the merge
+base. The comparison picker only discovers refs and publishes one of those
+lenses; it never checks out, fetches, or writes refs.
+
+Stage cycling is a file mutation, so `App` re-reads porcelain status for the
+exact section identity before choosing a direction. Any unstaged state stages
+the whole file; staged-only state resets that file from HEAD. Repository
+mutations use literal pathspecs and rename-aware paths, while the buffer guard
+rejects staging if any modified loaded buffer resolves to the same filesystem
+identity. Successful mutation reconciles the lens and restores a content
+anchor rather than trusting the pre-mutation row.
+
 ## Tests
 
 Tests are grouped by **intent**, because intent is what tells you how to read a
@@ -119,6 +144,10 @@ NVIM_LOG_FILE=/tmp/canvasdiff.log make test
 
 - Adding a user-facing command word: `lua/canvasdiff/input/command.lua`
   (grammar and plan), then `App:command` if the operation is new.
+- Adding a mapping: declare its context/action/description in
+  `lua/canvasdiff/input/keys.lua`, add its default under the matching
+  `config.settings.keymaps` context, then wire the handler in `App` (global and
+  canvas), `ui.sidebar` (sidebar), or `input.jump` (temporary file buffer).
 - Adding a controller: model it on `lua/canvasdiff/ui/scrollbar.lua`, which is
   the smallest complete example of the lease contract, and wire it in
   `App:open` with `claim`/`alive`/`release`.
