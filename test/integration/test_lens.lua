@@ -359,6 +359,170 @@ T["lens_range invalid refs fail transactionally before reading either side"] = f
   vim.fn.delete(root, "rf")
 end
 
+T["lens_range equal moving endpoints resolve once as an identity comparison"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "old\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "branch", "topic" })
+  local old_oid = assert(source.resolve_commit(root, "topic"))
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("new\n")
+  file:close()
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "new tip" })
+  local new_oid = assert(source.resolve_commit(root, "HEAD"))
+
+  local system = require("canvasdiff.os")
+  local real_run = system.run
+  local resolves = 0
+  local files, collect_err
+  local ok, err = xpcall(function()
+    system.run = function(cmd, opts)
+      local result = real_run(cmd, opts)
+      if vim.deep_equal(vim.list_slice(cmd, 4), {
+        "rev-parse", "--verify", "--quiet", "--end-of-options", "topic^{commit}",
+      }) then
+        resolves = resolves + 1
+        if resolves == 1 then
+          sh({ "git", "update-ref", "refs/heads/topic", new_oid, old_oid })
+        end
+      end
+      return result
+    end
+    files, collect_err = source.files(root, lens.range("topic", "topic", ".."))
+  end, debug.traceback)
+  system.run = real_run
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+  assert(files, collect_err)
+  H.eq(files, {}, "one endpoint snapshot compared with itself is empty")
+  H.eq(resolves, 1, "an identical endpoint expression is resolved exactly once")
+end
+
+T["lens_range planned object ids survive ref deletion and movement before reads"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "old\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "branch", "left" })
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("new\n")
+  file:close()
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "right tip" })
+  sh({ "git", "branch", "right" })
+
+  local next_file, err =
+    source.file_stream(root, lens.range("left", "right", ".."))
+  assert(next_file, err)
+  sh({ "git", "branch", "-D", "left" })
+  sh({ "git", "update-ref", "refs/heads/right", "HEAD~1" })
+
+  local collected, read_err = next_file()
+  assert(collected, read_err)
+  H.eq({ collected.old_text, collected.new_text }, { "old\n", "new\n" },
+    "blob reads use the planned object ids, not the now-changed refs")
+  H.eq(next_file(), nil)
+  vim.fn.delete(root, "rf")
+end
+
+T["lens_range a right ref literally named worktree is not an editable side"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "old\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "switch", "-c", "topic" })
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("committed range side\n")
+  file:close()
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "right side" })
+  sh({ "git", "branch", "worktree" })
+  sh({ "git", "switch", "main" })
+
+  local range = assert(lens.range("main", "worktree", ".."))
+  local range_sections, collect_err = source.sections(root, range, 3)
+  assert(range_sections, collect_err)
+  local range_canvas = require("canvasdiff.canvas")
+  local range_jump = require("canvasdiff.input").jump
+  local st = range_canvas.open(range_sections, {})
+  st.root = root
+  st.lens = range
+  st.base = lens.to_base(range)
+  local before = vim.api.nvim_win_get_buf(st.win)
+  local target
+  for row, line in ipairs(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)) do
+    if line:match("^%+") then
+      target = row
+      break
+    end
+  end
+  assert(target, "range fixture has a changed row")
+  vim.api.nvim_win_set_cursor(st.win, { target, 0 })
+
+  local store = range_jump.store()
+  local entered = range_jump.enter(store, st)
+  local returned = range_jump.back(store)
+  local after = vim.api.nvim_win_get_buf(st.win)
+  vim.fn.delete(root, "rf")
+
+  H.eq(entered.ok, false, "a committed range never opens the repository worktree")
+  H.eq(returned.ok, false, "a declined enter creates no back excursion")
+  H.eq(after, before, "the canvas remains in place across enter/back")
+end
+
+T["lens_range released new-side highlighting rehydrates the committed object"] = function()
+  local root = H.git_fixture({ committed = {
+    ["a.lua"] = "local value = 1\n",
+  } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "switch", "-c", "topic" })
+  local file = assert(io.open(vim.fs.joinpath(root, "a.lua"), "w"))
+  file:write("local committed_name = function() return 42 end\n")
+  file:close()
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "committed syntax" })
+  sh({ "git", "branch", "right" })
+  sh({ "git", "switch", "main" })
+  file = assert(io.open(vim.fs.joinpath(root, "a.lua"), "w"))
+  file:write("local unrelated_worktree = 'dirty'\n")
+  file:close()
+
+  local App = require("canvasdiff.App")
+  local range_model = require("canvasdiff.diff")
+  local highlighter = require("canvasdiff.ui").highlight
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  local expected, got
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_dir(root)
+    local st, open_err =
+      app:open({ lens = lens.range("main", "right", "..") })
+    assert(st, open_err)
+    local surface = assert(app.opened[#app.opened])
+    local lease = assert(surface.controllers.hl)
+    local section = assert(st.sections[1])
+    expected = highlighter.section_ts_marks(section)
+    assert(#expected > 0, "the committed side has syntax marks")
+    range_model.release_text(section)
+    highlighter.invalidate(lease, section.path)
+    got = highlighter.section_ts_marks(section, lease)
+  end, debug.traceback)
+  pcall(function() app:close() end)
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+  H.eq(got, expected,
+    "released new-side syntax must come from new_rev, never dirty worktree bytes")
+end
+
 T["lens_branch recreated untracked path replaces the ref-relative deletion"] = function()
   local root = H.git_fixture({ committed = { ["same.txt"] = "old tracked body\n" } })
   local function sh(cmd)
@@ -403,9 +567,45 @@ T["lens_editable only a worktree new-side is editable"] = function()
   H.eq(lens.editable(lens.get("all")), true)
   H.eq(lens.editable(lens.get("unstaged")), true)
   H.eq(lens.editable(lens.branch("main")), true)
+  H.eq(lens.editable(lens.range("main", "worktree", "..")), false,
+    "a ref whose name equals the sentinel is still a committed side")
   H.eq(lens.editable(lens.get("staged")), false,
     "the index is not a file you can edit -- unstage it first")
   H.eq(lens.editable(nil), false)
+end
+
+T["lens_valid malformed staged metadata falls back before rename path routing"] = function()
+  local root = H.git_fixture({ committed = { ["old.txt"] = "same\n" } })
+  local res = vim.system({ "git", "mv", "old.txt", "new.txt" },
+    { cwd = root, text = true }):wait()
+  assert(res.code == 0, res.stderr)
+  local file = assert(io.open(vim.fs.joinpath(root, "new.txt"), "w"))
+  file:write("unstaged edit\n")
+  file:close()
+
+  local malformed = {
+    id = "staged",
+    old = "HEAD",
+    new = ":0",
+    operator = "..",
+    label = "index vs HEAD (staged)",
+  }
+  local effective = lens.of({ lens = malformed, base = "index" })
+  local files, err = source.files(root, effective)
+  vim.fn.delete(root, "rf")
+  assert(files, err)
+  H.eq(lens.valid(malformed), false)
+  H.eq(effective.id, "unstaged", "invalid restored metadata falls back to its legacy base")
+  H.eq(#files, 1)
+  H.eq({
+    files[1].path,
+    files[1].old_path,
+    files[1].status,
+  }, {
+    "new.txt",
+    "new.txt",
+    "M",
+  }, "fallback sees only the unstaged edit, not a fabricated committed rename")
 end
 
 T["lens_base round-trips the legacy two-value vocabulary"] = function()

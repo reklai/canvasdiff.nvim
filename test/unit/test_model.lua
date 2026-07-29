@@ -45,6 +45,40 @@ return {
     H.eq(lens.same(two, three), false,
       "two-dot and three-dot have different old sides after resolution")
   end,
+  ["lens: malformed kind tags cannot fall through to sentinel validation"] = function()
+    local staged_with_operator = {
+      id = "staged",
+      old = "HEAD",
+      new = ":0",
+      operator = "..",
+      label = "index vs HEAD (staged)",
+    }
+    H.eq(lens.valid(staged_with_operator), false,
+      "an operator-bearing named record is not a fixed lens")
+    H.eq(lens.same(staged_with_operator, lens.get("staged")), true,
+      "operator sensitivity belongs only to two canonical ranges")
+    H.eq(lens.valid({
+      id = "branch:main",
+      old = "main",
+      new = "worktree",
+      operator = "..",
+      label = "worktree vs main",
+    }), false, "an operator-bearing branch record is not a branch lens")
+    H.eq(lens.valid({
+      id = "range:main..worktree",
+      old = "main",
+      new = "worktree",
+      operator = "--",
+      label = "x",
+    }), false, "a malformed range cannot fall through via the worktree sentinel")
+    H.eq(lens.valid({
+      id = "range:main..:0",
+      old = "main",
+      new = ":0",
+      operator = "--",
+      label = "x",
+    }), false, "a malformed range cannot fall through via the index sentinel")
+  end,
   ["model: modified file entries"] = function()
     local s = model.build_section("f.txt", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n",
                                             "a\nb\nc\nd\nE\nf\ng\nh\ni\nj\n", "M")

@@ -752,6 +752,9 @@ end
           return ""
         end
         if which == "new" then
+          if section.new_rev then
+            return source.show(st.root, section.new_rev, section.path) or ""
+          end
           return source.worktree_text(st.root, section.path, section.status)
         end
         return source.show(st.root, section.old_rev or lens.of(st).old,

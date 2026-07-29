@@ -58,6 +58,22 @@ local function range_shape(l)
     and l.id == "range:" .. l.old .. l.operator .. l.new
 end
 
+local function named_shape(l)
+  if type(l) ~= "table" or l.operator ~= nil then
+    return false
+  end
+  local named = L.named[l.id]
+  return named ~= nil and l.old == named.old and l.new == named.new
+end
+
+local function branch_shape(l)
+  return type(l) == "table"
+    and l.operator == nil
+    and type(l.old) == "string" and l.old ~= ""
+    and l.new == "worktree"
+    and l.id == "branch:" .. l.old
+end
+
 --- A read-only comparison between two committed refs.
 ---
 --- Two-dot compares the tips directly. Three-dot resolves the left side to the
@@ -112,9 +128,7 @@ end
 --- session payload, and requiring it to agree with `old` rejects a malformed
 --- hand-built record rather than routing it through the ref-specific collector.
 function L.is_branch(l)
-  return L.valid(l)
-    and l.new == "worktree"
-    and l.id == "branch:" .. l.old
+  return branch_shape(l)
 end
 
 --- A named lens by name, or nil. Returns a COPY: lenses end up on `state`, and a
@@ -130,7 +144,7 @@ end
 --- True when this lens's sections map onto files the user can actually edit.
 --- `jump.enter` gates on this.
 function L.editable(lens)
-  return lens ~= nil and lens.new == "worktree"
+  return L.valid(lens) and not range_shape(lens) and lens.new == "worktree"
 end
 
 --- The legacy `base` string ("HEAD" | "index") as a lens.
@@ -167,10 +181,7 @@ end
 --- which is on disk and hand-editable, from putting a nonsense new side on `state`
 --- where every reader would then trust it.
 function L.valid(l)
-  return range_shape(l)
-    or (type(l) == "table"
-      and type(l.old) == "string" and l.old ~= ""
-      and (l.new == "worktree" or l.new == L.INDEX_REV))
+  return range_shape(l) or branch_shape(l) or named_shape(l)
 end
 
 --- The lens a state is looking through.
@@ -208,7 +219,13 @@ function L.same(a, b)
   if a == nil or b == nil then
     return a == b
   end
-  return a.old == b.old and a.new == b.new and a.operator == b.operator
+  local a_range = range_shape(a)
+  local b_range = range_shape(b)
+  if a_range or b_range then
+    return a_range and b_range
+      and a.old == b.old and a.new == b.new and a.operator == b.operator
+  end
+  return a.old == b.old and a.new == b.new
 end
 
 return L

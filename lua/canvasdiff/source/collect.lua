@@ -66,6 +66,9 @@ end
 --- @return string|nil old_rev
 local function plan_files(root, spec)
   local l = type(spec) == "table" and spec or lens.from_base(spec)
+  if not lens.valid(l) then
+    return nil, "invalid lens"
+  end
   local is_branch = lens.is_branch(l)
   local is_range = lens.is_range(l)
   local changed
@@ -78,7 +81,9 @@ local function plan_files(root, spec)
     if not new_rev then
       return nil, err
     end
-    if l.operator == "..." then
+    if l.old == l.new then
+      old_rev = new_rev
+    elseif l.operator == "..." then
       old_rev, err = repository.merge_base(root, l.old, new_rev)
     else
       old_rev, err = repository.resolve_commit(root, l.old)
