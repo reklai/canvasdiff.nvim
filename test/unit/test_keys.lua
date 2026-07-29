@@ -194,6 +194,16 @@ T["keys_help resolves in both contexts and stays collision-free"] = function()
   end
 end
 
+T["keys_stage_cycle defaults to s on canvas and sidebar and remains configurable"] = function()
+  H.eq(find(keys.resolved("canvas", defaults()), "stage_cycle"), { "s" })
+  H.eq(find(keys.resolved("sidebar", defaults()), "stage_cycle"), { "s" })
+  local km = defaults()
+  km.canvas.stage_cycle = "gs"
+  km.sidebar.stage_cycle = false
+  H.eq(find(keys.resolved("canvas", km), "stage_cycle"), { "gs" })
+  H.eq(find(keys.resolved("sidebar", km), "stage_cycle"), {})
+end
+
 -- --- installed maps ----------------------------------------------------
 
 T["keys_install every canvas mapping is registered with a desc"] = function()

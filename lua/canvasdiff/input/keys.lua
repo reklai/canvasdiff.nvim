@@ -32,9 +32,11 @@ K.specs = {
   { ctx = "canvas", action = "lens_prev",  group = "View",     desc = "Previous lens" },
 
   { ctx = "canvas", action = "refresh",    group = "Canvas",   desc = "Re-scan the repo and splice in what changed (keeps your place)" },
+  { ctx = "canvas", action = "stage_cycle", group = "Canvas",  desc = "Stage or unstage this file" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Close the canvas, restore the previous buffer" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
+  { ctx = "sidebar", action = "stage_cycle", group = "Sidebar", desc = "Stage or unstage this file" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
 
   { ctx = "canvas",  action = "help", group = "Canvas",  desc = "Show keybind cheatsheet" },

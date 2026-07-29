@@ -22,6 +22,7 @@ return {
     table.sort(names)
     H.eq(names, {
       "branches",
+      "buffer_modified",
       "changed_files",
       "diff_files",
       "file_stream",
@@ -33,6 +34,8 @@ return {
       "sections",
       "show",
       "show_head",
+      "stage",
+      "unstage",
       "worktree_text",
     })
     for _, name in ipairs(names) do
@@ -417,5 +420,137 @@ return {
     H.eq(files[1].status, "R")
     H.eq(files[1].staged, "R")
     H.eq(files[1].unstaged, nil)
+  end,
+  ["git: stage captures the complete current disk state for mixed and unusual paths"] = function()
+    local paths = { "-leading.txt", "space name.txt", "tab\tname.txt" }
+    local committed = {}
+    for _, path in ipairs(paths) do committed[path] = "head\n" end
+    local root = H.git_fixture({ committed = committed })
+    for _, path in ipairs(paths) do
+      write(root, path, "index\n")
+      sh(root, { "git", "add", "--", path })
+      write(root, path, "disk\n")
+      local ok, err = source.stage(root, { path = path, old_path = path })
+      assert(ok, err)
+      H.eq(source.show(root, ":0", path), "disk\n",
+        "an unstaged Y column wins over the already-staged X column")
+    end
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: stage and unstage cover additions deletions and both rename paths"] = function()
+    local root = H.git_fixture({
+      committed = { ["delete.txt"] = "gone\n", ["old name.txt"] = "rename\n" },
+    })
+    write(root, "new file.txt", "new\n")
+    vim.fn.delete(vim.fs.joinpath(root, "delete.txt"))
+    sh(root, { "git", "mv", "old name.txt", "new name.txt" })
+
+    assert(source.stage(root, { path = "new file.txt", status = "?" }))
+    assert(source.stage(root, { path = "delete.txt", status = "D" }))
+    assert(source.stage(root, {
+      path = "new name.txt", old_path = "old name.txt", status = "R",
+    }))
+    local staged = source.changed_files(root)
+    for _, file in ipairs(staged) do
+      assert(file.staged and not file.unstaged,
+        "every complete disk state is staged: " .. vim.inspect(file))
+    end
+
+    for _, file in ipairs(staged) do
+      assert(source.unstage(root, file))
+    end
+    local unstaged = source.changed_files(root)
+    for _, file in ipairs(unstaged) do
+      assert(file.unstaged and not file.staged,
+        "unstage resets only the index and preserves worktree bytes: " .. vim.inspect(file))
+    end
+    H.eq(system.read_file(vim.fs.joinpath(root, "new file.txt")), "new\n")
+    H.eq(system.read_file(vim.fs.joinpath(root, "new name.txt")), "rename\n")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: unborn unstage removes paths only from the index"] = function()
+    local root = H.tmpdir()
+    sh(root, { "git", "init", "-b", "main" })
+    write(root, "-initial name.txt", "kept\n")
+    sh(root, { "git", "add", "--", "-initial name.txt" })
+    local commands = {}
+    local real_run = system.run
+    system.run = function(cmd, opts)
+      commands[#commands + 1] = vim.deepcopy(cmd)
+      return real_run(cmd, opts)
+    end
+    local ok, err = source.unstage(root, { path = "-initial name.txt", staged = "A" })
+    system.run = real_run
+    assert(ok, err)
+    H.eq(commands[1], {
+      "git", "-C", root, "reset", "HEAD", "--", "-initial name.txt",
+    }, "unstage always tries the ordinary path-scoped reset first")
+    H.eq(commands[#commands], {
+      "git", "-C", root, "rm", "--cached", "--ignore-unmatch", "--",
+      "-initial name.txt",
+    }, "only an unborn HEAD falls back to removing the path from the index")
+    H.eq(system.read_file(vim.fs.joinpath(root, "-initial name.txt")), "kept\n")
+    local files = assert(source.changed_files(root))
+    H.eq(files, {
+      {
+        path = "-initial name.txt", status = "?", staged = nil, unstaged = "?",
+      },
+    })
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: mutation failures are returned without claiming success"] = function()
+    local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "add") then
+          return { code = 128, stdout = "", stderr = "injected add failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local changed, stage_err = source.stage(root, { path = "a.txt" })
+      H.eq(changed, nil)
+      assert(stage_err and stage_err:find("injected add failure", 1, true), stage_err)
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: a rename add failure reports that its prerequisite reset changed the index"] = function()
+    local root = H.git_fixture({ committed = { ["old.txt"] = "old\n" } })
+    sh(root, { "git", "mv", "old.txt", "new.txt" })
+    write(root, "new.txt", "disk\n")
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "add") then
+          return { code = 128, stdout = "", stderr = "injected rename add failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local changed, stage_err, index_changed = source.stage(root, {
+        path = "new.txt", old_path = "old.txt", status = "R",
+      })
+      H.eq(changed, nil)
+      assert(stage_err and stage_err:find("injected rename add failure", 1, true),
+        stage_err)
+      H.eq(index_changed, true,
+        "callers must not describe the failed composite Git operation as atomic")
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["source: modified loaded buffers are detected by exact target identity"] = function()
+    local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+    local path = vim.fs.joinpath(root, "a.txt")
+    local buf = vim.fn.bufadd(path)
+    vim.fn.bufload(buf)
+    H.eq(source.buffer_modified(root, { path = "a.txt" }), false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved" })
+    H.eq(source.buffer_modified(root, { path = "a.txt" }), true)
+    H.eq(source.buffer_modified(root, { path = "other.txt" }), false)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    vim.fn.delete(root, "rf")
   end,
 }

@@ -1,5 +1,6 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
+local source = require("canvasdiff.source")
 
 local T = {}
 
@@ -64,10 +65,275 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "setup",
     "toggle",
     "toggle_base",
+    "toggle_stage",
   })
   for _, name in ipairs(names) do
     H.eq(type(first[name]), "function", name .. " is callable")
   end
+end
+
+T["root_ toggle_stage follows unstaged to staged and staged back to unstaged"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  in_cwd(root, function(fm)
+    fm.setup({
+      watch = { enabled = false },
+      sidebar = { enabled = false },
+      scrollbar = { enabled = false },
+      statuscolumn = { enabled = false },
+      highlight = { enabled = false },
+      virt = { enabled = false },
+      session = { enabled = false },
+    })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    assert(fm.toggle_stage())
+    local file = assert(source.changed_files(root)[1])
+    assert(file.staged and not file.unstaged, vim.inspect(file))
+    H.eq(st.lens.id, "staged")
+
+    assert(fm.toggle_stage())
+    file = assert(source.changed_files(root)[1])
+    assert(file.unstaged and not file.staged, vim.inspect(file))
+    H.eq(st.lens.id, "unstaged")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage stages mixed disk state but refuses an unsaved target buffer"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "head\n" } })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local f = assert(io.open(path, "w")); f:write("index\n"); f:close()
+  assert(vim.system({ "git", "add", "--", "a.txt" }, { cwd = root }):wait().code == 0)
+  f = assert(io.open(path, "w")); f:write("disk\n"); f:close()
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(path)
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved" })
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "index\n",
+      "the index must not move when the target has unsaved edits")
+    assert(msgs[#msgs].msg:find("unsaved", 1, true), vim.inspect(msgs))
+    vim.api.nvim_buf_delete(buf, { force = true })
+
+    assert(fm.toggle_stage())
+    H.eq(source.show(root, ":0", "a.txt"), "disk\n",
+      "mixed means stage the complete current disk state")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage permits unstage with a modified buffer and keeps lens policy"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  assert(vim.system({ "git", "add", "--", "a.txt" }, { cwd = root }):wait().code == 0)
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("staged") }))
+    local buf = vim.fn.bufadd(vim.fs.joinpath(root, "a.txt"))
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved" })
+    assert(fm.toggle_stage(), "unstaging never writes disk, so a modified buffer is safe")
+    local file = assert(source.changed_files(root)[1])
+    assert(file.unstaged and not file.staged, vim.inspect(file))
+    H.eq(st.lens.id, "unstaged")
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage declines committed ranges and missing XY without mutation"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open())
+    st.lens = require("canvasdiff.diff").lens.range("HEAD", "HEAD", "..")
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("committed", 1, true), tostring(err))
+    assert(source.changed_files(root)[1].unstaged)
+
+    st.lens = require("canvasdiff.diff").lens.get("all")
+    st.sections[1].staged, st.sections[1].unstaged = nil, nil
+    changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("status", 1, true), tostring(err))
+    assert(source.changed_files(root)[1].unstaged)
+    assert(msgs[#msgs].level == vim.log.levels.WARN)
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage reports a clean result without pivoting to an empty lens"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "head\n" } })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local f = assert(io.open(path, "w")); f:write("index\n"); f:close()
+  assert(vim.system({ "git", "add", "--", "a.txt" }, { cwd = root }):wait().code == 0)
+  f = assert(io.open(path, "w")); f:write("head\n"); f:close()
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    assert(fm.toggle_stage())
+    H.eq(source.changed_files(root), {})
+    H.eq(st.lens.id, "unstaged", "a clean index has no staged lens to follow")
+    assert(msgs[#msgs].msg:find("clean", 1, true), vim.inspect(msgs))
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage tells the truth when Git succeeds and refresh fails"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    assert(fm.open())
+    local real_sections = source.sections
+    source.sections = function() return nil, "injected reconcile failure" end
+    local changed, err = fm.toggle_stage()
+    source.sections = real_sections
+    H.eq(changed, nil)
+    assert(err and err:find("refresh failed", 1, true), tostring(err))
+    assert(source.changed_files(root)[1].staged,
+      "Git success is never rolled back to make the UI transaction look atomic")
+    assert(msgs[#msgs].msg:find("index changed", 1, true), vim.inspect(msgs))
+    assert(msgs[#msgs].msg:find("refresh failed", 1, true), vim.inspect(msgs))
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ stage_cycle canvas key invokes the same public transaction"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    vim.api.nvim_set_current_win(st.win)
+    vim.api.nvim_feedkeys(vim.keycode("s"), "x", false)
+    local file = assert(source.changed_files(root)[1])
+    assert(file.staged and not file.unstaged, vim.inspect(file))
+    H.eq(st.lens.id, "staged")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage keeps all and bare-ref lenses in place"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  assert(vim.system({ "git", "branch", "older", "HEAD" }, { cwd = root }):wait().code == 0)
+  assert(vim.system({ "git", "add", "--", "a.txt" }, { cwd = root }):wait().code == 0)
+  assert(vim.system({ "git", "commit", "-m", "advance" }, { cwd = root }):wait().code == 0)
+  local f = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  f:write("worktree after advance\n"); f:close()
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local lens_mod = require("canvasdiff.diff").lens
+    local st = assert(fm.open({ lens = lens_mod.get("all") }))
+    assert(fm.toggle_stage())
+    H.eq(st.lens.id, "all")
+    assert(fm.toggle_stage())
+    H.eq(st.lens.id, "all")
+
+    local branch_lens = lens_mod.branch("older")
+    assert(fm.set_lens(branch_lens))
+    assert(fm.toggle_stage())
+    H.eq(st.lens.id, branch_lens.id)
+    H.eq(st.lens.old, "older")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage preserves nearest line through rename stage and unstage"] = function()
+  local lines = {}
+  for i = 1, 80 do lines[i] = "line " .. i end
+  local body = table.concat(lines, "\n") .. "\n"
+  local root = H.git_fixture({ committed = { ["old.txt"] = body } })
+  assert(vim.system({ "git", "mv", "old.txt", "new.txt" }, { cwd = root }):wait().code == 0)
+  local path = vim.fs.joinpath(root, "new.txt")
+  local f = assert(io.open(path, "a")); f:write("worktree tail\n"); f:close()
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false }, virt = { enabled = false } })
+    local lens_mod = require("canvasdiff.diff").lens
+    local st = assert(fm.open({ lens = lens_mod.get("unstaged") }))
+    local canvas_mod = require("canvasdiff.canvas")
+    local start0 = canvas_mod.section_rows(st, 1)
+    vim.api.nvim_win_set_cursor(st.win, { start0 + 5, 0 })
+    local function cursor_identity()
+      local row = vim.api.nvim_win_get_cursor(st.win)[1] - 1
+      local i, offset = canvas_mod.locate(st, row)
+      local section = i and st.sections[i]
+      local entry = section and section.entries[offset]
+      return section and section.path, entry and entry.content
+    end
+    H.eq({ cursor_identity() }, { "new.txt", "line 80" },
+      "sanity: the cursor begins on a concrete semantic line")
+    assert(fm.toggle_stage())
+    local staged_i
+    for i, section in ipairs(st.sections) do
+      if section.path == "new.txt" then staged_i = i end
+    end
+    assert(staged_i, "rename destination survives into staged lens")
+    H.eq({ cursor_identity() }, { "new.txt", "line 80" },
+      "stage restores the same content even when the nearest row moved")
+
+    assert(fm.toggle_stage())
+    local new_i
+    for i, section in ipairs(st.sections) do
+      if section.path == "new.txt" then new_i = i end
+    end
+    assert(new_i, "rename destination fallback survives the reset split")
+    H.eq({ cursor_identity() }, { "new.txt", "line 80" },
+      "unstage prefers the rename destination and restores its nearest line")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage lifecycle invalidation after Git never refreshes a dead owner"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open())
+    local real_stage = source.stage
+    source.stage = function(...)
+      local ok, err = real_stage(...)
+      st.surface:dispose("injected during Git")
+      return ok, err
+    end
+    local changed, err = fm.toggle_stage()
+    source.stage = real_stage
+    H.eq(changed, nil)
+    assert(err and err:find("index changed", 1, true), tostring(err))
+    assert(source.changed_files(root)[1].staged)
+    assert(msgs[#msgs].msg:find("refresh failed", 1, true), vim.inspect(msgs))
+  end)
+  vim.fn.delete(root, "rf")
 end
 
 local function git(root, args)

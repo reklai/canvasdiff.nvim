@@ -7,6 +7,7 @@ local repository = require("canvasdiff.source.repository")
 -- internal modules below it.
 return {
   branches = repository.branches,
+  buffer_modified = buffer.modified,
   changed_files = repository.changed_files,
   diff_files = repository.diff_files,
   file_stream = collect.file_stream,
@@ -18,5 +19,7 @@ return {
   sections = collect.sections,
   show = repository.show,
   show_head = repository.show_head,
+  stage = repository.stage,
+  unstage = repository.unstage,
   worktree_text = buffer.read_worktree,
 }

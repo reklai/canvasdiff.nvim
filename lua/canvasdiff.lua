@@ -33,6 +33,9 @@ return {
   toggle_base = function()
     return app:toggle_base()
   end,
+  toggle_stage = function()
+    return app:toggle_stage()
+  end,
   --- Return from a jump excursion into the live review's canvas.
   jump_back = function(opts)
     return app:jump_back(nil, nil, type(opts) == "table" and opts.win or opts)

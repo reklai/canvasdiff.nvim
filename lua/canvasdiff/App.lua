@@ -19,6 +19,7 @@ local keys = input.keys
 local diff = require("canvasdiff.diff")
 local fold = diff.fold
 local lens = diff.lens
+local viewport = diff.anchor
 local Surface = require("canvasdiff.Surface")
 
 local App = {}
@@ -468,6 +469,8 @@ local function canvas_actions(app, surface, st, cfg)
     close      = owned_action(surface, generation, function() app:close() end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
+    stage_cycle = owned_action(surface, generation,
+      function() app:toggle_stage(nil, surface, generation) end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
     cycle_next = owned_action(surface, generation, function(owner, win)
@@ -893,6 +896,16 @@ end
           returned = self:jump_back(surface, generation, host_win)
         end)
         return returned
+      end,
+      on_stage_cycle = function(lease, _, path)
+        if surface.controllers.sidebar ~= lease then
+          return false
+        end
+        local changed = false
+        surface:guard(generation, function()
+          changed = self:toggle_stage(path, surface, generation) or false
+        end)
+        return changed
       end,
       release = function(lease)
         if surface.controllers.sidebar ~= lease then
@@ -1491,6 +1504,196 @@ function App:refresh()
     ui.warn(err)
     return nil, err
   end
+  return true
+end
+
+local function section_by_path(st, path)
+  for i, section in ipairs(st.sections or {}) do
+    if section.path == path or section.old_path == path then
+      return i, section
+    end
+  end
+end
+
+local function capture_file_positions(surface, st, file)
+  local positions = {}
+  for _, win in ipairs(surface:canvas_snapshot().canvas) do
+    local ok, cursor = pcall(vim.api.nvim_win_get_cursor, win)
+    if ok then
+      local section_i = canvas.locate(st, cursor[1] - 1)
+      local section = section_i and st.sections[section_i]
+      if section and (section.path == file.path
+          or section.path == file.old_path
+          or section.old_path == file.path
+          or section.old_path == file.old_path) then
+        local start0 = canvas.section_rows(st, section_i)
+        local offset = math.max(1, cursor[1] - start0)
+        local entry = section.entries and section.entries[offset] or nil
+        positions[win] = {
+          path = file.path,
+          old_path = file.old_path,
+          offset = offset,
+          anchor = entry and {
+            new_lnum = entry.new_lnum,
+            content = entry.content,
+          } or nil,
+          col = cursor[2],
+        }
+      end
+    end
+  end
+  return positions
+end
+
+local function restore_file_positions(st, positions)
+  for win, position in pairs(positions or {}) do
+    if canvas_showing(st, win) then
+      local section_i = section_by_path(st, position.path)
+      if not section_i and position.old_path then
+        section_i = section_by_path(st, position.old_path)
+      end
+      if section_i then
+        local start0, end0 = canvas.section_rows(st, section_i)
+        local section = st.sections[section_i]
+        local offset = position.anchor
+          and viewport.resolve(position.anchor, section.entries or {})
+          or position.offset
+        offset = math.max(1, offset or 1)
+        local row = math.min(start0 + offset - 1, math.max(start0, end0 - 1))
+        pcall(vim.api.nvim_win_set_cursor, win, { row + 1, position.col })
+      end
+    end
+  end
+end
+
+local function same_file_identity(candidate, file)
+  local wanted = {
+    [file.path] = true,
+    [file.old_path or file.path] = true,
+  }
+  return wanted[candidate.path] or wanted[candidate.old_path]
+end
+
+local function stage_refresh_failure(message)
+  local err = "index changed, but refresh failed: " .. tostring(message)
+  ui.warn(err)
+  return nil, err
+end
+
+--- Stage or unstage the file under the canvas cursor.
+---
+--- Git is the irreversible boundary: all ownership checks happen before it,
+--- and every failure after it says explicitly that the index already changed.
+--- `path`/`owned_surface`/`generation` are owner-only routing arguments used
+--- by the sidebar callback; the public root calls this with no arguments.
+function App:toggle_stage(path, owned_surface, generation)
+  local surface = owned_surface or active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  generation = generation or surface.generation
+  local st = surface.state
+  local current_lens = lens.of(st)
+  if lens.is_range(current_lens) then
+    local err = "committed ranges cannot be staged or unstaged"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local section_i, file
+  if path then
+    section_i, file = section_by_path(st, path)
+  else
+    local win = vim.api.nvim_get_current_win()
+    section_i = section_under_cursor(st, win)
+    file = section_i and st.sections[section_i]
+  end
+  if not file then
+    local err = path and (path .. " has no changes any more")
+      or "no file under the cursor"
+    ui.warn(err)
+    return nil, err
+  end
+  if not file.staged and not file.unstaged then
+    local err = file.path .. " has no stage status"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local action = file.unstaged and "stage" or "unstage"
+  if action == "stage" and source.buffer_modified(st.root, file) then
+    local err = "cannot stage " .. file.path .. ": its loaded buffer has unsaved changes"
+    ui.warn(err)
+    return nil, err
+  end
+
+  surface.stage_epoch = (surface.stage_epoch or 0) + 1
+  local transaction = surface.stage_epoch
+  local function guard()
+    return self.surfaces[st.buf] == surface
+      and surface:guard(generation)
+      and surface.stage_epoch == transaction
+  end
+  if not guard() then
+    local err = "stage action was superseded before Git ran"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local positions = capture_file_positions(surface, st, file)
+  local changed, mutation_err, index_changed = source[action](st.root, file)
+  if not changed then
+    if index_changed then
+      local err = "index changed, but " .. action .. " failed: " .. tostring(mutation_err)
+      ui.warn(err)
+      return nil, err
+    end
+    ui.warn(mutation_err)
+    return nil, mutation_err
+  end
+  if not guard() then
+    return stage_refresh_failure("the owning review changed during Git")
+  end
+
+  local files, status_err = source.changed_files(st.root)
+  if not files then
+    return stage_refresh_failure(status_err)
+  end
+  if not guard() then
+    return stage_refresh_failure("the owning review changed during status refresh")
+  end
+  local remains
+  for _, candidate in ipairs(files) do
+    if same_file_identity(candidate, file) then
+      remains = candidate
+      break
+    end
+  end
+  if not remains then
+    ui.notify(file.path .. " is clean")
+    return true
+  end
+
+  local target_lens = current_lens
+  if action == "stage" and current_lens.id == "unstaged" then
+    target_lens = lens.get("staged")
+  elseif action == "unstage" and current_lens.id == "staged" then
+    target_lens = lens.get("unstaged")
+  end
+  local reconciled, reconcile_err = pivot(surface, target_lens, guard)
+  if not reconciled then
+    if reconcile_err == STALE_COMPARE then
+      reconcile_err = "the owning review changed during reconcile"
+    end
+    return stage_refresh_failure(reconcile_err)
+  end
+  if not guard() then
+    return stage_refresh_failure("the owning review changed after reconcile")
+  end
+  restore_file_positions(st, positions)
+  ui.notify((action == "stage" and "staged " or "unstaged ") .. file.path)
   return true
 end
 

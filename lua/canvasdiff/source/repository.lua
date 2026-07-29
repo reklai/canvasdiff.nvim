@@ -155,6 +155,79 @@ function M.changed_files(root)
   return files
 end
 
+local function mutation_paths(file)
+  local paths = {}
+  if type(file) == "table" then
+    if type(file.old_path) == "string" and file.old_path ~= ""
+        and file.old_path ~= file.path then
+      paths[#paths + 1] = file.old_path
+    end
+    if type(file.path) == "string" and file.path ~= "" then
+      paths[#paths + 1] = file.path
+    end
+  end
+  return paths
+end
+
+--- Stage the complete current worktree state for one file identity.
+--- Rename identities deliberately name both sides so Git cannot leave a
+--- historical source path behind when similarity detection changes.
+function M.stage(root, file)
+  local paths = mutation_paths(file)
+  if #paths == 0 then
+    return nil, "cannot stage a file without a path"
+  end
+  -- A staged rename no longer has its old path in the index, and `git add`
+  -- rejects that otherwise-correct explicit pair as an unmatched pathspec.
+  -- Put only this rename identity back at HEAD first; the following add then
+  -- observes the old-side deletion and new-side bytes together.
+  if #paths == 2 then
+    local reset = { "reset", "HEAD", "--" }
+    vim.list_extend(reset, paths)
+    local reset_res = run(root, reset)
+    if reset_res.code ~= 0 then
+      return nil, command_error("git reset before rename add", reset_res)
+    end
+  end
+  local args = { "add", "-A", "--" }
+  vim.list_extend(args, paths)
+  local res = run(root, args)
+  if res.code ~= 0 then
+    return nil, command_error("git add", res), #paths == 2
+  end
+  return true
+end
+
+--- Restore one file identity's index entries from HEAD, leaving worktree
+--- bytes untouched. In an unborn repository there is no HEAD tree to reset
+--- from, so removing the entries from the index is the equivalent operation.
+function M.unstage(root, file)
+  local paths = mutation_paths(file)
+  if #paths == 0 then
+    return nil, "cannot unstage a file without a path"
+  end
+  local reset = { "reset", "HEAD", "--" }
+  vim.list_extend(reset, paths)
+  local reset_res = run(root, reset)
+  local head = run(root, { "rev-parse", "--verify", "--quiet", "HEAD" })
+  if head.code == 0 then
+    if reset_res.code ~= 0 then
+      return nil, command_error("git reset", reset_res)
+    end
+    return true
+  end
+  -- Git versions differ on whether reset reports success before the first
+  -- commit. Use the explicit unborn operation either way; it is idempotent
+  -- if reset already removed the entry.
+  local remove = { "rm", "--cached", "--ignore-unmatch", "--" }
+  vim.list_extend(remove, paths)
+  local remove_res = run(root, remove)
+  if remove_res.code ~= 0 then
+    return nil, command_error("git rm --cached", remove_res)
+  end
+  return true
+end
+
 --- Resolve an arbitrary revision expression to one canonical commit object.
 ---
 --- `--end-of-options` makes a ref beginning with "-" data rather than another

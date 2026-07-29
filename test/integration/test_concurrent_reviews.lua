@@ -181,6 +181,30 @@ T["concurrent_ mutating one review leaves the other untouched"] = function()
   end)
 end
 
+T["concurrent_ stage_cycle and both watchers stay scoped to the focused review"] = function()
+  with_two_reviews(function(ctx)
+    local source = require("canvasdiff.source")
+    local before_b = vim.deepcopy(ctx.b.state.sections)
+    local b_lens = vim.deepcopy(ctx.b.state.lens)
+    local b_watch = ctx.b.surface.controllers.watch
+    local a_watch = ctx.a.surface.controllers.watch
+    assert(a_watch and b_watch and not rawequal(a_watch, b_watch),
+      "the production path has two independent watcher leases")
+
+    vim.api.nvim_set_current_win(ctx.a.win)
+    assert(ctx.fm.toggle_stage())
+    local a_file = assert(source.changed_files(ctx.a.root)[1])
+    local b_file = assert(source.changed_files(ctx.b.root)[1])
+    assert(a_file.staged and not a_file.unstaged, vim.inspect(a_file))
+    assert(b_file.unstaged and not b_file.staged, vim.inspect(b_file))
+    H.eq(ctx.b.state.sections, before_b,
+      "A's stage reconcile and watcher fanout never touch B's model")
+    H.eq(ctx.b.state.lens, b_lens)
+    assert(ctx.a.surface.controllers.watch == a_watch)
+    assert(ctx.b.surface.controllers.watch == b_watch)
+  end)
+end
+
 --- Close both reviews in the given order and prove the survivor is intact
 --- between the two closes, and that nothing at all is left after the second.
 local function assert_close_order(ctx, first, second)

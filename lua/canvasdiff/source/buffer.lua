@@ -13,6 +13,22 @@ local function find_loaded(abs_path)
   return nil
 end
 
+--- Whether a loaded target buffer has edits that Git cannot see on disk.
+--- @param root string
+--- @param file { path: string, old_path: string? }
+--- @return boolean
+function M.modified(root, file)
+  for _, rel_path in ipairs({ file and file.path, file and file.old_path }) do
+    if type(rel_path) == "string" and rel_path ~= "" then
+      local buf = find_loaded(vim.fs.joinpath(root, rel_path))
+      if buf and vim.api.nvim_get_option_value("modified", { buf = buf }) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 --- Byte-exact text of a loaded buffer, as it sits on disk.
 ---
 --- `nvim_buf_get_lines` returns bare lines: Neovim strips `\r` on read and
