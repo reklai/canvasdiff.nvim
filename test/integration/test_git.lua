@@ -454,6 +454,25 @@ return {
       "magic-looking user data must not expand to another index entry")
     vim.fn.delete(root, "rf")
   end,
+  ["git: stage rejects an old-path-only identity without widening index scope"] = function()
+    local root = H.git_fixture({
+      committed = {
+        ["old.txt"] = "old head\n",
+        ["unrelated.txt"] = "unrelated head\n",
+      },
+      worktree = {
+        ["old.txt"] = "old disk\n",
+        ["unrelated.txt"] = "unrelated disk\n",
+      },
+    })
+    local changed, err = source.stage(root, { old_path = "old.txt" })
+    H.eq(changed, nil)
+    assert(err and err:find("path", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "old.txt"), "old head\n")
+    H.eq(source.show(root, ":0", "unrelated.txt"), "unrelated head\n",
+      "malformed identity must never degrade to repository-wide git add")
+    vim.fn.delete(root, "rf")
+  end,
   ["git: unstage treats pathspec-magic filenames literally and isolates index scope"] = function()
     local magic = ":(glob)*.txt"
     local root = H.git_fixture({

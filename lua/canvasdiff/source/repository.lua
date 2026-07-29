@@ -173,6 +173,12 @@ end
 --- Rename identities deliberately name both sides so Git cannot leave a
 --- historical source path behind when similarity detection changes.
 function M.stage(root, file)
+  if type(file) ~= "table"
+      or type(file.path) ~= "string"
+      or file.path == "" then
+    return nil, "cannot stage a file without a path"
+  end
+
   local paths = mutation_paths(file)
   if #paths == 0 then
     return nil, "cannot stage a file without a path"

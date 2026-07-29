@@ -144,3 +144,36 @@ Repair verification:
 Residual concern from the original implementation is closed: rename staging is
 no longer a two-command mutation, so an add failure cannot discard index-only
 content.
+
+## Repair round 2
+
+Independent review found that an old-path-only malformed file identity passed
+the nonempty mutation-path check while contributing a nil destination to the
+Lua command array. That truncated the command after `--` and widened
+`git add -A` from one file to the whole repository.
+
+Red evidence:
+
+- `NVIM_LOG_FILE=/tmp/task3-round2-red.log make test SUITE=integration
+  FILTER='old%-path%-only identity'` — failed because `stage()` returned true
+  and staged the malformed target instead of rejecting it.
+
+Repair:
+
+- `stage()` now requires a nonempty string `file.path` before constructing or
+  running any Git command.
+- The regression verifies both the intended old path and an unrelated dirty
+  entry remain unchanged in the index after rejection.
+
+Verification:
+
+- `NVIM_LOG_FILE=/tmp/task3-round2-green.log make test SUITE=integration
+  FILTER='old%-path%-only identity'` — 1/1 passed.
+- `NVIM_LOG_FILE=/tmp/task3-round2-git.log make test SUITE=integration
+  FILTER='git:'` — 22/22 passed.
+- `NVIM_LOG_FILE=/tmp/canvasdiff-task3-round2-full.log make test`
+  — 801/801 passed.
+- `git diff --check` — clean.
+
+Residual concern: none for the reported malformed-identity scope; the command
+cannot run unless the exact destination path is present.
