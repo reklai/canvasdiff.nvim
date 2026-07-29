@@ -29,9 +29,10 @@ useful from OUTSIDE the canvas, or inside your own mapping.
 
 Two things are worth knowing before you start:
 
-- The new side of a diff is your worktree, so it stays editable. Press
-  <CR> on any line to jump to that exact line in the real file, edit it, and
-  press CTRL-Space to come back to where you were on the canvas.
+- Worktree-backed lenses (`all`, `unstaged`, and a bare ref) have an editable
+  new side. Press <CR> to jump into that file, edit it, then press CTRL-Space
+  to return. The `staged` lens reads the index and commit ranges read commits,
+  so those views are read-only and decline the jump.
 - Reviews are independent. Two repositories open at once own separate
   canvases, separate sidebars, and separate sessions; closing one never
   disturbs the other.
@@ -55,7 +56,8 @@ No setup call is required. With `git` on your path, inside a repository: >vim
 
     :CanvasDiff
 <
-That opens the canvas on your unstaged changes. From there:
+That opens the `all` lens: every change between HEAD and your worktree. From
+there:
 
     j / k           move a line, as usual
     ]h  [h          next / previous hunk

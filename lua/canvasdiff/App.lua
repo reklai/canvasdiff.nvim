@@ -38,6 +38,9 @@ function App.new()
     opened = {},
     compare_request = 0,
     global_maps = {},
+    global_map_epoch = 0,
+    global_map_syncing = false,
+    global_map_pending = false,
   }, App)
 end
 
@@ -50,7 +53,11 @@ local function global_lhs(lhs)
 end
 
 local function current_global_map(lhs)
-  for _, map in ipairs(vim.api.nvim_get_keymap("n")) do
+  local ok, maps = pcall(vim.api.nvim_get_keymap, "n")
+  if not ok then
+    return nil, tostring(maps)
+  end
+  for _, map in ipairs(maps) do
     -- Control keys use lhsrawalt while printable and termcode sequences use
     -- lhsraw, so both are part of Neovim's observable canonical identity.
     if map.lhsraw == lhs or map.lhsrawalt == lhs then
@@ -59,16 +66,97 @@ local function current_global_map(lhs)
   end
 end
 
+local function map_flag(value)
+  return value == true or (type(value) == "number" and value ~= 0)
+end
+
+local function map_metadata(map)
+  local rhs = map.rhs
+  if rhs == "" then rhs = nil end
+  return {
+    desc = map.desc,
+    rhs = rhs,
+    noremap = map_flag(map.noremap),
+    silent = map_flag(map.silent),
+    nowait = map_flag(map.nowait),
+    expr = map_flag(map.expr),
+    script = map_flag(map.script),
+    replace_keycodes = map_flag(map.replace_keycodes),
+  }
+end
+
+local function expected_record(lhs, request, callback)
+  return {
+    lhs = lhs,
+    -- keytrans's display spelling is accepted by keymap.del for Space,
+    -- control and terminal keycodes, even though it is not suitable for lookup.
+    installed_lhs = vim.fn.keytrans(lhs),
+    callback = callback,
+    metadata = {
+      desc = request.desc,
+      rhs = nil,
+      noremap = true,
+      silent = true,
+      nowait = false,
+      expr = false,
+      script = false,
+      replace_keycodes = false,
+    },
+  }
+end
+
 --- Ownership is deliberately observable, not inferred from lhs or a
 --- CanvasDiff-looking description. A user can replace our lhs at any time;
---- callback identity plus the installed metadata is the authority to remove
---- it on the next setup.
+--- exact callback identity plus every behavior-affecting keymap field is the
+--- authority to remove it on the next setup.
 local function owns_global_map(record, map)
   return map
     and rawequal(map.callback, record.callback)
-    and map.desc == record.desc
-    and map.noremap == 1
-    and map.silent == 1
+    and vim.deep_equal(map_metadata(map), record.metadata)
+end
+
+local function record_from_map(record, map)
+  return {
+    lhs = record.lhs,
+    installed_lhs = map.lhs or record.installed_lhs,
+    callback = record.callback,
+    metadata = map_metadata(map),
+  }
+end
+
+--- Keep the newest candidate for a canonical lhs. A failed setter may leave a
+--- tentative record after an older stale record for the same sequence.
+local function compact_candidates(candidates)
+  local reversed, seen = {}, {}
+  for index = #candidates, 1, -1 do
+    local record = candidates[index]
+    if not seen[record.lhs] then
+      seen[record.lhs] = true
+      reversed[#reversed + 1] = record
+    end
+  end
+  local out = {}
+  for index = #reversed, 1, -1 do
+    out[#out + 1] = reversed[index]
+  end
+  return out
+end
+
+--- Refresh candidates against observable editor state. If inspection itself
+--- fails, retaining the candidate is conservative: it still grants no future
+--- mutation authority unless a later successful inspection authenticates it.
+local function refresh_global_ledger(candidates)
+  local out = {}
+  for _, record in ipairs(compact_candidates(candidates)) do
+    local map, err = current_global_map(record.lhs)
+    if err then
+      return compact_candidates(candidates), err
+    end
+    if owns_global_map(record, map) then
+      out[#out + 1] = record_from_map(record, map)
+    end
+  end
+  return out
 end
 
 -- Notification memory is not ownership: it grants no delete/replace
@@ -77,7 +165,9 @@ end
 local warned_collision_callbacks = setmetatable({}, { __mode = "k" })
 local warned_collision_mappings = {}
 
-local function report_global_collision(request, lhs, occupied)
+local function report_global_collision(collision)
+  local request, lhs, occupied =
+    collision.request, collision.lhs, collision.occupied
   local callback = occupied.callback
   if type(callback) == "function" then
     if warned_collision_callbacks[callback] then
@@ -102,71 +192,231 @@ local function report_global_collision(request, lhs, occupied)
     :format(request.configured_lhs, vim.fn.keytrans(lhs)))
 end
 
+local function desired_global_maps()
+  local global_config = config.options.keymaps.global or {}
+  local raw = global_config.compare
+  if raw ~= nil and raw ~= false and raw ~= "" then
+    if type(raw) ~= "string" and type(raw) ~= "table" then
+      return nil, nil, ("global compare mapping must be a string or list, got %s")
+        :format(type(raw))
+    end
+    if type(raw) == "table" then
+      local max_index, count = 0, 0
+      for index in pairs(raw) do
+        if type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
+          return nil, nil, "global compare mapping must be a dense list of lhs strings"
+        end
+        max_index = math.max(max_index, index)
+        count = count + 1
+      end
+      if max_index ~= count then
+        return nil, nil, "global compare mapping must be a dense list of lhs strings"
+      end
+    end
+  end
+
+  local ok, resolved = pcall(keys.resolved, "global", config.options.keymaps)
+  if not ok then
+    return nil, nil, "could not resolve global compare mappings: " .. tostring(resolved)
+  end
+  local desired, order = {}, {}
+  for index, mapping in ipairs(resolved) do
+    if type(mapping.lhs) ~= "string" then
+      return nil, nil, ("global compare mapping #%d must be a string, got %s")
+        :format(index, type(mapping.lhs))
+    end
+    if mapping.lhs == "" then
+      return nil, nil, ("global compare mapping list contains an empty lhs at position %d")
+        :format(index)
+    end
+    local lhs_ok, lhs = pcall(global_lhs, mapping.lhs)
+    if not lhs_ok or type(lhs) ~= "string" or lhs == "" then
+      return nil, nil, ("invalid global compare lhs %q: %s")
+        :format(mapping.lhs, tostring(lhs))
+    end
+    if desired[lhs] then
+      return nil, nil, ("global compare mappings %q and %q resolve to the same lhs")
+        :format(desired[lhs].configured_lhs, mapping.lhs)
+    end
+    desired[lhs] = {
+      configured_lhs = mapping.lhs,
+      desc = mapping.desc,
+    }
+    order[#order + 1] = lhs
+  end
+  return desired, order
+end
+
+local function settle_global_ledger(app, candidates, diagnostic)
+  local ledger, inspect_err = refresh_global_ledger(candidates)
+  app.global_maps = ledger
+  if inspect_err then
+    return {
+      {
+        kind = "error",
+        message = "could not verify global mapping ownership: " .. inspect_err,
+      },
+    }
+  end
+  return diagnostic and { diagnostic } or {}
+end
+
+--- One non-reentrant reconciliation pass. App:sync_global_keymaps coalesces
+--- nested setup calls around it; a partial pass always settles its actual
+--- candidates before the newest configuration is attempted.
+local function reconcile_global_keymaps(app)
+  local desired, desired_order, validation_error = desired_global_maps()
+  if validation_error then
+    return {
+      { kind = "error", message = validation_error },
+    }
+  end
+
+  local candidates = {}
+  for _, record in ipairs(app.global_maps) do
+    candidates[#candidates + 1] = record
+  end
+
+  local kept = {}
+  for _, record in ipairs(app.global_maps) do
+    local map, inspect_err = current_global_map(record.lhs)
+    if inspect_err then
+      return settle_global_ledger(app, candidates, {
+        kind = "error",
+        message = "could not inspect global mappings: " .. inspect_err,
+      })
+    end
+    if app.global_map_pending then
+      return settle_global_ledger(app, candidates)
+    end
+    if desired[record.lhs] and owns_global_map(record, map) then
+      kept[record.lhs] = record_from_map(record, map)
+    end
+  end
+
+  local collisions = {}
+  -- Install before deleting prior owned maps: a failed rebind leaves the old
+  -- entry usable and authenticated instead of publishing a half-transition.
+  for _, lhs in ipairs(desired_order) do
+    if not kept[lhs] then
+      local request = desired[lhs]
+      local occupied, inspect_err = current_global_map(lhs)
+      if inspect_err then
+        return settle_global_ledger(app, candidates, {
+          kind = "error",
+          message = "could not inspect global mappings: " .. inspect_err,
+        })
+      end
+      if app.global_map_pending then
+        return settle_global_ledger(app, candidates)
+      end
+      if occupied then
+        collisions[#collisions + 1] = {
+          kind = "collision",
+          request = request,
+          lhs = lhs,
+          occupied = occupied,
+        }
+      else
+        local callback = function()
+          return app:compare()
+        end
+        local tentative = expected_record(lhs, request, callback)
+        candidates[#candidates + 1] = tentative
+        local set_ok, set_err = pcall(vim.keymap.set, "n", request.configured_lhs, callback, {
+          desc = request.desc,
+          noremap = true,
+          silent = true,
+        })
+        if not set_ok then
+          return settle_global_ledger(app, candidates, {
+            kind = "error",
+            message = ("could not install global mapping %s: %s")
+              :format(request.configured_lhs, tostring(set_err)),
+          })
+        end
+        if app.global_map_pending then
+          return settle_global_ledger(app, candidates)
+        end
+      end
+    end
+  end
+
+  for _, record in ipairs(app.global_maps) do
+    if not desired[record.lhs] then
+      local map, inspect_err = current_global_map(record.lhs)
+      if inspect_err then
+        return settle_global_ledger(app, candidates, {
+          kind = "error",
+          message = "could not inspect global mappings: " .. inspect_err,
+        })
+      end
+      if app.global_map_pending then
+        return settle_global_ledger(app, candidates)
+      end
+      if owns_global_map(record, map) then
+        local del_ok, del_err = pcall(vim.keymap.del, "n", record.installed_lhs)
+        if not del_ok then
+          return settle_global_ledger(app, candidates, {
+            kind = "error",
+            message = ("could not remove global mapping %s: %s")
+              :format(record.installed_lhs, tostring(del_err)),
+          })
+        end
+        if app.global_map_pending then
+          return settle_global_ledger(app, candidates)
+        end
+      end
+    end
+  end
+
+  local diagnostics = settle_global_ledger(app, candidates)
+  for _, collision in ipairs(collisions) do
+    diagnostics[#diagnostics + 1] = collision
+  end
+  return diagnostics
+end
+
 --- Reconcile the process-wide actions for this exact App instance.
 ---
 --- Existing foreign maps always win. Records are per App, so a second instance
 --- (including one created by a module reload) sees the first instance's
 --- callback as foreign and cannot delete or replace it.
 function App:sync_global_keymaps()
-  local desired, desired_order = {}, {}
-  for _, mapping in ipairs(keys.resolved("global", config.options.keymaps)) do
-    local lhs = global_lhs(mapping.lhs)
-    -- Two configured spellings can expand to the same sequence. Install the
-    -- first once instead of manufacturing a self-collision.
-    if not desired[lhs] then
-      desired[lhs] = {
-        configured_lhs = mapping.lhs,
-        desc = mapping.desc,
-      }
-      desired_order[#desired_order + 1] = lhs
-    end
+  self.global_map_epoch = self.global_map_epoch + 1
+  if self.global_map_syncing then
+    self.global_map_pending = true
+    return
   end
 
-  local kept = {}
-  for _, record in ipairs(self.global_maps) do
-    local map = current_global_map(record.lhs)
-    if desired[record.lhs] and owns_global_map(record, map) then
-      kept[record.lhs] = record
-    elseif owns_global_map(record, map) then
-      -- Delete only after re-reading and authenticating what currently owns
-      -- the lhs; descriptions alone are intentionally insufficient.
-      pcall(vim.keymap.del, "n", record.installed_lhs)
-    end
-  end
+  self.global_map_syncing = true
+  local diagnostics, round
+  repeat
+    self.global_map_pending = false
+    round = self.global_map_epoch
+    local ok, result = pcall(reconcile_global_keymaps, self)
+    diagnostics = ok and result or {
+      {
+        kind = "error",
+        message = "global mapping reconciliation failed: " .. tostring(result),
+      },
+    }
+  until not self.global_map_pending and round == self.global_map_epoch
+  self.global_map_syncing = false
 
-  local next_records = {}
-  for _, lhs in ipairs(desired_order) do
-    local record = kept[lhs]
-    if not record then
-      local request = desired[lhs]
-      local occupied = current_global_map(lhs)
-      if occupied then
-        report_global_collision(request, lhs, occupied)
-      else
-        local callback = function()
-          return self:compare()
-        end
-        vim.keymap.set("n", request.configured_lhs, callback, {
-          desc = request.desc,
-          noremap = true,
-          silent = true,
-        })
-        local installed = current_global_map(lhs)
-        if installed and rawequal(installed.callback, callback) then
-          record = {
-            lhs = lhs,
-            installed_lhs = installed.lhs,
-            callback = callback,
-            desc = request.desc,
-          }
-        end
-      end
+  -- Present only the final committed pass. Notifications can run arbitrary
+  -- user code, including setup(); no ownership state is written afterwards.
+  local report_epoch = self.global_map_epoch
+  for _, diagnostic in ipairs(diagnostics) do
+    if diagnostic.kind == "collision" then
+      report_global_collision(diagnostic)
+    else
+      ui.err(diagnostic.message)
     end
-    if record then
-      next_records[#next_records + 1] = record
+    if self.global_map_epoch ~= report_epoch then
+      break
     end
   end
-  self.global_maps = next_records
 end
 
 --- Forget a review, whoever disposed it.

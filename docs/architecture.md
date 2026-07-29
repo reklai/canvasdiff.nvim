@@ -84,13 +84,16 @@ loses one releases its own bookkeeping for it rather than restoring over the
 new owner later.
 
 The process-wide compare keymap follows the same identity rule without becoming
-a controller lease. Each `App` retains the exact Lua callback and installed
-metadata for its own global maps. `setup()` removes or rebinds a mapping only
-when `nvim_get_keymap()` still reports that callback and metadata; an occupied
-lhs, a user/plugin takeover, another App, and a module reload are all foreign.
+a controller lease. Each `App` retains the exact Lua callback and complete
+behavior metadata (`desc`, remap/silent/nowait/expr/script/replace-keycodes)
+for its own global maps. `setup()` removes or rebinds a mapping only when
+`nvim_get_keymap()` still reports that callback and metadata; an occupied lhs,
+a user/plugin takeover, another App, and a module reload are all foreign.
 Configured `<leader>` notation is canonicalized at installation time, so a
 later leader change can retire the old owned sequence without confusing it
-with the newly requested one.
+with the newly requested one. Reconciliation prevalidates the complete list,
+retains authenticated candidates across API faults, and coalesces synchronous
+setup re-entry before presenting diagnostics from the committed pass.
 
 ## Git comparison and mutation boundaries
 

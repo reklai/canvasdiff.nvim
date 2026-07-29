@@ -62,3 +62,46 @@ NVIM_LOG_FILE=/tmp/canvasdiff-task4-full-final.log make test
 A command-only lazy-loading declaration cannot expose a plugin-owned mapping
 before the plugin itself loads. The README now makes that constraint explicit
 and shows startup loading for immediate `<leader>lb` availability.
+
+## Controller repair round 1
+
+Independent review identified synchronous setup re-entry, partial API failure,
+incomplete metadata authentication, and two help contradictions.
+
+Red regressions reproduced all reported behaviors:
+
+- same callback plus `nowait=true` was deleted as if still owned;
+- `compare = { "gQi", "" }` threw after installing the first lhs;
+- notification re-entry installed `gRb`, but a later disable left it orphaned;
+- a write-then-throw setter propagated and lost ownership.
+
+Repairs:
+
+- The complete compare value is validated before mutation: type, dense-list
+  shape, string/non-empty entries, termcode conversion, and canonical
+  duplicates.
+- Reconciliation now coalesces synchronous setup re-entry. Partial passes
+  settle authenticated candidates, the latest configuration is replayed, and
+  only final committed diagnostics are presented.
+- Set/get/delete failures are contained. A conservative candidate ledger is
+  retained and authenticated again before any later cleanup.
+- Ownership snapshots and compares callback identity plus normalized
+  `desc`, RHS, remap, silent, nowait, expr, script, and replace-keycodes
+  behavior. Same-callback takeovers altering each exposed behavior are
+  preserved.
+- Help now says the default opens `all`, limits editability to
+  worktree-backed lenses, and names staged/ranges as read-only.
+
+Repair verification:
+
+```text
+keys-focused: 25/25 passed
+architecture: 30/30 passed
+NVIM_LOG_FILE=/tmp/canvasdiff-task4-fix-full.log make test
+812/812 passed
+```
+
+Injected write-then-throw set, delete failure, and inspection failure all
+recover on a later setup without deleting foreign mappings. `git diff --check`
+passed. The documented command-only lazy-loading limitation remains the only
+known residual concern.

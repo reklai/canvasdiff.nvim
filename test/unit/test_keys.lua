@@ -340,6 +340,171 @@ T["keys_global compare preserves a mapping that takes over its lhs"] = function(
   config.setup({})
 end
 
+T["keys_global compare preserves same-callback takeovers with changed behavior metadata"] = function()
+  local fm = require("canvasdiff")
+  local cases = {
+    { lhs = "gQn", opts = { nowait = true }, field = "nowait" },
+    {
+      lhs = "gQe",
+      opts = { expr = true, replace_keycodes = false },
+      field = "expr",
+    },
+    { lhs = "gQs", opts = { script = true }, field = "script" },
+    {
+      lhs = "gQr",
+      opts = { expr = true, replace_keycodes = true },
+      field = "replace_keycodes",
+    },
+  }
+  for _, case in ipairs(cases) do
+    delete_global(case.lhs)
+    fm.setup({ keymaps = { global = { compare = case.lhs } } })
+    local installed = assert(global_map(case.lhs))
+    local opts = {
+      desc = installed.desc,
+      noremap = true,
+      silent = true,
+    }
+    for name, value in pairs(case.opts) do opts[name] = value end
+    vim.keymap.set("n", case.lhs, installed.callback, opts)
+    local takeover = assert(global_map(case.lhs))
+    assert(rawequal(takeover.callback, installed.callback),
+      "the takeover deliberately retains the callback identity")
+
+    fm.setup({ keymaps = { global = { compare = false } } })
+    assert(global_map(case.lhs),
+      ("changed %s metadata must make the map foreign"):format(case.field))
+    delete_global(case.lhs)
+  end
+  config.setup({})
+end
+
+T["keys_global compare validates a complete list before mutating any lhs"] = function()
+  local fm = require("canvasdiff")
+  local lhs = "gQi"
+  delete_global(lhs)
+  fm.setup({ keymaps = { global = { compare = false } } })
+  local cases = {
+    { value = { lhs, "" }, fragment = "empty" },
+    { value = { lhs, 42 }, fragment = "string" },
+    { value = { lhs, lhs }, fragment = "same lhs" },
+    { value = 42, fragment = "string or list" },
+    { value = { named = lhs }, fragment = "dense list" },
+  }
+  for _, case in ipairs(cases) do
+    local messages = capture_notifications(function()
+      fm.setup({ keymaps = { global = { compare = case.value } } })
+    end)
+    H.eq(global_map(lhs), nil,
+      "an invalid complete value cannot leave an earlier list entry installed")
+    assert(#messages == 1
+        and messages[1].level == vim.log.levels.ERROR
+        and messages[1].message:find(case.fragment, 1, true),
+      "the validation error must be presented: " .. vim.inspect(messages))
+  end
+  fm.setup({ keymaps = { global = { compare = false } } })
+  delete_global(lhs)
+  config.setup({})
+end
+
+T["keys_global compare coalesces notification reentry so the newest setup owns the result"] = function()
+  local fm = require("canvasdiff")
+  local collision_lhs, newest_lhs = "gRa", "gRb"
+  delete_global(collision_lhs)
+  delete_global(newest_lhs)
+  fm.setup({ keymaps = { global = { compare = false } } })
+  local foreign = function() end
+  vim.keymap.set("n", collision_lhs, foreign, { desc = "Foreign reentry trigger" })
+
+  local real_notify = vim.notify
+  local reentered = false
+  vim.notify = function(message)
+    if not reentered and tostring(message):find(collision_lhs, 1, true) then
+      reentered = true
+      fm.setup({ keymaps = { global = { compare = newest_lhs } } })
+    end
+  end
+  local ok, err = pcall(function()
+    fm.setup({ keymaps = { global = { compare = collision_lhs } } })
+  end)
+  vim.notify = real_notify
+  assert(ok, err)
+  assert(reentered, "the collision notification must exercise synchronous setup reentry")
+  assert(rawequal(assert(global_map(collision_lhs)).callback, foreign))
+  assert(global_map(newest_lhs), "the reentrant newest setup installs its map")
+
+  fm.setup({ keymaps = { global = { compare = false } } })
+  H.eq(global_map(newest_lhs), nil,
+    "the newest map remains in the ownership ledger and is removable")
+  delete_global(collision_lhs)
+  delete_global(newest_lhs)
+  config.setup({})
+end
+
+T["keys_global compare retains recoverable ownership across set and delete failures"] = function()
+  local fm = require("canvasdiff")
+  local set_lhs, del_lhs, get_lhs = "gRf", "gRd", "gRg"
+  delete_global(set_lhs)
+  delete_global(del_lhs)
+  delete_global(get_lhs)
+
+  local real_set = vim.keymap.set
+  vim.keymap.set = function(mode, lhs, callback, opts)
+    real_set(mode, lhs, callback, opts)
+    if lhs == set_lhs then error("injected write-then-throw") end
+  end
+  local set_ok, set_err = pcall(function()
+    capture_notifications(function()
+      fm.setup({ keymaps = { global = { compare = set_lhs } } })
+    end)
+  end)
+  vim.keymap.set = real_set
+  assert(set_ok, set_err)
+  assert(global_map(set_lhs), "the injected setter wrote before it failed")
+  fm.setup({ keymaps = { global = { compare = false } } })
+  H.eq(global_map(set_lhs), nil, "the failed set remains authenticated for cleanup")
+
+  fm.setup({ keymaps = { global = { compare = del_lhs } } })
+  assert(global_map(del_lhs))
+  local real_del = vim.keymap.del
+  vim.keymap.del = function(mode, lhs, opts)
+    if lhs == del_lhs then error("injected delete failure") end
+    return real_del(mode, lhs, opts)
+  end
+  local del_ok, del_err = pcall(function()
+    capture_notifications(function()
+      fm.setup({ keymaps = { global = { compare = false } } })
+    end)
+  end)
+  vim.keymap.del = real_del
+  assert(del_ok, del_err)
+  assert(global_map(del_lhs), "a failed delete leaves the map and ledger intact")
+  fm.setup({ keymaps = { global = { compare = false } } })
+  H.eq(global_map(del_lhs), nil, "a later setup retries cleanup")
+
+  fm.setup({ keymaps = { global = { compare = get_lhs } } })
+  assert(global_map(get_lhs))
+  local real_get = vim.api.nvim_get_keymap
+  vim.api.nvim_get_keymap = function()
+    error("injected keymap inspection failure")
+  end
+  local get_ok, get_err = pcall(function()
+    capture_notifications(function()
+      fm.setup({ keymaps = { global = { compare = false } } })
+    end)
+  end)
+  vim.api.nvim_get_keymap = real_get
+  assert(get_ok, get_err)
+  assert(global_map(get_lhs), "an inspection failure performs no unauthenticated delete")
+  fm.setup({ keymaps = { global = { compare = false } } })
+  H.eq(global_map(get_lhs), nil, "the candidate ledger survives for a later cleanup")
+
+  delete_global(set_lhs)
+  delete_global(del_lhs)
+  delete_global(get_lhs)
+  config.setup({})
+end
+
 T["keys_global compare expands leader at each setup without crossing App ownership"] = function()
   local old_leader = vim.g.mapleader
   vim.g.mapleader = " "
