@@ -147,3 +147,61 @@ NVIM_LOG_FILE=/tmp/canvasdiff-task4-r2-full.log make test
 
 `git diff --check` passed. The documented command-only lazy-loading limitation
 remains the only known residual concern.
+
+## Controller repair round 3
+
+Independent re-review found that a throwing setter could still escalate a
+tentative record. If the setter wrote CanvasDiff's callback, reinstalled that
+same callback and behavior with foreign provenance, then threw,
+`settle_global_ledger()` authenticated only the tentative behavior and promoted
+the foreign identity. A later disable deleted it.
+
+The exact regression failed before the repair because the foreign-provenance
+mapping did not survive disable. The repair separates expected-install
+matching from ownership:
+
+- a tentative record has no deletion authority;
+- only a successful set followed by a complete observed identity becomes an
+  authoritative record;
+- a throwing setter's observed mapping is never promoted;
+- earlier successful list entries already carry full identities, so a later
+  setter failure does not orphan those known-owned mappings.
+
+The lifecycle review then found one post-load re-entry hook left in the final
+comparison: replaceable `vim.deep_equal`. Its regression failed with one
+wrapper call and deletion of the takeover. Global-map reconciliation now uses
+captured `pcall`, iteration, type, raw-access and raw-equality primitives plus
+an internal scalar-field comparator. The fix-only re-review returned
+`ADDRESSED`; the independent requirements review and final whole-change review
+both returned `PASS`.
+
+### Pre-load API-wrapper disposition
+
+No sound Lua-only protection exists for API functions replaced before
+`canvasdiff.App` initializes. Neovim 0.11's documented global deletion
+operation is `nvim_del_keymap(mode, lhs)` and provides no expected-identity
+argument or atomic compare-and-delete primitive. Neovim Lua execution is
+single-threaded, so no mapping mutation can interleave between the captured
+non-reentrant native get, internal comparison and native delete calls under
+the normal API boundary. But a pre-load wrapper can falsify observations and
+mutate during deletion; any Lua bootstrap or hidden table is itself mutable
+and cannot distinguish that compromise. The architecture documentation now
+states this boundary explicitly, including deliberate full module reloads.
+
+Repair verification:
+
+```text
+failed-set takeover regression: RED, then 1/1 passed
+post-load comparison-wrapper regression: RED, then 1/1 passed
+keys_global focused: 13/13 passed
+architecture: 30/30 passed
+NVIM_LOG_FILE=/tmp/canvasdiff-task4-r3-full.log make test
+816/816 passed
+```
+
+`git diff --check` passed. No receipt or ledger file was edited. A setter that
+throws after writing can leave that mapping present, but it is deliberately
+non-authoritative and CanvasDiff will not delete it; previously authenticated
+maps still recover normally. The command-only lazy-loading limitation remains
+the only product-level residual, while arbitrary pre-load API replacement is
+the documented runtime trust boundary.

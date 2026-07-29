@@ -89,15 +89,27 @@ stable `nvim_get_keymap()` identity for its own global maps, including behavior
 and provenance such as `sid`, `lnum`, `scriptversion`, mode bits and buffer
 scope. `setup()` removes or rebinds a mapping only when the captured native
 getter still reports that callback and identity; the immediately following
-delete also uses a captured native function, leaving no replaceable Lua wrapper
-between authentication and mutation. An occupied lhs, a user/plugin takeover,
-another App, a same-callback reinstall and a module reload are all foreign.
+comparison and delete use captured control primitives and native functions,
+leaving no replaceable Lua wrapper between authentication and mutation. An
+occupied lhs, a user/plugin takeover, another App, a same-callback reinstall
+and a module reload are all foreign.
 Configured `<leader>` notation is canonicalized at installation time, so a
 later leader change can retire the old owned sequence without confusing it
 with the newly requested one. Reconciliation prevalidates the complete list,
 including Neovim's 50-byte post-termcode lhs limit, retains authenticated
 candidates across API faults, and coalesces synchronous setup re-entry before
 presenting diagnostics from the committed pass.
+
+Those captured functions have one explicit trust boundary: Neovim's API table
+must still contain its native functions when `canvasdiff.App` initializes
+(including after a deliberate full module reload). Neovim's Lua execution is
+single-threaded, so no mapping takeover can interleave between the captured,
+non-reentrant native get and delete calls. Conversely, Neovim exposes no atomic
+compare-and-delete mapping primitive, and a Lua wrapper installed before module
+initialization can falsify the observation and mutate during deletion.
+CanvasDiff cannot authenticate such a pre-compromised API namespace from Lua;
+capturing the functions after initialization protects against later public
+table replacement, not arbitrary code that crossed this bootstrap boundary.
 
 ## Git comparison and mutation boundaries
 

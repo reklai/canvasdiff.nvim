@@ -484,6 +484,33 @@ T["keys_global compare deletion bypasses reentrant public get and delete wrapper
   config.setup({})
 end
 
+T["keys_global compare deletion bypasses reentrant public comparison wrappers"] = function()
+  local fm = require("canvasdiff")
+  local lhs = "gVe"
+  delete_global(lhs)
+  fm.setup({ keymaps = { global = { compare = lhs } } })
+
+  local real_deep_equal = vim.deep_equal
+  local comparison_calls = 0
+  local foreign = function() end
+  vim.deep_equal = function()
+    comparison_calls = comparison_calls + 1
+    vim.keymap.set("n", lhs, foreign, { desc = "Comparison takeover" })
+    return true
+  end
+  local ok, err = pcall(function()
+    fm.setup({ keymaps = { global = { compare = false } } })
+  end)
+  vim.deep_equal = real_deep_equal
+  assert(ok, err)
+  H.eq(comparison_calls, 0,
+    "final ownership comparison must not call a replaceable Vim wrapper")
+  H.eq(global_map(lhs), nil, "the original owned mapping is removed")
+
+  delete_global(lhs)
+  config.setup({})
+end
+
 T["keys_global compare coalesces notification reentry so the newest setup owns the result"] = function()
   local fm = require("canvasdiff")
   local collision_lhs, newest_lhs = "gRa", "gRb"
@@ -518,7 +545,7 @@ T["keys_global compare coalesces notification reentry so the newest setup owns t
   config.setup({})
 end
 
-T["keys_global compare retains recoverable ownership across set and delete failures"] = function()
+T["keys_global compare recovers known ownership across set and delete failures"] = function()
   local App = require("canvasdiff.App")
   local set_lhs, later_set_lhs = "gRf", "gRh"
   local del_lhs, get_lhs = "gRd", "gRg"
@@ -563,8 +590,8 @@ T["keys_global compare retains recoverable ownership across set and delete failu
   config.setup({ keymaps = { global = { compare = false } } })
   app:sync_global_keymaps()
   H.eq(global_map(set_lhs), nil, "the earlier set remains authenticated for cleanup")
-  H.eq(global_map(later_set_lhs), nil,
-    "the failed later set remains authenticated for cleanup")
+  assert(global_map(later_set_lhs),
+    "a throwing later setter cannot confer cleanup authority")
 
   config.setup({ keymaps = { global = { compare = del_lhs } } })
   app:sync_global_keymaps()
@@ -596,6 +623,59 @@ T["keys_global compare retains recoverable ownership across set and delete failu
   delete_global(later_set_lhs)
   delete_global(del_lhs)
   delete_global(get_lhs)
+  config.setup({})
+end
+
+T["keys_global compare never promotes a failed setter's foreign takeover"] = function()
+  local App = require("canvasdiff.App")
+  local owned_lhs, takeover_lhs = "gRt", "gRu"
+  delete_global(owned_lhs)
+  delete_global(takeover_lhs)
+
+  local native_get = vim.api.nvim_get_keymap
+  local native_set = vim.api.nvim_set_keymap
+  local native_del = vim.api.nvim_del_keymap
+  local first_install, callback
+  local app = App.new({
+    global_keymap_effects = {
+      get = native_get,
+      set = function(mode, lhs, installed_callback, opts)
+        local native_opts = vim.deepcopy(opts)
+        native_opts.callback = installed_callback
+        native_set(mode, lhs, "", native_opts)
+        if lhs == takeover_lhs then
+          first_install = assert(global_map(lhs))
+          callback = installed_callback
+          vim.keymap.set(mode, lhs, installed_callback, opts)
+          error("injected foreign takeover after write")
+        end
+      end,
+      del = native_del,
+    },
+  })
+
+  config.setup({
+    keymaps = { global = { compare = { owned_lhs, takeover_lhs } } },
+  })
+  capture_notifications(function()
+    app:sync_global_keymaps()
+  end)
+  assert(global_map(owned_lhs), "the earlier successful mapping is known-owned")
+  local takeover = assert(global_map(takeover_lhs))
+  assert(rawequal(takeover.callback, callback),
+    "the takeover deliberately reuses CanvasDiff's callback")
+  assert(takeover.lnum ~= first_install.lnum or takeover.sid ~= first_install.sid,
+    "the takeover must have different observable provenance")
+
+  config.setup({ keymaps = { global = { compare = false } } })
+  app:sync_global_keymaps()
+  H.eq(global_map(owned_lhs), nil,
+    "a later setter failure must not orphan an earlier known-owned mapping")
+  assert(global_map(takeover_lhs),
+    "a failed setter never grants deletion authority over the observed identity")
+
+  delete_global(owned_lhs)
+  delete_global(takeover_lhs)
   config.setup({})
 end
 

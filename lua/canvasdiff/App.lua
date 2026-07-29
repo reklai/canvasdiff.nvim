@@ -22,13 +22,19 @@ local lens = diff.lens
 local viewport = diff.anchor
 local Surface = require("canvasdiff.Surface")
 
--- Capture Neovim's raw global-map operations at module load. The final
--- authenticate/delete pair must not pass through replaceable Lua wrappers:
--- one can otherwise publish a foreign takeover between the snapshot and the
--- deletion it delegates.
+-- Capture the trusted Neovim global-map operations at module load. From this
+-- point onward the final authenticate/delete pair does not pass through
+-- replaceable Lua table fields, which could otherwise publish a foreign
+-- takeover between the snapshot and the deletion it delegates.
 local native_get_keymap = vim.api.nvim_get_keymap
 local native_set_keymap = vim.api.nvim_set_keymap
 local native_del_keymap = vim.api.nvim_del_keymap
+local native_ipairs = ipairs
+local native_next = next
+local native_pcall = pcall
+local native_rawget = rawget
+local native_rawequal = rawequal
+local native_type = type
 
 local App = {}
 App.__index = App
@@ -72,11 +78,11 @@ local function global_lhs(lhs)
 end
 
 local function current_global_map(app, lhs)
-  local ok, maps = pcall(app.global_map_effects.get, "n")
+  local ok, maps = native_pcall(app.global_map_effects.get, "n")
   if not ok then
     return nil, tostring(maps)
   end
-  for _, map in ipairs(maps) do
+  for _, map in native_ipairs(maps) do
     -- Control keys use lhsrawalt while printable and termcode sequences use
     -- lhsraw, so both are part of Neovim's observable canonical identity.
     if map.lhsraw == lhs or map.lhsrawalt == lhs then
@@ -86,7 +92,7 @@ local function current_global_map(app, lhs)
 end
 
 local function map_flag(value)
-  return value == true or (type(value) == "number" and value ~= 0)
+  return value == true or (native_type(value) == "number" and value ~= 0)
 end
 
 local function map_behavior(map)
@@ -120,7 +126,8 @@ local MAP_FLAG_FIELDS = {
 --- different call site is a foreign takeover, even with identical behavior.
 local function map_identity(map)
   local out = {}
-  for name, value in pairs(map) do
+  local name, value = native_next(map)
+  while name ~= nil do
     if name ~= "callback" then
       if MAP_FLAG_FIELDS[name] then
         out[name] = map_flag(value)
@@ -130,8 +137,27 @@ local function map_identity(map)
         out[name] = value
       end
     end
+    name, value = native_next(map, name)
   end
   return out
+end
+
+local function map_fields_equal(left, right)
+  local name, value = native_next(left)
+  while name ~= nil do
+    if not native_rawequal(value, native_rawget(right, name)) then
+      return false
+    end
+    name, value = native_next(left, name)
+  end
+  name = native_next(right)
+  while name ~= nil do
+    if native_rawget(left, name) == nil then
+      return false
+    end
+    name = native_next(right, name)
+  end
+  return true
 end
 
 local function expected_record(lhs, request, callback)
@@ -154,18 +180,21 @@ local function expected_record(lhs, request, callback)
   }
 end
 
+local function matches_expected_install(record, map)
+  return map
+    and native_rawequal(map.callback, record.callback)
+    and map_fields_equal(map_behavior(map), record.expected_behavior)
+end
+
 --- Ownership is deliberately observable, not inferred from lhs or a
 --- CanvasDiff-looking description. A user can replace our lhs at any time;
 --- exact callback identity plus the complete stable keymap API identity is the
 --- authority to remove it on the next setup.
 local function owns_global_map(record, map)
-  if not (map and rawequal(map.callback, record.callback)) then
-    return false
-  end
-  if record.identity then
-    return vim.deep_equal(map_identity(map), record.identity)
-  end
-  return vim.deep_equal(map_behavior(map), record.expected_behavior)
+  return record.identity
+    and map
+    and native_rawequal(map.callback, record.callback)
+    and map_fields_equal(map_identity(map), record.identity)
 end
 
 local function record_from_map(record, map)
@@ -200,7 +229,7 @@ end
 --- mutation authority unless a later successful inspection authenticates it.
 local function refresh_global_ledger(app, candidates)
   local out = {}
-  for _, record in ipairs(compact_candidates(candidates)) do
+  for _, record in native_ipairs(compact_candidates(candidates)) do
     local map, err = current_global_map(app, record.lhs)
     if err then
       return compact_candidates(candidates), err
@@ -222,7 +251,7 @@ local function report_global_collision(collision)
   local request, lhs, occupied =
     collision.request, collision.lhs, collision.occupied
   local callback = occupied.callback
-  if type(callback) == "function" then
+  if native_type(callback) == "function" then
     if warned_collision_callbacks[callback] then
       return
     end
@@ -249,18 +278,20 @@ local function desired_global_maps()
   local global_config = config.options.keymaps.global or {}
   local raw = global_config.compare
   if raw ~= nil and raw ~= false and raw ~= "" then
-    if type(raw) ~= "string" and type(raw) ~= "table" then
+    if native_type(raw) ~= "string" and native_type(raw) ~= "table" then
       return nil, nil, ("global compare mapping must be a string or list, got %s")
-        :format(type(raw))
+        :format(native_type(raw))
     end
-    if type(raw) == "table" then
+    if native_type(raw) == "table" then
       local max_index, count = 0, 0
-      for index in pairs(raw) do
-        if type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
+      local index = native_next(raw)
+      while index ~= nil do
+        if native_type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
           return nil, nil, "global compare mapping must be a dense list of lhs strings"
         end
         max_index = math.max(max_index, index)
         count = count + 1
+        index = native_next(raw, index)
       end
       if max_index ~= count then
         return nil, nil, "global compare mapping must be a dense list of lhs strings"
@@ -268,22 +299,22 @@ local function desired_global_maps()
     end
   end
 
-  local ok, resolved = pcall(keys.resolved, "global", config.options.keymaps)
+  local ok, resolved = native_pcall(keys.resolved, "global", config.options.keymaps)
   if not ok then
     return nil, nil, "could not resolve global compare mappings: " .. tostring(resolved)
   end
   local desired, order = {}, {}
-  for index, mapping in ipairs(resolved) do
-    if type(mapping.lhs) ~= "string" then
+  for index, mapping in native_ipairs(resolved) do
+    if native_type(mapping.lhs) ~= "string" then
       return nil, nil, ("global compare mapping #%d must be a string, got %s")
-        :format(index, type(mapping.lhs))
+        :format(index, native_type(mapping.lhs))
     end
     if mapping.lhs == "" then
       return nil, nil, ("global compare mapping list contains an empty lhs at position %d")
         :format(index)
     end
-    local lhs_ok, lhs = pcall(global_lhs, mapping.lhs)
-    if not lhs_ok or type(lhs) ~= "string" or lhs == "" then
+    local lhs_ok, lhs = native_pcall(global_lhs, mapping.lhs)
+    if not lhs_ok or native_type(lhs) ~= "string" or lhs == "" then
       return nil, nil, ("invalid global compare lhs %q: %s")
         :format(mapping.lhs, tostring(lhs))
     end
@@ -331,12 +362,12 @@ local function reconcile_global_keymaps(app)
   end
 
   local candidates = {}
-  for _, record in ipairs(app.global_maps) do
+  for _, record in native_ipairs(app.global_maps) do
     candidates[#candidates + 1] = record
   end
 
   local kept = {}
-  for _, record in ipairs(app.global_maps) do
+  for _, record in native_ipairs(app.global_maps) do
     local map, inspect_err = current_global_map(app, record.lhs)
     if inspect_err then
       return settle_global_ledger(app, candidates, {
@@ -355,7 +386,7 @@ local function reconcile_global_keymaps(app)
   local collisions = {}
   -- Install before deleting prior owned maps: a failed rebind leaves the old
   -- entry usable and authenticated instead of publishing a half-transition.
-  for _, lhs in ipairs(desired_order) do
+  for _, lhs in native_ipairs(desired_order) do
     if not kept[lhs] then
       local request = desired[lhs]
       local occupied, inspect_err = current_global_map(app, lhs)
@@ -381,7 +412,7 @@ local function reconcile_global_keymaps(app)
         end
         local tentative = expected_record(lhs, request, callback)
         candidates[#candidates + 1] = tentative
-        local set_ok, set_err = pcall(app.global_map_effects.set,
+        local set_ok, set_err = native_pcall(app.global_map_effects.set,
           "n", request.configured_lhs, callback, {
           desc = request.desc,
           noremap = true,
@@ -394,6 +425,22 @@ local function reconcile_global_keymaps(app)
               :format(request.configured_lhs, tostring(set_err)),
           })
         end
+        local installed, verify_err = current_global_map(app, lhs)
+        if verify_err then
+          return settle_global_ledger(app, candidates, {
+            kind = "error",
+            message = ("could not verify installed global mapping %s: %s")
+              :format(request.configured_lhs, verify_err),
+          })
+        end
+        if not matches_expected_install(tentative, installed) then
+          return settle_global_ledger(app, candidates, {
+            kind = "error",
+            message = ("could not authenticate installed global mapping %s")
+              :format(request.configured_lhs),
+          })
+        end
+        candidates[#candidates] = record_from_map(tentative, installed)
         if app.global_map_pending then
           return settle_global_ledger(app, candidates)
         end
@@ -401,7 +448,7 @@ local function reconcile_global_keymaps(app)
     end
   end
 
-  for _, record in ipairs(app.global_maps) do
+  for _, record in native_ipairs(app.global_maps) do
     if not desired[record.lhs] then
       local map, inspect_err = current_global_map(app, record.lhs)
       if inspect_err then
@@ -414,7 +461,7 @@ local function reconcile_global_keymaps(app)
         return settle_global_ledger(app, candidates)
       end
       if owns_global_map(record, map) then
-        local del_ok, del_err = pcall(
+        local del_ok, del_err = native_pcall(
           app.global_map_effects.del, "n", record.installed_lhs)
         if not del_ok then
           return settle_global_ledger(app, candidates, {
@@ -431,7 +478,7 @@ local function reconcile_global_keymaps(app)
   end
 
   local diagnostics = settle_global_ledger(app, candidates)
-  for _, collision in ipairs(collisions) do
+  for _, collision in native_ipairs(collisions) do
     diagnostics[#diagnostics + 1] = collision
   end
   return diagnostics
@@ -454,7 +501,7 @@ function App:sync_global_keymaps()
   repeat
     self.global_map_pending = false
     round = self.global_map_epoch
-    local ok, result = pcall(reconcile_global_keymaps, self)
+    local ok, result = native_pcall(reconcile_global_keymaps, self)
     diagnostics = ok and result or {
       {
         kind = "error",
@@ -467,7 +514,7 @@ function App:sync_global_keymaps()
   -- Present only the final committed pass. Notifications can run arbitrary
   -- user code, including setup(); no ownership state is written afterwards.
   local report_epoch = self.global_map_epoch
-  for _, diagnostic in ipairs(diagnostics) do
+  for _, diagnostic in native_ipairs(diagnostics) do
     if diagnostic.kind == "collision" then
       report_global_collision(diagnostic)
     else
