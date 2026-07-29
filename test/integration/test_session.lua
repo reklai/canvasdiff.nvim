@@ -830,4 +830,50 @@ T["session_ init round trip"] = function()
   assert(ok, err)
 end
 
+T["session_ committed range API is read-only and restores on reopen"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "topic\n" } })
+  local function git(args)
+    local cmd = { "git" }
+    vim.list_extend(cmd, args)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+    return vim.trim(res.stdout or "")
+  end
+  git({ "branch", "topic" })
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("main committed\n")
+  file:close()
+  git({ "add", "-A" })
+  git({ "commit", "-m", "main side" })
+
+  local before_status = git({ "status", "--porcelain=v1" })
+  local before_branch = git({ "symbolic-ref", "--short", "HEAD" })
+  in_repo(root, {}, function(fm)
+    local changed, change_err = fm.set_range("topic..")
+    assert(changed, change_err)
+    local winbar = vim.api.nvim_get_option_value(
+      "winbar", { win = vim.api.nvim_get_current_win() })
+    assert(winbar:find("HEAD vs topic", 1, true),
+      "the normalized two-dot label reaches the live canvas: " .. winbar)
+
+    fm.close()
+    local saved = assert(session.load(root))
+    H.eq(saved.lens, model.lens.range("topic", "HEAD", ".."),
+      "the committed range itself, not a legacy base, is persisted")
+
+    fm.open()
+    local restored = vim.api.nvim_get_option_value(
+      "winbar", { win = vim.api.nvim_get_current_win() })
+    assert(restored:find("HEAD vs topic", 1, true),
+      "reopen must collect the saved range before rendering: " .. restored)
+    fm.close()
+  end)
+
+  H.eq(git({ "status", "--porcelain=v1" }), before_status,
+    "range open/close cannot write the index or worktree")
+  H.eq(git({ "symbolic-ref", "--short", "HEAD" }), before_branch,
+    "range mode cannot checkout either endpoint")
+  vim.fn.delete(root, "rf")
+end
+
 return T

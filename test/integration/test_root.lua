@@ -52,6 +52,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "close",
     "command",
     "command_complete",
+    "compare",
     "cycle_lens",
     "jump_back",
     "open",
@@ -59,6 +60,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "set_base",
     "set_branch",
     "set_lens",
+    "set_range",
     "setup",
     "toggle",
     "toggle_base",
@@ -66,6 +68,559 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   for _, name in ipairs(names) do
     H.eq(type(first[name]), "function", name .. " is callable")
   end
+end
+
+local function git(root, args)
+  local cmd = { "git" }
+  vim.list_extend(cmd, args)
+  local res = vim.system(cmd, { cwd = root, text = true }):wait()
+  assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  return vim.trim(res.stdout or "")
+end
+
+local function picker_fixture()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "base\n" } })
+  git(root, { "branch", "master" })
+  git(root, { "branch", "zeta" })
+  git(root, { "update-ref", "refs/remotes/origin/topic", "HEAD" })
+  git(root, { "symbolic-ref", "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/topic" })
+  git(root, { "update-ref", "refs/remotes/upstream/topic", "HEAD" })
+  git(root, { "symbolic-ref", "refs/remotes/upstream/HEAD",
+    "refs/remotes/upstream/topic" })
+  git(root, { "switch", "zeta" })
+  return root
+end
+
+local function names(items)
+  local out = {}
+  for _, item in ipairs(items) do
+    out[#out + 1] = item.name
+  end
+  return out
+end
+
+local function item_named(items, name)
+  for _, item in ipairs(items) do
+    if item.name == name then
+      return item
+    end
+  end
+  error("missing picker item " .. name .. " in " .. vim.inspect(names(items)))
+end
+
+T["root_ compare picker orders metadata choices and cancels silently"] = function()
+  local root = picker_fixture()
+  in_cwd(root, function(fm, msgs)
+    H.eq(fm.command_complete("origin/"), { "origin/HEAD", "origin/topic" },
+      "completion inspects the command window's repository")
+    H.eq(fm.command_complete("main...up"), {
+      "main...upstream/HEAD", "main...upstream/topic",
+    }, "range completion preserves the typed left side and operator")
+    local before = vim.api.nvim_get_current_buf()
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts }
+      if #calls == 1 then
+        callback(items[1], 1)
+      else
+        callback(nil, nil)
+      end
+    end
+    local ok, err = xpcall(function()
+      fm.compare()
+    end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+
+    H.eq(#calls, 2, "choosing a base opens exactly one comparison prompt")
+    H.eq(names(calls[1].items), {
+      "origin/HEAD", "upstream/HEAD", "main", "master",
+      "origin/topic", "upstream/topic", "zeta",
+    }, "base choices prefer remote defaults and conventional local bases")
+    H.eq(names(calls[2].items), {
+      "zeta", "main", "master", "origin/topic", "upstream/topic",
+    }, "comparison choices put the current branch first and exclude remote HEAD")
+    H.eq(calls[1].items[1].ref, "refs/remotes/origin/HEAD",
+      "picker execution identity is the unambiguous full ref")
+    assert(calls[1].opts.format_item(calls[1].items[1]):find(
+      "remote default", 1, true), "the symbolic default is labeled")
+    assert(calls[2].opts.format_item(calls[2].items[1]):find(
+      "current", 1, true), "the current branch is labeled")
+    H.eq(vim.api.nvim_get_current_buf(), before,
+      "cancelling the second prompt changes no window")
+    H.eq(#msgs, 0, "cancellation is silent")
+
+    calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts }
+      callback(nil, nil)
+    end
+    fm.compare()
+    H.eq(#calls, 1, "cancelling the base prompt cannot open the second prompt")
+    H.eq(vim.api.nvim_get_current_buf(), before)
+    H.eq(#msgs, 0, "first-prompt cancellation is silent too")
+    vim.ui.select = real_select
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ base priority uses full refs when a tag collides with main"] = function()
+  local root = picker_fixture()
+  git(root, { "tag", "main" })
+  in_cwd(root, function(fm)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+    end
+    local ok, err = xpcall(function() fm.compare() end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(names(calls[1].items), {
+      "origin/HEAD", "upstream/HEAD", "heads/main", "master",
+      "origin/topic", "upstream/topic", "zeta",
+    }, "local main stays ahead of master even when its safe display name changes")
+    H.eq(calls[1].items[3].ref, "refs/heads/main")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ detached compare picker synthesizes HEAD as the current choice"] = function()
+  local root = picker_fixture()
+  git(root, { "switch", "--detach" })
+  in_cwd(root, function(fm)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts }
+      if #calls == 1 then
+        callback(item_named(items, "main"))
+      else
+        callback(nil, nil)
+      end
+    end
+    local ok, err = xpcall(function() fm.compare() end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(calls[2].items[1], {
+      ref = "HEAD", name = "HEAD", kind = "detached", current = true,
+    }, "detached HEAD remains selectable even though it has no local branch ref")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+local function two_surface_app(root)
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local st_a = assert(app:open())
+  local win_a = vim.api.nvim_get_current_win()
+  vim.cmd("tabnew")
+  local win_b = vim.api.nvim_get_current_win()
+  local st_b = assert(app:open())
+  return app, st_a, win_a, st_b, win_b, old_cwd
+end
+
+local function cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  for _, win in ipairs({ win_b, win_a }) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_win(win)
+      pcall(function() app:close() end)
+    end
+  end
+  if #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd, "tabclose")
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+end
+
+T["root_ delayed picker callbacks retain their exact originating Surface"] = function()
+  local root = picker_fixture()
+  local app, st_a, win_a, st_b, win_b, old_cwd = two_surface_app(root)
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(win_a)
+    app:compare()
+    H.eq(#calls, 1)
+
+    vim.api.nvim_set_current_win(win_b)
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(#calls, 2)
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+
+    H.eq(require("canvasdiff.diff").lens.of(st_a),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."),
+      "the delayed choice must pivot the Surface that opened the picker")
+    H.eq(require("canvasdiff.diff").lens.of(st_b).id, "all",
+      "the currently focused Surface must remain untouched")
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ an unowned picker window cannot redirect into another Surface"] = function()
+  local root = picker_fixture()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local existing = assert(app:open())
+  local existing_win = vim.api.nvim_get_current_win()
+  vim.cmd("tabnew")
+  local origin_win = vim.api.nvim_get_current_win()
+  local origin_buf = vim.api.nvim_get_current_buf()
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+
+    H.eq(require("canvasdiff.diff").lens.of(existing).id, "all",
+      "the unrelated live review cannot answer for an unowned origin window")
+    assert(vim.api.nvim_win_get_buf(origin_win) ~= origin_buf,
+      "a successful picker opens its committed review in the origin window")
+    local opened = assert(app.opened[#app.opened])
+    H.eq(opened.state.root, root)
+    H.eq(require("canvasdiff.diff").lens.of(opened.state),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."))
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  for _, win in ipairs({ origin_win, existing_win }) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_win(win)
+      pcall(function() app:close() end)
+    end
+  end
+  if #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd, "tabclose")
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ delayed unowned picker keeps its captured repository across cwd drift"] =
+function()
+  local root = picker_fixture()
+  local other = H.git_fixture({
+    committed = { ["other.txt"] = "other\n" },
+    worktree = { ["other.txt"] = "dirty\n" },
+  })
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local win = vim.api.nvim_get_current_win()
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    vim.api.nvim_set_current_dir(other)
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+    local opened = assert(app.opened[#app.opened])
+    H.eq(opened.state.root, root,
+      "async completion uses the repository captured when the picker opened")
+    H.eq(require("canvasdiff.diff").lens.of(opened.state),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."))
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  vim.fn.delete(other, "rf")
+  assert(ok, err)
+end
+
+T["root_ picker from a jump excursion reopens the exact Surface window"] =
+function()
+  local root = picker_fixture()
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("dirty worktree\n")
+  file:close()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local st = assert(app:open())
+  local surface = assert(app.opened[#app.opened])
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  local entered = require("canvasdiff.input").jump.enter(
+    surface.excursion, st, { win = win })
+  assert(entered.ok, vim.inspect(entered))
+  assert(not surface:is_showing(), "the single canvas window is in its file excursion")
+
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+
+    assert(require("canvasdiff.canvas").is_canvas_buf(
+      vim.api.nvim_win_get_buf(win)),
+      "a successful picker must visibly return the excursion window to a canvas")
+    local replacement = assert(app.opened[#app.opened])
+    H.eq(replacement.state.root, root)
+    H.eq(require("canvasdiff.diff").lens.of(replacement.state),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."))
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ a newer compare request invalidates every older callback"] = function()
+  local root = picker_fixture()
+  local app, st_a, win_a, st_b, win_b, old_cwd = two_surface_app(root)
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(win_a)
+    app:compare()
+    vim.api.nvim_set_current_win(win_b)
+    app:compare()
+    H.eq(#calls, 2, "both first prompts were issued")
+
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(#calls, 2, "the stale first callback cannot open another prompt")
+
+    calls[2].callback(item_named(calls[2].items, "main"))
+    H.eq(#calls, 3)
+    calls[3].callback(item_named(calls[3].items, "zeta"))
+    H.eq(require("canvasdiff.diff").lens.of(st_a).id, "all")
+    H.eq(require("canvasdiff.diff").lens.of(st_b),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."))
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ compare invalidates its predecessor before repository inspection"] = function()
+  local root = picker_fixture()
+  local app, st_a, win_a, st_b, win_b, old_cwd = two_surface_app(root)
+  local source = require("canvasdiff.source")
+  local real_branches = source.branches
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(win_a)
+    app:compare()
+    H.eq(#calls, 1)
+
+    source.branches = function(repo)
+      calls[1].callback(item_named(calls[1].items, "main"))
+      return real_branches(repo)
+    end
+    vim.api.nvim_set_current_win(win_b)
+    app:compare()
+    H.eq(#calls, 2,
+      "the old callback reentered during inspection but could not open a prompt")
+    H.eq(require("canvasdiff.diff").lens.of(st_a).id, "all")
+    H.eq(require("canvasdiff.diff").lens.of(st_b).id, "all")
+  end, debug.traceback)
+
+  source.branches = real_branches
+  vim.ui.select = real_select
+  cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ owned picker rechecks newest request after range collection"] = function()
+  local root = picker_fixture()
+  local app, st_a, win_a, st_b, win_b, old_cwd = two_surface_app(root)
+  local source = require("canvasdiff.source")
+  local real_sections = source.sections
+  local real_select = vim.ui.select
+  local real_notify = vim.notify
+  local messages = {}
+  local calls = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(win_a)
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    local reentered = false
+    source.sections = function(...)
+      if not reentered then
+        reentered = true
+        vim.api.nvim_set_current_win(win_b)
+        app:compare()
+      end
+      return nil, "stale owned collection"
+    end
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+    H.eq(#calls, 3, "collection reentry started the newer picker")
+    H.eq(require("canvasdiff.diff").lens.of(st_a).id, "all",
+      "the stale owned transaction cannot publish after collection")
+    H.eq(require("canvasdiff.diff").lens.of(st_b).id, "all")
+    H.eq(messages, {}, "a stale collection error is discarded silently")
+  end, debug.traceback)
+
+  source.sections = real_sections
+  vim.ui.select = real_select
+  vim.notify = real_notify
+  cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ unowned picker rechecks newest request after open collection"] = function()
+  local root = picker_fixture()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local source = require("canvasdiff.source")
+  local real_sections = source.sections
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local win = vim.api.nvim_get_current_win()
+  local before = vim.api.nvim_win_get_buf(win)
+  local real_select = vim.ui.select
+  local real_notify = vim.notify
+  local messages = {}
+  local calls = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    local reentered = false
+    source.sections = function(...)
+      if not reentered then
+        reentered = true
+        app:compare()
+      end
+      return nil, "stale unowned collection"
+    end
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+    H.eq(#calls, 3, "open collection reentry started the newer picker")
+    H.eq(#app.opened, 0,
+      "the stale unowned transaction cannot create a Surface after collection")
+    H.eq(vim.api.nvim_win_get_buf(win), before,
+      "the stale open changes no window")
+    H.eq(messages, {}, "a stale open error is discarded silently")
+  end, debug.traceback)
+
+  source.sections = real_sections
+  vim.ui.select = real_select
+  vim.notify = real_notify
+  if #app.opened > 0 and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ reentrant select invalidates the picker it interrupted"] = function()
+  local root = picker_fixture()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local st = assert(app:open())
+  local win = vim.api.nvim_get_current_win()
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+    if #calls == 1 then
+      callback(item_named(items, "main"))
+    elseif #calls == 2 then
+      -- A UI implementation is allowed to run arbitrary code before returning.
+      -- Starting another picker here must invalidate both callbacks above.
+      app:compare()
+    end
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    H.eq(#calls, 3, "the reentrant request issued its own first prompt")
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+    H.eq(require("canvasdiff.diff").lens.of(st).id, "all",
+      "the interrupted request cannot publish after re-entry")
+
+    calls[3].callback(item_named(calls[3].items, "main"))
+    H.eq(#calls, 4)
+    calls[4].callback(item_named(calls[4].items, "zeta"))
+    H.eq(require("canvasdiff.diff").lens.of(st),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."),
+      "the newest request remains live")
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
 end
 
 T["root_ loader has no init shim and App instances own separate Surfaces"] = function()
@@ -237,10 +792,13 @@ T["root_ resolves from the current buffer when cwd is not a repo"] = function()
     committed = { ["f.txt"] = "one\ntwo\n" },
     worktree = { ["f.txt"] = "one\nCHANGED\n" },
   })
+  git(root, { "branch", "topic" })
   local parent = vim.fs.dirname(root)
 
   in_cwd(parent, function(fm)
     vim.cmd.edit(vim.fs.joinpath(root, "f.txt"))
+    H.eq(fm.command_complete("topi"), { "topic" },
+      "completion uses the same buffer-repository fallback as open")
     fm.open()
     assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()),
       "the canvas must open from the buffer's own repo")

@@ -45,4 +45,10 @@ return {
   command_complete = function(arglead)
     return app:command_complete(arglead)
   end,
+  compare = function()
+    return app:compare()
+  end,
+  set_range = function(spec)
+    return app:set_range(spec)
+  end,
 }

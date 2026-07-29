@@ -245,18 +245,48 @@ return {
     H.eq(option_like, nil, "--end-of-options must make this a ref, never an option")
     assert(option_err, "option-looking invalid ref must still return an error")
   end,
-  ["git: branches enumerates local and remote refs in stable order"] = function()
+  ["git: branches preserves full ref identity and classifies picker metadata"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
     sh(root, { "git", "branch", "zeta" })
     sh(root, { "git", "branch", "alpha" })
+    sh(root, { "git", "branch", "origin/topic" })
+    sh(root, { "git", "commit", "--allow-empty", "-m", "distinct remote tip" })
     sh(root, { "git", "update-ref", "refs/remotes/origin/topic", "HEAD" })
     sh(root, { "git", "symbolic-ref", "refs/remotes/origin/HEAD",
       "refs/remotes/origin/topic" })
 
     local refs, err = source.branches(root)
     assert(refs, err)
-    H.eq(refs, { "alpha", "main", "origin/topic", "zeta" },
-      "symbolic remote HEAD is not a branch choice and results are sorted")
+    H.eq(refs, {
+      {
+        ref = "refs/heads/alpha", name = "alpha", kind = "local",
+        current = false,
+      },
+      {
+        ref = "refs/heads/origin/topic", name = "heads/origin/topic",
+        kind = "local", current = false,
+      },
+      {
+        ref = "refs/heads/main", name = "main", kind = "local",
+        current = true,
+      },
+      {
+        ref = "refs/remotes/origin/HEAD", name = "origin/HEAD",
+        kind = "remote", remote_default = true,
+      },
+      {
+        ref = "refs/remotes/origin/topic", name = "remotes/origin/topic",
+        kind = "remote",
+      },
+      {
+        ref = "refs/heads/zeta", name = "zeta", kind = "local",
+        current = false,
+      },
+    }, "full refs prevent a same-named local and remote branch becoming ambiguous")
+    local local_tip = assert(source.resolve_commit(root, "heads/origin/topic"))
+    local remote_tip = assert(source.resolve_commit(root, "remotes/origin/topic"))
+    assert(local_tip ~= remote_tip,
+      "Git-disambiguated completion names must resolve both distinct tips")
     vim.fn.delete(root, "rf")
   end,
   ["git: merge_base resolves refs to their common commit"] = function()

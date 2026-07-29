@@ -19,6 +19,7 @@ C.words = {
   close    = { action = "close" },
   toggle   = { action = "toggle" },
   refresh  = { action = "refresh" },
+  compare  = { action = "compare" },
   -- Lenses. States, not flips: see the public facade's set_lens.
   unstaged = { action = "set_lens", lens = "unstaged" },
   all      = { action = "set_lens", lens = "all" },
@@ -26,7 +27,9 @@ C.words = {
 }
 
 --- Completion candidates, in the order they should be offered.
-C.candidate_order = { "open", "close", "toggle", "refresh", "all", "unstaged", "staged" }
+C.candidate_order = {
+  "open", "close", "toggle", "refresh", "compare", "all", "unstaged", "staged",
+}
 
 -- `git diff --staged` (and its `--cached` synonym) means index-vs-HEAD, which the
 -- `staged` lens now renders -- but the flag spelling stays refused rather than
@@ -85,13 +88,30 @@ function C.parse(fargs)
     return { action = word.action, lens = word.lens, errors = {} }
   end
 
-  -- Anything else names a revision. A bare ref is a LENS -- "worktree vs main" --
-  -- whose new side is still the worktree, so it stays editable and is supported. A
-  -- RANGE (`main...HEAD`, `v1..v2`) puts a commit on both sides, which would make
-  -- the canvas a read-only viewer and lose the reason to use it; that stays
-  -- unimplemented, and the grammar keeps it distinguishable.
-  if arg:find("%.%.") then
-    return { action = "range", rev = arg, errors = {} }
+  -- Anything else names a revision. A bare ref is "worktree vs ref". A range
+  -- puts commits on both sides and is read-only. Three dots must be recognized
+  -- before two; an omitted side has Git's usual HEAD meaning.
+  local operator, at
+  at = arg:find("...", 1, true)
+  if at then
+    operator = "..."
+  else
+    at = arg:find("..", 1, true)
+    if at then
+      operator = ".."
+    end
+  end
+  if operator then
+    local left = arg:sub(1, at - 1)
+    local right = arg:sub(at + #operator)
+    return {
+      action = "range",
+      rev = arg,
+      left = left ~= "" and left or "HEAD",
+      right = right ~= "" and right or "HEAD",
+      operator = operator,
+      errors = {},
+    }
   end
   return { action = "rev", rev = arg, errors = {} }
 end
@@ -122,31 +142,51 @@ function C.plan(parse)
   end
 
   if parse.action == "range" then
-    -- Deliberately plans NO call: silently showing worktree-vs-HEAD when the
-    -- user asked for `main...HEAD` would be worse than refusing, because the
-    -- diff would look plausible and be wrong.
     return {
-      diagnostic = {
-        level = "warn",
-        message = ("commit ranges are not supported (got '%s'). A bare ref works:"
-          .. " `:CanvasDiff main` shows your worktree against it"):format(parse.rev),
-      },
+      call = "set_range",
+      argument = lens.range(parse.left, parse.right, parse.operator),
     }
   end
 
   return { call = parse.action }
 end
 
---- Completion candidates for `arglead`. Pure.
----
---- Bare refs are supported, but refs are deliberately NOT offered yet because
---- branch-name enumeration/completion has not been implemented. Fixed command
---- words remain complete and deterministic in the meantime.
-function C.complete(arglead)
+--- Completion candidates for `arglead`. Pure; repository inspection belongs
+--- to the App owner, which passes branch metadata in.
+function C.complete(arglead, refs)
   local out = {}
-  for _, c in ipairs(C.candidate_order) do
-    if c:sub(1, #arglead) == arglead then
-      out[#out + 1] = c
+  local seen = {}
+  local operator, at
+  at = arglead:find("...", 1, true)
+  if at then
+    operator = "..."
+  else
+    at = arglead:find("..", 1, true)
+    if at then
+      operator = ".."
+    end
+  end
+  local prefix = ""
+  local lead = arglead
+  if operator then
+    prefix = arglead:sub(1, at + #operator - 1)
+    lead = arglead:sub(at + #operator)
+  else
+    for _, c in ipairs(C.candidate_order) do
+      if c:sub(1, #lead) == lead then
+        out[#out + 1] = c
+        seen[c] = true
+      end
+    end
+  end
+  for _, branch in ipairs(refs or {}) do
+    local name = type(branch) == "table" and branch.name or branch
+    if type(name) == "string" and name:sub(1, #lead) == lead then
+      local candidate = prefix .. name
+      if not seen[candidate] then
+        out[#out + 1] = candidate
+        seen[candidate] = true
+      end
     end
   end
   return out

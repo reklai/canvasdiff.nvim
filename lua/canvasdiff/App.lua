@@ -25,12 +25,14 @@ local App = {}
 App.__index = App
 
 local EMPTY_MSG = "-- no changes --"
+local STALE_COMPARE = {}
+local buf_dir
 
 function App.new()
   -- Reviews are indexed by their own canvas buffer, which is the only identity
   -- that cannot drift: windows move between tabs, a review may have none on
   -- screen for a while, and two reviews of the same repository are legal.
-  return setmetatable({ surfaces = {}, opened = {} }, App)
+  return setmetatable({ surfaces = {}, opened = {}, compare_request = 0 }, App)
 end
 
 --- Forget a review, whoever disposed it.
@@ -163,10 +165,20 @@ function App:command(fargs)
   return outcome
 end
 
---- Completion candidates for `:CanvasDiff`. Pure, but routed through the owner
---- so the plugin file imports only the root facade.
+--- Completion candidates for `:CanvasDiff`, resolved from the command window's
+--- repository and routed through the owner so the plugin imports only the root
+--- facade.
 function App:command_complete(arglead)
-  return command.complete(arglead)
+  local win = vim.api.nvim_get_current_win()
+  local surface = surface_for_window(self, win)
+  local root = surface and surface.state.root or source.root(vim.fn.getcwd())
+  if not root then
+    local ok, buf = pcall(vim.api.nvim_win_get_buf, win)
+    local dir = ok and buf_dir(buf) or nil
+    root = dir and source.root(dir) or nil
+  end
+  local branches = root and source.branches(root) or {}
+  return command.complete(arglead, branches or {})
 end
 
 --- Return from a jump excursion into the owning review's canvas.
@@ -495,7 +507,7 @@ end
 --- Restricted to ordinary file buffers, so scratch buffers, terminals and
 --- URI-backed buffers (oil://, fugitive://, our own canvasdiff://) never
 --- contribute a bogus path.
-local function buf_dir(buf)
+buf_dir = function(buf)
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then
     return nil
   end
@@ -546,7 +558,9 @@ function App:open(opts)
   local prev_buf = vim.api.nvim_win_get_buf(win)
 
   local cwd = vim.fn.getcwd()
-  local root = source.root(cwd)
+  -- `_root` is an internal async handoff: a picker resolves its repository
+  -- before yielding and must not silently follow a later cwd change.
+  local root = opts._root or source.root(cwd)
   if not root then
     local dir = buf_dir(prev_buf)
     root = dir and source.root(dir) or nil
@@ -604,6 +618,9 @@ end
   -- particular, an invalid/deleted branch ref is an error, not an empty old
   -- side and not an empty canvas.
   local sections, collect_err = source.sections(root, l, config.options.context)
+  if opts._guard and not opts._guard() then
+    return nil, STALE_COMPARE
+  end
   if not sections then
     ui.warn(collect_err)
     return nil, collect_err
@@ -1241,7 +1258,7 @@ end
 ---
 --- Shared by the lens pivot, App:refresh and watch -- they are one operation ("go and
 --- see what is true now"), differing only in what prompted it.
-local function pivot(surface, target_lens)
+local function pivot(surface, target_lens, guard)
   local st = surface and surface.state
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
     return nil, "no valid diff canvas"
@@ -1249,6 +1266,9 @@ local function pivot(surface, target_lens)
 
   local next_lens = target_lens or lens.of(st)
   local desired, err = source.sections(st.root, next_lens, config.options.context)
+  if guard and not guard() then
+    return nil, STALE_COMPARE
+  end
   if not desired then
     return nil, err
   end
@@ -1338,6 +1358,22 @@ function App:set_lens(l)
   return true
 end
 
+local function set_owned_lens(surface, l, guard)
+  if lens.same(lens.of(surface.state), l) then
+    return true
+  end
+  local ok, err = pivot(surface, l, guard)
+  if not ok then
+    if err == STALE_COMPARE then
+      return nil
+    end
+    ui.warn(err)
+    return nil, err
+  end
+  ui.notify("showing " .. l.label)
+  return true
+end
+
 --- Step through the three named lenses: all → unstaged → staged → all.
 ---
 --- This is what the `base` keymap runs, and it is the gesture the canvas is built
@@ -1362,6 +1398,201 @@ function App:set_branch(ref)
     return nil, err
   end
   return self:set_lens(l)
+end
+
+--- Point the canvas at a committed range. Public callers may pass the direct
+--- command spelling or an already-normalized range lens.
+function App:set_range(spec)
+  local l = spec
+  if type(spec) == "string" then
+    local parsed = command.parse({ spec })
+    if parsed.action == "range" then
+      l = lens.range(parsed.left, parsed.right, parsed.operator)
+    end
+  end
+  if not lens.is_range(l) then
+    local err = "not a commit range"
+    ui.warn(err)
+    return nil, err
+  end
+  return self:set_lens(l)
+end
+
+local function sorted_copy(items)
+  local out = vim.list_slice(items)
+  table.sort(out, function(a, b)
+    if a.name ~= b.name then
+      return a.name < b.name
+    end
+    return a.ref < b.ref
+  end)
+  return out
+end
+
+local function base_choices(branches)
+  local origin_default
+  local remote_defaults = {}
+  local main
+  local master
+  local remaining = {}
+  for _, item in ipairs(branches) do
+    if item.remote_default then
+      if item.ref == "refs/remotes/origin/HEAD" then
+        origin_default = item
+      else
+        remote_defaults[#remote_defaults + 1] = item
+      end
+    elseif item.ref == "refs/heads/main" then
+      main = item
+    elseif item.ref == "refs/heads/master" then
+      master = item
+    else
+      remaining[#remaining + 1] = item
+    end
+  end
+  remote_defaults = sorted_copy(remote_defaults)
+  remaining = sorted_copy(remaining)
+  local out = {}
+  if origin_default then
+    out[#out + 1] = origin_default
+  end
+  vim.list_extend(out, remote_defaults)
+  if main then
+    out[#out + 1] = main
+  end
+  if master then
+    out[#out + 1] = master
+  end
+  vim.list_extend(out, remaining)
+  return out
+end
+
+local function comparison_choices(branches)
+  local current
+  local remaining = {}
+  for _, item in ipairs(branches) do
+    if not item.remote_default then
+      if item.kind == "local" and item.current then
+        current = item
+      else
+        remaining[#remaining + 1] = item
+      end
+    end
+  end
+  remaining = sorted_copy(remaining)
+  local out = {
+    current or { ref = "HEAD", name = "HEAD", kind = "detached", current = true },
+  }
+  vim.list_extend(out, remaining)
+  return out
+end
+
+local function format_branch(item)
+  local labels = {}
+  if item.current then
+    labels[#labels + 1] = "current"
+  end
+  if item.remote_default then
+    labels[#labels + 1] = "remote default"
+  end
+  if item.kind == "local" or item.kind == "remote" then
+    labels[#labels + 1] = item.kind
+  end
+  if #labels == 0 then
+    return item.name
+  end
+  return item.name .. " [" .. table.concat(labels, "] [") .. "]"
+end
+
+local function compare_origin_alive(app, request)
+  if app.compare_request ~= request.token
+      or not vim.api.nvim_win_is_valid(request.win) then
+    return false
+  end
+  local owner = surface_for_window(app, request.win)
+  if request.surface then
+    return owner == request.surface
+      and request.surface:guard(request.generation)
+  end
+  return owner == nil
+end
+
+--- Pick a merge-base comparison without changing refs or repository state.
+--- Every callback is fenced by both a monotonic request and the exact
+--- Surface/window identity that issued it.
+function App:compare()
+  -- Invalidate before any repository or editor call: injected adapters and UI
+  -- callbacks may reenter, and "newer" begins when this request is invoked.
+  self.compare_request = self.compare_request + 1
+  local token = self.compare_request
+  local win = vim.api.nvim_get_current_win()
+  local surface = surface_for_window(self, win)
+  local root = surface and surface.state.root or source.root(vim.fn.getcwd())
+  if not root then
+    local ok, buf = pcall(vim.api.nvim_win_get_buf, win)
+    local dir = ok and buf_dir(buf) or nil
+    root = dir and source.root(dir) or nil
+  end
+  if not root then
+    ui.warn("not inside a git repository")
+    return
+  end
+
+  local branches, err = source.branches(root)
+  if not branches then
+    ui.warn(err)
+    return nil, err
+  end
+  local bases = base_choices(branches)
+  if #bases == 0 then
+    local no_branches = "no branches found"
+    ui.warn(no_branches)
+    return nil, no_branches
+  end
+  local comparisons = comparison_choices(branches)
+
+  local request = {
+    token = token,
+    win = win,
+    surface = surface,
+    generation = surface and surface.generation or nil,
+    root = root,
+  }
+  vim.ui.select(bases, {
+    prompt = "CanvasDiff base:",
+    kind = "canvasdiff_branch_base",
+    format_item = format_branch,
+  }, function(base)
+    if not base or not compare_origin_alive(self, request) then
+      return
+    end
+    vim.ui.select(comparisons, {
+      prompt = "CanvasDiff compare:",
+      kind = "canvasdiff_branch_compare",
+      format_item = format_branch,
+    }, function(other)
+      if not other or not compare_origin_alive(self, request) then
+        return
+      end
+      vim.api.nvim_win_call(request.win, function()
+        if compare_origin_alive(self, request) then
+          local target = lens.range(base.ref, other.ref, "...")
+          local guard = function()
+            return compare_origin_alive(self, request)
+          end
+          if request.surface and request.surface:is_showing() then
+            set_owned_lens(request.surface, target, guard)
+          else
+            self:open({
+              lens = target,
+              _root = request.root,
+              _guard = guard,
+            })
+          end
+        end
+      end)
+    end)
+  end)
 end
 
 --- Set the diff base to "HEAD" or "index" -- the older two-value vocabulary, which

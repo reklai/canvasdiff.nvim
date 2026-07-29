@@ -15,6 +15,7 @@ end
 T["cmd_parse each word maps to its action"] = function()
   for word, want in pairs({
     open = "open", close = "close", toggle = "toggle", refresh = "refresh",
+    compare = "compare",
     unstaged = "set_lens", all = "set_lens", staged = "set_lens",
   }) do
     H.eq(cmd.parse({ word }).action, want, "'" .. word .. "' should be " .. want)
@@ -61,18 +62,36 @@ end
 -- The grammar reserves revision specs now so that adding range mode later is
 -- not a breaking change to the command surface.
 -- A bare ref is a supported lens (worktree vs that ref, still editable). A range
--- puts a commit on BOTH sides, which would make the canvas read-only and lose the
--- point of it, so the grammar keeps the two apart.
-T["cmd_parse a bare ref is a lens, a range is not"] = function()
+-- puts a commit on BOTH sides, so the grammar keeps the editable and read-only
+-- comparisons distinct.
+T["cmd_parse distinguishes bare refs from two and three dot ranges"] = function()
   for _, ref in ipairs({ "HEAD~3", "main", "deadbeef", "origin/main" }) do
     local p = cmd.parse({ ref })
     H.eq(p.action, "rev", ref .. " should parse as a bare ref")
     H.eq(p.rev, ref)
   end
-  for _, range in ipairs({ "main...HEAD", "v1.0..v2.0" }) do
-    local p = cmd.parse({ range })
-    H.eq(p.action, "range", range .. " should parse as a range")
-    H.eq(p.rev, range)
+  for _, range in ipairs({
+    { "main...HEAD", "main", "HEAD", "..." },
+    { "v1.0..v2.0", "v1.0", "v2.0", ".." },
+  }) do
+    local p = cmd.parse({ range[1] })
+    H.eq(p.action, "range", range[1] .. " should parse as a range")
+    H.eq({ p.left, p.right, p.operator }, { range[2], range[3], range[4] })
+  end
+end
+
+T["cmd_parse omitted range endpoints mean HEAD"] = function()
+  for _, case in ipairs({
+    { "..topic", "HEAD", "topic", ".." },
+    { "main..", "main", "HEAD", ".." },
+    { "...topic", "HEAD", "topic", "..." },
+    { "main...", "main", "HEAD", "..." },
+    { "..", "HEAD", "HEAD", ".." },
+    { "...", "HEAD", "HEAD", "..." },
+  }) do
+    local p = cmd.parse({ case[1] })
+    H.eq(p.action, "range", case[1])
+    H.eq({ p.left, p.right, p.operator }, { case[2], case[3], case[4] }, case[1])
   end
 end
 
@@ -85,20 +104,30 @@ end
 -- --- completion --------------------------------------------------------
 
 T["cmd_complete filters by prefix and offers every word"] = function()
-  H.eq(cmd.complete(""), { "open", "close", "toggle", "refresh", "all", "unstaged", "staged" })
-  H.eq(cmd.complete("c"), { "close" })
+  H.eq(cmd.complete("", {}), {
+    "open", "close", "toggle", "refresh", "compare", "all", "unstaged", "staged",
+  })
+  H.eq(cmd.complete("c", {}), { "close", "compare" })
   H.eq(cmd.complete("un"), { "unstaged" })
   H.eq(cmd.complete("s"), { "staged" })
   H.eq(cmd.complete("zzz"), {})
   H.eq(cmd.complete("re"), { "refresh" })
 end
 
-T["cmd_complete omits refs until branch completion exists"] = function()
-  -- Bare refs work, but branch enumeration is not part of completion yet.
-  -- Until it is, every candidate must remain one of the fixed command words.
-  for _, c in ipairs(cmd.complete("")) do
-    assert(cmd.words[c], "completion offered '" .. c .. "', which is not a known word")
-  end
+T["cmd_complete offers branch names and preserves a range prefix"] = function()
+  local refs = {
+    { ref = "refs/heads/main", name = "main", kind = "local", current = true },
+    { ref = "refs/remotes/origin/main", name = "origin/main", kind = "remote" },
+    { ref = "refs/remotes/origin/topic", name = "origin/topic", kind = "remote" },
+  }
+  H.eq(cmd.complete("ma", refs), { "main" })
+  H.eq(cmd.complete("origin/", refs), { "origin/main", "origin/topic" })
+  H.eq(cmd.complete("main..ori", refs), {
+    "main..origin/main", "main..origin/topic",
+  })
+  H.eq(cmd.complete("...ori", refs), {
+    "...origin/main", "...origin/topic",
+  })
 end
 
 -- --- running -----------------------------------------------------------
@@ -111,30 +140,6 @@ local function capture(fn)
   vim.notify = real
   assert(ok, err)
   return msgs
-end
-
-T["cmd_run a commit range reports and opens nothing"] = function()
-  local canvas = require("canvasdiff.canvas")
-  local before = 0
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if canvas.is_canvas_buf(b) then before = before + 1 end
-  end
-
-  local msgs = capture(function()
-    require("canvasdiff").command({ "main...HEAD" })
-  end)
-
-  H.eq(#msgs, 1, "exactly one notification")
-  assert(msgs[1].msg:match("not supported"), "got: " .. msgs[1].msg)
-  assert(msgs[1].msg:match("main%.%.%.HEAD"), "should quote the revspec, got: " .. msgs[1].msg)
-  -- And it must point at the thing that DOES work, not just refuse.
-  assert(msgs[1].msg:match("bare ref"), "should name the supported form, got: " .. msgs[1].msg)
-
-  local after = 0
-  for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if canvas.is_canvas_buf(b) then after = after + 1 end
-  end
-  H.eq(after, before, "refusing must not create a canvas as a side effect")
 end
 
 T["cmd_run an error is reported at ERROR level"] = function()
@@ -175,12 +180,17 @@ T["cmd_plan a bare ref becomes a branch change"] = function()
   H.eq(outcome.argument, "main")
 end
 
-T["cmd_plan refusals carry a level and plan no operation"] = function()
-  local range = cmd.plan(cmd.parse({ "main...HEAD" }))
-  H.eq(range.call, nil, "a range must not fall through to any operation")
-  H.eq(range.diagnostic.level, "warn")
-  assert(range.diagnostic.message:match("not supported"), range.diagnostic.message)
+T["cmd_plan ranges construct committed lenses with normalized endpoints"] = function()
+  local two = cmd.plan(cmd.parse({ "main.." }))
+  H.eq(two.call, "set_range")
+  H.eq(two.argument, require("canvasdiff.diff").lens.range("main", "HEAD", ".."))
 
+  local three = cmd.plan(cmd.parse({ "...topic" }))
+  H.eq(three.call, "set_range")
+  H.eq(three.argument, require("canvasdiff.diff").lens.range("HEAD", "topic", "..."))
+end
+
+T["cmd_plan refusals carry a level and plan no operation"] = function()
   local refused = cmd.plan(cmd.parse({ "--cached" }))
   H.eq(refused.call, nil)
   H.eq(refused.diagnostic.level, "error")

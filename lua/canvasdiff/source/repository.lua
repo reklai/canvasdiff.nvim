@@ -181,15 +181,18 @@ function M.resolve_commit(root, ref)
   return oid
 end
 
---- Local and remote branch names, sorted and without symbolic remote HEAD refs.
+--- Local and remote branch metadata. Full refs remain the execution identity;
+--- short names exist only for display/completion, so a same-named ref cannot
+--- silently resolve to a different object. Symbolic remote HEADs are retained
+--- as explicit base-picker choices.
 --- @param root string
---- @return string[]|nil
+--- @return table[]|nil
 --- @return string|nil
 function M.branches(root)
   local res = run(root, {
     "for-each-ref",
     "--sort=refname",
-    "--format=%(refname:short)%09%(symref)",
+    "--format=%(refname)%09%(refname:short)%09%(symref)%09%(HEAD)",
     "refs/heads",
     "refs/remotes",
   })
@@ -198,12 +201,35 @@ function M.branches(root)
   end
   local refs = {}
   for _, line in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
-    local name, symref = line:match("^(.-)\t(.*)$")
-    if name and name ~= "" and symref == "" then
-      refs[#refs + 1] = name
+    local ref, short, symref, head = line:match("^(.-)\t(.-)\t(.-)\t(.*)$")
+    local kind = ref and ref:find("refs/heads/", 1, true) == 1 and "local" or "remote"
+    local full_name = ref and ref:gsub("^refs/heads/", ""):gsub("^refs/remotes/", "")
+    local remote_default = kind == "remote"
+      and type(symref) == "string" and symref ~= ""
+      and type(full_name) == "string"
+      and full_name:match("/HEAD$") ~= nil
+    -- Git lengthens refname:short when a local and remote display spelling
+    -- collide (`heads/x` vs `remotes/x`). Keep that disambiguation. Symbolic
+    -- remote HEAD is the exception: Git shortens it to the remote name alone,
+    -- so retain the explicit `<remote>/HEAD` picker label from the full ref.
+    local name = remote_default and full_name or short
+    if ref and ref ~= "" and type(name) == "string" and name ~= ""
+        and (symref == "" or remote_default) then
+      local item = { ref = ref, name = name, kind = kind }
+      if kind == "local" then
+        item.current = head == "*"
+      elseif remote_default then
+        item.remote_default = true
+      end
+      refs[#refs + 1] = item
     end
   end
-  table.sort(refs)
+  table.sort(refs, function(a, b)
+    if a.name ~= b.name then
+      return a.name < b.name
+    end
+    return a.ref < b.ref
+  end)
   return refs
 end
 
