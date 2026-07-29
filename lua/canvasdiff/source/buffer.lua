@@ -13,6 +13,101 @@ local function find_loaded(abs_path)
   return nil
 end
 
+local function split_path(path)
+  local slashed = path:gsub("\\", "/")
+  local prefix, rest
+  if slashed:match("^%a:/") then
+    prefix, rest = slashed:sub(1, 3), slashed:sub(4)
+  elseif slashed:sub(1, 2) == "//" then
+    prefix, rest = "//", slashed:sub(3)
+  elseif slashed:sub(1, 1) == "/" then
+    prefix, rest = "/", slashed:sub(2)
+  else
+    rest = slashed
+  end
+  local parts = {}
+  for part in rest:gmatch("[^/]+") do
+    parts[#parts + 1] = part
+  end
+  return prefix, parts
+end
+
+local function join_parts(prefix, parts)
+  local body = table.concat(parts, "/")
+  if prefix == "/" or prefix == "//" then
+    return prefix .. body
+  end
+  if prefix then
+    return prefix .. body
+  end
+  return body
+end
+
+-- Resolve symlinks one component at a time, before applying a following `..`.
+-- Normalizing the whole link destination first is wrong: `dir/..` does not
+-- return to the lexical parent when `dir` itself is a symlink.
+local function lexical_realpath(path)
+  local prefix, pending = split_path(path)
+  if not prefix then
+    return nil, false
+  end
+  local resolved = {}
+  local expansions = 0
+  local traverses_symlink = false
+  while #pending > 0 do
+    local part = table.remove(pending, 1)
+    if part == "." or part == "" then
+      -- no-op
+    elseif part == ".." then
+      resolved[#resolved] = nil
+    else
+      local candidate_parts = {}
+      for i, component in ipairs(resolved) do
+        candidate_parts[i] = component
+      end
+      candidate_parts[#candidate_parts + 1] = part
+      local candidate = join_parts(prefix, candidate_parts)
+      local link = vim.uv.fs_readlink(candidate)
+      if link then
+        traverses_symlink = true
+        expansions = expansions + 1
+        if expansions > 256 then
+          return nil, true
+        end
+        local link_prefix, link_parts = split_path(link)
+        if link_prefix then
+          prefix = link_prefix
+          resolved = {}
+        end
+        vim.list_extend(link_parts, pending)
+        pending = link_parts
+      else
+        local lstat = vim.uv.fs_lstat(candidate)
+        if lstat and lstat.type == "link" then
+          return nil, true
+        end
+        resolved[#resolved + 1] = part
+      end
+    end
+  end
+  return join_parts(prefix, resolved), traverses_symlink
+end
+
+local function existing_device(path)
+  local current = path
+  while current do
+    local stat = vim.uv.fs_stat(current)
+    if stat then
+      return stat.dev
+    end
+    local parent = vim.fs.dirname(current)
+    if not parent or parent == current then
+      return nil
+    end
+    current = parent
+  end
+end
+
 --- Whether a loaded target buffer has edits that Git cannot see on disk.
 --- @param root string
 --- @param file { path: string, old_path: string? }
@@ -25,12 +120,16 @@ function M.modified(root, file)
       local stat = vim.uv.fs_stat(path)
       targets[#targets + 1] = {
         normalized = vim.fs.normalize(path),
+        lexical = lexical_realpath(path),
         real = vim.uv.fs_realpath(path),
         dev = stat and stat.dev or nil,
         ino = stat and stat.ino or nil,
+        missing = stat == nil,
+        parent_dev = stat and stat.dev or existing_device(path),
       }
     end
   end
+  local stages_deletion = file and file.unstaged == "D"
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(buf)
         and vim.api.nvim_get_option_value("modified", { buf = buf }) then
@@ -38,12 +137,24 @@ function M.modified(root, file)
       if name ~= "" then
         local stat = vim.uv.fs_stat(name)
         local normalized = vim.fs.normalize(name)
+        local lexical, traverses_symlink = lexical_realpath(name)
         local real = vim.uv.fs_realpath(name)
         for _, target in ipairs(targets) do
           if normalized == target.normalized
+              or (lexical and target.lexical and lexical == target.lexical)
               or (real and target.real and real == target.real)
               or (stat and target.dev ~= nil and target.ino ~= nil
                 and stat.dev == target.dev and stat.ino == target.ino) then
+            return true
+          end
+          -- Once a deletion removes the target inode, a hard-link relationship
+          -- cannot be disproved from current filesystem state. This includes a
+          -- buffer whose alias path was also removed. Refuse conservatively;
+          -- existing targets retain exact identity checks above, so unrelated
+          -- ordinary edits remain non-blocking.
+          if stages_deletion and target.missing
+              and (not stat or traverses_symlink or target.parent_dev == nil
+                or stat.dev == target.parent_dev) then
             return true
           end
         end

@@ -2032,6 +2032,71 @@ local function section_by_restore_path(st, path)
   end
 end
 
+local function status_identity_key(file)
+  return table.concat({
+    tostring(file.path or ""),
+    tostring(file.old_path or ""),
+    tostring(file.staged or ""),
+    tostring(file.unstaged or ""),
+    tostring(file.status or ""),
+  }, "\0")
+end
+
+-- Porcelain can report two records with the same current path, notably a
+-- staged deletion plus a recreated untracked source. Keep action routing on
+-- the exact selected section path, then use that section's visible lens and XY
+-- metadata to choose deterministically between same-path records.
+local function action_file(files, cached, current_lens)
+  local best, best_rank, best_key
+  for _, candidate in ipairs(files or {}) do
+    if candidate.path == cached.path then
+      local rank = 0
+      if current_lens.id == "staged" and candidate.staged then
+        rank = rank + 16
+      elseif current_lens.id == "unstaged" and candidate.unstaged then
+        rank = rank + 16
+      end
+      if candidate.staged == cached.staged then rank = rank + 4 end
+      if candidate.unstaged == cached.unstaged then rank = rank + 2 end
+      if candidate.old_path == cached.old_path then rank = rank + 1 end
+      local key = status_identity_key(candidate)
+      if not best_rank or rank > best_rank
+          or (rank == best_rank and key < best_key) then
+        best, best_rank, best_key = candidate, rank, key
+      end
+    end
+  end
+  return best
+end
+
+-- Git may rewrite one logical identity after a stage mutation: for example,
+-- staging the deleted destination of an indexed old->new rename leaves a
+-- staged deletion at old. Prefer the stable destination when it survives,
+-- then its historical source, and break otherwise-equivalent matches by
+-- Git's already-sorted path identity. This is intentionally post-mutation
+-- only; action preflight remains exact-section-path.
+local function post_mutation_file(files, before)
+  local best, best_rank, best_key
+  for _, candidate in ipairs(files or {}) do
+    local rank = 0
+    if candidate.path == before.path then
+      rank = 4
+    elseif before.old_path and candidate.path == before.old_path then
+      rank = 3
+    elseif candidate.old_path == before.path then
+      rank = 2
+    elseif before.old_path and candidate.old_path == before.old_path then
+      rank = 1
+    end
+    local key = status_identity_key(candidate)
+    if rank > 0 and (not best_rank or rank > best_rank
+        or (rank == best_rank and key < best_key)) then
+      best, best_rank, best_key = candidate, rank, key
+    end
+  end
+  return best
+end
+
 local function capture_file_positions(surface, st, file)
   local positions = {}
   for _, win in ipairs(surface:canvas_snapshot().canvas) do
@@ -2151,13 +2216,7 @@ function App:toggle_stage(path, owned_surface, generation)
     ui.warn(status_err)
     return nil, status_err
   end
-  local file
-  for _, candidate in ipairs(files) do
-    if candidate.path == cached_file.path then
-      file = candidate
-      break
-    end
-  end
+  local file = action_file(files, cached_file, current_lens)
   if not file then
     local err = cached_file.path .. " has no changes any more"
     ui.warn(err)
@@ -2198,13 +2257,7 @@ function App:toggle_stage(path, owned_surface, generation)
   if not guard() then
     return stage_refresh_failure("the owning review changed during status refresh")
   end
-  local remains
-  for _, candidate in ipairs(files) do
-    if candidate.path == file.path then
-      remains = candidate
-      break
-    end
-  end
+  local remains = post_mutation_file(files, file)
   if not remains then
     local reconciled, reconcile_err = pivot(surface, current_lens, guard)
     if not reconciled then

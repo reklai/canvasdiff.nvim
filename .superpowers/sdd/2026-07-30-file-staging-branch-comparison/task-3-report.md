@@ -177,3 +177,71 @@ Verification:
 
 Residual concern: none for the reported malformed-identity scope; the command
 cannot run unless the exact destination path is present.
+
+## Whole-change repair
+
+Whole-change review found two remaining identity hazards:
+
+- After staging deletion of an indexed rename destination, Git can rewrite the
+  visible identity from `old -> new` to a staged deletion at `old`. Exact-path
+  post-mutation lookup treated that as clean, so the lens did not follow the
+  surviving identity and the operation was not reversibly routed.
+- A modified buffer reached through a symlink or hard-link alias was not
+  reliably detected after the target was deleted, because the target's
+  realpath and inode were no longer observable.
+
+Red evidence included:
+
+- `FILTER='follows a deleted rename destination'` — failed 0/1 because the
+  staged lens was not selected.
+- `FILTER='deleted target with a modified'` — failed 0/2 because both alias
+  deletions were staged.
+- Atomic-replacement and deleted-hardlink-path regressions each failed 0/1.
+- The dangling relative-symlink regression failed 0/1 after selecting the
+  tracked target.
+- Recreated rename-source ambiguity failed 0/1 when the equal-path untracked
+  record was deliberately returned before the staged deletion.
+- The cross-device regular-buffer regression failed 0/1 under an
+  over-conservative interim repair.
+- The retargeted cross-device symlink regression failed 0/1 when the alias
+  could incorrectly use that regular-buffer exclusion.
+
+Repairs:
+
+- Action preflight remains bound to the exact selected section path. When
+  porcelain contains multiple records at that path, the current lens and
+  cached XY metadata rank the intended record with a deterministic total-key
+  tie break.
+- Rename-aware matching is limited to post-mutation reconciliation. It
+  intersects the before/after destination and historical-source identities in
+  a deliberate order, again with a deterministic total-key tie break.
+- Buffer safety resolves symlinks component by component before consuming a
+  following `..`, including through a missing final target, using APIs
+  available in Neovim 0.10.
+- Deleted-target staging refuses conservatively for statless aliases,
+  same-device buffers, and every path that traverses a symlink. A live regular
+  file on a different filesystem is the only deleted-target case whose
+  hard-link identity can be ruled out.
+
+Adversarial repair review additionally exercised stale index inode metadata,
+atomic target replacement, vanished hard-link paths, relative symlink
+components, Neovim 0.10 API compatibility, recreated-source duplicate paths,
+cross-device regular buffers, and retargeted cross-device symlinks. Each
+finding was repaired and scoped re-review reported it addressed with no new
+Critical or Important issue.
+
+Verification at the integration checkpoint:
+
+- `make test SUITE=integration FILTER='alias'` — 6/6 passed.
+- `make test SUITE=integration FILTER='toggle_stage'` — 13/13 passed.
+- `make test SUITE=integration FILTER='stage_cycle'` — 4/4 passed.
+- `make test SUITE=integration` — 383/383 passed.
+- `NVIM_LOG_FILE=/tmp/canvasdiff-task3-whole-repair-full.log make test`
+  — 825/825 passed.
+- `git diff --check` — clean.
+
+Residual behavior is intentionally conservative: after a target deletion, an
+unrelated modified named buffer on the same filesystem may refuse staging
+because a vanished hard-link relationship cannot be disproved. A non-symlink
+regular buffer on a different filesystem is allowed because hard links cannot
+cross device boundaries.

@@ -36,6 +36,21 @@ local function shown_files()
   return out
 end
 
+-- Deletion staging deliberately refuses when any modified named buffer could
+-- still be a vanished hardlink. Tests exercising unrelated rename mechanics
+-- must therefore start without modified buffers leaked by earlier async test
+-- teardown in the shared Neovim process.
+local function clear_modified_file_buffers()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf)
+        and vim.api.nvim_buf_get_name(buf) ~= ""
+        and vim.api.nvim_get_option_value("modified", { buf = buf }) then
+      vim.api.nvim_set_option_value("modified", false, { buf = buf })
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+  end
+end
+
 -- The root module is the entire supported Lua surface. Pin it before the
 -- App/Surface extraction so moving ownership cannot accidentally expose an
 -- implementation method or drop one of the command-facing compatibility
@@ -120,6 +135,7 @@ T["root_ toggle_stage stages mixed disk state but refuses an unsaved target buff
     H.eq(source.show(root, ":0", "a.txt"), "index\n",
       "the index must not move when the target has unsaved edits")
     assert(msgs[#msgs].msg:find("unsaved", 1, true), vim.inspect(msgs))
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
     vim.api.nvim_buf_delete(buf, { force = true })
 
     assert(fm.toggle_stage())
@@ -188,6 +204,7 @@ T["root_ toggle_stage permits unstage with a modified buffer and keeps lens poli
     local file = assert(source.changed_files(root)[1])
     assert(file.unstaged and not file.staged, vim.inspect(file))
     H.eq(st.lens.id, "unstaged")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
     vim.api.nvim_buf_delete(buf, { force = true })
   end)
   vim.fn.delete(root, "rf")
@@ -293,6 +310,209 @@ T["root_ modified symlink-alias buffer blocks staging its real target"] = functi
     H.eq(changed, nil)
     assert(err and err:find("unsaved", 1, true), tostring(err))
     H.eq(source.show(root, ":0", "a.txt"), "head\n")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ deleted target with a modified symlink-alias buffer refuses staging"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  assert(vim.uv.fs_symlink(path, alias))
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    assert(vim.uv.fs_unlink(path))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved alias" })
+    vim.api.nvim_set_current_win(st.win)
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "head\n",
+      "a dangling symlink alias must not permit staging the target deletion")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ deleted target with a modified hardlink-alias buffer refuses staging"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  local linked = vim.uv.fs_link(path, alias)
+  if not linked then
+    vim.fn.delete(root, "rf")
+    return
+  end
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    assert(vim.uv.fs_unlink(path))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved hardlink alias" })
+    vim.api.nvim_set_current_win(st.win)
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "head\n",
+      "an extant hardlink alias must not permit staging the target deletion")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ atomically replaced target keeps its modified hardlink alias protected"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "head\n" } })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local replacement = vim.fs.joinpath(root, "replacement.tmp")
+  local f = assert(io.open(replacement, "w"))
+  f:write("replacement\n")
+  f:close()
+  assert(vim.uv.fs_rename(replacement, path))
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  local linked = vim.uv.fs_link(path, alias)
+  if not linked then
+    vim.fn.delete(root, "rf")
+    return
+  end
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    assert(vim.uv.fs_unlink(path))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved replacement alias" })
+    vim.api.nvim_set_current_win(st.win)
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "head\n")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ deleted hardlink alias path still protects its modified buffer"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  local linked = vim.uv.fs_link(path, alias)
+  if not linked then
+    vim.fn.delete(root, "rf")
+    return
+  end
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    assert(vim.uv.fs_unlink(path))
+    assert(vim.uv.fs_unlink(alias))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved vanished alias" })
+    vim.api.nvim_set_current_win(st.win)
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "head\n")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ dangling relative symlink components protect the deleted target"] = function()
+  local root = H.git_fixture({
+    committed = { ["sub/a.txt"] = "head\n" },
+    worktree = { ["sub/a.txt"] = "disk\n" },
+  })
+  vim.fn.mkdir(vim.fs.joinpath(root, "sub", "nested"), "p")
+  assert(vim.uv.fs_symlink("sub/nested", vim.fs.joinpath(root, "dir")))
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  assert(vim.uv.fs_symlink("dir/../a.txt", alias))
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "sub", "a.txt")))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved nested alias" })
+    vim.api.nvim_set_current_win(st.win)
+    local target_i
+    for i, section in ipairs(st.sections) do
+      if section.path == "sub/a.txt" then target_i = i end
+    end
+    assert(target_i, "the tracked target is selectable beside alias entries")
+    local start0 = canvas.section_rows(st, target_i)
+    vim.api.nvim_win_set_cursor(st.win, { start0 + 1, 0 })
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "sub/a.txt"), "head\n")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ retargeted cross-device symlink still protects its loaded buffer"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "disk\n" },
+  })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local unrelated = "/proc/self/status"
+  local root_stat = assert(vim.uv.fs_stat(root))
+  local unrelated_stat = vim.uv.fs_stat(unrelated)
+  if not unrelated_stat or unrelated_stat.dev == root_stat.dev then
+    vim.fn.delete(root, "rf")
+    return
+  end
+  local alias = vim.fs.joinpath(root, "alias.txt")
+  assert(vim.uv.fs_symlink(path, alias))
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved original target" })
+    assert(vim.uv.fs_unlink(path))
+    assert(vim.uv.fs_unlink(alias))
+    assert(vim.uv.fs_symlink(unrelated, alias))
+    vim.api.nvim_set_current_win(st.win)
+
+    local changed, err = fm.toggle_stage()
+    H.eq(changed, nil)
+    assert(err and err:find("unsaved", 1, true), tostring(err))
+    H.eq(source.show(root, ":0", "a.txt"), "head\n")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
     vim.api.nvim_buf_delete(buf, { force = true })
   end)
   vim.fn.delete(root, "rf")
@@ -410,6 +630,97 @@ T["root_ toggle_stage preserves nearest line through rename stage and unstage"] 
     assert(new_i, "rename destination fallback survives the reset split")
     H.eq({ cursor_identity() }, { "new.txt", "line 80" },
       "unstage prefers the rename destination and restores its nearest line")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage follows a deleted rename destination to its reversible deletion"] = function()
+  clear_modified_file_buffers()
+  local root = H.git_fixture({ committed = { ["old.txt"] = "rename body\n" } })
+  assert(vim.system({ "git", "mv", "old.txt", "new.txt" },
+    { cwd = root }):wait().code == 0)
+  assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "new.txt")))
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local lens_mod = require("canvasdiff.diff").lens
+    local st = assert(fm.open({ lens = lens_mod.get("unstaged") }))
+    H.eq(st.sections[1].path, "new.txt",
+      "sanity: the unstaged deletion is still the rename destination")
+
+    assert(fm.toggle_stage())
+    H.eq(st.lens.id, "staged")
+    H.eq({ st.sections[1].path, st.sections[1].status },
+      { "old.txt", "D" }, "the staged source deletion remains visible")
+    local row = vim.api.nvim_win_get_cursor(st.win)[1] - 1
+    local section_i = assert(canvas.locate(st, row))
+    H.eq(st.sections[section_i].path, "old.txt",
+      "the cursor follows the identity rewrite to the rename source")
+
+    assert(fm.toggle_stage())
+    local file = assert(source.changed_files(root)[1])
+    assert(file.unstaged and not file.staged, vim.inspect(file))
+    H.eq({ st.lens.id, st.sections[1].path, st.sections[1].status },
+      { "unstaged", "old.txt", "D" },
+      "a second press reverses the staged deletion")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ toggle_stage reverses deletion when a rename source is recreated"] = function()
+  clear_modified_file_buffers()
+  local root = H.git_fixture({ committed = { ["old.txt"] = "rename body\n" } })
+  assert(vim.system({ "git", "mv", "old.txt", "new.txt" },
+    { cwd = root }):wait().code == 0)
+  local old = assert(io.open(vim.fs.joinpath(root, "old.txt"), "w"))
+  old:write("recreated source\n")
+  old:close()
+  assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "new.txt")))
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    local lens_mod = require("canvasdiff.diff").lens
+    local st = assert(fm.open({ lens = lens_mod.get("unstaged") }))
+    local new_i
+    for i, section in ipairs(st.sections) do
+      if section.path == "new.txt" then new_i = i end
+    end
+    assert(new_i, "the deleted rename destination is selectable")
+    local start0 = canvas.section_rows(st, new_i)
+    vim.api.nvim_win_set_cursor(st.win, { start0 + 1, 0 })
+
+    assert(fm.toggle_stage())
+    H.eq(st.lens.id, "staged")
+    local deletion_i
+    for i, section in ipairs(st.sections) do
+      if section.path == "old.txt" and section.staged == "D" then
+        deletion_i = i
+        break
+      end
+    end
+    assert(deletion_i, "the staged source deletion is visible")
+    start0 = canvas.section_rows(st, deletion_i)
+    vim.api.nvim_win_set_cursor(st.win, { start0 + 1, 0 })
+
+    local real_changed_files = source.changed_files
+    source.changed_files = function(...)
+      local files, err = real_changed_files(...)
+      if files then
+        table.sort(files, function(a, b)
+          if a.path == b.path then
+            return a.unstaged == "?" and b.unstaged ~= "?"
+          end
+          return a.path < b.path
+        end)
+      end
+      return files, err
+    end
+    local changed, err = fm.toggle_stage()
+    source.changed_files = real_changed_files
+    assert(changed, err)
+    H.eq(source.show(root, ":0", "old.txt"), "rename body\n",
+      "the second cycle unstages the deletion instead of staging recreated bytes")
+    H.eq(st.lens.id, "unstaged")
   end)
   vim.fn.delete(root, "rf")
 end

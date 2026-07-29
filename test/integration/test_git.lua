@@ -697,6 +697,42 @@ return {
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved" })
     H.eq(source.buffer_modified(root, { path = "a.txt" }), true)
     H.eq(source.buffer_modified(root, { path = "other.txt" }), false)
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+    H.eq(vim.api.nvim_buf_is_loaded(buf), false)
+    for _, stale in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(stale)
+          and vim.api.nvim_buf_get_name(stale) == path then
+        pcall(vim.api.nvim_set_option_value, "modified", false, { buf = stale })
+        pcall(vim.api.nvim_buf_delete, stale, { force = true })
+      end
+    end
+    vim.fn.delete(root, "rf")
+  end,
+  ["source: a cross-device modified buffer cannot alias a deleted target"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "disk\n" },
+    })
+    local unrelated = "/proc/self/status"
+    local root_stat = assert(vim.uv.fs_stat(root))
+    local unrelated_stat = vim.uv.fs_stat(unrelated)
+    if not unrelated_stat or unrelated_stat.dev == root_stat.dev then
+      vim.fn.delete(root, "rf")
+      return
+    end
+    local buf = vim.fn.bufadd(unrelated)
+    vim.fn.bufload(buf)
+    vim.api.nvim_set_option_value("readonly", false, { buf = buf })
+    vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "unsaved unrelated" })
+    assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "a.txt")))
+
+    H.eq(source.buffer_modified(root, {
+      path = "a.txt",
+      status = "D",
+      unstaged = "D",
+    }), false, "hardlinks cannot cross filesystem device boundaries")
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
     vim.api.nvim_buf_delete(buf, { force = true })
     vim.fn.delete(root, "rf")
   end,
