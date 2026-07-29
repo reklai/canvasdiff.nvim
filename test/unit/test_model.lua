@@ -1,8 +1,50 @@
 local H = require("helpers")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
+local lens = model.lens
 
 return {
+  ["lens: range construction validates identity and preserves operator"] = function()
+    H.eq(lens.range("main", "topic", ".."), {
+      id = "range:main..topic",
+      old = "main",
+      new = "topic",
+      operator = "..",
+      label = "topic vs main",
+    })
+    H.eq(lens.range("main", "topic", "..."), {
+      id = "range:main...topic",
+      old = "main",
+      new = "topic",
+      operator = "...",
+      label = "topic vs merge-base(main)",
+    })
+    H.eq(lens.range("", "topic", ".."), nil, "an omitted endpoint is normalized by the parser")
+    H.eq(lens.range("main", "", ".."), nil)
+    H.eq(lens.range("main", "topic", "--"), nil, "only Git range operators are accepted")
+  end,
+  ["lens: range validity classification and equality include the operator"] = function()
+    local two = assert(lens.range("main", "topic", ".."))
+    local three = assert(lens.range("main", "topic", "..."))
+    H.eq(lens.valid(two), true)
+    H.eq(lens.is_range(two), true)
+    H.eq(lens.is_range(lens.branch("main")), false)
+    H.eq(lens.valid({
+      id = "range:other..topic",
+      old = "main",
+      new = "topic",
+      operator = "..",
+    }), false, "a restored range's stable identity must agree with its sides")
+    H.eq(lens.valid({
+      id = "range:main--topic",
+      old = "main",
+      new = "topic",
+      operator = "--",
+    }), false)
+    H.eq(lens.same(two, lens.range("main", "topic", "..")), true)
+    H.eq(lens.same(two, three), false,
+      "two-dot and three-dot have different old sides after resolution")
+  end,
   ["model: modified file entries"] = function()
     local s = model.build_section("f.txt", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n",
                                             "a\nb\nc\nd\nE\nf\ng\nh\ni\nj\n", "M")
@@ -52,6 +94,7 @@ return {
         path = new_path,
         old_path = old_path,
         old_rev = "abc123",
+        new_rev = "def456",
         status = "R",
         staged = "R",
         unstaged = "M",
@@ -62,10 +105,10 @@ return {
     H.eq(#sections, 1, "identity alone is a reviewable change")
     local s = sections[1]
     H.eq({
-      s.path, s.old_path, s.old_rev, s.status, s.staged, s.unstaged,
+      s.path, s.old_path, s.old_rev, s.new_rev, s.status, s.staged, s.unstaged,
       s.renamed, s.rename_only, s.adds, s.dels, s.nhunks,
     }, {
-      new_path, old_path, "abc123", "R", "R", "M",
+      new_path, old_path, "abc123", "def456", "R", "R", "M",
       true, true, 0, 0, 0,
     })
     H.eq(#s.entries, 1, "a pure rename has only its file header")

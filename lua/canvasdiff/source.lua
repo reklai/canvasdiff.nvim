@@ -6,10 +6,12 @@ local repository = require("canvasdiff.source.repository")
 -- through this exact facade. Live-buffer and protocol details remain owned by
 -- internal modules below it.
 return {
+  branches = repository.branches,
   changed_files = repository.changed_files,
   diff_files = repository.diff_files,
   file_stream = collect.file_stream,
   files = collect.files,
+  merge_base = repository.merge_base,
   resolve_commit = repository.resolve_commit,
   root = repository.root,
   section_stream = collect.section_stream,

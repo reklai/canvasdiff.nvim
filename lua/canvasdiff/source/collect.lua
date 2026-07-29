@@ -67,10 +67,30 @@ end
 local function plan_files(root, spec)
   local l = type(spec) == "table" and spec or lens.from_base(spec)
   local is_branch = lens.is_branch(l)
+  local is_range = lens.is_range(l)
   local changed
   local old_rev = l.old
+  local new_rev
 
-  if is_branch then
+  if is_range then
+    local err
+    new_rev, err = repository.resolve_commit(root, l.new)
+    if not new_rev then
+      return nil, err
+    end
+    if l.operator == "..." then
+      old_rev, err = repository.merge_base(root, l.old, new_rev)
+    else
+      old_rev, err = repository.resolve_commit(root, l.old)
+    end
+    if not old_rev then
+      return nil, err
+    end
+    changed, err = repository.diff_files(root, old_rev, new_rev)
+    if not changed then
+      return nil, err
+    end
+  elseif is_branch then
     local err
     old_rev, err = repository.resolve_commit(root, l.old)
     if not old_rev then
@@ -143,7 +163,7 @@ local function plan_files(root, spec)
   local planned = {}
   for _, f in ipairs(changed) do
     local path, old_path, status
-    if is_branch then
+    if is_branch or is_range then
       path = f.path
       old_path = f.old_path or path
       status = f.status
@@ -154,6 +174,7 @@ local function plan_files(root, spec)
       path = path,
       old_path = old_path,
       old_rev = old_rev,
+      new_rev = new_rev,
       status = status,
       -- Carried through so the canvas can say WHICH KIND of change each file is,
       -- independently of the lens you happen to be looking through.
@@ -171,23 +192,35 @@ end
 --- Read one planned file's two sides.
 --- @return table|nil file
 --- @return string|nil err
-local function read_file(root, l, entry, is_branch)
+local function read_file(root, l, entry, is_branch, is_range)
   local old_text, old_err = repository.show(root, entry.old_rev, entry.old_path)
-  if old_text == nil and is_branch
+  if old_text == nil and (is_branch or is_range)
       and entry.status ~= "A" and entry.status ~= "?" then
     return nil, ("cannot read old side %s:%s for %s change: %s")
       :format(entry.old_rev, entry.old_path, entry.status,
         old_err or "unknown git error")
   end
+  local new_text, new_err
+  if is_range then
+    new_text, new_err = repository.show(root, entry.new_rev, entry.path)
+    if new_text == nil and entry.status ~= "D" then
+      return nil, ("cannot read new side %s:%s for %s change: %s")
+        :format(entry.new_rev, entry.path, entry.status,
+          new_err or "unknown git error")
+    end
+  else
+    new_text = M.new_side(root, l, entry.path, entry.status)
+  end
   return {
     path = entry.path,
     old_path = entry.old_path,
     old_rev = entry.old_rev,
+    new_rev = entry.new_rev,
     status = entry.status,
     staged = entry.staged,
     unstaged = entry.unstaged,
     old_text = old_text or "",
-    new_text = M.new_side(root, l, entry.path, entry.status),
+    new_text = new_text or "",
   }
 end
 
@@ -207,6 +240,7 @@ function M.file_stream(root, spec)
     return nil, err
   end
   local is_branch = lens.is_branch(l)
+  local is_range = lens.is_range(l)
   local index = 0
   return function()
     index = index + 1
@@ -214,7 +248,7 @@ function M.file_stream(root, spec)
     if not entry then
       return nil
     end
-    return read_file(root, l, entry, is_branch)
+    return read_file(root, l, entry, is_branch, is_range)
   end
 end
 

@@ -73,6 +73,7 @@ local function with_metadata(section, path, old_text, new_text, status, metadata
   section.path = path
   section.old_path = metadata.old_path or path
   section.old_rev = metadata.old_rev
+  section.new_rev = metadata.new_rev
   section.status = status
   section.staged = metadata.staged
   section.unstaged = metadata.unstaged

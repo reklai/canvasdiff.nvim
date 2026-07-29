@@ -23,8 +23,9 @@ L.INDEX_REV = ":0"
 --- @class CanvasDiffLens
 --- @field id string     stable key for per-lens bookkeeping and the session
 --- @field old string    git rev for the old side
---- @field new string    "worktree" | "index"
+--- @field new string    "worktree" | "index" | a committed range's right ref
 --- @field label string  human text for the on-screen indicator
+--- @field operator string? ".." | "..." for a committed range
 
 --- The three fixed lenses. `branch` is built per-ref by L.branch.
 ---
@@ -48,6 +49,45 @@ L.named = {
 
 --- Order the UI offers them in: everything, then the two halves it splits into.
 L.order = { "all", "unstaged", "staged" }
+
+local function range_shape(l)
+  return type(l) == "table"
+    and type(l.old) == "string" and l.old ~= ""
+    and type(l.new) == "string" and l.new ~= ""
+    and (l.operator == ".." or l.operator == "...")
+    and l.id == "range:" .. l.old .. l.operator .. l.new
+end
+
+--- A read-only comparison between two committed refs.
+---
+--- Two-dot compares the tips directly. Three-dot resolves the left side to the
+--- merge base during source collection, while keeping the requested refs here
+--- so the lens remains stable and serializable.
+function L.range(left, right, operator)
+  if type(left) ~= "string" or left == ""
+      or type(right) ~= "string" or right == ""
+      or (operator ~= ".." and operator ~= "...") then
+    return nil
+  end
+  local label
+  if operator == "..." then
+    label = right .. " vs merge-base(" .. left .. ")"
+  else
+    label = right .. " vs " .. left
+  end
+  return {
+    id = "range:" .. left .. operator .. right,
+    old = left,
+    new = right,
+    operator = operator,
+    label = label,
+  }
+end
+
+--- True when `l` is an intact committed-range lens.
+function L.is_range(l)
+  return range_shape(l)
+end
 
 --- A lens comparing the worktree against an arbitrary ref.
 ---
@@ -127,9 +167,10 @@ end
 --- which is on disk and hand-editable, from putting a nonsense new side on `state`
 --- where every reader would then trust it.
 function L.valid(l)
-  return type(l) == "table"
-    and type(l.old) == "string" and l.old ~= ""
-    and (l.new == "worktree" or l.new == L.INDEX_REV)
+  return range_shape(l)
+    or (type(l) == "table"
+      and type(l.old) == "string" and l.old ~= ""
+      and (l.new == "worktree" or l.new == L.INDEX_REV))
 end
 
 --- The lens a state is looking through.
@@ -167,7 +208,7 @@ function L.same(a, b)
   if a == nil or b == nil then
     return a == b
   end
-  return a.old == b.old and a.new == b.new
+  return a.old == b.old and a.new == b.new and a.operator == b.operator
 end
 
 return L

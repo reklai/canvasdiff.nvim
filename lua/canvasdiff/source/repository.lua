@@ -181,20 +181,78 @@ function M.resolve_commit(root, ref)
   return oid
 end
 
+--- Local and remote branch names, sorted and without symbolic remote HEAD refs.
+--- @param root string
+--- @return string[]|nil
+--- @return string|nil
+function M.branches(root)
+  local res = run(root, {
+    "for-each-ref",
+    "--sort=refname",
+    "--format=%(refname:short)%09%(symref)",
+    "refs/heads",
+    "refs/remotes",
+  })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil, command_error("git for-each-ref", res)
+  end
+  local refs = {}
+  for _, line in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
+    local name, symref = line:match("^(.-)\t(.*)$")
+    if name and name ~= "" and symref == "" then
+      refs[#refs + 1] = name
+    end
+  end
+  table.sort(refs)
+  return refs
+end
+
+--- Resolve the common ancestor of two commit-ish refs.
+--- @param root string
+--- @param left string
+--- @param right string
+--- @return string|nil oid
+--- @return string|nil err
+function M.merge_base(root, left, right)
+  local left_oid, left_err = M.resolve_commit(root, left)
+  if not left_oid then
+    return nil, left_err
+  end
+  local right_oid, right_err = M.resolve_commit(root, right)
+  if not right_oid then
+    return nil, right_err
+  end
+  local res = run(root, { "merge-base", left_oid, right_oid })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil, ("revisions '%s' and '%s' have no merge base"):format(left, right)
+  end
+  local oid = res.stdout:gsub("%s+$", "")
+  if oid == "" or not oid:match("^[0-9a-fA-F]+$") then
+    return nil, "git merge-base did not return a canonical object id"
+  end
+  return oid
+end
+
 --- Files whose tracked worktree result differs from `oid`.
 ---
 --- `--name-status -z` makes every status and path its own NUL-delimited field:
 --- ordinary records are STATUS, PATH; rename/copy records are Rnnn/Cnnn,
 --- OLD_PATH, NEW_PATH. No path is whitespace-split or trimmed.
 --- @param root string
---- @param oid string canonical commit id
+--- When `new_oid` is present, both sides are committed and the worktree is
+--- ignored. With one oid the historical oid-to-worktree behavior is retained.
+--- @param oid string canonical old-side commit id
+--- @param new_oid string? canonical new-side commit id
 --- @return { path: string, old_path: string, status: string, score: integer? }[]|nil
 --- @return string|nil
-function M.diff_files(root, oid)
+function M.diff_files(root, oid, new_oid)
   if type(oid) ~= "string" or oid == "" then
     return nil, "diff base must be a non-empty object id"
   end
-  local res = run(root, {
+  if new_oid ~= nil and (type(new_oid) ~= "string" or new_oid == "") then
+    return nil, "diff result must be a non-empty object id"
+  end
+  local args = {
     "diff",
     "--no-ext-diff",
     "--ignore-submodules=all",
@@ -203,8 +261,12 @@ function M.diff_files(root, oid)
     "--find-renames",
     "--diff-filter=ACDMRT",
     oid,
-    "--",
-  })
+  }
+  if new_oid then
+    args[#args + 1] = new_oid
+  end
+  args[#args + 1] = "--"
+  local res = run(root, args)
   if res.code ~= 0 or res.stdout == nil then
     return nil, command_error("git diff", res)
   end

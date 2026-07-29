@@ -254,6 +254,111 @@ T["lens_branch invalid ref returns an error instead of fabricating an addition"]
   vim.fn.delete(root, "rf")
 end
 
+T["lens_range two-dot reads committed A D M R sides and carries both revisions"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["deleted.txt"] = "delete me\n",
+      ["modified.txt"] = "before\n",
+      ["old-name.txt"] = "rename-only body\n",
+    },
+  })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  local function write(rel, body)
+    local f = assert(io.open(vim.fs.joinpath(root, rel), "w"))
+    f:write(body)
+    f:close()
+  end
+
+  sh({ "git", "branch", "left" })
+  local left_oid = assert(source.resolve_commit(root, "left"))
+  write("added.txt", "added\n")
+  write("modified.txt", "after\n")
+  assert(vim.fn.delete(vim.fs.joinpath(root, "deleted.txt")) == 0)
+  sh({ "git", "mv", "old-name.txt", "renamed.txt" })
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "right side" })
+  sh({ "git", "branch", "right" })
+  local right_oid = assert(source.resolve_commit(root, "right"))
+  write("modified.txt", "dirty worktree\n")
+  write("added.txt", "dirty worktree\n")
+
+  local files, err = source.files(root, lens.range("left", "right", ".."))
+  assert(files, err)
+  local by = {}
+  for _, file in ipairs(files) do
+    by[file.path] = file
+    H.eq(file.old_rev, left_oid)
+    H.eq(file.new_rev, right_oid)
+  end
+  H.eq(#files, 4)
+  H.eq({
+    by["added.txt"].status, by["added.txt"].old_text, by["added.txt"].new_text,
+  }, { "A", "", "added\n" })
+  H.eq({
+    by["deleted.txt"].status, by["deleted.txt"].old_text, by["deleted.txt"].new_text,
+  }, { "D", "delete me\n", "" })
+  H.eq({
+    by["modified.txt"].status, by["modified.txt"].old_text, by["modified.txt"].new_text,
+  }, { "M", "before\n", "after\n" })
+  H.eq({
+    by["renamed.txt"].status, by["renamed.txt"].old_path,
+    by["renamed.txt"].old_text, by["renamed.txt"].new_text,
+  }, { "R", "old-name.txt", "rename-only body\n", "rename-only body\n" })
+
+  local sections, section_err =
+    source.sections(root, lens.range("left", "right", ".."), 3)
+  assert(sections, section_err)
+  for _, section in ipairs(sections) do
+    H.eq(section.old_rev, left_oid)
+    H.eq(section.new_rev, right_oid)
+  end
+  vim.fn.delete(root, "rf")
+end
+
+T["lens_range three-dot uses the merge base as the old committed side"] = function()
+  local root = H.git_fixture({ committed = { ["shared.txt"] = "base\n" } })
+  local function sh(cmd)
+    local res = vim.system(cmd, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(cmd, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  local function write(body)
+    local f = assert(io.open(vim.fs.joinpath(root, "shared.txt"), "w"))
+    f:write(body)
+    f:close()
+  end
+
+  local base_oid = assert(source.resolve_commit(root, "HEAD"))
+  sh({ "git", "branch", "topic" })
+  write("left tip\n")
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "left tip" })
+  sh({ "git", "branch", "left" })
+  sh({ "git", "switch", "topic" })
+  write("topic tip\n")
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "topic tip" })
+  local topic_oid = assert(source.resolve_commit(root, "topic"))
+
+  local two = assert(source.files(root, lens.range("left", "topic", "..")))
+  local three = assert(source.files(root, lens.range("left", "topic", "...")))
+  H.eq({ two[1].old_text, two[1].new_text }, { "left tip\n", "topic tip\n" })
+  H.eq({ three[1].old_text, three[1].new_text }, { "base\n", "topic tip\n" })
+  H.eq({ three[1].old_rev, three[1].new_rev }, { base_oid, topic_oid })
+  vim.fn.delete(root, "rf")
+end
+
+T["lens_range invalid refs fail transactionally before reading either side"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+  local files, err =
+    source.files(root, lens.range("main", "--definitely-not-an-option", ".."))
+  H.eq(files, nil)
+  assert(err and err:find("does not resolve", 1, true), tostring(err))
+  vim.fn.delete(root, "rf")
+end
+
 T["lens_branch recreated untracked path replaces the ref-relative deletion"] = function()
   local root = H.git_fixture({ committed = { ["same.txt"] = "old tracked body\n" } })
   local function sh(cmd)

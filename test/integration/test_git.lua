@@ -21,10 +21,12 @@ return {
     local names = vim.tbl_keys(source)
     table.sort(names)
     H.eq(names, {
+      "branches",
       "changed_files",
       "diff_files",
       "file_stream",
       "files",
+      "merge_base",
       "resolve_commit",
       "root",
       "section_stream",
@@ -243,6 +245,39 @@ return {
     H.eq(option_like, nil, "--end-of-options must make this a ref, never an option")
     assert(option_err, "option-looking invalid ref must still return an error")
   end,
+  ["git: branches enumerates local and remote refs in stable order"] = function()
+    local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })
+    sh(root, { "git", "branch", "zeta" })
+    sh(root, { "git", "branch", "alpha" })
+    sh(root, { "git", "update-ref", "refs/remotes/origin/topic", "HEAD" })
+    sh(root, { "git", "symbolic-ref", "refs/remotes/origin/HEAD",
+      "refs/remotes/origin/topic" })
+
+    local refs, err = source.branches(root)
+    assert(refs, err)
+    H.eq(refs, { "alpha", "main", "origin/topic", "zeta" },
+      "symbolic remote HEAD is not a branch choice and results are sorted")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: merge_base resolves refs to their common commit"] = function()
+    local root = H.git_fixture({ committed = { ["common.txt"] = "base\n" } })
+    local base = assert(source.resolve_commit(root, "HEAD"))
+    sh(root, { "git", "branch", "left" })
+    write(root, "right.txt", "right\n")
+    sh(root, { "git", "add", "-A" })
+    sh(root, { "git", "commit", "-m", "right tip" })
+    sh(root, { "git", "branch", "right" })
+    sh(root, { "git", "switch", "left" })
+    write(root, "left.txt", "left\n")
+    sh(root, { "git", "add", "-A" })
+    sh(root, { "git", "commit", "-m", "left tip" })
+
+    H.eq(source.merge_base(root, "left", "right"), base)
+    local missing, err = source.merge_base(root, "--not-an-option", "right")
+    H.eq(missing, nil)
+    assert(err and err:find("does not resolve", 1, true), tostring(err))
+    vim.fn.delete(root, "rf")
+  end,
   ["git: diff_files enumerates clean committed A D M R relative to an old commit"] = function()
     local root = H.git_fixture({
       committed = {
@@ -304,6 +339,41 @@ return {
     end
     table.sort(paths)
     H.eq(got, paths, "paths are NUL fields, never whitespace-split or trimmed")
+  end,
+  ["git: diff_files compares two committed sides and preserves unusual paths"] = function()
+    local paths = {
+      "-leading.txt",
+      "line\nbreak.txt",
+      "space name.txt",
+      "tab\tname.txt",
+    }
+    local committed = {}
+    for _, path in ipairs(paths) do
+      committed[path] = "left\n"
+    end
+    local root = H.git_fixture({ committed = committed })
+    local left = assert(source.resolve_commit(root, "HEAD"))
+    for _, path in ipairs(paths) do
+      write(root, path, "right\n")
+    end
+    sh(root, { "git", "add", "-A" })
+    sh(root, { "git", "commit", "-m", "right side" })
+    local right = assert(source.resolve_commit(root, "HEAD"))
+    for _, path in ipairs(paths) do
+      write(root, path, "left\n")
+    end
+
+    local files, err = source.diff_files(root, left, right)
+    assert(files, err)
+    local got = {}
+    for _, file in ipairs(files) do
+      got[#got + 1] = file.path
+      H.eq(file.old_path, file.path)
+      H.eq(file.status, "M")
+    end
+    table.sort(paths)
+    H.eq(got, paths)
+    vim.fn.delete(root, "rf")
   end,
   ["git: porcelain rename keeps the original path"] = function()
     local root = H.git_fixture({ committed = { ["old name.txt"] = "same\n" } })
