@@ -177,23 +177,16 @@ function M.stage(root, file)
   if #paths == 0 then
     return nil, "cannot stage a file without a path"
   end
-  -- A staged rename no longer has its old path in the index, and `git add`
-  -- rejects that otherwise-correct explicit pair as an unmatched pathspec.
-  -- Put only this rename identity back at HEAD first; the following add then
-  -- observes the old-side deletion and new-side bytes together.
-  if #paths == 2 then
-    local reset = { "reset", "HEAD", "--" }
-    vim.list_extend(reset, paths)
-    local reset_res = run(root, reset)
-    if reset_res.code ~= 0 then
-      return nil, command_error("git reset before rename add", reset_res)
-    end
-  end
-  local args = { "add", "-A", "--" }
-  vim.list_extend(args, paths)
+  -- A porcelain rename is already represented in the index: its old path is
+  -- absent and its destination is present. Re-adding only the destination is
+  -- one atomic Git mutation that updates its current disk bytes while
+  -- retaining the staged old-side deletion. Naming the absent old path would
+  -- make `git add` reject the whole operation, which previously forced a
+  -- destructive reset/add composite.
+  local args = { "--literal-pathspecs", "add", "-A", "--", file.path }
   local res = run(root, args)
   if res.code ~= 0 then
-    return nil, command_error("git add", res), #paths == 2
+    return nil, command_error("git add", res)
   end
   return true
 end
@@ -206,20 +199,22 @@ function M.unstage(root, file)
   if #paths == 0 then
     return nil, "cannot unstage a file without a path"
   end
-  local reset = { "reset", "HEAD", "--" }
+  local reset = { "--literal-pathspecs", "reset", "HEAD", "--" }
   vim.list_extend(reset, paths)
   local reset_res = run(root, reset)
-  local head = run(root, { "rev-parse", "--verify", "--quiet", "HEAD" })
-  if head.code == 0 then
-    if reset_res.code ~= 0 then
-      return nil, command_error("git reset", reset_res)
-    end
+  if reset_res.code == 0 then
     return true
   end
-  -- Git versions differ on whether reset reports success before the first
-  -- commit. Use the explicit unborn operation either way; it is idempotent
-  -- if reset already removed the entry.
-  local remove = { "rm", "--cached", "--ignore-unmatch", "--" }
+  local head = run(root, { "rev-parse", "--verify", "--quiet", "HEAD" })
+  if head.code == 0 then
+    return nil, command_error("git reset", reset_res)
+  end
+  if head.code ~= 1 then
+    return nil, command_error("git rev-parse HEAD", head)
+  end
+  local remove = {
+    "--literal-pathspecs", "rm", "--cached", "--ignore-unmatch", "--",
+  }
   vim.list_extend(remove, paths)
   local remove_res = run(root, remove)
   if remove_res.code ~= 0 then

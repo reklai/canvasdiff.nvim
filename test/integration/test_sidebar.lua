@@ -585,6 +585,50 @@ T["sidebar_integration stage_cycle declines directories and mutates file rows"] 
   assert(ok, err)
 end
 
+T["sidebar_integration stage_cycle routes recreated rename-source row exactly"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({ committed = { ["old.txt"] = "rename body\n" } })
+  assert(vim.system({ "git", "mv", "old.txt", "new.txt" }, { cwd = root }):wait().code == 0)
+  local recreated = assert(io.open(vim.fs.joinpath(root, "old.txt"), "w"))
+  recreated:write("recreated\n"); recreated:close()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  local st = assert(fm.open())
+  local lease = assert(st.surface.controllers.sidebar)
+  local side_win
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if sidebar.is_sidebar_win(lease, win) then side_win = win end
+  end
+  assert(side_win)
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(side_win)
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(side_win), 0, -1, false)
+    local row
+    for i, line in ipairs(lines) do
+      if line:find("old.txt", 1, true) and not line:find("→", 1, true) then row = i end
+    end
+    assert(row, "the recreated untracked source has its own visible sidebar row")
+    vim.api.nvim_win_set_cursor(side_win, { row, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("s"), "x", false)
+    local by = {}
+    for _, file in ipairs(require("canvasdiff.source").changed_files(root)) do
+      by[file.path] = file
+    end
+    assert(by["new.txt"] and by["new.txt"].staged,
+      "the selected old row must not unstage the rename destination")
+    assert(by["old.txt"] and by["old.txt"].staged,
+      "the selected recreated source itself is staged")
+  end, debug.traceback)
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 T["sidebar_win close() recovers a stranded last-window sidebar instead of erroring"] = function()
   -- `nvim_win_close` on the last window of a NON-final tab just closes the
   -- tab (no error) -- that would silently defeat this test. `:only` instead

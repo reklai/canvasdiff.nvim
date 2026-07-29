@@ -18,11 +18,35 @@ end
 --- @param file { path: string, old_path: string? }
 --- @return boolean
 function M.modified(root, file)
+  local targets = {}
   for _, rel_path in ipairs({ file and file.path, file and file.old_path }) do
     if type(rel_path) == "string" and rel_path ~= "" then
-      local buf = find_loaded(vim.fs.joinpath(root, rel_path))
-      if buf and vim.api.nvim_get_option_value("modified", { buf = buf }) then
-        return true
+      local path = vim.fs.joinpath(root, rel_path)
+      local stat = vim.uv.fs_stat(path)
+      targets[#targets + 1] = {
+        normalized = vim.fs.normalize(path),
+        real = vim.uv.fs_realpath(path),
+        dev = stat and stat.dev or nil,
+        ino = stat and stat.ino or nil,
+      }
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf)
+        and vim.api.nvim_get_option_value("modified", { buf = buf }) then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name ~= "" then
+        local stat = vim.uv.fs_stat(name)
+        local normalized = vim.fs.normalize(name)
+        local real = vim.uv.fs_realpath(name)
+        for _, target in ipairs(targets) do
+          if normalized == target.normalized
+              or (real and target.real and real == target.real)
+              or (stat and target.dev ~= nil and target.ino ~= nil
+                and stat.dev == target.dev and stat.ino == target.ino) then
+            return true
+          end
+        end
       end
     end
   end

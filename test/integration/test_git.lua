@@ -437,6 +437,43 @@ return {
     end
     vim.fn.delete(root, "rf")
   end,
+  ["git: stage treats pathspec-magic filenames literally and isolates index scope"] = function()
+    local magic = ":(glob)*.txt"
+    local root = H.git_fixture({
+      committed = {
+        [magic] = "magic head\n",
+        ["victim.txt"] = "victim head\n",
+      },
+    })
+    write(root, magic, "magic disk\n")
+    write(root, "victim.txt", "victim disk\n")
+    local ok, err = source.stage(root, { path = magic, unstaged = "M" })
+    assert(ok, err)
+    H.eq(source.show(root, ":0", magic), "magic disk\n")
+    H.eq(source.show(root, ":0", "victim.txt"), "victim head\n",
+      "magic-looking user data must not expand to another index entry")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: unstage treats pathspec-magic filenames literally and isolates index scope"] = function()
+    local magic = ":(glob)*.txt"
+    local root = H.git_fixture({
+      committed = {
+        [magic] = "magic head\n",
+        ["victim.txt"] = "victim head\n",
+      },
+    })
+    write(root, magic, "magic staged\n")
+    write(root, "victim.txt", "victim staged\n")
+    sh(root, { "git", "add", "-A" })
+    local ok, err = source.unstage(root, { path = magic, staged = "M" })
+    assert(ok, err)
+    local by = {}
+    for _, file in ipairs(assert(source.changed_files(root))) do by[file.path] = file end
+    assert(by[magic].unstaged and not by[magic].staged, vim.inspect(by[magic]))
+    assert(by["victim.txt"].staged and not by["victim.txt"].unstaged,
+      "literal unstage must leave the neighbouring staged entry intact")
+    vim.fn.delete(root, "rf")
+  end,
   ["git: stage and unstage cover additions deletions and both rename paths"] = function()
     local root = H.git_fixture({
       committed = { ["delete.txt"] = "gone\n", ["old name.txt"] = "rename\n" },
@@ -468,7 +505,7 @@ return {
     H.eq(system.read_file(vim.fs.joinpath(root, "new name.txt")), "rename\n")
     vim.fn.delete(root, "rf")
   end,
-  ["git: unborn unstage removes paths only from the index"] = function()
+  ["git: unborn unstage falls back only after reset explicitly fails"] = function()
     local root = H.tmpdir()
     sh(root, { "git", "init", "-b", "main" })
     write(root, "-initial name.txt", "kept\n")
@@ -477,16 +514,21 @@ return {
     local real_run = system.run
     system.run = function(cmd, opts)
       commands[#commands + 1] = vim.deepcopy(cmd)
+      if vim.tbl_contains(cmd, "reset") then
+        return { code = 128, stdout = "", stderr = "ambiguous argument 'HEAD'\n" }
+      end
       return real_run(cmd, opts)
     end
     local ok, err = source.unstage(root, { path = "-initial name.txt", staged = "A" })
     system.run = real_run
     assert(ok, err)
     H.eq(commands[1], {
-      "git", "-C", root, "reset", "HEAD", "--", "-initial name.txt",
+      "git", "-C", root, "--literal-pathspecs",
+      "reset", "HEAD", "--", "-initial name.txt",
     }, "unstage always tries the ordinary path-scoped reset first")
     H.eq(commands[#commands], {
-      "git", "-C", root, "rm", "--cached", "--ignore-unmatch", "--",
+      "git", "-C", root, "--literal-pathspecs",
+      "rm", "--cached", "--ignore-unmatch", "--",
       "-initial name.txt",
     }, "only an unborn HEAD falls back to removing the path from the index")
     H.eq(system.read_file(vim.fs.joinpath(root, "-initial name.txt")), "kept\n")
@@ -497,6 +539,87 @@ return {
       },
     })
     vim.fn.delete(root, "rf")
+  end,
+  ["git: successful unstage returns before probing HEAD or attempting fallback"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "staged\n" },
+    })
+    sh(root, { "git", "add", "--", "a.txt" })
+    local commands = {}
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        commands[#commands + 1] = vim.deepcopy(cmd)
+        return real_run(cmd, opts)
+      end
+      assert(source.unstage(root, { path = "a.txt", staged = "M" }))
+      H.eq(#commands, 1, "a successful reset is the terminal mutation")
+      H.eq(commands[1], {
+        "git", "-C", root, "--literal-pathspecs", "reset", "HEAD", "--", "a.txt",
+      })
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: failed HEAD probe is not classified as an unborn repository"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "staged\n" },
+    })
+    sh(root, { "git", "add", "--", "a.txt" })
+    local real_run = system.run
+    local saw_rm = false
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "reset") then
+          return { code = 128, stdout = "", stderr = "injected reset failure\n" }
+        end
+        if vim.tbl_contains(cmd, "rev-parse") then
+          return { code = 128, stdout = "", stderr = "injected HEAD lock failure\n" }
+        end
+        if vim.tbl_contains(cmd, "rm") then saw_rm = true end
+        return real_run(cmd, opts)
+      end
+      local changed, unstage_err = source.unstage(root, { path = "a.txt", staged = "M" })
+      H.eq(changed, nil)
+      assert(unstage_err and unstage_err:find("HEAD lock failure", 1, true),
+        tostring(unstage_err))
+      H.eq(saw_rm, false, "an uncertain HEAD must never select destructive fallback")
+      assert(source.changed_files(root)[1].staged,
+        "the tracked index entry remains staged after both injected failures")
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: unborn fallback failure is returned and preserves the staged entry"] = function()
+    local root = H.tmpdir()
+    sh(root, { "git", "init", "-b", "main" })
+    write(root, "a.txt", "kept\n")
+    sh(root, { "git", "add", "--", "a.txt" })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "reset") then
+          return { code = 128, stdout = "", stderr = "missing HEAD\n" }
+        end
+        if vim.tbl_contains(cmd, "rm") then
+          return { code = 128, stdout = "", stderr = "injected index lock\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local changed, unstage_err = source.unstage(root, { path = "a.txt", staged = "A" })
+      H.eq(changed, nil)
+      assert(unstage_err and unstage_err:find("index lock", 1, true),
+        tostring(unstage_err))
+    end, debug.traceback)
+    system.run = real_run
+    local staged = assert(source.changed_files(root)[1])
+    assert(staged.staged and not staged.unstaged, vim.inspect(staged))
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
   end,
   ["git: mutation failures are returned without claiming success"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
@@ -516,7 +639,7 @@ return {
     vim.fn.delete(root, "rf")
     assert(ok, err)
   end,
-  ["git: a rename add failure reports that its prerequisite reset changed the index"] = function()
+  ["git: a failed mixed-rename add leaves the existing index snapshot byte-exact"] = function()
     local root = H.git_fixture({ committed = { ["old.txt"] = "old\n" } })
     sh(root, { "git", "mv", "old.txt", "new.txt" })
     write(root, "new.txt", "disk\n")
@@ -528,14 +651,19 @@ return {
         end
         return real_run(cmd, opts)
       end
+      local before = sh(root, { "git", "diff", "--cached", "--raw", "-z" })
+      local before_blob = source.show(root, ":0", "new.txt")
       local changed, stage_err, index_changed = source.stage(root, {
         path = "new.txt", old_path = "old.txt", status = "R",
       })
       H.eq(changed, nil)
       assert(stage_err and stage_err:find("injected rename add failure", 1, true),
         stage_err)
-      H.eq(index_changed, true,
-        "callers must not describe the failed composite Git operation as atomic")
+      H.eq(index_changed, nil)
+      H.eq(sh(root, { "git", "diff", "--cached", "--raw", "-z" }), before,
+        "a failed add must not discard the already-staged rename")
+      H.eq(source.show(root, ":0", "new.txt"), before_blob,
+        "the staged blob remains byte-exact on failure")
     end, debug.traceback)
     system.run = real_run
     vim.fn.delete(root, "rf")

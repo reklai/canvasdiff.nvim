@@ -105,6 +105,13 @@ local function active_surface(app, win)
   return live[#live] or nil
 end
 
+--- Claim the next model-publication turn for one Surface. Unlike generation,
+--- this advances for a newer user intent that keeps the same live owner.
+local function claim_model_epoch(surface)
+  surface.model_epoch = (surface.model_epoch or 0) + 1
+  return surface.model_epoch
+end
+
 --- Is one concrete window displaying this Canvas?
 local function canvas_showing(st, win)
   win = win or st.win
@@ -838,6 +845,7 @@ end
       end,
       on_change = function()
         surface:guard(generation, function()
+          claim_model_epoch(surface)
           sync_after_reconcile(surface, st)
         end)
       end,
@@ -1499,15 +1507,33 @@ function App:refresh()
   if not surface then
     return
   end
-  local ok, err = pivot(surface)
+  local generation = surface.generation
+  local model_epoch = claim_model_epoch(surface)
+  local function guard()
+    return self.surfaces[surface.state.buf] == surface
+      and surface:guard(generation)
+      and surface.model_epoch == model_epoch
+  end
+  local ok, err = pivot(surface, lens.of(surface.state), guard)
   if not ok then
+    if err == STALE_COMPARE then
+      return nil
+    end
     ui.warn(err)
     return nil, err
   end
   return true
 end
 
-local function section_by_path(st, path)
+local function section_by_exact_path(st, path)
+  for i, section in ipairs(st.sections or {}) do
+    if section.path == path then
+      return i, section
+    end
+  end
+end
+
+local function section_by_restore_path(st, path)
   for i, section in ipairs(st.sections or {}) do
     if section.path == path or section.old_path == path then
       return i, section
@@ -1548,9 +1574,9 @@ end
 local function restore_file_positions(st, positions)
   for win, position in pairs(positions or {}) do
     if canvas_showing(st, win) then
-      local section_i = section_by_path(st, position.path)
+      local section_i = section_by_restore_path(st, position.path)
       if not section_i and position.old_path then
-        section_i = section_by_path(st, position.old_path)
+        section_i = section_by_restore_path(st, position.old_path)
       end
       if section_i then
         local start0, end0 = canvas.section_rows(st, section_i)
@@ -1564,14 +1590,6 @@ local function restore_file_positions(st, positions)
       end
     end
   end
-end
-
-local function same_file_identity(candidate, file)
-  local wanted = {
-    [file.path] = true,
-    [file.old_path or file.path] = true,
-  }
-  return wanted[candidate.path] or wanted[candidate.old_path]
 end
 
 local function stage_refresh_failure(message)
@@ -1602,17 +1620,55 @@ function App:toggle_stage(path, owned_surface, generation)
     return nil, err
   end
 
-  local section_i, file
+  surface.stage_epoch = (surface.stage_epoch or 0) + 1
+  local transaction = surface.stage_epoch
+  local model_epoch = claim_model_epoch(surface)
+  local function guard()
+    return self.surfaces[st.buf] == surface
+      and surface:guard(generation)
+      and surface.stage_epoch == transaction
+      and surface.model_epoch == model_epoch
+  end
+  if not guard() then
+    local err = "stage action was superseded before Git ran"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local section_i, cached_file
   if path then
-    section_i, file = section_by_path(st, path)
+    section_i, cached_file = section_by_exact_path(st, path)
   else
     local win = vim.api.nvim_get_current_win()
     section_i = section_under_cursor(st, win)
-    file = section_i and st.sections[section_i]
+    cached_file = section_i and st.sections[section_i]
   end
-  if not file then
+  if not cached_file then
     local err = path and (path .. " has no changes any more")
       or "no file under the cursor"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local files, status_err = source.changed_files(st.root)
+  if not guard() then
+    local err = "stage action was superseded during status preflight"
+    ui.warn(err)
+    return nil, err
+  end
+  if not files then
+    ui.warn(status_err)
+    return nil, status_err
+  end
+  local file
+  for _, candidate in ipairs(files) do
+    if candidate.path == cached_file.path then
+      file = candidate
+      break
+    end
+  end
+  if not file then
+    local err = cached_file.path .. " has no changes any more"
     ui.warn(err)
     return nil, err
   end
@@ -1629,20 +1685,7 @@ function App:toggle_stage(path, owned_surface, generation)
     return nil, err
   end
 
-  surface.stage_epoch = (surface.stage_epoch or 0) + 1
-  local transaction = surface.stage_epoch
-  local function guard()
-    return self.surfaces[st.buf] == surface
-      and surface:guard(generation)
-      and surface.stage_epoch == transaction
-  end
-  if not guard() then
-    local err = "stage action was superseded before Git ran"
-    ui.warn(err)
-    return nil, err
-  end
-
-  local positions = capture_file_positions(surface, st, file)
+  local positions = capture_file_positions(surface, st, cached_file)
   local changed, mutation_err, index_changed = source[action](st.root, file)
   if not changed then
     if index_changed then
@@ -1666,12 +1709,22 @@ function App:toggle_stage(path, owned_surface, generation)
   end
   local remains
   for _, candidate in ipairs(files) do
-    if same_file_identity(candidate, file) then
+    if candidate.path == file.path then
       remains = candidate
       break
     end
   end
   if not remains then
+    local reconciled, reconcile_err = pivot(surface, current_lens, guard)
+    if not reconciled then
+      if reconcile_err == STALE_COMPARE then
+        reconcile_err = "the owning review changed during clean reconcile"
+      end
+      return stage_refresh_failure(reconcile_err)
+    end
+    if not guard() then
+      return stage_refresh_failure("the owning review changed after clean reconcile")
+    end
     ui.notify(file.path .. " is clean")
     return true
   end
@@ -1717,30 +1770,17 @@ function App:set_lens(l)
     end
     return true
   end
+  local generation = surface.generation
+  local model_epoch = claim_model_epoch(surface)
+  local function guard()
+    return self.surfaces[surface.state.buf] == surface
+      and surface:guard(generation)
+      and surface.model_epoch == model_epoch
+  end
   if lens.same(lens.of(surface.state), l) then
     return true
   end
 
-  local ok, err = pivot(surface, l)
-  if not ok then
-    ui.warn(err)
-    return nil, err
-  end
-  ui.notify("showing " .. l.label)
-  return true
-end
-
-local function set_owned_lens(surface, l, guard, on_commit)
-  if guard and not guard() then
-    return nil
-  end
-  if lens.same(lens.of(surface.state), l)
-      and not (guard and (surface.compare_depth or 0) > 0) then
-    if on_commit then
-      on_commit()
-    end
-    return true
-  end
   local ok, err = pivot(surface, l, guard)
   if not ok then
     if err == STALE_COMPARE then
@@ -1749,7 +1789,38 @@ local function set_owned_lens(surface, l, guard, on_commit)
     ui.warn(err)
     return nil, err
   end
-  if guard and not guard() then
+  ui.notify("showing " .. l.label)
+  return true
+end
+
+local function set_owned_lens(app, surface, l, guard, on_commit)
+  local generation = surface.generation
+  local model_epoch = claim_model_epoch(surface)
+  local function owned_guard()
+    return (not guard or guard())
+      and app.surfaces[surface.state.buf] == surface
+      and surface:guard(generation)
+      and surface.model_epoch == model_epoch
+  end
+  if not owned_guard() then
+    return nil
+  end
+  if lens.same(lens.of(surface.state), l)
+      and not ((surface.compare_depth or 0) > 0) then
+    if on_commit then
+      on_commit()
+    end
+    return true
+  end
+  local ok, err = pivot(surface, l, owned_guard)
+  if not ok then
+    if err == STALE_COMPARE then
+      return nil
+    end
+    ui.warn(err)
+    return nil, err
+  end
+  if not owned_guard() then
     return nil
   end
   if on_commit then
@@ -1984,7 +2055,7 @@ function App:compare()
           end
           if request.surface then
             local changed = set_owned_lens(
-              request.surface, target, guard, function()
+              self, request.surface, target, guard, function()
                 jump.cancel(request.surface.excursion)
               end)
             if changed and guard()
