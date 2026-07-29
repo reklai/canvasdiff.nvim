@@ -67,8 +67,12 @@ local function lexical_realpath(path)
       end
       candidate_parts[#candidate_parts + 1] = part
       local candidate = join_parts(prefix, candidate_parts)
-      local link = vim.uv.fs_readlink(candidate)
-      if link then
+      local lstat = vim.uv.fs_lstat(candidate)
+      if lstat and lstat.type == "link" then
+        local link = vim.uv.fs_readlink(candidate)
+        if not link then
+          return nil, true
+        end
         traverses_symlink = true
         expansions = expansions + 1
         if expansions > 256 then
@@ -82,30 +86,11 @@ local function lexical_realpath(path)
         vim.list_extend(link_parts, pending)
         pending = link_parts
       else
-        local lstat = vim.uv.fs_lstat(candidate)
-        if lstat and lstat.type == "link" then
-          return nil, true
-        end
         resolved[#resolved + 1] = part
       end
     end
   end
   return join_parts(prefix, resolved), traverses_symlink
-end
-
-local function existing_device(path)
-  local current = path
-  while current do
-    local stat = vim.uv.fs_stat(current)
-    if stat then
-      return stat.dev
-    end
-    local parent = vim.fs.dirname(current)
-    if not parent or parent == current then
-      return nil
-    end
-    current = parent
-  end
 end
 
 --- Whether a loaded target buffer has edits that Git cannot see on disk.
@@ -124,8 +109,6 @@ function M.modified(root, file)
         real = vim.uv.fs_realpath(path),
         dev = stat and stat.dev or nil,
         ino = stat and stat.ino or nil,
-        missing = stat == nil,
-        parent_dev = stat and stat.dev or existing_device(path),
       }
     end
   end
@@ -137,7 +120,7 @@ function M.modified(root, file)
       if name ~= "" then
         local stat = vim.uv.fs_stat(name)
         local normalized = vim.fs.normalize(name)
-        local lexical, traverses_symlink = lexical_realpath(name)
+        local lexical = lexical_realpath(name)
         local real = vim.uv.fs_realpath(name)
         for _, target in ipairs(targets) do
           if normalized == target.normalized
@@ -152,9 +135,7 @@ function M.modified(root, file)
           -- buffer whose alias path was also removed. Refuse conservatively;
           -- existing targets retain exact identity checks above, so unrelated
           -- ordinary edits remain non-blocking.
-          if stages_deletion and target.missing
-              and (not stat or traverses_symlink or target.parent_dev == nil
-                or stat.dev == target.parent_dev) then
+          if stages_deletion then
             return true
           end
         end

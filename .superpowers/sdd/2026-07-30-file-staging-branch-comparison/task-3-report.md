@@ -245,3 +245,61 @@ unrelated modified named buffer on the same filesystem may refuse staging
 because a vanished hard-link relationship cannot be disproved. A non-symlink
 regular buffer on a different filesystem is allowed because hard links cannot
 cross device boundaries.
+
+## Whole-change repair round 2
+
+Fresh review found that the deleted-target cross-device exemption combined
+filesystem observations from different pathname states. An initial
+cross-device `stat` could be followed by a same-device non-symlink probe, or a
+probe error could be mistaken for an ordinary component, allowing staging
+despite unsaved alias content.
+
+Strict TDD exposed progressively deeper versions of the same unsound premise:
+
+- Deterministic pathname-drift and component-probe-error regressions failed
+  0/2 because `buffer_modified()` returned false.
+- Bracketing initial stat, leaf lstat, and final stat made those tests pass,
+  but a new historical-alias regression failed 0/1: a loaded buffer still
+  represented a vanished hardlink even when its pathname later stably
+  identified a different cross-device file.
+- After removing that exemption for currently missing targets, a recreated
+  target regression failed 0/1 because later existence suppressed the guard
+  even though fresh Git preflight had already classified the action as a
+  deletion.
+
+The final repair follows the preflight identity instead of attempting to infer
+buffer history from later pathname state:
+
+- Component resolution calls `lstat` before `readlink`, and a link whose
+  `readlink` fails remains uncertain.
+- Device inference and the deleted-target cross-device exemption are removed.
+- Whenever fresh action status is `unstaged == "D"`, any modified named buffer
+  blocks staging regardless of whether the target is missing, recreated, or
+  replaced by the time buffer inspection runs.
+- Ordinary existing-target operations retain exact normalized path, resolved
+  path, realpath, and device/inode comparisons, so a provably unrelated
+  modified buffer remains non-blocking outside deletion staging.
+
+The race and probe-error tests now use local files plus injected complete stat
+identities, contain no environment-dependent early return, and assert their
+filesystem seams were exercised.
+
+Focused verification:
+
+- `FILTER='stable replacement'` — 1/1 passed.
+- `FILTER='target is recreated'` — 1/1 passed.
+- `FILTER='deleted target blocks'` — 2/2 passed.
+- `FILTER='alias'` — 6/6 passed.
+- `FILTER='toggle_stage'` — 13/13 passed.
+- `NVIM_LOG_FILE=/tmp/canvasdiff-task3-whole-repair-round2-full.log
+  make test` — 828/828 passed.
+- `git diff --check` — clean.
+
+Independent correctness and adversarial reviewers marked all original and
+follow-up Important findings addressed, with no new Critical or Important
+issue in the final fix delta.
+
+This round supersedes the previous cross-device residual: without load-time
+inode history, even a stable current cross-device pathname cannot disprove
+that a modified buffer was loaded from a vanished hardlink. Deletion staging
+therefore refuses conservatively for every modified named buffer.

@@ -709,31 +709,198 @@ return {
     end
     vim.fn.delete(root, "rf")
   end,
-  ["source: a cross-device modified buffer cannot alias a deleted target"] = function()
+  ["source: a stable replacement cannot clear a deleted target's alias history"] = function()
     local root = H.git_fixture({
       committed = { ["a.txt"] = "head\n" },
       worktree = { ["a.txt"] = "disk\n" },
     })
-    local unrelated = "/proc/self/status"
+    local path = vim.fs.joinpath(root, "a.txt")
+    local alias = vim.fs.joinpath(root, "alias.txt")
+    assert(vim.uv.fs_link(path, alias))
     local root_stat = assert(vim.uv.fs_stat(root))
-    local unrelated_stat = vim.uv.fs_stat(unrelated)
-    if not unrelated_stat or unrelated_stat.dev == root_stat.dev then
-      vim.fn.delete(root, "rf")
-      return
-    end
-    local buf = vim.fn.bufadd(unrelated)
+    local replacement = vim.tbl_extend("force", assert(vim.uv.fs_stat(alias)), {
+      dev = root_stat.dev + 1,
+      ino = root_stat.ino + 1,
+      type = "file",
+    })
+    local buf = vim.fn.bufadd(alias)
     vim.fn.bufload(buf)
-    vim.api.nvim_set_option_value("readonly", false, { buf = buf })
-    vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "unsaved unrelated" })
-    assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "a.txt")))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved vanished alias" })
+    assert(vim.uv.fs_unlink(path))
+    assert(vim.uv.fs_unlink(alias))
+
+    local real_stat = vim.uv.fs_stat
+    local real_lstat = vim.uv.fs_lstat
+    local real_realpath = vim.uv.fs_realpath
+    local stat_calls, lstat_calls = 0, 0
+    local ok, err = xpcall(function()
+      vim.uv.fs_stat = function(candidate, ...)
+        if candidate == alias then
+          stat_calls = stat_calls + 1
+          return replacement
+        end
+        return real_stat(candidate, ...)
+      end
+      vim.uv.fs_lstat = function(candidate, ...)
+        if candidate == alias then
+          lstat_calls = lstat_calls + 1
+          return replacement
+        end
+        return real_lstat(candidate, ...)
+      end
+      vim.uv.fs_realpath = function(candidate, ...)
+        if candidate == alias then return alias end
+        return real_realpath(candidate, ...)
+      end
+      H.eq(source.buffer_modified(root, {
+        path = "a.txt",
+        status = "D",
+        unstaged = "D",
+      }), true, "current pathname identity cannot erase loaded alias history")
+      assert(stat_calls >= 1 and lstat_calls >= 1,
+        "the stable replacement observation was not exercised")
+    end, debug.traceback)
+    vim.uv.fs_stat = real_stat
+    vim.uv.fs_lstat = real_lstat
+    vim.uv.fs_realpath = real_realpath
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["source: deletion preflight blocks if the target is recreated before inspection"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "disk\n" },
+    })
+    local path = vim.fs.joinpath(root, "a.txt")
+    local alias = vim.fs.joinpath(root, "alias.txt")
+    assert(vim.uv.fs_link(path, alias))
+    local buf = vim.fn.bufadd(alias)
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved original inode" })
+    assert(vim.uv.fs_unlink(path))
+    assert(vim.uv.fs_unlink(alias))
+    write(root, "a.txt", "replacement\n")
 
     H.eq(source.buffer_modified(root, {
       path = "a.txt",
       status = "D",
       unstaged = "D",
-    }), false, "hardlinks cannot cross filesystem device boundaries")
+    }), true, "a recreated pathname cannot erase the deletion preflight identity")
     vim.api.nvim_set_option_value("modified", false, { buf = buf })
     vim.api.nvim_buf_delete(buf, { force = true })
     vim.fn.delete(root, "rf")
+  end,
+  ["source: a deleted target blocks when buffer identity changes during probes"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "disk\n" },
+    })
+    write(root, "other.txt", "unrelated\n")
+    local unrelated = vim.fs.joinpath(root, "other.txt")
+    local root_stat = assert(vim.uv.fs_stat(root))
+    local buf = vim.fn.bufadd(unrelated)
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "unsaved raced alias" })
+    local name = vim.api.nvim_buf_get_name(buf)
+    local observed = assert(vim.uv.fs_stat(name))
+    local first = vim.tbl_extend("force", observed, {
+      dev = root_stat.dev + 1,
+      ino = observed.ino + 1,
+      type = "file",
+    })
+    local replacement = vim.tbl_extend("force", observed, {
+      dev = root_stat.dev,
+      ino = observed.ino + 2,
+      type = "file",
+    })
+    assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "a.txt")))
+
+    local real_stat = vim.uv.fs_stat
+    local real_lstat = vim.uv.fs_lstat
+    local name_stats, name_lstats = 0, 0
+    local ok, err = xpcall(function()
+      vim.uv.fs_stat = function(path, ...)
+        if path == name then
+          name_stats = name_stats + 1
+          return name_stats == 1 and first or replacement
+        end
+        return real_stat(path, ...)
+      end
+      vim.uv.fs_lstat = function(path, ...)
+        if path == name then
+          name_lstats = name_lstats + 1
+          return replacement
+        end
+        return real_lstat(path, ...)
+      end
+      H.eq(source.buffer_modified(root, {
+        path = "a.txt",
+        status = "D",
+        unstaged = "D",
+      }), true, "identity drift cannot authorize the cross-device exemption")
+      assert(name_stats >= 1 and name_lstats >= 1,
+        "the deterministic pathname transition was not exercised")
+    end, debug.traceback)
+    vim.uv.fs_stat = real_stat
+    vim.uv.fs_lstat = real_lstat
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["source: a deleted target blocks when a buffer component probe errors"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "head\n" },
+      worktree = { ["a.txt"] = "disk\n" },
+    })
+    write(root, "other.txt", "unrelated\n")
+    local unrelated = vim.fs.joinpath(root, "other.txt")
+    local root_stat = assert(vim.uv.fs_stat(root))
+    local buf = vim.fn.bufadd(unrelated)
+    vim.fn.bufload(buf)
+    vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "unsaved uncertain alias" })
+    local name = vim.api.nvim_buf_get_name(buf)
+    local observed = assert(vim.uv.fs_stat(name))
+    local cross_device = vim.tbl_extend("force", observed, {
+      dev = root_stat.dev + 1,
+      ino = observed.ino + 1,
+      type = "file",
+    })
+    assert(vim.uv.fs_unlink(vim.fs.joinpath(root, "a.txt")))
+
+    local real_stat = vim.uv.fs_stat
+    local real_lstat = vim.uv.fs_lstat
+    local stat_calls, lstat_errors = 0, 0
+    local ok, err = xpcall(function()
+      vim.uv.fs_stat = function(path, ...)
+        if path == name then
+          stat_calls = stat_calls + 1
+          return cross_device
+        end
+        return real_stat(path, ...)
+      end
+      vim.uv.fs_lstat = function(path, ...)
+        if path == name then
+          lstat_errors = lstat_errors + 1
+          return nil, "EACCES: injected component probe failure", "EACCES"
+        end
+        return real_lstat(path, ...)
+      end
+      H.eq(source.buffer_modified(root, {
+        path = "a.txt",
+        status = "D",
+        unstaged = "D",
+      }), true, "a failed link probe leaves alias identity uncertain")
+      assert(stat_calls >= 1 and lstat_errors >= 1,
+        "the deterministic component-probe error was not exercised")
+    end, debug.traceback)
+    vim.uv.fs_stat = real_stat
+    vim.uv.fs_lstat = real_lstat
+    vim.api.nvim_set_option_value("modified", false, { buf = buf })
+    vim.api.nvim_buf_delete(buf, { force = true })
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
   end,
 }
