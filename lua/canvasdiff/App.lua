@@ -602,6 +602,8 @@ local function claim_model_epoch(surface)
   return surface.model_epoch
 end
 
+local pivot
+
 --- Is one concrete window displaying this Canvas?
 local function canvas_showing(st, win)
   win = win or st.win
@@ -824,16 +826,6 @@ local function sync_after_collapse(surface, st)
   local scroll = surface and surface.controllers.scrollbar
   if scroll then
     scrollbar.update(scroll, st)
-  end
-end
-
---- Watch changed the model rather than only its rendered shape, so every
---- consumer refreshes and the virtualizer re-evaluates the new full size.
-local function sync_after_reconcile(surface, st)
-  sync_after_collapse(surface, st)
-  local lease = surface.controllers.virt
-  if lease then
-    virt.apply(lease, config.options.virt)
   end
 end
 
@@ -1324,20 +1316,40 @@ end
       alive = function()
         return surface:guard(generation)
       end,
-      on_empty = function()
-        surface:guard(generation, function()
-          show_empty_message(st)
-        end)
+      begin = function()
+        if not surface:guard(generation) then
+          return nil
+        end
+        return {
+          epoch = claim_model_epoch(surface),
+          lens = lens.of(st),
+        }
+      end,
+      current = function(publication)
+        return surface:guard(generation)
+          and publication ~= nil
+          and surface.model_epoch == publication.epoch
+          and lens.same(lens.of(st), publication.lens)
+      end,
+      publish = function(_, desired, publication)
+        local function guard()
+          return surface:guard(generation)
+            and surface.model_epoch == publication.epoch
+            and lens.same(lens.of(st), publication.lens)
+        end
+        local ok, err, full = pivot(
+          surface, publication.lens, guard, desired)
+        if not ok then
+          if err == STALE_COMPARE then
+            return false
+          end
+          return nil, err
+        end
+        return true, nil, full
       end,
       on_error = function(err)
         surface:guard(generation, function()
           ui.warn(err)
-        end)
-      end,
-      on_change = function()
-        surface:guard(generation, function()
-          claim_model_epoch(surface)
-          sync_after_reconcile(surface, st)
         end)
       end,
     })
@@ -1869,14 +1881,17 @@ local function rollback_pivot(surface, st, snapshot, transaction)
   end
 end
 
-local function pivot(surface, target_lens, guard)
+pivot = function(surface, target_lens, guard, collected, publish)
   local st = surface and surface.state
   if not (st and st.buf and vim.api.nvim_buf_is_valid(st.buf)) then
     return nil, "no valid diff canvas"
   end
 
   local next_lens = target_lens or lens.of(st)
-  local desired, err = source.sections(st.root, next_lens, config.options.context)
+  local desired, err = collected, nil
+  if desired == nil then
+    desired, err = source.sections(st.root, next_lens, config.options.context)
+  end
   if guard and not guard() then
     return nil, STALE_COMPARE
   end
@@ -1904,10 +1919,7 @@ local function pivot(surface, target_lens, guard)
     end
     return ok, err
   end
-  local function stale()
-    if not (guard and not guard()) then
-      return false
-    end
+  local function rollback()
     if snapshot then
       local restore = snapshot
       local restore_transaction = transaction
@@ -1918,7 +1930,23 @@ local function pivot(surface, target_lens, guard)
       end
       rollback_pivot(surface, st, restore, restore_transaction)
       snapshot = nil
+      -- Reconciliation publishes more than section text. A failed excursion
+      -- presentation can occur after peer winbars and controllers observed the
+      -- provisional lens, so restore those consumers from the same checkpoint
+      -- before the transaction returns.
+      refresh_winbars(surface)
+      sync_after_collapse(surface, st)
+      local lease = surface.controllers.virt
+      if lease then
+        virt.apply(lease, config.options.virt)
+      end
     end
+  end
+  local function stale()
+    if not (guard and not guard()) then
+      return false
+    end
+    rollback()
     return true
   end
   if stale() then
@@ -1959,6 +1987,18 @@ local function pivot(surface, target_lens, guard)
       return finish(nil, STALE_COMPARE)
     end
   end
+  if publish then
+    local called, published, publish_err = pcall(publish)
+    if not called or not published then
+      rollback()
+      return finish(nil, called
+        and (publish_err or "could not publish comparison")
+        or tostring(published))
+    end
+    if stale() then
+      return finish(nil, STALE_COMPARE)
+    end
+  end
   if transaction and surface.compare_depth > 1 then
     local committed = capture_pivot(surface, st)
     if stale() then
@@ -1972,7 +2012,8 @@ local function pivot(surface, target_lens, guard)
       }
     end
   end
-  return finish(true)
+  local ok, finish_err = finish(true)
+  return ok, finish_err, full and true or false
 end
 
 --- Re-collect and splice in whatever changed: the manual version of the pass
@@ -2337,7 +2378,7 @@ function App:set_lens(l)
   return true
 end
 
-local function set_owned_lens(app, surface, l, guard, on_commit)
+local function set_owned_lens(app, surface, l, guard, on_commit, publish)
   local generation = surface.generation
   local model_epoch = claim_model_epoch(surface)
   local function owned_guard()
@@ -2351,12 +2392,27 @@ local function set_owned_lens(app, surface, l, guard, on_commit)
   end
   if lens.same(lens.of(surface.state), l)
       and not ((surface.compare_depth or 0) > 0) then
+    if publish then
+      local called, published, publish_err = pcall(publish)
+      if not called or not published then
+        local err = called
+          and (publish_err or "could not publish comparison")
+          or tostring(published)
+        if err ~= STALE_COMPARE then
+          ui.warn(err)
+        end
+        return nil, err
+      end
+      if not owned_guard() then
+        return nil
+      end
+    end
     if on_commit then
       on_commit()
     end
     return true
   end
-  local ok, err = pivot(surface, l, owned_guard)
+  local ok, err = pivot(surface, l, owned_guard, nil, publish)
   if not ok then
     if err == STALE_COMPARE then
       return nil
@@ -2511,8 +2567,18 @@ local function compare_origin_alive(app, request, unpublished_buf)
   end
   local owner = surface_for_window(app, request.win)
   if request.surface then
-    return owner == request.surface
-      and request.surface:guard(request.generation)
+    if owner ~= request.surface
+        or not request.surface:guard(request.generation) then
+      return false
+    end
+    if request.origin == "sidebar" then
+      local side = request.surface.controllers.sidebar
+      return side ~= nil
+        and sidebar.is_sidebar_win(side, request.win)
+        and sidebar.canvas_win(side, request.win) == request.host_win
+        and canvas_showing(request.surface.state, request.host_win)
+    end
+    return true
   end
   return owner == nil
     and (
@@ -2541,6 +2607,19 @@ function App:compare()
   end
   request.surface = surface
   request.generation = surface and surface.generation or nil
+  if surface then
+    local side = surface.controllers.sidebar
+    if side and sidebar.is_sidebar_win(side, win) then
+      request.origin = "sidebar"
+      request.host_win = sidebar.canvas_win(side, win)
+    elseif canvas_showing(surface.state, win) then
+      request.origin = "canvas"
+      request.host_win = win
+    else
+      request.origin = "excursion"
+      request.host_win = win
+    end
+  end
 
   local root = surface and surface.state.root or source.root(vim.fn.getcwd())
   if not compare_origin_alive(self, request) then
@@ -2598,23 +2677,54 @@ function App:compare()
             return compare_origin_alive(self, request, unpublished_buf)
           end
           if request.surface then
+            local publish
+            if request.origin == "excursion"
+                and not canvas_showing(request.surface.state, request.host_win) then
+              publish = function()
+                local host = request.host_win
+                local st = request.surface.state
+                local landing = vim.api.nvim_win_get_buf(host)
+                local primary = st.win
+                local winbar = vim.api.nvim_get_option_value("winbar", { win = host })
+                local function restore()
+                  st.win = primary
+                  if vim.api.nvim_win_is_valid(host)
+                      and vim.api.nvim_buf_is_valid(landing)
+                      and vim.api.nvim_win_get_buf(host) == st.buf then
+                    pcall(vim.api.nvim_win_set_buf, host, landing)
+                    pcall(vim.api.nvim_set_option_value,
+                      "winbar", winbar, { win = host })
+                  end
+                end
+                local ok, published = pcall(function()
+                  if not canvas.show(st, host) then
+                    error("could not show comparison in its originating window", 0)
+                  end
+                  if not guard() then
+                    error(STALE_COMPARE, 0)
+                  end
+                  request.surface:adopt_window(host, landing)
+                  request.surface:capture_view(host)
+                  set_winbar(st, nil, host)
+                  local side_lease = request.surface.controllers.sidebar
+                  if side_lease then
+                    sidebar.reconcile(side_lease)
+                  end
+                  return true
+                end)
+                if not ok or not published then
+                  restore()
+                  return nil, ok
+                    and "could not publish comparison"
+                    or tostring(published)
+                end
+                return true
+              end
+            end
             local changed = set_owned_lens(
               self, request.surface, target, guard, function()
                 jump.cancel(request.surface.excursion)
-              end)
-            if changed and guard()
-                and not canvas_showing(request.surface.state, request.win) then
-              local landing = vim.api.nvim_win_get_buf(request.win)
-              if canvas.show(request.surface.state, request.win) and guard() then
-                request.surface:adopt_window(request.win, landing)
-                request.surface:capture_view(request.win)
-                set_winbar(request.surface.state, nil, request.win)
-                local side_lease = request.surface.controllers.sidebar
-                if side_lease then
-                  sidebar.reconcile(side_lease)
-                end
-              end
-            end
+              end, publish)
           else
             self:open({
               lens = target,

@@ -891,6 +891,86 @@ T["root_ detached compare picker synthesizes HEAD as the current choice"] = func
   vim.fn.delete(root, "rf")
 end
 
+T["root_ compare from fixed sidebar keeps it and publishes through its canvas host"] =
+function()
+  local root = picker_fixture()
+  local changed = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  changed:write("zeta committed\n")
+  changed:close()
+  git(root, { "add", "a.txt" })
+  git(root, { "commit", "-m", "zeta change" })
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("dirty worktree\n")
+  dirty:close()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local sidebar = require("canvasdiff.ui").sidebar
+  local old_cwd = vim.fn.getcwd()
+  local real_select = vim.ui.select
+  local real_notify = vim.notify
+  local calls, messages = {}, {}
+  vim.api.nvim_set_current_dir(root)
+  require("canvasdiff.config").setup({
+    watch = { enabled = false },
+    sidebar = { enabled = true },
+    scrollbar = { enabled = false },
+    statuscolumn = { enabled = false },
+    highlight = { enabled = false },
+    virt = { enabled = false },
+    session = { enabled = false },
+  })
+  local st = assert(app:open())
+  local surface = assert(app.opened[#app.opened])
+  local canvas_win = vim.api.nvim_get_current_win()
+  local side_lease = assert(surface.controllers.sidebar)
+  local side_win
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if sidebar.is_sidebar_win(side_lease, win) then
+      side_win = win
+      break
+    end
+  end
+  assert(side_win, "the review opened its fixed sidebar")
+  local side_buf = vim.api.nvim_win_get_buf(side_win)
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_current_win(side_win)
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+
+    H.eq(#app.opened, 1, "the exact originating Surface remains the owner")
+    H.eq(app.opened[1], surface)
+    H.eq(vim.api.nvim_win_get_buf(side_win), side_buf,
+      "the fixed sidebar survives range publication")
+    H.eq(vim.api.nvim_win_get_buf(canvas_win), st.buf,
+      "the sidebar's existing canvas host displays the committed range")
+    H.eq(require("canvasdiff.diff").lens.of(st),
+      require("canvasdiff.diff").lens.range(
+        "refs/heads/main", "refs/heads/zeta", "..."))
+    H.eq(surface.model_epoch, 1,
+      "one selection claims and commits the model exactly once")
+    H.eq(#messages, 1, "only the committed range emits a diagnostic")
+    assert(messages[1].message:find("showing ", 1, true), messages[1].message)
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  vim.notify = real_notify
+  if vim.api.nvim_win_is_valid(canvas_win) then
+    vim.api.nvim_set_current_win(canvas_win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 local function two_surface_app(root)
   local App = require("canvasdiff.App")
   local app = App.new()
@@ -1043,6 +1123,11 @@ end
 T["root_ picker from a jump excursion reopens the exact Surface window"] =
 function()
   local root = picker_fixture()
+  local committed = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  committed:write("zeta committed\n")
+  committed:close()
+  git(root, { "add", "a.txt" })
+  git(root, { "commit", "-m", "zeta change" })
   local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
   file:write("dirty worktree\n")
   file:close()
@@ -1077,12 +1162,113 @@ function()
     H.eq(require("canvasdiff.diff").lens.of(replacement.state),
       require("canvasdiff.diff").lens.range(
         "refs/heads/main", "refs/heads/zeta", "..."))
+
+    local temporary = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_win_set_buf(win, temporary)
+    app:compare()
+    calls[3].callback(item_named(calls[3].items, "main"))
+    calls[4].callback(item_named(calls[4].items, "zeta"))
+    assert(require("canvasdiff.canvas").is_canvas_buf(
+      vim.api.nvim_win_get_buf(win)),
+      "selecting the already-active range still republishes the excursion host")
   end, debug.traceback)
 
   vim.ui.select = real_select
   if vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_set_current_win(win)
     pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ failed compare publication restores the prior lens and excursion"] =
+function()
+  local root = picker_fixture()
+  local changed = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  changed:write("zeta committed\n")
+  changed:close()
+  git(root, { "add", "a.txt" })
+  git(root, { "commit", "-m", "zeta change" })
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("dirty worktree\n")
+  dirty:close()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local canvas_module = require("canvasdiff.canvas")
+  local real_show = canvas_module.show
+  local real_select = vim.ui.select
+  local real_notify = vim.notify
+  local old_cwd = vim.fn.getcwd()
+  local calls, messages = {}, {}
+  vim.api.nvim_set_current_dir(root)
+  require("canvasdiff.config").setup({
+    watch = { enabled = false },
+    sidebar = { enabled = false },
+    scrollbar = { enabled = false },
+    statuscolumn = { enabled = false },
+    highlight = { enabled = false },
+    virt = { enabled = false },
+    session = { enabled = false },
+  })
+  local st = assert(app:open())
+  local surface = assert(app.opened[#app.opened])
+  local win = vim.api.nvim_get_current_win()
+  vim.cmd("split")
+  local peer_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_set_current_win(win)
+  local prior_lens = vim.deepcopy(require("canvasdiff.diff").lens.of(st))
+  local prior_lines = vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)
+  local prior_peer_winbar =
+    vim.api.nvim_get_option_value("winbar", { win = peer_win })
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  local entered = require("canvasdiff.input").jump.enter(
+    surface.excursion, st, { win = win })
+  assert(entered.ok, vim.inspect(entered))
+  local excursion_buf = vim.api.nvim_win_get_buf(win)
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    canvas_module.show = function()
+      return false
+    end
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+
+    H.eq(require("canvasdiff.diff").lens.of(st), prior_lens,
+      "an unpublishable comparison cannot retain model ownership")
+    H.eq(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), prior_lines,
+      "an unpublishable comparison restores the prior canvas content")
+    H.eq(vim.api.nvim_get_option_value("winbar", { win = peer_win }),
+      prior_peer_winbar,
+      "a peer canvas host restores the label from before failed publication")
+    H.eq(vim.api.nvim_win_get_buf(win), excursion_buf,
+      "the originating excursion remains visibly unchanged")
+    assert(surface.excursion.excursion,
+      "the return path is consumed only after successful publication")
+    for _, message in ipairs(messages) do
+      assert(not message.message:find("showing ", 1, true),
+        "failure cannot announce a committed lens: " .. message.message)
+    end
+  end, debug.traceback)
+
+  canvas_module.show = real_show
+  vim.ui.select = real_select
+  vim.notify = real_notify
+  if vim.api.nvim_win_is_valid(win) then
+    pcall(canvas_module.show, st, win)
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  if vim.api.nvim_win_is_valid(peer_win) then
+    pcall(vim.api.nvim_win_close, peer_win, true)
   end
   vim.api.nvim_set_current_dir(old_cwd)
   vim.fn.delete(root, "rf")
@@ -1154,6 +1340,102 @@ T["root_ compare invalidates its predecessor before repository inspection"] = fu
   source.branches = real_branches
   vim.ui.select = real_select
   cleanup_two_surface_app(app, win_a, win_b, old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["root_ watcher collection cannot overwrite a reentrant staged lens"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "head\n" },
+    worktree = { ["a.txt"] = "staged\n" },
+  })
+  git(root, { "add", "a.txt" })
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("unstaged\n")
+  file:close()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local source_module = require("canvasdiff.source")
+  local real_sections = source_module.sections
+  local canvas_module = require("canvasdiff.canvas")
+  local real_reconcile = canvas_module.reconcile_sections
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  require("canvasdiff.config").setup({
+    watch = { enabled = true, debounce_ms = 1 },
+    sidebar = { enabled = false },
+    scrollbar = { enabled = false },
+    statuscolumn = { enabled = false },
+    highlight = { enabled = false },
+    virt = { enabled = false },
+    session = { enabled = false },
+  })
+  local st = assert(app:open())
+  local win = vim.api.nvim_get_current_win()
+  local collected, reentered, stale_published = false, false, false
+
+  local ok, err = xpcall(function()
+    canvas_module.reconcile_sections = function(state, desired)
+      if state == st and require("canvasdiff.diff").lens.of(state).id == "staged"
+          and desired[1] and desired[1].new_text == "unstaged\n" then
+        stale_published = true
+      end
+      return real_reconcile(state, desired)
+    end
+    source_module.sections = function(...)
+      local desired, collect_err = real_sections(...)
+      if not reentered then
+        reentered = true
+        assert(app:set_lens(require("canvasdiff.diff").lens.get("staged")))
+        collected = true
+      end
+      return desired, collect_err
+    end
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    assert(vim.wait(1000, function() return collected end, 10),
+      "the injected watcher collection reentered a newer staged publication")
+    vim.wait(50, function() return false end, 10)
+
+    H.eq(require("canvasdiff.diff").lens.of(st).id, "staged")
+    H.eq(stale_published, false,
+      "the stale all-lens snapshot never reaches the reconciliation boundary")
+    H.eq(st.sections[1].new_text, "staged\n",
+      "the model remains content-consistent with the newer staged lens")
+    local rendered = table.concat(
+      vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), "\n")
+    assert(rendered:find("staged", 1, true), rendered)
+    assert(not rendered:find("unstaged", 1, true),
+      "the stale all-lens watcher snapshot never reaches the buffer")
+
+    source_module.sections = real_sections
+    canvas_module.reconcile_sections = real_reconcile
+    assert(app:set_lens(require("canvasdiff.diff").lens.get("all")))
+    local reconciled = false
+    canvas_module.reconcile_sections = function(state, desired)
+      if not reconciled and state == st
+          and require("canvasdiff.diff").lens.of(state).id == "all"
+          and desired[1] and desired[1].new_text == "unstaged\n" then
+        reconciled = true
+        assert(app:set_lens(require("canvasdiff.diff").lens.get("staged")))
+      end
+      return real_reconcile(state, desired)
+    end
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    assert(vim.wait(1000, function() return reconciled end, 10),
+      "the watcher reconciliation boundary reentered a newer staged publication")
+    vim.wait(50, function() return false end, 10)
+    H.eq(require("canvasdiff.diff").lens.of(st).id, "staged")
+    H.eq(st.sections[1].new_text, "staged\n",
+      "post-reconcile fencing rolls stale watcher content back transactionally")
+  end, debug.traceback)
+
+  source_module.sections = real_sections
+  canvas_module.reconcile_sections = real_reconcile
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
   vim.fn.delete(root, "rf")
   assert(ok, err)
 end

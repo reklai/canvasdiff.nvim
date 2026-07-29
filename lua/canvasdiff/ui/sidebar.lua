@@ -1266,6 +1266,25 @@ function S.is_sidebar_win(lease, win)
   return view ~= nil and view_exact(lease, view) and view.win == win and owned_pair(view)
 end
 
+--- The exact Canvas view paired with one owned sidebar window.
+---
+--- Consumers that originate an action in the fixed sidebar must publish into
+--- this host, never try to replace the sidebar's winfixbuf buffer itself.
+function S.canvas_win(lease, win)
+  if not S.is_sidebar_win(lease, win) then
+    return nil
+  end
+  local view = lease.views_by_win[win]
+  local canvas_win = view and view.canvas_win
+  local state = lease.state
+  if not (canvas_win and valid_win(canvas_win) and state and state.buf
+      and valid_buf(state.buf)
+      and vim.api.nvim_win_get_buf(canvas_win) == state.buf) then
+    return nil
+  end
+  return canvas_win
+end
+
 --- Open one Surface-owned Sidebar lease. A lease owns one view per host tab;
 --- no module-global "current" identity exists, so independent owners cannot
 --- erase or redirect one another.

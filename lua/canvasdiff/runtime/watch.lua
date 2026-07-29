@@ -107,6 +107,15 @@ end
 --- to refresh.
 local function reconcile(state, callbacks, lease)
   callbacks = callbacks or {}
+  local publication
+
+  local function current()
+    if lease and not is_active(lease) then
+      return false
+    end
+    local callback = callbacks.current
+    return not callback or callback(publication) == true
+  end
 
   local function fail(err)
     call(callbacks.on_error, err)
@@ -117,12 +126,19 @@ local function reconcile(state, callbacks, lease)
     return fail("no valid canvas state to reconcile")
   end
 
+  if callbacks.begin then
+    publication = call(callbacks.begin, state)
+    if publication == nil or not current() then
+      return false
+    end
+  end
+  local collected_lens = lens.of(state)
   local desired, err = source.sections(
-    state.root, lens.of(state), config.options.context)
+    state.root, collected_lens, config.options.context)
   -- Collection is an I/O boundary. The owner may die or explicitly stop this
-  -- exact lease while source.sections is running; never commit that stale
-  -- snapshot into its former canvas.
-  if lease and not is_active(lease) then
+  -- exact lease, or publish a newer model intent, while source.sections is
+  -- running; never commit that stale snapshot into its former canvas.
+  if not current() then
     return false
   end
   if not desired then
@@ -131,7 +147,23 @@ local function reconcile(state, callbacks, lease)
     return fail(err)
   end
 
-  local full = canvas.reconcile_sections(state, desired)
+  local full
+  if callbacks.publish then
+    local published, publish_err, published_full =
+      call(callbacks.publish, state, desired, publication)
+    if not current() then
+      return false
+    end
+    if not published then
+      return fail(publish_err or "watch publication failed")
+    end
+    full = published_full
+  else
+    full = canvas.reconcile_sections(state, desired)
+    if not current() then
+      return false
+    end
+  end
   local result = {
     full = full and true or false,
     empty = #desired == 0,
@@ -140,8 +172,14 @@ local function reconcile(state, callbacks, lease)
 
   if result.full and result.empty then
     call(callbacks.on_empty)
+    if not current() then
+      return false
+    end
   end
   call(callbacks.on_change, state, result)
+  if not current() then
+    return false
+  end
   return true, result
 end
 
@@ -153,6 +191,25 @@ local refresh_fs_watches
 
 local function lease_callbacks(lease)
   return {
+    begin = lease.callbacks.begin and function(state)
+      if not is_active(lease) then
+        return nil
+      end
+      return call(lease.callbacks.begin, state)
+    end or nil,
+    current = function(publication)
+      if not is_active(lease) then
+        return false
+      end
+      local callback = lease.callbacks.current
+      return not callback or callback(publication) == true
+    end,
+    publish = lease.callbacks.publish and function(state, desired, publication)
+      if not is_active(lease) then
+        return false
+      end
+      return call(lease.callbacks.publish, state, desired, publication)
+    end or nil,
     on_empty = function()
       if not is_active(lease) then
         return
