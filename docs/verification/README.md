@@ -108,11 +108,12 @@ writes — injecting Git-process and session-write failure, and asserts that no
 augroup outlives the Surface that owned it and that no two live Surfaces claim
 one canvas buffer. It found a real disposal bug on its first campaign.
 
-The same campaign also covers the checkout/track journey: role-appropriate ref
-selection, modified-buffer blocking, exact full-ref mutation, Surface
-retirement, and `HEAD → WORKTREE` recollection. It does not add a live-scale
-run: this path does not change the paged store, projection, compression, or
-benchmark schema, so the existing performance thresholds remain unchanged.
+For checkout/track rebuilding, this campaign exercises the shared Surface
+lifecycle, disposal, and publication invariants after a ref change. The exact
+role picker, full-ref mutation, and modified-buffer guard are covered by the
+deterministic integration and E2E tests. It does not add a live-scale run: this
+path does not change the paged store, projection, compression, or benchmark
+schema, so the existing performance thresholds remain unchanged.
 
 ```sh
 make bench-chaos
