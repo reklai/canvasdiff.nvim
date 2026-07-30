@@ -1490,20 +1490,16 @@ T["root_ compare picker orders metadata choices and cancels silently"] = functio
 
     H.eq(#calls, 2, "choosing a base opens exactly one comparison prompt")
     H.eq(names(calls[1].items), {
-      "origin/HEAD", "upstream/HEAD", "main", "master",
-      "origin/topic", "upstream/topic", "zeta",
-    }, "base choices prefer remote defaults and conventional local bases")
+      "main", "master", "zeta",
+    }, "the base picker contains local branches only")
     H.eq(names(calls[2].items), {
-      "zeta", "main", "master", "origin/topic", "upstream/topic",
-    }, "comparison choices put the current branch first and exclude remote HEAD")
-    H.eq(calls[1].items[1].ref, "refs/remotes/origin/HEAD",
-      "picker execution identity is the unambiguous full ref")
-    H.eq(calls[1].opts.prompt, "CanvasDiff compare from (base):")
-    H.eq(
-      calls[2].opts.prompt,
-      "CanvasDiff compare to (merge-base(origin/HEAD, target) → target):")
-    H.eq(calls[1].opts.format_item(calls[1].items[1]),
-      "origin/HEAD [default for origin]")
+      "zeta", "main", "master",
+    }, "the target picker puts the checked-out local branch first")
+    H.eq(calls[1].items[1].ref, "refs/heads/main",
+      "picker execution keeps the exact full local ref")
+    H.eq(calls[1].opts.prompt, "CanvasDiff compare from branch:")
+    H.eq(calls[2].opts.prompt, "CanvasDiff compare to branch:")
+    H.eq(calls[1].opts.format_item(calls[1].items[1]), "main")
     H.eq(calls[2].opts.format_item(calls[2].items[1]),
       "zeta [checked out]")
     H.eq(vim.api.nvim_get_current_buf(), before,
@@ -1537,15 +1533,14 @@ T["root_ base priority uses full refs when a tag collides with main"] = function
     vim.ui.select = real_select
     assert(ok, err)
     H.eq(names(calls[1].items), {
-      "origin/HEAD", "upstream/HEAD", "heads/main", "master",
-      "origin/topic", "upstream/topic", "zeta",
+      "heads/main", "master", "zeta",
     }, "local main stays ahead of master even when its safe display name changes")
-    H.eq(calls[1].items[3].ref, "refs/heads/main")
+    H.eq(calls[1].items[1].ref, "refs/heads/main")
   end)
   vim.fn.delete(root, "rf")
 end
 
-T["root_ detached compare picker synthesizes HEAD as the current choice"] = function()
+T["root_ detached compare picker still lists strict local branches"] = function()
   local root = picker_fixture()
   git(root, { "switch", "--detach" })
   in_cwd(root, function(fm)
@@ -1562,9 +1557,36 @@ T["root_ detached compare picker synthesizes HEAD as the current choice"] = func
     local ok, err = xpcall(function() fm.compare() end, debug.traceback)
     vim.ui.select = real_select
     assert(ok, err)
-    H.eq(calls[2].items[1], {
-      ref = "HEAD", name = "HEAD", kind = "detached", current = true,
-    }, "detached HEAD remains selectable even though it has no local branch ref")
+    H.eq(names(calls[2].items), { "main", "master", "zeta" })
+    for _, item in ipairs(calls[2].items) do
+      assert(item.ref ~= "HEAD", "detached HEAD is not a branch choice")
+      H.eq(item.kind, "local")
+    end
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ compare reports when no local branches exist"] = function()
+  local root = picker_fixture()
+  git(root, { "switch", "--detach" })
+  git(root, { "branch", "-D", "main" })
+  git(root, { "branch", "-D", "master" })
+  git(root, { "branch", "-D", "zeta" })
+  in_cwd(root, function(fm, msgs)
+    local before_win = vim.api.nvim_get_current_win()
+    local before_buf = vim.api.nvim_get_current_buf()
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+    end
+    local ok, err = xpcall(function() fm.compare() end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(#calls, 0, "remote-tracking refs cannot keep the branch picker alive")
+    assert(msgs[#msgs].msg:find("no local branches found", 1, true), vim.inspect(msgs))
+    H.eq(vim.api.nvim_get_current_win(), before_win)
+    H.eq(vim.api.nvim_get_current_buf(), before_buf)
   end)
   vim.fn.delete(root, "rf")
 end

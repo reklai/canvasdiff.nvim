@@ -279,7 +279,7 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff open        " open it
 :CanvasDiff close       " close it
 :CanvasDiff refresh     " re-scan and splice in what changed, keeping your place
-:CanvasDiff compare     " choose two branches/revisions and compare them
+:CanvasDiff compare     " choose two local branches and compare them
 :CanvasDiff checkout    " switch to one local branch
 :CanvasDiff track       " create and switch to a local branch tracking one remote ref
 :CanvasDiff all         " everything: HEAD → worktree   (the default)
@@ -332,11 +332,13 @@ are therefore read-only:
   `...topic` is `HEAD...topic`.
 
 `:CanvasDiff compare` (or the default global `<leader>lb`) opens two
-`vim.ui.select` pickers: first the base, then the comparison ref. Base choices
-prioritize `origin/HEAD`, other remote HEADs, then local `main`/`master`; the
-second picker puts the current branch (or detached HEAD) first. Full ref
-identities stay internal. `origin/main` is a local remote-tracking ref from
-the last fetch, not a network lookup: compare never fetches or checks out.
+`vim.ui.select` pickers containing local branches only: first the base, then
+the comparison branch. Base choices put local `main`, then `master`, before
+the remaining branches alphabetically; the second picker puts the checked-out
+local branch first, then sorts the rest alphabetically. Full ref identities
+stay internal. Remote-tracking snapshots such as `origin/main` are available
+only when explicitly typed as revision ranges; compare never fetches or checks
+out.
 
 `:CanvasDiff checkout` lists local branches only and switches to the selected
 one. `:CanvasDiff track` lists non-symbolic remote-tracking refs, then creates
@@ -371,7 +373,7 @@ require("canvasdiff").setup({
   -- each key lives on. Every value takes one key or a list of them.
   keymaps = {
     global = {
-      compare = "<leader>lb", -- choose two refs and open their read-only diff
+      compare = "<leader>lb", -- choose two local branches and open their read-only diff
     },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" }, -- open the file under the cursor

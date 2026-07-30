@@ -116,8 +116,10 @@ table replacement, not arbitrary code that crossed this bootstrap boundary.
 Named lenses (`all`, `unstaged`, `staged`) and bare refs can have a worktree or
 index side. `A..B` and `A...B` resolve both sides to commits and are marked
 read-only: two-dot compares tips, while three-dot replaces A with the merge
-base. The comparison picker only discovers refs and publishes one of those
-lenses; it never checks out, fetches, or writes refs.
+base. The interactive comparison picker projects repository metadata to local
+branches only. Branch names are presentation; exact refs/heads/* identities
+build the read-only range lens. Explicit typed ranges retain the broader Git
+revision grammar.
 
 Ref handling has one deliberately narrow boundary:
 

@@ -2503,19 +2503,11 @@ local function sorted_copy(items)
 end
 
 local function base_choices(branches)
-  local origin_default
-  local remote_defaults = {}
   local main
   local master
   local remaining = {}
   for _, item in ipairs(branches) do
-    if item.remote_default then
-      if item.ref == "refs/remotes/origin/HEAD" then
-        origin_default = item
-      else
-        remote_defaults[#remote_defaults + 1] = item
-      end
-    elseif item.ref == "refs/heads/main" then
+    if item.ref == "refs/heads/main" then
       main = item
     elseif item.ref == "refs/heads/master" then
       master = item
@@ -2523,13 +2515,8 @@ local function base_choices(branches)
       remaining[#remaining + 1] = item
     end
   end
-  remote_defaults = sorted_copy(remote_defaults)
   remaining = sorted_copy(remaining)
   local out = {}
-  if origin_default then
-    out[#out + 1] = origin_default
-  end
-  vim.list_extend(out, remote_defaults)
   if main then
     out[#out + 1] = main
   end
@@ -2544,18 +2531,17 @@ local function comparison_choices(branches)
   local current
   local remaining = {}
   for _, item in ipairs(branches) do
-    if not item.remote_default then
-      if item.kind == "local" and item.current then
-        current = item
-      else
-        remaining[#remaining + 1] = item
-      end
+    if item.current then
+      current = item
+    else
+      remaining[#remaining + 1] = item
     end
   end
   remaining = sorted_copy(remaining)
-  local out = {
-    current or { ref = "HEAD", name = "HEAD", kind = "detached", current = true },
-  }
+  local out = {}
+  if current then
+    out[#out + 1] = current
+  end
   vim.list_extend(out, remaining)
   return out
 end
@@ -2924,16 +2910,17 @@ function App:compare()
     ui.warn(err)
     return nil, err
   end
-  local bases = base_choices(branches)
+  local local_branches = source.local_branches(branches)
+  local bases = base_choices(local_branches)
   if #bases == 0 then
-    local no_branches = "no branches found"
+    local no_branches = "no local branches found"
     ui.warn(no_branches)
     return nil, no_branches
   end
-  local comparisons = comparison_choices(branches)
+  local comparisons = comparison_choices(local_branches)
 
   vim.ui.select(bases, {
-    prompt = "CanvasDiff compare from (base):",
+    prompt = "CanvasDiff compare from branch:",
     kind = "canvasdiff_branch_base",
     format_item = format_branch,
   }, function(base)
@@ -2941,8 +2928,7 @@ function App:compare()
       return
     end
     vim.ui.select(comparisons, {
-      prompt = "CanvasDiff compare to ("
-        .. lens.range(base.name, "target", "...").label .. "):",
+      prompt = "CanvasDiff compare to branch:",
       kind = "canvasdiff_branch_compare",
       format_item = format_branch,
     }, function(other)
