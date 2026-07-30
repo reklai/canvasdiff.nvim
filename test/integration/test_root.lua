@@ -2603,6 +2603,10 @@ function()
       "the range-only file is born under the existing fold")
     H.eq(seen.lens, active.id,
       "fold staleness records the range being rendered, not the prior lens")
+    local range_winbar = vim.api.nvim_get_option_value("winbar", { win = win })
+    assert(range_winbar:find(
+      "merge-base(main, topic) → topic · %<a.txt", 1, true),
+      "three-dot comparisons retain their merge-base source")
   end, debug.traceback)
 
   if vim.api.nvim_win_is_valid(win) then

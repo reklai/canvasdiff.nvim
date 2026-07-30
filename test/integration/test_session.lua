@@ -895,8 +895,9 @@ T["session_ committed range API is read-only and restores on reopen"] = function
     assert(changed, change_err)
     local winbar = vim.api.nvim_get_option_value(
       "winbar", { win = vim.api.nvim_get_current_win() })
-    assert(winbar:find("topic → HEAD", 1, true),
-      "the normalized two-dot label reaches the live canvas: " .. winbar)
+    assert(winbar:find("topic → HEAD · %<a.txt", 1, true),
+      "two-dot comparison uses the normalized directional breadcrumb")
+    assert(not winbar:find("CanvasDiff:", 1, true))
 
     fm.close()
     local saved = assert(session.load(root))
@@ -906,8 +907,8 @@ T["session_ committed range API is read-only and restores on reopen"] = function
     fm.open()
     local restored = vim.api.nvim_get_option_value(
       "winbar", { win = vim.api.nvim_get_current_win() })
-    assert(restored:find("topic → HEAD", 1, true),
-      "reopen must collect the saved range before rendering: " .. restored)
+    assert(restored:find("topic → HEAD · %<a.txt", 1, true),
+      "reopen restores the same comparison breadcrumb")
     fm.close()
   end)
 
@@ -942,8 +943,8 @@ T["session_ restored lens derives its live label from identity"] = function()
       "the live lens is normalized instead of trusting persisted display text")
     local winbar = vim.api.nvim_get_option_value(
       "winbar", { win = vim.api.nvim_get_current_win() })
-    assert(winbar:find("main → WORKTREE", 1, true),
-      "the winbar derives the comparison direction from lens identity: " .. winbar)
+    assert(winbar:find("main → WORKTREE · %<a.txt", 1, true),
+      "the breadcrumb is derived from normalized identity, not persisted copy")
     fm.close()
   end)
 

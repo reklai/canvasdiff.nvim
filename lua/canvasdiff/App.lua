@@ -770,6 +770,18 @@ local function path_under_top(st, win)
   return ok and path or nil
 end
 
+local function winbar_escape(text)
+  return tostring(text or ""):gsub("%%", "%%%%")
+end
+
+local function comparison_breadcrumb(st, path)
+  local label = winbar_escape(lens.of(st).label)
+  if not path then
+    return label
+  end
+  return label .. " · %<" .. winbar_escape(render.escape_path(path))
+end
+
 local function set_winbar(st, text, win, path)
   win = win or (st and st.win)
   if not (st and win and vim.api.nvim_win_is_valid(win)) then
@@ -782,9 +794,7 @@ local function set_winbar(st, text, win, path)
     -- knows, but peripherally and only if it is enabled. This keeps the answer on the
     -- canvas itself.
     local here = path or path_under_top(st, win)
-    local file = here and ("  │  " .. render.escape_path(here)) or ""
-
-    text = ("  CanvasDiff: " .. lens.of(st).label .. file):gsub("%%", "%%%%")
+    text = comparison_breadcrumb(st, here)
   end
   -- Skipped when nothing changed, because this runs on every WinScrolled and writing
   -- 'winbar' forces a redraw of the window. Comparing the resolved string also covers

@@ -633,8 +633,16 @@ return {
       return table.concat(o, "\n") .. "\n"
     end
     local root = H.git_fixture({
-      committed = { ["aaa.txt"] = body("aaa"), ["zzz.txt"] = body("zzz") },
-      worktree = { ["aaa.txt"] = body("aaa", true), ["zzz.txt"] = body("zzz", true) },
+      committed = {
+        ["aaa.txt"] = body("aaa"),
+        ["pct%name.txt"] = body("pct"),
+        ["zzz.txt"] = body("zzz"),
+      },
+      worktree = {
+        ["aaa.txt"] = body("aaa", true),
+        ["pct%name.txt"] = body("pct", true),
+        ["zzz.txt"] = body("zzz", true),
+      },
     })
     vim.api.nvim_set_current_dir(root)
     package.loaded["canvasdiff"] = nil
@@ -643,9 +651,14 @@ return {
     local cwin, cbuf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
     vim.api.nvim_win_set_height(cwin, 12)
 
-    local function wb() return vim.api.nvim_get_option_value("winbar", { win = cwin }) end
+    local function wb()
+      return vim.api.nvim_get_option_value("winbar", { win = cwin })
+    end
 
-    assert(wb():match("aaa%.txt"), "the winbar names the file under the topline: " .. wb())
+    H.eq(wb(), "HEAD → WORKTREE · %<aaa.txt",
+      "the breadcrumb names the comparison and visible file")
+    assert(not wb():find("CanvasDiff:", 1, true))
+    assert(not wb():find("│", 1, true))
 
     -- Scroll deep INSIDE zzz.txt, past its header, then drive the scroll hook by hand
     -- (WinScrolled never fires headlessly -- see the harness notes).
@@ -658,9 +671,25 @@ return {
       vim.fn.winrestview({ topline = zrow + 20, lnum = zrow + 22 })
     end)
     vim.api.nvim_exec_autocmds("WinScrolled", {})
-    assert(wb():match("zzz%.txt"),
-      "the winbar follows the topline into the next file, which is the whole point -- "
-      .. "its header has scrolled off by now. got: " .. wb())
+    H.eq(wb(), "HEAD → WORKTREE · %<zzz.txt",
+      "only the trailing file breadcrumb changes while scrolling")
+
+    local pct_row
+    for i, line in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+      if line:find("pct%name.txt", 1, true) then
+        pct_row = i
+        break
+      end
+    end
+    assert(pct_row, "the percent-bearing section is rendered")
+    vim.api.nvim_win_call(cwin, function()
+      vim.fn.winrestview({ topline = pct_row + 20, lnum = pct_row + 22 })
+    end)
+    vim.api.nvim_exec_autocmds("WinScrolled", {})
+    assert(wb():find("%%name.txt", 1, true),
+      "a literal percent is escaped in the stored statusline expression")
+    assert(wb():find(" · %<", 1, true),
+      "the truncation marker remains active formatting")
 
     fm.close()
     -- Left armed, this resolves sections against a dead state on every scroll anywhere.
