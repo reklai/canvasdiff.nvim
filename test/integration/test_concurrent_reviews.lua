@@ -101,6 +101,7 @@ local function with_two_reviews(body)
     })
   end, debug.traceback)
 
+  fm.setup({ keymaps = { global = { compare = false, checkout = false } } })
   for _, surface in ipairs({ state_b.surface, state_a.surface }) do
     if surface then
       pcall(surface.dispose, surface, "test cleanup")
