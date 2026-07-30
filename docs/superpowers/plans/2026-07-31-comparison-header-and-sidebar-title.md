@@ -182,7 +182,9 @@ Run:
 NVIM_LOG_FILE=/tmp/canvasdiff-header-green.log \
   make test SUITE=e2e FILTER='sidebar and winbar agree'
 NVIM_LOG_FILE=/tmp/canvasdiff-header-session.log \
-  make test SUITE=integration FILTER='committed range API|restored lens derives'
+  make test SUITE=integration FILTER='committed range API'
+NVIM_LOG_FILE=/tmp/canvasdiff-header-restored-lens.log \
+  make test SUITE=integration FILTER='restored lens derives'
 NVIM_LOG_FILE=/tmp/canvasdiff-header-range.log \
   make test SUITE=integration FILTER='folded range pivot'
 ```
@@ -320,7 +322,9 @@ Run:
 
 ```bash
 NVIM_LOG_FILE=/tmp/canvasdiff-sidebar-title-red.log \
-  make test SUITE=integration FILTER='sidebar_win|sidebar_integration'
+  make test SUITE=integration FILTER='sidebar_win'
+NVIM_LOG_FILE=/tmp/canvasdiff-sidebar-integration-red.log \
+  make test SUITE=integration FILTER='sidebar_integration'
 ```
 
 Expected: the new title assertions FAIL because sidebar windows currently
@@ -454,7 +458,11 @@ rg -n 'CanvasDiff: HEAD|Files changed|→.*·' README.md doc/canvasdiff.txt
 NVIM_LOG_FILE=/tmp/canvasdiff-header-focused.log \
   make test SUITE=e2e FILTER='sidebar and winbar agree'
 NVIM_LOG_FILE=/tmp/canvasdiff-sidebar-focused.log \
-  make test SUITE=integration FILTER='sidebar_|committed range API|restored lens derives'
+  make test SUITE=integration FILTER='sidebar_'
+NVIM_LOG_FILE=/tmp/canvasdiff-header-session-focused.log \
+  make test SUITE=integration FILTER='committed range API'
+NVIM_LOG_FILE=/tmp/canvasdiff-header-restored-focused.log \
+  make test SUITE=integration FILTER='restored lens derives'
 ```
 
 Expected: no old `CanvasDiff: HEAD` example, both new conventions documented,
