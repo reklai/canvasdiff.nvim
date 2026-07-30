@@ -19,6 +19,8 @@
 - Development size overrides are recorded as non-authoritative and cannot publish the checked-in verification artifact.
 - The first machine-dependent live baseline is observational; portable correctness/stability gates and existing million-row paged-engine budgets remain hard gates.
 - Baseline comparison refuses mismatched schema, sizes, repetitions, seed, fixture/config digest, host fingerprint, or measurement capabilities.
+- Baseline/current source revisions and tree digests are recorded as provenance
+  but are not compatibility equality gates because optimization changes them.
 - Linux is the authoritative RSS/HWM gate platform; unsupported platforms remain outside the documented boundary.
 - Add no runtime dependency, public telemetry API, background daemon, Git fetch, checkout, merge, or network operation.
 
@@ -72,8 +74,8 @@
   Sort a copy, never the caller's table. Reject non-finite and empty input.
   Compare these exact identity paths: schema/profile, authoritative sizes,
   repetitions, seed, fixture digest/schema, config digest, host fingerprint,
-  RSS source, and HWM source. Return all mismatch reasons in deterministic path
-  order.
+  RSS source, and HWM source. Record but do not compare source revision/tree
+  digest. Return all mismatch reasons in deterministic path order.
 
 - [ ] **Step 4: Run focused and complete performance suites**
 

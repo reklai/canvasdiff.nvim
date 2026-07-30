@@ -68,7 +68,9 @@ use.
     responsiveness, cleanup, finite metrics, page/cache bounds, and absence of
     crashes or unhandled errors.
   - Same-host comparisons cover latency and memory regression using matching
-    environment, fixture, config, seed, source-tree identity, and sample count.
+    host fingerprint, fixture, config, seed, measurement capabilities, and
+    sample count. Both source revisions and tree digests are recorded as
+    provenance but deliberately differ across an optimization comparison.
   - The existing absolute million-row paged-engine gates remain authoritative.
     The first live baseline is observational for machine-dependent latency; it
     does not invent universal timing promises from one host.
