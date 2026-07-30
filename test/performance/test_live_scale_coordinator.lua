@@ -162,7 +162,16 @@ local function valid_payload(rows, run_index)
       started_after_fixture = true,
       ticks = 2,
       max_gap_ns = 50000000,
+      max_gap = {
+        action_index = 1,
+        action_name = "open",
+        callback_admission_ns = 50000000,
+        callback_body_ns = 0,
+      },
       operation_windows = #trace,
+    },
+    watch = {
+      convergence_timeout_ms = 1500 + math.floor(rows / 100000) * 250,
     },
     capabilities = {
       rss_source = "libuv.resident_set_memory",
@@ -297,7 +306,8 @@ T["live_scale_coordinator_aggregates development sizes and publishes atomically"
     procfs = true,
   })
   H.eq(aggregate.thresholds.worker_timeout_ms, 900000)
-  H.eq(aggregate.thresholds.heartbeat_max_gap_ns.max, 100000000)
+  H.eq(aggregate.thresholds.heartbeat_max_gap_ns.target, 100000000)
+  H.eq(aggregate.thresholds.heartbeat_max_gap_ns.max, 2000000000)
   H.eq(aggregate.thresholds.row_extmarks.exact, 0)
   H.eq(aggregate.thresholds.paging_resident_pages.max, 8)
   H.eq(aggregate.thresholds.paging_resident_bytes.max, 532512)
@@ -330,7 +340,8 @@ T["live_scale_coordinator_records malformed timeout and gate failures then conti
       end
       local payload = valid_payload(spec.rows, spec.run_index)
       if spec.rows == 10000 then
-        payload.heartbeat.max_gap_ns = 100000001
+        payload.heartbeat.max_gap_ns = 2000000001
+        payload.heartbeat.max_gap.callback_admission_ns = 2000000001
       end
       return { code = 0, signal = 0, payload = payload }
     end,
@@ -349,7 +360,8 @@ T["live_scale_coordinator_records malformed timeout and gate failures then conti
     { "worker exceeded the 900000ms timeout" })
   H.eq(#aggregate.failures[2].stderr_tail, 4000)
   H.eq(aggregate.failures[3].messages,
-    { "heartbeat max gap exceeds 100ms" })
+    { "heartbeat max gap exceeds 2s" })
+  H.eq(aggregate.failures[3].worker_payload.heartbeat.max_gap_ns, 2000000001)
   H.eq(aggregate.samples[4].status, "pass",
     "a later valid sample must survive preceding failures")
   H.eq(#aggregate.aggregates, 1)
@@ -437,6 +449,17 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
   H.eq(current.failures[#current.failures].kind, "baseline")
   H.eq(current.failures[#current.failures].messages,
     { "incompatible baseline: host_fingerprint" })
+end
+
+T["live_scale_coordinator_requires attributed heartbeat diagnostics"] = function()
+  local payload = valid_payload(1, 1)
+  payload.heartbeat.max_gap = nil
+  local valid, errors = coordinator.validate_worker(payload, {
+    rows = 1, seed = 1729, run_index = 1,
+  })
+  H.eq(valid, nil)
+  assert(vim.tbl_contains(errors,
+    "heartbeat maximum-gap attribution is required"))
 end
 
 T["live_scale_coordinator_treats every explicit size override as development"] = function()
@@ -564,7 +587,8 @@ T["live_scale_coordinator_gate failure does not establish capabilities"] = funct
     launch = function(spec)
       local payload = valid_payload(spec.rows, spec.run_index)
       if spec.rows == 1 then
-        payload.heartbeat.max_gap_ns = 100000001
+        payload.heartbeat.max_gap_ns = 2000000001
+        payload.heartbeat.max_gap.callback_admission_ns = 2000000001
         payload.capabilities.rss_source = "different"
       end
       return { code = 0, signal = 0, payload = payload }

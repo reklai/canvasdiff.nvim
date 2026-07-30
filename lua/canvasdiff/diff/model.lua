@@ -83,6 +83,7 @@ local function with_metadata(section, path, old_text, new_text, status, metadata
   -- Computed while the text is in hand, so a section that later releases its
   -- sides can still answer "did this file change" -- a 64-byte answer instead
   -- of a retained copy of the file.
+  section.old_fingerprint = vim.fn.sha256(section.old_text)
   section.new_fingerprint = vim.fn.sha256(section.new_text)
   return section
 end

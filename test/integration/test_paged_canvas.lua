@@ -173,25 +173,44 @@ T["paged_ colours the rows the eager canvas colours"] = function()
       for _, mark in ipairs(render.section_hl(sec)) do
         expected[mark.row] = mark.group
       end
-      local styles = paged.styles[index]
-
       -- The header row carries the full-width bar as well as its own group.
-      H.eq(styles[0].line_hl_group, "CanvasDiffFileBar",
+      local header = assert(Paged.style_at(paged, paged.starts[index]))
+      H.eq(header.line_hl_group, "CanvasDiffFileBar",
         "the file header lost its bar")
-      H.eq(styles[0].hl_group, expected[0],
+      H.eq(header.hl_group, expected[0],
         "the file header lost its own group")
 
       for row, group in pairs(expected) do
         if row ~= 0 then
-          H.eq(styles[row] and styles[row].hl_group, group, (
+          local style = Paged.style_at(paged, paged.starts[index] + row)
+          H.eq(style and style.hl_group, group, (
             "section %d row %d should be %s"
           ):format(index, row, group))
         end
       end
     end
+    H.eq(paged.styles, nil,
+      "the paged canvas retained a per-row style graph")
   end, debug.traceback)
   Paged.dispose(paged)
   assert(ok, failure)
+end
+
+T["paged_ initial ingestion streams rows and releases source text"] = function()
+  local PageList = require("canvasdiff.canvas.PageList")
+  local real_create = PageList.create
+  local sections = three_sections()
+  PageList.create = function()
+    error("paged initial ingestion materialized the complete row list")
+  end
+  local ok, paged, err = pcall(Paged.render, sections)
+  PageList.create = real_create
+  assert(ok and paged, err or paged)
+  for _, section in ipairs(sections) do
+    H.eq(section.old_text, nil, "paged state retained the old file side")
+    H.eq(section.new_text, nil, "paged state retained the new file side")
+  end
+  Paged.dispose(paged)
 end
 
 T["paged_ an empty review is one blank row, as the eager canvas is"] = function()

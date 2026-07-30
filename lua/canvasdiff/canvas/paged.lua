@@ -26,6 +26,7 @@ local Projection = require("canvasdiff.canvas.Projection")
 local Restore = require("canvasdiff.canvas.compression.restore")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local render = require("canvasdiff.canvas.format")
+local model = require("canvasdiff.diff")
 
 local Paged = {}
 
@@ -59,29 +60,22 @@ local function section_at(starts, row0)
   return found
 end
 
---- Build the row-relative highlight map for one section, once.
+--- Derive the presentation of one visible row from its existing model entry.
 ---
---- Held per section rather than per row: a section's map is as large as its
---- entries, and the sum over sections is the canvas -- but it holds group
---- NAMES, not extmarks, so Neovim never sees it and it costs no redraw work.
-local function section_styles(section, collapsed)
-  if collapsed then
-    return { [0] = { hl_group = "CanvasDiffFileHeader" } }
+--- This intentionally retains no parallel per-row style map. Projection asks
+--- only for visible rows, so the lookup stays bounded by the viewport while a
+--- million-row review keeps one model entry per row instead of two.
+local function style_for(section, offset0, collapsed)
+  local entry = not collapsed and section.entries[offset0 + 1] or nil
+  local group = collapsed and "CanvasDiffFileHeader" or render.entry_hl(entry)
+  if not group and not (offset0 == 0 and not collapsed) then
+    return nil
   end
-  local styles = {}
-  for _, mark in ipairs(render.section_hl(section)) do
-    styles[mark.row] = { hl_group = mark.group }
+  local style = { hl_group = group }
+  if offset0 == 0 and not collapsed then
+    style.line_hl_group = FILE_BAR_GROUP
   end
-  -- The file header's full-width bar, so crossing from one file into the next
-  -- is visible in peripheral vision while scrolling. Expanded sections only,
-  -- exactly as in the eager canvas: a collapsed placeholder is already one
-  -- visually distinct row and has no body below it to delimit.
-  local header = styles[0] or {}
-  styles[0] = {
-    hl_group = header.hl_group,
-    line_hl_group = FILE_BAR_GROUP,
-  }
-  return styles
+  return style
 end
 
 --- Render `sections` into a page-backed canvas.
@@ -106,31 +100,44 @@ function Paged.render(sections, opts)
     return nil, "paged canvas collapsed/stale must be functions"
   end
 
-  local rows = {}
   local starts = {}
-  local styles = {}
   local collapsed_state = {}
+  local total_rows = 0
   for index, section in ipairs(sections) do
     local collapsed = collapsed_for(section.path) and true or false
     collapsed_state[index] = collapsed
-    starts[index] = #rows
-    styles[index] = section_styles(section, collapsed)
-    local lines = collapsed
-      and { render.placeholder(section, stale_for(section) and true or false) }
-      or render.section_lines(section)
-    for _, line in ipairs(lines) do
-      rows[#rows + 1] = line
-    end
+    starts[index] = total_rows
+    total_rows = total_rows + (collapsed and 1 or #section.entries)
   end
   -- A Projection needs at least the shape of a canvas. An empty review is one
   -- blank logical row, matching the eager canvas, which cannot have a
   -- zero-line buffer either.
-  if #rows == 0 then
-    rows[1] = ""
-  end
-
   local restore = Restore.adapter()
-  local list, list_err = PageList.create(rows, restore and {
+  local section_index, entry_index = 1, 0
+  local emitted_empty = false
+  local function next_row()
+    if #sections == 0 then
+      if emitted_empty then return nil end
+      emitted_empty = true
+      return ""
+    end
+    local section = sections[section_index]
+    if not section then return nil end
+    entry_index = entry_index + 1
+    local collapsed = collapsed_state[section_index]
+    local row
+    if collapsed then
+      row = render.placeholder(section, stale_for(section) and true or false)
+    else
+      row = render.section_line(section, entry_index)
+    end
+    if collapsed or entry_index >= #section.entries then
+      section_index = section_index + 1
+      entry_index = 0
+    end
+    return row
+  end
+  local list, list_err = PageList.from_iterator(next_row, restore and {
     resident = { restore = restore },
   } or nil)
   if not list then
@@ -141,7 +148,6 @@ function Paged.render(sections, opts)
     list = list,
     sections = sections,
     starts = starts,
-    styles = styles,
     collapsed = collapsed_state,
   }
 
@@ -154,8 +160,10 @@ function Paged.render(sections, opts)
     if not index then
       return nil
     end
-    local map = paged.styles[index]
-    return map and map[row0 - paged.starts[index]] or nil
+    return style_for(
+      paged.sections[index],
+      row0 - paged.starts[index],
+      paged.collapsed[index])
   end
 
   local projection, projection_err = Projection.create(list, {
@@ -172,6 +180,9 @@ function Paged.render(sections, opts)
   -- while the canvas sits open. It is created here and disposed with the
   -- projection so the two can never outlive each other.
   paged.scheduler = Scheduler.create(list, opts.scheduler)
+  for _, section in ipairs(sections) do
+    model.release_text(section)
+  end
 
   -- The state shape the display stack already understands. `paged` is what the
   -- canvas API dispatches on: with it set, `section_rows`, `locate` and
@@ -190,6 +201,13 @@ function Paged.render(sections, opts)
     end
   end
   return paged
+end
+
+function Paged.style_at(paged, row0)
+  local index = paged and section_at(paged.starts or {}, row0)
+  if not index then return nil end
+  return style_for(
+    paged.sections[index], row0 - paged.starts[index], paged.collapsed[index])
 end
 
 --- The logical row range one section occupies, end-exclusive.
@@ -254,7 +272,6 @@ function Paged.set_collapsed(paged, index, collapsed, opts)
     paged.starts[later] = paged.starts[later] + delta
   end
   paged.collapsed[index] = collapsed
-  paged.styles[index] = section_styles(section, collapsed)
 
   -- The skeleton has to grow or shrink with the store before anything reads a
   -- row through it, and the ghosts of the rows that just moved are stale.
@@ -316,7 +333,6 @@ function Paged.replace_section(paged, index, section, opts)
   if section == nil and not removing_last then
     table.remove(paged.sections, index)
     table.remove(paged.starts, index)
-    table.remove(paged.styles, index)
     table.remove(paged.collapsed, index)
     for later = index, #paged.starts do
       paged.starts[later] = paged.starts[later] + delta
@@ -324,7 +340,6 @@ function Paged.replace_section(paged, index, section, opts)
   else
     if section ~= nil then
       paged.sections[index] = section
-      paged.styles[index] = section_styles(section, collapsed)
       paged.collapsed[index] = collapsed
     end
     for later = index + 1, #paged.starts do
@@ -341,6 +356,9 @@ function Paged.replace_section(paged, index, section, opts)
   end
   if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
     vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  if section ~= nil then
+    model.release_text(section)
   end
   return true
 end
@@ -427,13 +445,11 @@ function Paged.render_all(paged, sections, opts)
 
   local rows = {}
   local starts = {}
-  local styles = {}
   local collapsed_state = {}
   for index, section in ipairs(sections) do
     local collapsed = collapsed_for(section.path) and true or false
     collapsed_state[index] = collapsed
     starts[index] = #rows
-    styles[index] = section_styles(section, collapsed)
     local lines = collapsed
       and { render.placeholder(section, stale_for(section) and true or false) }
       or render.section_lines(section)
@@ -453,7 +469,6 @@ function Paged.render_all(paged, sections, opts)
 
   paged.sections = sections
   paged.starts = starts
-  paged.styles = styles
   paged.collapsed = collapsed_state
   if paged.state then
     paged.state.sections = sections
@@ -465,6 +480,9 @@ function Paged.render_all(paged, sections, opts)
   end
   if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
     vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
+  end
+  for _, section in ipairs(sections) do
+    model.release_text(section)
   end
   return true
 end
@@ -506,7 +524,6 @@ function Paged.insert_section(paged, index, section, opts)
 
   table.insert(paged.sections, index, section)
   table.insert(paged.starts, index, at)
-  table.insert(paged.styles, index, section_styles(section, collapsed))
   table.insert(paged.collapsed, index, collapsed)
   local delta = #lines - delete_count
   for later = index + 1, #paged.starts do
@@ -523,6 +540,7 @@ function Paged.insert_section(paged, index, section, opts)
   if paged.buffer and vim.api.nvim_buf_is_valid(paged.buffer) then
     vim.api.nvim_buf_clear_namespace(paged.buffer, GHOST_NS, 0, -1)
   end
+  model.release_text(section)
   return true
 end
 

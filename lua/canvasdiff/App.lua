@@ -1824,10 +1824,14 @@ local function capture_pivot(surface, st)
       views[win] = view
     end
   end
+  local sections = {}
+  for index, section in ipairs(st.sections or {}) do
+    sections[index] = section
+  end
   return {
     lens = st.lens,
     base = st.base,
-    sections = vim.deepcopy(st.sections or {}),
+    sections = sections,
     collapsed = vim.deepcopy(st.collapsed or {}),
     folded = vim.deepcopy(st.folded or {}),
     folded_seen = vim.deepcopy(st.folded_seen or {}),
@@ -1844,7 +1848,11 @@ local function rollback_pivot(surface, st, snapshot, transaction)
     st.folded = vim.deepcopy(snapshot.folded)
     st.folded_seen = vim.deepcopy(snapshot.folded_seen)
     st.rendered_hidden = vim.deepcopy(snapshot.rendered_hidden)
-    canvas.render_all(st, vim.deepcopy(snapshot.sections))
+    local sections = {}
+    for index, section in ipairs(snapshot.sections) do
+      sections[index] = section
+    end
+    canvas.render_all(st, sections)
     if #snapshot.sections == 0 then
       show_empty_message(st)
     end

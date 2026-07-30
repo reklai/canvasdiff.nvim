@@ -1052,8 +1052,8 @@ local RECONCILE_FIELDS = {
   "status",
   "staged",
   "unstaged",
-  "old_text",
-  "new_text",
+  "old_fingerprint",
+  "new_fingerprint",
 }
 
 local function same_section(cur, desired)

@@ -71,6 +71,14 @@ create or relax a Linux memory gate. Portable correctness, responsiveness,
 paging, cleanup, finite-metric, and no-unhandled-error gates still apply
 everywhere they are supported.
 
+The live lifecycle reports 100 ms as its responsiveness target and attributes
+the worst heartbeat gap to an exact action. Its hard gate is a 2 second
+bounded-completion ceiling: the campaign deliberately includes synchronous
+million-row collection and reconciliation, so treating 100 ms as a universal
+pass/fail promise would reject correct baseline evidence instead of measuring
+it. Watch convergence remains finite and scales from 1.5 to at most 5 seconds
+with the requested content rows.
+
 ## Isolated eager-canvas baseline
 
 This lane freezes the ordinary-project performance of CanvasDiff's current

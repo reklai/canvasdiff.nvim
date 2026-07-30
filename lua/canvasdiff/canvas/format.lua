@@ -62,28 +62,35 @@ local HL_GROUP = {
   add = "CanvasDiffAdd",
 }
 
-function R.section_lines(section)
-  local lines = {}
-  for i, e in ipairs(section.entries) do
-    if e.kind == "file_hdr" then
+function R.section_line(section, index)
+  local e = section.entries[index]
+  if not e then
+    return nil
+  end
+  if e.kind == "file_hdr" then
       -- "(+0 −0)" on a binary file would read as "nothing changed", which is
       -- the opposite of the truth -- it changed, we just won't show how.
-      local counts
-      if section.rename_only then
-        counts = "  (renamed)"
-      elseif section.binary then
-        counts = "  (binary)"
-      else
-        counts = ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
-      end
-      lines[i] = GLYPHS.file .. " " .. R.section_path(section) .. counts
-    elseif e.kind == "hunk_hdr" then
-      lines[i] = e.content
-    elseif e.kind == "binary" then
-      lines[i] = "  " .. e.content
+    local counts
+    if section.rename_only then
+      counts = "  (renamed)"
+    elseif section.binary then
+      counts = "  (binary)"
     else
-      lines[i] = PREFIX[e.kind] .. e.content
+      counts = ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
     end
+    return GLYPHS.file .. " " .. R.section_path(section) .. counts
+  elseif e.kind == "hunk_hdr" then
+    return e.content
+  elseif e.kind == "binary" then
+    return "  " .. e.content
+  end
+  return PREFIX[e.kind] .. e.content
+end
+
+function R.section_lines(section)
+  local lines = {}
+  for i = 1, #section.entries do
+    lines[i] = R.section_line(section, i)
   end
   return lines
 end
@@ -242,6 +249,10 @@ function R.section_hl(section)
     end
   end
   return marks
+end
+
+function R.entry_hl(entry)
+  return entry and HL_GROUP[entry.kind] or nil
 end
 
 return R

@@ -9,6 +9,9 @@ return {
     local new = "one\nTWO\nthree\n"
     local section = differ.build_section("a.txt", old, new, "M")
     local before = differ.fingerprint(section)
+    local old_before = section.old_fingerprint
+    assert(type(old_before) == "string" and old_before ~= "",
+      "the old-side identity is computed while text is resident")
     local entries = #section.entries
     assert(before ~= "" and entries > 0, "sanity: a real section")
 
@@ -18,6 +21,8 @@ return {
     H.eq(#section.entries, entries, "the rendered entries are unaffected")
     H.eq(differ.fingerprint(section), before,
       "the fingerprint outlives the text it summarizes")
+    H.eq(section.old_fingerprint, old_before,
+      "the old-side identity also outlives the released text")
     H.eq(section.path, "a.txt")
     H.eq(section.old_path, "a.txt")
     H.eq(section.status, "M")

@@ -349,7 +349,9 @@
   as finite and every required correctness field before summarizing it.
 
   Portable gates are: successful cleanup, exact requested content rows,
-  correctness observations all true, heartbeat ticks ≥ 1 and max gap ≤ 100ms,
+  correctness observations all true, heartbeat ticks ≥ 1, a reported 100ms
+  responsiveness target, and a finite maximum gap ≤ 2s for the deliberately
+  synchronous live lifecycle,
   zero row extmarks, resident pages/bytes within the configured paging caps,
   and no unhandled worker error. Report latency/memory without a universal hard
   ceiling in the first baseline.

@@ -1640,6 +1640,45 @@ function()
   assert(ok, err)
 end
 
+T["root_ transactional pivot snapshots section identity without deep-copying models"] =
+function()
+  local root = picker_fixture()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local real_select = vim.ui.select
+  local real_deepcopy = vim.deepcopy
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local st = assert(app:open())
+  local win = vim.api.nvim_get_current_win()
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+  vim.deepcopy = function(value, ...)
+    if value == st.sections then
+      error("transaction deep-copied the complete section model")
+    end
+    return real_deepcopy(value, ...)
+  end
+
+  local ok, err = xpcall(function()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+  end, debug.traceback)
+
+  vim.deepcopy = real_deepcopy
+  vim.ui.select = real_select
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    pcall(function() app:close() end)
+  end
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 T["root_ synchronous newer same-lens selection survives stale outer rollback"] =
 function()
   local root = picker_fixture()

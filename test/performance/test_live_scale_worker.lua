@@ -552,6 +552,18 @@ T["live_scale_worker_publishes bounded paged resident evidence at 100k"] = funct
     })
     assert(valid, table.concat(errors, "\n"))
     H.eq(payload.paging.mode, "paged")
+    local heartbeat = payload.heartbeat
+    assert(type(heartbeat.max_gap) == "table",
+      "worker must attribute its maximum heartbeat gap")
+    assert(heartbeat.max_gap.action_index >= 1
+        and type(heartbeat.max_gap.action_name) == "string"
+        and heartbeat.max_gap.callback_admission_ns == heartbeat.max_gap_ns
+        and heartbeat.max_gap.callback_body_ns >= 0,
+      "heartbeat gap attribution must distinguish admission from callback work")
+    assert(type(payload.watch) == "table"
+        and payload.watch.convergence_timeout_ms >= 1500
+        and payload.watch.convergence_timeout_ms <= 5000,
+      "worker must publish a bounded scale-aware watch deadline")
     local resident = payload.paging.cache.resident
     assert(resident.samples >= 2)
     assert(resident.navigation_samples >= 1)

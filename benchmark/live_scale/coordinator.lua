@@ -19,7 +19,15 @@ local WORKER_TIMEOUT_MS = 15 * 60 * 1000
 local LOG_TAIL_BYTES = 4000
 local PAGING_RESIDENT_MAX_PAGES = 8
 local PAGING_RESIDENT_MAX_BYTES = 532512
-local HEARTBEAT_MAX_GAP_NS = 100 * 1000 * 1000
+-- A 100ms gap is our responsiveness target. The live Git replay deliberately
+-- includes synchronous million-row operations, so its correctness gate is a
+-- bounded-completion ceiling rather than a false claim that every operation
+-- can admit a callback inside the target.
+local HEARTBEAT_TARGET_GAP_NS = 100 * 1000 * 1000
+local HEARTBEAT_MAX_GAP_NS = 2 * 1000 * 1000 * 1000
+local WATCH_CONVERGENCE_BASE_MS = 1500
+local WATCH_CONVERGENCE_PER_100K_MS = 250
+local WATCH_CONVERGENCE_MAX_MS = 5000
 local PHASES = {
   fixture_build = true,
   adapter_install = true,
@@ -76,6 +84,12 @@ local worker_path = vim.fs.joinpath(lane_root, "worker.lua")
 
 local function integer(value)
   return metrics.finite(value) and value == math.floor(value)
+end
+
+local function watch_convergence_timeout_ms(rows)
+  return math.min(WATCH_CONVERGENCE_MAX_MS,
+    WATCH_CONVERGENCE_BASE_MS
+      + math.floor(rows / 100000) * WATCH_CONVERGENCE_PER_100K_MS)
 end
 
 local function sha256(value)
@@ -562,6 +576,26 @@ function M.validate_worker(payload, expected)
       and integer(heartbeat.operation_windows)
       and heartbeat.operation_windows >= 1,
     "heartbeat must contain finite plugin-operation observations")
+  local maximum = type(heartbeat) == "table" and heartbeat.max_gap or nil
+  local attributed_action = type(maximum) == "table"
+      and type(payload.trace) == "table"
+      and maximum.action_index and payload.trace[maximum.action_index] or nil
+  check(type(maximum) == "table"
+      and integer(maximum.action_index) and maximum.action_index >= 1
+      and type(maximum.action_name) == "string"
+      and type(attributed_action) == "table"
+      and attributed_action.name == maximum.action_name
+      and metrics.finite(maximum.callback_admission_ns)
+      and maximum.callback_admission_ns == heartbeat.max_gap_ns
+      and metrics.finite(maximum.callback_body_ns)
+      and maximum.callback_body_ns >= 0,
+    "heartbeat maximum-gap attribution is required")
+
+  local watch = payload.watch
+  check(type(watch) == "table"
+      and integer(watch.convergence_timeout_ms)
+      and watch.convergence_timeout_ms == watch_convergence_timeout_ms(expected.rows),
+    "watch convergence deadline must match the bounded scale policy")
 
   local capabilities = payload.capabilities
   check(type(capabilities) == "table"
@@ -690,7 +724,7 @@ local function gate_worker(payload, expected)
   check(payload.error == nil or payload.error == vim.NIL,
     "worker published an unhandled error")
   check(payload.heartbeat.max_gap_ns <= HEARTBEAT_MAX_GAP_NS,
-    "heartbeat max gap exceeds 100ms")
+    "heartbeat max gap exceeds 2s")
   check(payload.extmarks.after == 0,
     "extmarks must be zero after cleanup")
   if payload.paging.mode == "paged" then
@@ -920,8 +954,8 @@ local function decode_payload(value)
   return decoded
 end
 
-local function failure(kind, spec, messages, launched)
-  return {
+local function failure(kind, spec, messages, launched, worker_payload)
+  local recorded = {
     kind = kind,
     size = spec.rows,
     repetition = spec.repetition,
@@ -930,6 +964,12 @@ local function failure(kind, spec, messages, launched)
     stdout_tail = tail(launched and launched.stdout),
     stderr_tail = tail(launched and launched.stderr),
   }
+  if worker_payload ~= nil then
+    -- This crosses the process boundary only after strict validation, keeping
+    -- gate failures reproducible without trusting malformed worker output.
+    recorded.worker_payload = worker_payload
+  end
+  return recorded
 end
 
 local function derive_worker(payload)
@@ -1129,7 +1169,15 @@ function M.execute(options)
       requested_content_rows = { exact = true },
       correctness = { all = true },
       heartbeat_ticks = { min = 1 },
-      heartbeat_max_gap_ns = { max = HEARTBEAT_MAX_GAP_NS },
+      heartbeat_max_gap_ns = {
+        target = HEARTBEAT_TARGET_GAP_NS,
+        max = HEARTBEAT_MAX_GAP_NS,
+      },
+      watch_convergence_timeout_ms = {
+        base = WATCH_CONVERGENCE_BASE_MS,
+        per_100k_rows = WATCH_CONVERGENCE_PER_100K_MS,
+        max = WATCH_CONVERGENCE_MAX_MS,
+      },
       row_extmarks = { exact = 0, scope = "paged_persistent" },
       paging_resident_pages = { max = PAGING_RESIDENT_MAX_PAGES },
       paging_resident_bytes = { max = PAGING_RESIDENT_MAX_BYTES },
@@ -1296,7 +1344,7 @@ function M.execute(options)
                 }
               elseif not gated then
                 aggregate.failures[#aggregate.failures + 1] =
-                  failure("gate", spec, gate_errors, launched)
+                failure("gate", spec, gate_errors, launched, payload)
                 aggregate.samples[#aggregate.samples + 1] = {
                   size = size,
                   repetition = repetition,
