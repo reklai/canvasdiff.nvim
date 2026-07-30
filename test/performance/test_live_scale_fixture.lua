@@ -123,7 +123,9 @@ T["live_scale_fixture_build streams an exact thousand-row primary diff"] = funct
   H.eq(git(root, "diff", "--numstat", "--", "primary.txt"),
     "1000\t0\tprimary.txt")
   H.eq(git(root, "diff", "--check"), "")
-  local lines = vim.fn.readfile(vim.fs.joinpath(root, manifest.primary_path))
+  local primary = vim.fs.joinpath(root, manifest.primary_path)
+  H.eq(vim.fn.sha256(read_bytes(primary)), manifest.digest)
+  local lines = vim.fn.readfile(primary)
   H.eq(#lines, 1000)
   H.eq(lines[1], "scale 1 seed -7")
   H.eq(lines[500], "scale 500 seed -7")
