@@ -80,8 +80,8 @@ Add a session test that restores a valid lens carrying
 Run:
 
 ```bash
-make test FILE=test/integration/test_lens.lua
-make test FILE=test/integration/test_session.lua
+make test SUITE=integration FILTER='^lens_'
+make test SUITE=integration FILTER='^session_'
 ```
 
 Expected: failures show the old `vs` labels and persisted label reuse.
@@ -158,7 +158,7 @@ Also assert:
 Run:
 
 ```bash
-make test FILE=test/unit/test_ref.lua
+make test SUITE=unit FILTER='^ref_'
 ```
 
 Expected: module-not-found failure for `canvasdiff.source.ref`.
@@ -201,10 +201,10 @@ H.eq(calls[2].opts.format_item(calls[2].items[1]),
 Run:
 
 ```bash
-make test FILE=test/unit/test_ref.lua
-make test FILE=test/integration/test_lens.lua
-make test FILE=test/integration/test_session.lua
-make test FILE=test/integration/test_root.lua
+make test SUITE=unit FILTER='^ref_'
+make test SUITE=integration FILTER='^lens_'
+make test SUITE=integration FILTER='^session_'
+make test SUITE=integration FILTER='^root_ compare'
 ```
 
 Expected: all selected tests pass.
@@ -265,7 +265,7 @@ The exact candidate order becomes:
 Run:
 
 ```bash
-make test FILE=test/unit/test_cmd.lua
+make test SUITE=unit FILTER='^cmd_'
 ```
 
 Expected: `checkout` and `track` parse as revisions and are absent from
@@ -320,7 +320,8 @@ buffers, and merely loaded unmodified buffers do not block.
 Run:
 
 ```bash
-make test FILE=test/integration/test_git.lua
+make test SUITE=integration FILTER='^git:'
+make test SUITE=integration FILTER='^source:'
 ```
 
 Expected: missing source facade operations.
@@ -358,8 +359,9 @@ path. Export all operations through `source.lua`.
 Run:
 
 ```bash
-make test FILE=test/unit/test_cmd.lua
-make test FILE=test/integration/test_git.lua
+make test SUITE=unit FILTER='^cmd_'
+make test SUITE=integration FILTER='^git:'
+make test SUITE=integration FILTER='^source:'
 ```
 
 Expected: all selected tests pass and leave no fixture repositories.
@@ -443,9 +445,9 @@ collection failure needed to reach the post-mutation error branch.
 Run:
 
 ```bash
-make test FILE=test/integration/test_root.lua
-make test FILE=test/integration/test_concurrent_reviews.lua
-make test FILE=test/e2e/test_e2e.lua
+make test SUITE=integration FILTER='^root_'
+make test SUITE=integration FILTER='^concurrent_'
+make test SUITE=e2e FILTER='^e2e: branch'
 ```
 
 Expected: missing `App:checkout`/`App:track` behavior.
@@ -501,9 +503,9 @@ do not add test-only lifecycle methods.
 Run:
 
 ```bash
-make test FILE=test/integration/test_root.lua
-make test FILE=test/integration/test_concurrent_reviews.lua
-make test FILE=test/e2e/test_e2e.lua
+make test SUITE=integration FILTER='^root_'
+make test SUITE=integration FILTER='^concurrent_'
+make test SUITE=e2e FILTER='^e2e: branch'
 make test SUITE=fault
 ```
 
@@ -572,14 +574,15 @@ Run:
 
 ```bash
 git diff --check
-make test FILE=test/unit/test_ref.lua
-make test FILE=test/unit/test_cmd.lua
-make test FILE=test/integration/test_git.lua
-make test FILE=test/integration/test_lens.lua
-make test FILE=test/integration/test_session.lua
-make test FILE=test/integration/test_root.lua
-make test FILE=test/integration/test_concurrent_reviews.lua
-make test FILE=test/e2e/test_e2e.lua
+make test SUITE=unit FILTER='^ref_'
+make test SUITE=unit FILTER='^cmd_'
+make test SUITE=integration FILTER='^git:'
+make test SUITE=integration FILTER='^source:'
+make test SUITE=integration FILTER='^lens_'
+make test SUITE=integration FILTER='^session_'
+make test SUITE=integration FILTER='^root_'
+make test SUITE=integration FILTER='^concurrent_'
+make test SUITE=e2e FILTER='^e2e: branch'
 ```
 
 Expected: all commands exit 0.
