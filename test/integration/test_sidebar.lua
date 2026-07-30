@@ -711,9 +711,147 @@ T["sidebar_win close() recovers a stranded last-window sidebar instead of errori
   H.eq(sidebar.is_open(lease), false)
   H.eq(vim.api.nvim_win_is_valid(win), true, "the stranded window survives, recovered rather than abandoned")
   H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = win }), false, "winfixbuf cleared")
-  H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), "Host title")
+  H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), "",
+    "the replacement scratch keeps its own winbar once the installed title is no longer live")
   local buf = vim.api.nvim_win_get_buf(win)
   H.eq(vim.api.nvim_get_option_value("modifiable", { buf = buf }), true, "usable scratch buffer left behind")
+end
+
+T["sidebar_win lifecycle creation aborts after BufWinEnter steals the buffer"] = function()
+  vim.cmd("silent only")
+  local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  local foreign = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(
+    foreign, "canvasdiff-test://sidebar-create-foreign/" .. tostring(vim.uv.hrtime()))
+  vim.api.nvim_buf_set_lines(foreign, 0, -1, false, { "foreign content" })
+  local invaded_win
+  local group = vim.api.nvim_create_augroup(
+    "canvasdiff.test.sidebar.create." .. tostring(vim.uv.hrtime()), { clear = true })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    pattern = "canvasdiff://sidebar/*",
+    once = true,
+    callback = function(event)
+      local win = vim.fn.bufwinid(event.buf)
+      assert(win ~= -1, "the new sidebar buffer is displayed during BufWinEnter")
+      invaded_win = win
+      vim.api.nvim_set_option_value("bufhidden", "hide", { buf = event.buf })
+      vim.api.nvim_win_set_buf(win, foreign)
+      vim.api.nvim_set_option_value("winbar", "Foreign title", {
+        win = win, scope = "local",
+      })
+      vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
+    end,
+  })
+
+  local ok, result = pcall(sidebar.open, st, { width = 30 })
+  pcall(vim.api.nvim_del_augroup_by_id, group)
+  local observed = {
+    opened = ok,
+    buffer = invaded_win and vim.api.nvim_win_get_buf(invaded_win) or nil,
+    winbar = invaded_win
+      and vim.api.nvim_get_option_value("winbar", { win = invaded_win })
+      or nil,
+    wrap = invaded_win
+      and vim.api.nvim_get_option_value("wrap", { win = invaded_win })
+      or nil,
+  }
+  if ok then
+    pcall(sidebar.close, result)
+  end
+  if invaded_win and vim.api.nvim_win_is_valid(invaded_win) then
+    pcall(vim.api.nvim_win_close, invaded_win, true)
+  end
+  if vim.api.nvim_buf_is_valid(foreign) then
+    vim.api.nvim_buf_delete(foreign, { force = true })
+  end
+
+  H.eq(observed, {
+    opened = false,
+    buffer = foreign,
+    winbar = "Foreign title",
+    wrap = true,
+  }, "open aborts fail-closed without claiming or mutating the foreign pair")
+end
+
+T["sidebar_win lifecycle teardown preserves a BufEnter winbar replacement"] = function()
+  vim.cmd("silent only")
+  local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  vim.api.nvim_set_option_value("winbar", "Host title", {
+    win = st.win, scope = "local",
+  })
+  local lease = assert(sidebar.open(st, { width = 30 }))
+  vim.api.nvim_win_close(st.win, true)
+  local win = vim.api.nvim_tabpage_list_wins(0)[1]
+  local group = vim.api.nvim_create_augroup(
+    "canvasdiff.test.sidebar.close-title." .. tostring(vim.uv.hrtime()), { clear = true })
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    once = true,
+    callback = function()
+      vim.api.nvim_set_option_value("winbar", "Foreign title", {
+        win = win, scope = "local",
+      })
+    end,
+  })
+
+  sidebar.close(lease)
+  pcall(vim.api.nvim_del_augroup_by_id, group)
+  local actual = vim.api.nvim_get_option_value("winbar", { win = win })
+  vim.api.nvim_set_option_value("winbar", "", { win = win, scope = "local" })
+
+  H.eq(actual, "Foreign title",
+    "teardown does not replay a stale CanvasDiff title over a BufEnter replacement")
+end
+
+T["sidebar_win lifecycle teardown preserves a BufEnter buffer replacement"] = function()
+  vim.cmd("silent only")
+  local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  vim.api.nvim_set_option_value("winbar", "Host title", {
+    win = st.win, scope = "local",
+  })
+  local lease = assert(sidebar.open(st, { width = 30 }))
+  vim.api.nvim_win_close(st.win, true)
+  local win = vim.api.nvim_tabpage_list_wins(0)[1]
+  local foreign = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(
+    foreign, "canvasdiff-test://sidebar-close-foreign/" .. tostring(vim.uv.hrtime()))
+  vim.api.nvim_buf_set_lines(foreign, 0, -1, false, { "foreign content" })
+  local fired = false
+  local group = vim.api.nvim_create_augroup(
+    "canvasdiff.test.sidebar.close-buffer." .. tostring(vim.uv.hrtime()), { clear = true })
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    callback = function()
+      if fired then
+        return
+      end
+      fired = true
+      vim.api.nvim_win_set_buf(win, foreign)
+      vim.api.nvim_set_option_value("winbar", "Foreign title", {
+        win = win, scope = "local",
+      })
+    end,
+  })
+
+  sidebar.close(lease)
+  pcall(vim.api.nvim_del_augroup_by_id, group)
+  local observed = {
+    buffer = vim.api.nvim_win_get_buf(win),
+    lines = vim.api.nvim_buf_get_lines(foreign, 0, -1, false),
+    winbar = vim.api.nvim_get_option_value("winbar", { win = win }),
+  }
+  local scratch = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_win_set_buf(win, scratch)
+  if vim.api.nvim_buf_is_valid(foreign) then
+    vim.api.nvim_buf_delete(foreign, { force = true })
+  end
+
+  H.eq(observed, {
+    buffer = foreign,
+    lines = { "foreign content" },
+    winbar = "Foreign title",
+  }, "teardown stops restoring once BufEnter replaces the expected scratch")
 end
 
 T["sidebar_win canvas WinClosed cleans up a stranded sidebar"] = function()

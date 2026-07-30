@@ -757,8 +757,6 @@ local function restore_surviving_window(view, win, buf)
   if ok_fixed then
     winfixbuf_owned = fixed == view.applied_options.winfixbuf
   end
-  local ok_winbar, winbar = pcall(
-    vim.api.nvim_get_option_value, "winbar", { win = win })
   pcall(vim.api.nvim_set_option_value, "winfixbuf", false, {
     win = win,
     scope = "local",
@@ -768,11 +766,14 @@ local function restore_surviving_window(view, win, buf)
     local ok_set = pcall(vim.api.nvim_win_set_buf, win, scratch)
     if not ok_set and valid_buf(scratch) then
       pcall(vim.api.nvim_buf_delete, scratch, { force = true })
-    elseif ok_winbar then
-      pcall(vim.api.nvim_set_option_value, "winbar", winbar, {
-        win = win,
-        scope = "local",
-      })
+    elseif ok_set then
+      local ok_showing, showing = pcall(vim.api.nvim_win_get_buf, win)
+      if not (valid_win(win) and valid_buf(scratch) and ok_showing and showing == scratch) then
+        if valid_buf(scratch) then
+          pcall(vim.api.nvim_buf_delete, scratch, { force = true })
+        end
+        return
+      end
     end
   end
 
@@ -958,14 +959,23 @@ local function create_view(lease, tab, host_win, observed)
       width = lease.width,
       win = host_win,
     })
-    if not view_active(lease, view) then
-      if valid_win(win) and vim.api.nvim_win_get_buf(win) == buf then
+    local still_active = view_active(lease, view)
+    local ok_showing, showing = pcall(vim.api.nvim_win_get_buf, win)
+    local owns_pair = valid_win(win)
+      and valid_buf(buf)
+      and ok_showing
+      and showing == buf
+    if not (still_active and owns_pair) then
+      if owns_pair then
         pcall(vim.api.nvim_win_close, win, true)
       end
       if valid_buf(buf) then
         pcall(vim.api.nvim_buf_delete, buf, { force = true })
       end
-      error("sidebar open was superseded while creating a window", 0)
+      if not still_active then
+        error("sidebar open was superseded while creating a window", 0)
+      end
+      error("sidebar window ownership was lost while creating a window", 0)
     end
     view.win = win
     lease.views_by_win[win] = view
