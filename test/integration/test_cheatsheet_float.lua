@@ -17,6 +17,10 @@ T["cheatsheet_toggle opens a centered float and toggle closes it again"] = funct
   assert(joined:find("q", 1, true), "overlay lists the close action's key")
   assert(joined:find("<leader>lb", 1, true),
     "overlay lists the process-wide compare picker without implying it is buffer-local")
+  assert(joined:find("<leader>lc", 1, true),
+    "overlay lists the process-wide checkout picker without implying it is buffer-local")
+  assert(joined:find("Refresh the current diff", 1, true),
+    "overlay shows the exact refresh description")
 
   cheatsheet.toggle()
   H.eq(cheatsheet.is_open(), false)
@@ -46,6 +50,7 @@ end
 T["cheatsheet_toggle with all keybinds disabled opens showing placeholder message"] = function()
   -- Create keymaps with all actions disabled.
   local empty_km = {
+    global = { compare = false, checkout = false },
     canvas = {
       jump = false, collapse = false, next_file = false, prev_file = false,
       next_hunk = false, prev_hunk = false, cycle_next = false, cycle_prev = false,

@@ -46,22 +46,25 @@ T["cheatsheet_model promotes to Global only on identical keys AND desc"] = funct
   H.eq(where.jump, "Canvas")
   H.eq(where.refresh, "Canvas")
   H.eq(where.compare, "Global")
+  H.eq(where.checkout, "Global")
 end
 
-T["cheatsheet_model labels the process-wide compare mapping as Global"] = function()
+T["cheatsheet_model labels the process-wide compare and checkout mappings as Global"] = function()
   local model = cheatsheet.model(defaults())
   for _, col in ipairs(model) do
     if col.title == "Global" then
+      local rows = {}
       for _, row in ipairs(col.sections[1].rows) do
-        if row.action == "compare" then
-          H.eq(row.keys, { "<leader>lb" })
-          assert(row.desc:find("Compare", 1, true))
-          return
-        end
+        rows[row.action] = row
       end
+      H.eq(rows.compare.keys, { "<leader>lb" })
+      H.eq(rows.compare.desc, "Compare two branches or revisions")
+      H.eq(rows.checkout.keys, { "<leader>lc" })
+      H.eq(rows.checkout.desc, "Checkout a local branch")
+      return
     end
   end
-  error("the global compare action must be discoverable in cheatsheet metadata")
+  error("the global compare and checkout actions must be discoverable in cheatsheet metadata")
 end
 
 T["cheatsheet_model close stays per column with its own meaning"] = function()
@@ -207,7 +210,8 @@ T["cheatsheet_lines one row per action with keys joined by spaces"] = function()
   local model = cheatsheet.model(defaults())
   local joined = table.concat((cheatsheet.lines(model, 200)), "\n")
   assert(joined:find("za c", 1, true), "multi-key collapse renders on one row")
-  assert(joined:find("Re-scan", 1, true), "descs render next to their keys")
+  assert(joined:find("Refresh the current diff", 1, true), "descs render next to their keys")
+  assert(not joined:find("Re-scan", 1, true), "stale refresh copy is not rendered")
 end
 
 return T

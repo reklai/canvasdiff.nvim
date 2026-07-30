@@ -797,6 +797,15 @@ local function item_named(items, name)
   error("missing picker item " .. name .. " in " .. vim.inspect(names(items)))
 end
 
+local function mapping_for(buf, lhs)
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if mapping.lhs == lhs then
+      return mapping
+    end
+  end
+  error(("missing normal-mode mapping %q in buffer %d"):format(lhs, buf))
+end
+
 local function head_branch(root)
   return git(root, { "branch", "--show-current" })
 end
@@ -1518,6 +1527,49 @@ T["root_ compare picker orders metadata choices and cancels silently"] = functio
     vim.ui.select = real_select
   end)
   vim.fn.delete(root, "rf")
+end
+
+T["root_ comparison exits restore the originating canvas landing"] = function()
+  local root = picker_fixture()
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  local real_select = vim.ui.select
+  local calls = {}
+  vim.api.nvim_set_current_dir(root)
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = { items = items, opts = opts, callback = callback }
+  end
+
+  local ok, err = xpcall(function()
+    -- Phase 1: comparison opened from a normal buffer.
+    local origin = vim.api.nvim_get_current_buf()
+    app:compare()
+    calls[1].callback(item_named(calls[1].items, "main"))
+    calls[2].callback(item_named(calls[2].items, "zeta"))
+    local surface = assert(app.opened[#app.opened])
+    local q = assert(mapping_for(surface.state.buf, "q"))
+    q.callback()
+    H.eq(vim.api.nvim_get_current_buf(), origin,
+      "q restores the buffer that initiated a newly opened comparison")
+
+    -- Phase 2: comparison replaces the lens of an existing canvas.
+    local state = assert(app:open())
+    local original_landing = origin
+    app:compare()
+    calls[3].callback(item_named(calls[3].items, "main"))
+    calls[4].callback(item_named(calls[4].items, "zeta"))
+    local q_again = assert(mapping_for(state.buf, "q"))
+    q_again.callback()
+    H.eq(vim.api.nvim_get_current_buf(), original_landing,
+      "q retains the canvas's original landing rather than landing on itself")
+  end, debug.traceback)
+
+  vim.ui.select = real_select
+  pcall(function() app:close() end)
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
 end
 
 T["root_ base priority uses full refs when a tag collides with main"] = function()

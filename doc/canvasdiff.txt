@@ -125,6 +125,8 @@ Commit ranges compare committed content and are read-only:
 
 An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
 `HEAD...topic`. File jumps and stage cycling are declined in a range lens.
+Press <Tab> or <S-Tab> to leave a range at HEAD vs WORKTREE. `q` closes the
+review and restores the buffer from which its canvas was entered.
 
 `--staged` and `--cached` are likewise refused by name rather than accepted as
 synonyms, because `--staged` is one keystroke away from `unstaged` and the two
@@ -150,6 +152,8 @@ mean OPPOSITE things.
 :CanvasDiff compare     Choose a base and comparison ref with two
                         `vim.ui.select` prompts. Does not checkout or fetch.
 
+:CanvasDiff checkout    Choose and checkout a local branch.
+
 :CanvasDiff all         Switch to the `all` lens.
 :CanvasDiff unstaged    Switch to the `unstaged` lens.
 :CanvasDiff staged      Switch to the `staged` lens.
@@ -169,15 +173,17 @@ name the buffer they apply to. Every one is configurable; see
 |canvasdiff-configuration|.
 
 Global~
-    <leader>lb              Choose two branches/revisions to compare
+    <leader>lb              Compare two local branches or revisions
+    <leader>lc              Checkout a local branch
 
-This is the only process-wide default. It is shown in the cheatsheet's Global
-column. If another mapping already occupies it, CanvasDiff preserves that map
-and reports the collision.
+These are the two process-wide defaults. They are shown in the cheatsheet's
+Global column. If another mapping already occupies either lhs, CanvasDiff
+preserves that map and reports the collision.
 
-The comparison picker prioritizes default remote branches, then local
-`main`/`master`; its second prompt puts the current branch (or detached HEAD)
-first. Full refs stay internal. It never checks out, fetches, or writes refs.
+The comparison picker lists local branches only. Its base prompt orders local
+`main`, then `master`, then the remaining branches alphabetically; its second
+prompt puts the checked-out local branch first. Full refs stay internal. It
+never checks out, fetches, or writes refs.
 
 On the canvas~
                                                         *canvasdiff-canvas-maps*
@@ -187,7 +193,7 @@ On the canvas~
     ]h  /  [h               Next / previous hunk
     CTRL-N  /  CTRL-P       Cycle to the next / previous file
     <Tab>  /  <S-Tab>       Next / previous lens
-    r                       Refresh
+    r                       Refresh the current diff
     s                       Stage this file / unstage when staged-only
     q                       Close the review
     <leader>lh              Show keybind cheatsheet
@@ -238,6 +244,7 @@ default. >lua
       keymaps = {
         global = {
           compare = "<leader>lb",
+          checkout = "<leader>lc",
         },
         canvas = {
           jump       = { "<CR>", "<2-LeftMouse>" },
@@ -283,9 +290,11 @@ default. >lua
     })
 <
 Every mapping accepts a string or list. `false`, `""`, or `{}` disables it.
-For the global compare mapping, repeated `setup()` calls remove/rebind only a
-map CanvasDiff still owns by exact callback and metadata identity. A foreign
-collision or later takeover is never overwritten or deleted.
+For the global compare and checkout mappings, repeated `setup()` calls
+remove/rebind only maps CanvasDiff still owns by exact callback and metadata
+identity. A foreign collision or later takeover is never overwritten or
+deleted. A canonical compare/checkout collision is rejected before any global
+mapping mutation.
 
                                                            *canvasdiff-paged*
 Large reviews~
@@ -408,8 +417,8 @@ Shifted or modified keys do nothing~
 A configured mapping never appears~
     Check for the flat pre-1.0 keymaps shape, which warns on `setup()`, and
     for a misspelled key -- `canvas.colapse` is accepted by the merge and then
-    never found. For `global.compare`, also check CanvasDiff's warning: a
-    pre-existing global map is deliberately preserved.
+    never found. For `global.compare` or `global.checkout`, also check
+    CanvasDiff's warning: a pre-existing global map is deliberately preserved.
 
 Syntax highlighting is missing inside the diff~
     No Tree-sitter parser is installed for that filetype. The canvas still

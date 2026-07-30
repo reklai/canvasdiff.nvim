@@ -17,9 +17,10 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 `opts = {}` (or omitting `opts`/`config` entirely) is enough — the plugin
 works with its defaults even if `setup()` is never called.
-Load CanvasDiff at startup if you want its built-in global `<leader>lb` mapping
-available immediately; a `cmd = "CanvasDiff"`-only lazy spec cannot expose a
-mapping until that command has loaded the plugin.
+Load CanvasDiff at startup if you want its built-in global `<leader>lb`
+comparison and `<leader>lc` local-checkout mappings available immediately; a
+`cmd = "CanvasDiff"`-only lazy spec cannot expose mappings until that command
+has loaded the plugin.
 
 ## Usage
 
@@ -331,6 +332,10 @@ are therefore read-only:
 - Either omitted endpoint means `HEAD`, so `main..` is `main..HEAD` and
   `...topic` is `HEAD...topic`.
 
+`<Tab>` or `<Shift-Tab>` leaves a read-only range at `HEAD → WORKTREE`.
+Pressing `q` closes the review and restores the buffer from which that
+canvas was entered.
+
 `:CanvasDiff compare` (or the default global `<leader>lb`) opens two
 `vim.ui.select` pickers containing local branches only: first the base, then
 the comparison branch. Base choices put local `main`, then `master`, before
@@ -374,6 +379,7 @@ require("canvasdiff").setup({
   keymaps = {
     global = {
       compare = "<leader>lb", -- choose two local branches and open their read-only diff
+      checkout = "<leader>lc", -- switch to one local branch
     },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" }, -- open the file under the cursor
@@ -449,6 +455,7 @@ keymaps = { canvas  = { jump = { "<CR>", "o" } } }    -- a different pair
 keymaps = { canvas  = { close = false } }             -- disable it
 keymaps = { sidebar = { close = {} } }                -- also disables
 keymaps = { global  = { compare = false } }           -- disable global compare
+keymaps = { global  = { checkout = {} } }             -- disable global checkout
 ```
 
 An override **replaces** the list rather than merging into it, so
@@ -465,7 +472,7 @@ have about a second between taps).
 | `next_file` / `prev_file` | `]f` / `[f` | tap **]** then **f** / **[** then **f** | Cursor to the next/previous file's diff start, clamping. Lands on folded files too; takes a count |
 | `next_hunk` / `prev_hunk` | `]h` / `[h` | tap **]** then **h** / **[** then **h** | Cursor to the next/previous hunk header, clamping. A folded file counts as one stop; takes a count |
 | `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | hold **Ctrl** + **N** / **P** | Scroll to the next/previous file's diff, wrapping. Lands on folded files too; takes a count |
-| `refresh` | `r` | **r** | Re-scan the repo and splice in what changed — **keeps the same text under your cursor** |
+| `refresh` | `r` | **r** | Refresh the current diff |
 | `stage_cycle` | `s` | **s** | Stage every unstaged change in this file; if it is staged-only, unstage it |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens forward / back: all ⇄ unstaged ⇄ staged |
 | `close` | `q` | **q** | Close the canvas, restore the previous buffer |
@@ -534,15 +541,15 @@ have to keep working. That asymmetry is the whole reason keymaps are grouped by 
 
 ### Global mappings
 
-The plugin installs one process-wide default: **`<leader>lb` opens the branch/revision
-comparison picker**. It is registered with a description for `:map`, which-key, and
-keymap pickers. CanvasDiff never replaces an existing global map: if that lhs is
-already occupied it leaves it untouched and reports the collision. Repeated
-`setup()` calls remove or rebind only the exact callback and metadata still owned by
-that CanvasDiff App instance, so a user/plugin takeover is preserved.
-
-Change or disable it with `keymaps.global.compare = "..."`, `false`, `""`, or `{}`.
-String and list forms work like every other CanvasDiff mapping.
+The plugin installs two process-wide defaults: **`<leader>lb` opens the
+local-branch comparison picker** and **`<leader>lc` checks out a local branch**.
+Each is registered with a description for `:map`, which-key, and keymap pickers.
+Configure each action independently with a string, a list, or `false`, `""`, or
+`{}` to disable it. CanvasDiff never replaces an existing global map: an occupied
+foreign lhs wins and is reported as a collision. Effective-key collisions between
+compare and checkout are rejected before CanvasDiff mutates any global mapping.
+Repeated `setup()` calls remove or rebind only the exact callback and metadata still
+owned by that CanvasDiff App instance, so a user/plugin takeover is preserved.
 
 If you also want canvas/lens entry points globally, add them in your plugin manager
 (lazy.nvim example; adjust the prefixes to taste):
@@ -570,9 +577,9 @@ bare single keys for the actions you press dozens of times in a sweep.
 > `timeoutlen` after the second Space to see whether another key is coming, and the
 > toggle feels broken. A separate prefix costs nothing and avoids that entirely.
 
-Every CanvasDiff mapping is registered with a `desc`. The in-canvas cheatsheet also
-lists `<leader>lb` in its **Global** column; it does not pretend the mapping is local
-to the canvas or sidebar.
+Every CanvasDiff mapping is registered with a `desc`. The in-canvas cheatsheet lists
+`<leader>lb` and `<leader>lc` in its **Global** column; it does not pretend either
+mapping is local to the canvas or sidebar.
 
 Diff content is highlighted lazily: only sections within `margin` rows of
 the current viewport get real treesitter syntax highlighting (using
@@ -668,7 +675,7 @@ you. Because Linux `inotify` has no recursive watch, external-change
 detection watches the repo root and `.git` non-recursively plus the parent
 directories of files currently shown on the canvas; a change to a file in
 some other, not-yet-watched subdirectory is picked up the next time you
-save or refocus Neovim (or with a manual `R`) rather than instantly. Set
+save or refocus Neovim (or with a manual `r`) rather than instantly. Set
 `watch.enabled = false` to go back to manual-refresh-only behavior. The
 watcher keeps running while the canvas is merely hidden (so it's already
 fresh when you return to it) and only stops when the canvas is closed with
@@ -685,7 +692,7 @@ What's here today:
   emphasis of the diffed code itself, applied within `margin` rows of the
   viewport.
 - Auto-refresh on save, focus, and external filesystem changes (see
-  Configuration above), plus manual refresh (`R` / `:CanvasDiff
+  Configuration above), plus manual refresh (`r` / `:CanvasDiff
   refresh`) for a full re-scan on demand.
 - Jump/back round-trip preserves your semantic position (same hunk/line)
   across edits, not just a raw line number.

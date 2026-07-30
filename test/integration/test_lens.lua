@@ -663,6 +663,11 @@ T["lens_step cycles the three named lenses"] = function()
   H.eq(lens.step(lens.get("all"), -1).id, "staged", "and backwards")
   H.eq(lens.step(lens.branch("main"), 1).id, "all",
     "a branch lens is outside the cycle, so stepping enters it at the start")
+  local range = assert(lens.range("main", "topic", "..."))
+  H.eq(lens.step(range, 1).id, "all",
+    "Tab leaves a committed comparison at HEAD → WORKTREE")
+  H.eq(lens.step(range, -1).id, "all",
+    "Shift-Tab leaves a committed comparison at HEAD → WORKTREE")
   H.eq(lens.step(nil, 1).id, "all")
 end
 

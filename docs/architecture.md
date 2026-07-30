@@ -83,16 +83,20 @@ exactly one lease owns any one window or extmark ID at a time, and a lease that
 loses one releases its own bookkeeping for it rather than restoring over the
 new owner later.
 
-The process-wide compare keymap follows the same identity rule without becoming
-a controller lease. Each `App` retains the exact Lua callback and the complete
-stable `nvim_get_keymap()` identity for its own global maps, including behavior
-and provenance such as `sid`, `lnum`, `scriptversion`, mode bits and buffer
-scope. `setup()` removes or rebinds a mapping only when the captured native
-getter still reports that callback and identity; the immediately following
-comparison and delete use captured control primitives and native functions,
-leaving no replaceable Lua wrapper between authentication and mutation. An
-occupied lhs, a user/plugin takeover, another App, a same-callback reinstall
-and a module reload are all foreign.
+The process-wide compare and checkout keymaps follow the same identity rule.
+Each desired and owned record carries its allowlisted action. Reconciliation
+retains a mapping only when its effective lhs, action, callback, behavior, and
+complete observable Neovim identity still match. Each `App` retains the exact
+Lua callback and the complete stable `nvim_get_keymap()` identity for its own
+global maps, including provenance such as `sid`, `lnum`, `scriptversion`, mode
+bits and buffer scope. Canonical cross-action collisions are rejected before
+mutation; an authenticated same-lhs action change replaces only CanvasDiff's
+own prior callback. `setup()` removes or rebinds a mapping only when the
+captured native getter still reports that callback and identity; the immediately
+following comparison and delete use captured control primitives and native
+functions, leaving no replaceable Lua wrapper between authentication and
+mutation. An occupied lhs, a user/plugin takeover, another App, a
+same-callback reinstall and a module reload are all foreign.
 Configured `<leader>` notation is canonicalized at installation time, so a
 later leader change can retire the old owned sequence without confusing it
 with the newly requested one. Reconciliation prevalidates the complete list,
