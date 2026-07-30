@@ -30,6 +30,17 @@ local function with_git_fixture(spec, run)
   assert(ok, err)
 end
 
+local function mutation_state(root)
+  return {
+    head = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+    refs = sh(root, { "git", "show-ref" }),
+    index = sh(root, { "git", "ls-files", "--stage", "-z" }),
+    status = sh(root, { "git", "status", "--porcelain=v2", "-z" }),
+    a = read(root, "a.txt"),
+    saved = read(root, "saved.txt"),
+  }
+end
+
 return {
   ["source_ facade exports exactly repository and collection operations"] = function()
     local names = vim.tbl_keys(source)
@@ -372,6 +383,53 @@ return {
         H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before,
           invalid .. " must not reach a branch-changing Git operation")
       end
+    end)
+  end,
+  ["git: checkout shorthand pseudo-name cannot redirect switch_branch"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "main\n" } }, function(root)
+      sh(root, { "git", "switch", "-c", "topic" })
+      write(root, "a.txt", "topic\n")
+      sh(root, { "git", "add", "-A" })
+      sh(root, { "git", "commit", "-m", "topic tip" })
+      sh(root, { "git", "switch", "main" })
+      write(root, "saved.txt", "saved bytes\r\n")
+      sh(root, { "git", "add", "saved.txt" })
+      local before = mutation_state(root)
+
+      local switched, err = source.switch_branch(root, "refs/heads/@{-1}")
+
+      H.eq(mutation_state(root), before,
+        "a checkout shorthand must leave HEAD, refs, index, and worktree unchanged")
+      H.eq(switched, nil)
+      assert(type(err) == "string" and err ~= "",
+        "rejected checkout shorthand needs a diagnostic")
+    end)
+  end,
+  ["git: checkout shorthand pseudo-name cannot redirect track_branch"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "main\n" } }, function(root)
+      sh(root, { "git", "switch", "-c", "topic" })
+      write(root, "a.txt", "topic\n")
+      sh(root, { "git", "add", "-A" })
+      sh(root, { "git", "commit", "-m", "topic tip" })
+      local topic_oid = vim.trim(sh(root, { "git", "rev-parse", "HEAD" }))
+      sh(root, { "git", "switch", "main" })
+      sh(root, { "git", "branch", "-D", "topic" })
+      sh(root, { "git", "remote", "add", "origin", "." })
+      sh(root, {
+        "git", "update-ref", "refs/remotes/origin/feature/api", topic_oid,
+      })
+      write(root, "saved.txt", "saved bytes\r\n")
+      sh(root, { "git", "add", "saved.txt" })
+      local before = mutation_state(root)
+
+      local tracked, err = source.track_branch(
+        root, "@{-1}", "refs/remotes/origin/feature/api")
+
+      H.eq(mutation_state(root), before,
+        "a checkout shorthand must leave HEAD, refs, index, and worktree unchanged")
+      H.eq(tracked, nil)
+      assert(type(err) == "string" and err ~= "",
+        "rejected tracking shorthand needs a diagnostic")
     end)
   end,
   ["git: switch_branch never guesses a same-named remote for a stale local ref"] = function()

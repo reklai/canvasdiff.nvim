@@ -307,10 +307,14 @@ function M.branches(root)
   return refs
 end
 
-local function local_branch_name(full_ref)
+local function local_branch_name(root, full_ref)
   if type(full_ref) ~= "string"
       or not full_ref:match("^refs/heads/.+$") then
     return nil, "local branch ref must match refs/heads/<name>"
+  end
+  local format = run(root, { "check-ref-format", full_ref })
+  if format.code ~= 0 then
+    return nil, command_error("git check-ref-format", format)
   end
   return full_ref:sub(#"refs/heads/" + 1)
 end
@@ -332,7 +336,7 @@ end
 --- @return true|nil
 --- @return string|nil
 function M.switch_branch(root, full_ref)
-  local name, validation_err = local_branch_name(full_ref)
+  local name, validation_err = local_branch_name(root, full_ref)
   if not name then
     return nil, validation_err
   end
@@ -361,6 +365,11 @@ function M.track_branch(root, local_name, full_remote_ref)
   local format = run(root, { "check-ref-format", "--branch", local_name })
   if format.code ~= 0 then
     return nil, command_error("git check-ref-format --branch", format)
+  end
+  local checked_name = format.stdout
+    and format.stdout:gsub("[\r\n]+$", "") or nil
+  if checked_name ~= local_name then
+    return nil, "local branch name must not use checkout shorthand"
   end
 
   local local_ref = "refs/heads/" .. local_name
