@@ -128,6 +128,10 @@ An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
 Press <Tab> or <S-Tab> to leave a range at HEAD vs WORKTREE. `q` closes the
 review and restores the buffer from which its canvas was entered.
 
+The canvas winbar uses `source → destination · current/file`. The sidebar
+winbar uses `Files changed (N)`, where N counts changed files rather than
+visible directory rows.
+
 `--staged` and `--cached` are likewise refused by name rather than accepted as
 synonyms, because `--staged` is one keystroke away from `unstaged` and the two
 mean OPPOSITE things.

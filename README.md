@@ -95,11 +95,12 @@ tokyonight, where `CursorLine` manages +15 and `ColorColumn` is actually *darker
 And once you're a screen deep and that header has scrolled off, two things say where
 you are — always the same answer:
 
-- **The winbar** names the file under the topline, next to the lens:
-  `CanvasDiff: HEAD → WORKTREE │ src/canvas.lua`. It follows you as you scroll, so the
-  answer is on the canvas itself rather than only off to the side.
-- **The sidebar's highlighted row** tracks the same section — resolved from the
-  topline, not the cursor, so the two can't disagree.
+- **The canvas winbar** is a breadcrumb:
+  `HEAD → WORKTREE · src/canvas.lua`. The comparison stays on the left and the
+  file under the topline follows after it as you scroll.
+- **The sidebar winbar** is a collection title such as `Files changed (12)`.
+  Its count is the number of changed files, even when directories are folded.
+- **The sidebar's highlighted row** tracks the same file as the canvas.
 
 **Both follow you into a jump.** Open a file with **Enter** and the sidebar highlights
 *that* file, because you're still somewhere in the changeset and the tree's job is to
@@ -304,8 +305,9 @@ The canvas always compares two sides, and the **lens** is which pair:
 
 `<Tab>` cycles through the three; the commands **set** one, so they're safe in a
 mapping — `:CanvasDiff unstaged` always lands unstaged, which a toggle can't
-promise. Any of them will open the canvas if it isn't showing, and the current
-lens is always named in the canvas's winbar.
+promise. Any of them will open the canvas if it isn't showing.
+The current comparison is always named on the left side of the canvas
+breadcrumb.
 
 Pivoting is non-destructive: a file that looks identical through two lenses
 isn't re-rendered at all, so your scroll position and cursor stay exactly where
