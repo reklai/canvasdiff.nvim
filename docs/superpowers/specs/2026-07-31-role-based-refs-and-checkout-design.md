@@ -67,8 +67,13 @@ After selecting a base, the target prompt names the effective operation:
 `CanvasDiff compare to (merge-base(<base>, target) → target):`. Selecting the
 target is confirmation. There is no redundant third dialog.
 
-Full refs remain the execution identity. Display names never flow back into
-Git commands, so same-named local and remote refs cannot become ambiguous.
+Full refs remain the authoritative selection identity. Display names never
+flow back into Git commands. Git's `switch` grammar rejects a fully-qualified
+`refs/heads/*` argument, so CanvasDiff derives the local branch name only after
+validating and stripping that exact namespace, and passes `--no-guess` to
+prevent Git from substituting a remote branch. Tracking passes the exact full
+remote ref. Same-named local and remote refs therefore cannot become
+ambiguous.
 
 ## Local branch checkout
 
@@ -146,9 +151,10 @@ repository.switch_branch(root, full_ref)
 repository.track_branch(root, local_name, full_remote_ref)
 ```
 
-They return `true` on success or `nil, diagnostic` on failure. Inputs must be
-metadata returned by the repository ref enumerator, not unchecked display
-text.
+They return `true` on success or `nil, diagnostic` on failure. The full refs
+must come from metadata returned by the repository ref enumerator, not
+unchecked display text. `switch_branch` validates `refs/heads/*`, derives the
+branch name from that identity, and disables Git's remote guessing.
 
 ## Rendering environments
 
