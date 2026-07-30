@@ -1016,6 +1016,114 @@ T["root_ checkout replaces visible Canvas and disposes hidden Canvas"] = functio
   vim.fn.delete(root, "rf")
 end
 
+T["root_ hidden branch switch replaces the persisted comparison lens"] =
+function()
+  local root = picker_fixture()
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("dirty\n")
+  dirty:close()
+  local saved = require("canvasdiff.session").path_for(root)
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = true } })
+    local branch_lens = require("canvasdiff.diff").lens.branch("refs/heads/main")
+    local old = assert(fm.open({ lens = branch_lens }))
+    assert(require("canvasdiff.diff").lens.is_branch(old.lens),
+      "sanity: the outgoing lens is branch-specific")
+    require("canvasdiff.canvas").set_collapsed(old, 1, true)
+    vim.cmd("enew")
+    assert(not old.surface:is_showing(), "the comparison is hidden")
+
+    local real_select = vim.ui.select
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "main"))
+    end
+    local changed, err = fm.checkout()
+    vim.ui.select = real_select
+    assert(changed, err)
+    H.eq(head_branch(root), "main")
+    local persisted = assert(require("canvasdiff.session").load(root))
+    H.eq(persisted.lens.id, "all")
+    H.eq(persisted.collapsed, {},
+      "comparison-shaped fold state is not persisted across branch identity")
+
+    local reopened = assert(fm.open())
+    H.eq(reopened.lens.id, "all",
+      "an ordinary later open must not restore the pre-switch comparison")
+  end)
+  os.remove(saved)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ failed visible rebuild replaces the persisted comparison lens"] =
+function()
+  local root = picker_fixture()
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("dirty\n")
+  dirty:close()
+  local saved = require("canvasdiff.session").path_for(root)
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = true } })
+    local branch_lens = require("canvasdiff.diff").lens.branch("refs/heads/main")
+    local old = assert(fm.open({ lens = branch_lens }))
+    assert(require("canvasdiff.diff").lens.is_branch(old.lens),
+      "sanity: the outgoing lens is branch-specific")
+
+    local real_sections = source.sections
+    local real_select = vim.ui.select
+    source.sections = function()
+      return nil, "injected collection failure"
+    end
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "main"))
+    end
+    local invoked, changed, err = pcall(fm.checkout)
+    source.sections = real_sections
+    vim.ui.select = real_select
+    assert(invoked, changed)
+    H.eq(changed, nil)
+    assert(err and err:find("branch changed, but Canvas refresh failed:", 1, true),
+      tostring(err))
+    H.eq(head_branch(root), "main")
+
+    local reopened = assert(fm.open())
+    H.eq(reopened.lens.id, "all",
+      "recovery must not reload the comparison saved by the retired Surface")
+  end)
+  os.remove(saved)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ stale current picker metadata still switches the exact selected ref"] =
+function()
+  local root = picker_fixture()
+  in_cwd(root, function(fm)
+    local real_select = vim.ui.select
+    local call
+    vim.ui.select = function(items, opts, callback)
+      call = picker_call(items, opts, callback)
+    end
+    local ok, err = xpcall(function()
+      fm.checkout()
+      local selected = item_named(call.items, "zeta")
+      assert(selected.current, "sanity: zeta was current when the picker opened")
+      git(root, { "switch", "main" })
+      H.eq(head_branch(root), "main", "HEAD changed while the picker was open")
+      call.callback(selected)
+      H.eq(head_branch(root), "zeta",
+        "the selected exact ref wins over stale enumeration metadata")
+    end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+  end)
+  vim.fn.delete(root, "rf")
+end
+
 T["root_ post-switch collection failure keeps the new branch and reports it"] =
 function()
   local root = picker_fixture()

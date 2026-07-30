@@ -291,7 +291,7 @@ end
 ---
 --- Disposal happens inside this operation so callers cannot accidentally
 --- recollect repository state while the old controllers are still live.
-function Surface:retire_for_ref_change(preferred_win)
+function Surface:retire_for_ref_change(preferred_win, replacement_lens)
   if not self:is_alive() then
     return nil
   end
@@ -317,6 +317,12 @@ function Surface:retire_for_ref_change(preferred_win)
     displaced = graph.canvas,
     session = vim.deepcopy(self.state and self.state.session_snapshot or nil),
   }
+  if replacement_lens and self.state then
+    self.state.lens = vim.deepcopy(replacement_lens)
+    self.state.collapsed = {}
+    self.state.folded = {}
+    self.state.folded_seen = {}
+  end
   self:dispose("branch_changed")
   return replacement
 end

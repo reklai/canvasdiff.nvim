@@ -2681,7 +2681,8 @@ local function rebuild_after_ref_change(app, request)
 
   -- The ownership operation invalidates the old generation and disposes every
   -- controller/store before App:open can recollect against the new HEAD.
-  local replacement = request.surface:retire_for_ref_change(request.host_win)
+  local replacement = request.surface:retire_for_ref_change(
+    request.host_win, lens.get("all"))
   if not replacement then
     return branch_refresh_failure("could not retire the originating Canvas")
   end
@@ -2766,11 +2767,6 @@ local function choose_ref(app, kind)
     if not offered then
       return
     end
-    if kind == "checkout" and selected.current then
-      result = true
-      return
-    end
-
     local local_name
     if kind == "track" then
       local_name, result_err = source.tracking_branch_name(selected)
