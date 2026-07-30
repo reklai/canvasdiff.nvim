@@ -1,0 +1,261 @@
+{
+  "ended_at": "2026-07-31T05:32:39+09:00",
+  "final_verdict": "passed",
+  "findings": [
+    {
+      "category": "long-path-truncation-coverage",
+      "disposition": "parked",
+      "reviewer": "final-reviewer-a",
+      "severity": "Minor"
+    },
+    {
+      "category": "foreign-winbar-surviving-teardown-coverage",
+      "disposition": "parked",
+      "reviewer": "final-reviewer-a",
+      "severity": "Minor"
+    },
+    {
+      "category": "creation-ownership-loss",
+      "disposition": "open",
+      "reviewer": "final-reviewer-b",
+      "severity": "Important"
+    },
+    {
+      "category": "teardown-callback-ordering",
+      "disposition": "open",
+      "reviewer": "final-reviewer-b",
+      "severity": "Important"
+    },
+    {
+      "category": "creation-ownership-loss",
+      "disposition": "fixed",
+      "reviewer": "final-fix-rereview",
+      "severity": "Important"
+    },
+    {
+      "category": "teardown-callback-ordering",
+      "disposition": "fixed",
+      "reviewer": "final-fix-rereview",
+      "severity": "Important"
+    }
+  ],
+  "fix_rounds": 1,
+  "git_mode": "clean-worktree",
+  "guardrails": [
+    {
+      "kind": "regression-test",
+      "path": "test/e2e/test_e2e.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_root.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_session.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_sidebar.lua"
+    },
+    {
+      "kind": "project-guidance",
+      "path": "README.md"
+    },
+    {
+      "kind": "project-guidance",
+      "path": "doc/canvasdiff.txt"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_sidebar.lua"
+    }
+  ],
+  "run_id": "comparison-header-sidebar-20260731",
+  "schema_version": 1,
+  "stages": [
+    {
+      "elapsed_ms": 147000,
+      "ended_at": "2026-07-31T05:09:35+09:00",
+      "name": "task1-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:07:08+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 31000,
+      "ended_at": "2026-07-31T05:10:15+09:00",
+      "name": "task1-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:09:44+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 273000,
+      "ended_at": "2026-07-31T05:15:01+09:00",
+      "name": "task2-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:10:28+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 137000,
+      "ended_at": "2026-07-31T05:17:27+09:00",
+      "name": "task2-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:15:10+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 74000,
+      "ended_at": "2026-07-31T05:18:58+09:00",
+      "name": "task3-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "medium",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:17:44+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 27000,
+      "ended_at": "2026-07-31T05:19:35+09:00",
+      "name": "task3-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "medium",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:19:08+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 199000,
+      "ended_at": "2026-07-31T05:23:15+09:00",
+      "name": "final-reviewer-a",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:19:56+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 199000,
+      "ended_at": "2026-07-31T05:23:15+09:00",
+      "name": "final-reviewer-b",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:19:56+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 418000,
+      "ended_at": "2026-07-31T05:30:35+09:00",
+      "name": "final-fix-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:23:37+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 63000,
+      "ended_at": "2026-07-31T05:31:49+09:00",
+      "name": "final-fix-rereview",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "medium",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T05:30:46+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    }
+  ],
+  "started_at": "2026-07-31T05:06:19+09:00",
+  "task_label": "comparison-header-sidebar-title",
+  "trigger_reasons": [
+    "multiple-subsystems",
+    "lifecycle"
+  ],
+  "verification": [
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-comparison-header-full.log make test",
+      "exit_code": 0,
+      "status": "passed"
+    }
+  ]
+}
