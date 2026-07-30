@@ -34,6 +34,17 @@ local SOURCE_NAMES = {
   stage = true,
   unstage = true,
 }
+local MEMORY_NAMES = {
+  "worker_start",
+  "after_fixture",
+  "after_app_load",
+  "after_replay",
+  "after_cleanup",
+}
+local MEMORY_NAME_SET = {}
+for _, name in ipairs(MEMORY_NAMES) do
+  MEMORY_NAME_SET[name] = true
+end
 local RESOURCE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
@@ -375,10 +386,12 @@ function M.validate_worker(payload, expected)
     check(manifest.rows == expected.rows, "fixture rows mismatch")
     check(manifest.seed == expected.seed, "fixture seed mismatch")
     check(manifest.primary_path == "primary.txt", "primary path mismatch")
-    check(type(manifest.first_line) == "string",
-      "fixture first line is required")
-    check(type(manifest.last_line) == "string",
-      "fixture last line is required")
+    check(manifest.first_line
+        == ("scale 1 seed %d"):format(expected.seed),
+      "fixture first line mismatch")
+    check(manifest.last_line
+        == ("scale %d seed %d"):format(expected.rows, expected.seed),
+      "fixture last line mismatch")
     check(sha256(manifest.digest), "fixture digest must be sha256")
   end
 
@@ -388,11 +401,14 @@ function M.validate_worker(payload, expected)
       type(payload.phases) == "table" and payload.phases or {}) do
     check(type(phase) == "table", "phase sample must be an object")
     if type(phase) == "table" then
-      check(PHASES[phase.name] == true,
+      local name = phase.name
+      check(type(name) == "string" and PHASES[name] == true,
         "unexpected phase " .. tostring(phase.name))
-      check(not found_phases[phase.name],
+      check(type(name) ~= "string" or not found_phases[name],
         "duplicate phase " .. tostring(phase.name))
-      found_phases[phase.name] = true
+      if type(name) == "string" then
+        found_phases[name] = true
+      end
       check(metrics.finite(phase.elapsed_ns) and phase.elapsed_ns >= 0,
         "phase duration must be finite")
       check(phase.status == "ok", "phase must finish successfully")
@@ -418,6 +434,18 @@ function M.validate_worker(payload, expected)
         "action arguments mismatch")
       check(metrics.finite(action.operation_ns) and action.operation_ns >= 0,
         "action operation duration must be finite")
+      if action.name == "open" then
+        check(metrics.finite(action.first_view_ns)
+            and action.first_view_ns >= 0
+            and metrics.finite(action.operation_ns)
+            and action.first_view_ns < action.operation_ns
+            and integer(action.operation_count)
+            and action.operation_count >= 2,
+          "open first-view duration must be finite")
+      else
+        check(action.first_view_ns == nil or action.first_view_ns == vim.NIL,
+          "only open may publish first-view duration")
+      end
       check(action.elapsed_ns == action.operation_ns,
         "elapsed duration must contain operation time only")
       check(metrics.finite(action.oracle_ns) and action.oracle_ns >= 0,
@@ -508,9 +536,12 @@ function M.validate_worker(payload, expected)
       type(source_samples) == "table" and source_samples or {}) do
     check(type(sample) == "table", "source adapter sample must be an object")
     if type(sample) == "table" then
-      check(SOURCE_NAMES[sample.name] == true,
+      local name = sample.name
+      check(type(name) == "string" and SOURCE_NAMES[name] == true,
         "unexpected source adapter name")
-      source_seen[sample.name] = true
+      if type(name) == "string" then
+        source_seen[name] = true
+      end
       check(sample.status == "ok", "source adapter status must be ok")
       check(metrics.finite(sample.elapsed_ns) and sample.elapsed_ns >= 0,
         "source adapter duration must be finite")
@@ -545,16 +576,20 @@ function M.validate_worker(payload, expected)
   local memory = payload.memory
   check(type(memory) == "table"
       and type(memory.samples) == "table"
-      and #memory.samples >= 4,
+      and #memory.samples == #MEMORY_NAMES,
     "memory samples are required")
   local memory_names = {}
   for _, sample in ipairs(type(memory) == "table"
       and type(memory.samples) == "table" and memory.samples or {}) do
     check(type(sample) == "table", "memory sample must be an object")
     if type(sample) == "table" then
-      check(type(sample.name) == "string" and sample.name ~= "",
-        "memory sample name is required")
-      memory_names[sample.name] = true
+      local name = sample.name
+      check(type(name) == "string" and MEMORY_NAME_SET[name] == true,
+        "unexpected memory sample " .. tostring(name))
+      if type(name) == "string" and MEMORY_NAME_SET[name] then
+        check(not memory_names[name], "duplicate memory sample " .. name)
+        memory_names[name] = true
+      end
       check(metrics.finite(sample.heap_bytes) and sample.heap_bytes >= 0,
         "heap sample must be finite")
       if type(capabilities) == "table"
@@ -569,8 +604,9 @@ function M.validate_worker(payload, expected)
       end
     end
   end
-  check(memory_names.after_cleanup,
-    "retained memory sample after_cleanup is required")
+  for _, name in ipairs(MEMORY_NAMES) do
+    check(memory_names[name], "missing memory sample " .. name)
+  end
 
   local paging = payload.paging
   check(type(paging) == "table"
@@ -602,6 +638,14 @@ function M.validate_worker(payload, expected)
         and integer(resident.max_pages) and resident.max_pages >= 0
         and integer(resident.max_bytes) and resident.max_bytes >= 0,
       "paged resident cache observations are required")
+    check(integer(resident and resident.samples)
+        and resident.samples >= 2
+        and integer(resident.navigation_samples)
+        and resident.navigation_samples >= 1
+        and resident.scope == "live_after_first_view_and_actions"
+        and resident.first_sample == "open_first_view"
+        and type(resident.last_sample) == "string",
+      "paged resident evidence must cover live navigation")
   end
 
   local extmarks = payload.extmarks
@@ -888,7 +932,16 @@ local function failure(kind, spec, messages, launched)
   }
 end
 
-local function max_memory(payload)
+local function derive_worker(payload)
+  local source_ns = 0
+  for _, sample in ipairs(payload.adapters.source) do
+    local next_value = source_ns + sample.elapsed_ns
+    if not metrics.finite(next_value) then
+      return nil, { "source timing sum must be finite" }
+    end
+    source_ns = next_value
+  end
+
   local peak_rss = 0
   local retained_heap
   for _, sample in ipairs(payload.memory.samples) do
@@ -902,10 +955,31 @@ local function max_memory(payload)
       retained_heap = sample.heap_bytes
     end
   end
-  return peak_rss, assert(retained_heap)
+  if not metrics.finite(retained_heap) then
+    return nil, { "retained heap derivation must be finite" }
+  end
+  local first_view_ns
+  for _, action in ipairs(payload.trace) do
+    if action.name == "open" then
+      first_view_ns = action.first_view_ns
+      break
+    end
+  end
+  if not metrics.finite(first_view_ns) then
+    return nil, { "first-view derivation must be finite" }
+  end
+  return {
+    source_ns = source_ns,
+    peak_rss_bytes = peak_rss,
+    retained_heap_bytes = retained_heap,
+    first_view_ns = first_view_ns,
+  }
 end
 
 local function append_value(destination, name, value)
+  assert(type(name) == "string" and name ~= "",
+    "aggregate metric name must be a non-empty string")
+  assert(metrics.finite(value), "aggregate metric value must be finite")
   destination[name] = destination[name] or {}
   destination[name][#destination[name] + 1] = value
 end
@@ -918,9 +992,9 @@ local function summarize_map(values)
   return result
 end
 
-local function aggregate_size(size, samples)
+local function aggregate_size(size, samples, repetitions)
   local phases, action_values = {}, {}
-  local source_values, heartbeat_values = {}, {}
+  local source_values, first_view_values, heartbeat_values = {}, {}, {}
   local peak_rss_values, retained_heap_values = {}, {}
   for _, sample in ipairs(samples) do
     if sample.size == size and sample.status == "pass" then
@@ -931,19 +1005,18 @@ local function aggregate_size(size, samples)
       for _, action in ipairs(payload.trace) do
         append_value(action_values, action.name, action.operation_ns)
       end
-      local source_ns = 0
-      for _, adapter in ipairs(payload.adapters.source) do
-        source_ns = source_ns + adapter.elapsed_ns
-      end
-      source_values[#source_values + 1] = source_ns
+      source_values[#source_values + 1] = sample.derived.source_ns
+      first_view_values[#first_view_values + 1] =
+        sample.derived.first_view_ns
       heartbeat_values[#heartbeat_values + 1] =
         payload.heartbeat.max_gap_ns
-      local peak_rss, retained_heap = max_memory(payload)
-      peak_rss_values[#peak_rss_values + 1] = peak_rss
-      retained_heap_values[#retained_heap_values + 1] = retained_heap
+      peak_rss_values[#peak_rss_values + 1] =
+        sample.derived.peak_rss_bytes
+      retained_heap_values[#retained_heap_values + 1] =
+        sample.derived.retained_heap_bytes
     end
   end
-  if #source_values == 0 then
+  if #source_values ~= repetitions then
     return nil
   end
   local action_summaries = summarize_map(action_values)
@@ -954,6 +1027,7 @@ local function aggregate_size(size, samples)
     actions = action_summaries,
     operations = vim.deepcopy(action_summaries),
     source = metrics.summary(source_values),
+    first_view = metrics.summary(first_view_values),
     heartbeat = {
       max_gap_ns = metrics.summary(heartbeat_values),
     },
@@ -965,17 +1039,22 @@ local function aggregate_size(size, samples)
   }
 end
 
-local function fixture_identity(samples, sizes)
+local function fixture_identity(samples, sizes, repetitions)
   local by_size = {}
+  local counts = {}
   for _, sample in ipairs(samples) do
-    if sample.status == "pass" and not by_size[sample.size] then
-      by_size[sample.size] = sample.worker.manifest.digest
+    if sample.status == "pass" then
+      counts[sample.size] = (counts[sample.size] or 0) + 1
+      if not by_size[sample.size] then
+        by_size[sample.size] = sample.worker.manifest.digest
+      end
     end
   end
   local records = {}
   for _, size in ipairs(sizes) do
+    local digest = counts[size] == repetitions and by_size[size] or "missing"
     records[#records + 1] =
-      tostring(size) .. "\0" .. tostring(by_size[size] or "missing")
+      tostring(size) .. "\0" .. tostring(digest)
   end
   return {
     schema = FIXTURE_SCHEMA,
@@ -1000,9 +1079,10 @@ end
 function M.execute(options)
   options = options or {}
   assert(type(options) == "table", "coordinator options must be an object")
+  local sizes_overridden = options.sizes ~= nil
   local sizes = vim.deepcopy(options.sizes or AUTHORITATIVE_SIZES)
   validate_sizes(sizes)
-  local authoritative = is_authoritative(sizes)
+  local authoritative = not sizes_overridden and is_authoritative(sizes)
   local repetitions = options.repetitions == nil and 1 or options.repetitions
   assert(integer(repetitions) and repetitions >= 1 and repetitions <= 20,
     "repetitions must be an integer between 1 and 20")
@@ -1062,6 +1142,7 @@ function M.execute(options)
       "seed=" .. seed,
       "virt.enabled=false",
       "heartbeat.interval_ms=10",
+      "first_view=forced_redraw",
       "resident.max_pages=" .. PAGING_RESIDENT_MAX_PAGES,
       "resident.max_bytes=" .. PAGING_RESIDENT_MAX_BYTES,
     }, "\n")),
@@ -1071,6 +1152,7 @@ function M.execute(options)
   }
 
   local capability_reference
+  local fixture_reference_by_size = {}
   local sample_index = 0
   for _, size in ipairs(sizes) do
     for repetition = 1, repetitions do
@@ -1128,8 +1210,22 @@ function M.execute(options)
             isolation = launched.isolation,
           }
         else
-          local valid, validation_errors = M.validate_worker(payload, spec)
-          if not valid then
+          local validation_called, valid, validation_errors =
+            pcall(M.validate_worker, payload, spec)
+          if not validation_called then
+            aggregate.failures[#aggregate.failures + 1] =
+              failure("validation_exception", spec, {
+                "worker validation raised: " .. tostring(valid),
+              }, launched)
+            aggregate.samples[#aggregate.samples + 1] = {
+              size = size,
+              repetition = repetition,
+              run_index = repetition,
+              status = "fail",
+              failure_kind = "validation_exception",
+              isolation = launched.isolation,
+            }
+          elseif not valid then
             aggregate.failures[#aggregate.failures + 1] =
               failure("validation", spec, validation_errors, launched)
             aggregate.samples[#aggregate.samples + 1] = {
@@ -1155,52 +1251,123 @@ function M.execute(options)
               failure_kind = "process",
               isolation = launched.isolation,
             }
-          elseif capability_reference
-              and not vim.deep_equal(
-                capability_reference, payload.capabilities) then
-            aggregate.failures[#aggregate.failures + 1] =
-              failure("identity", spec, {
-                "worker capability identity differs from the first sample",
-              }, launched)
-            aggregate.samples[#aggregate.samples + 1] = {
-              size = size,
-              repetition = repetition,
-              run_index = repetition,
-              status = "fail",
-              failure_kind = "identity",
-              isolation = launched.isolation,
-            }
           else
-            capability_reference =
-              capability_reference or vim.deepcopy(payload.capabilities)
-            local gated, gate_errors = gate_worker(payload, spec)
-            if not gated then
+            local derived_called, derived, derived_errors =
+              pcall(derive_worker, payload)
+            if not derived_called then
               aggregate.failures[#aggregate.failures + 1] =
-                failure("gate", spec, gate_errors, launched)
+                failure("derived_metrics", spec, {
+                  "worker metric derivation raised: " .. tostring(derived),
+                }, launched)
               aggregate.samples[#aggregate.samples + 1] = {
                 size = size,
                 repetition = repetition,
                 run_index = repetition,
                 status = "fail",
-                failure_kind = "gate",
+                failure_kind = "derived_metrics",
                 isolation = launched.isolation,
               }
-            else
+            elseif not derived then
+              aggregate.failures[#aggregate.failures + 1] =
+                failure("derived_metrics", spec, derived_errors, launched)
               aggregate.samples[#aggregate.samples + 1] = {
                 size = size,
                 repetition = repetition,
                 run_index = repetition,
-                status = "pass",
-                process = {
-                  wall_ns = launched.wall_ns,
-                  exit_code = launched.code,
-                  signal = launched.signal,
-                  stdout_tail = tail(launched.stdout),
-                  stderr_tail = tail(launched.stderr),
-                },
+                status = "fail",
+                failure_kind = "derived_metrics",
                 isolation = launched.isolation,
-                worker = payload,
               }
+            else
+              local gate_called, gated, gate_errors =
+                pcall(gate_worker, payload, spec)
+              if not gate_called then
+                aggregate.failures[#aggregate.failures + 1] =
+                  failure("gate_exception", spec, {
+                    "worker gate raised: " .. tostring(gated),
+                  }, launched)
+                aggregate.samples[#aggregate.samples + 1] = {
+                  size = size,
+                  repetition = repetition,
+                  run_index = repetition,
+                  status = "fail",
+                  failure_kind = "gate_exception",
+                  isolation = launched.isolation,
+                }
+              elseif not gated then
+                aggregate.failures[#aggregate.failures + 1] =
+                  failure("gate", spec, gate_errors, launched)
+                aggregate.samples[#aggregate.samples + 1] = {
+                  size = size,
+                  repetition = repetition,
+                  run_index = repetition,
+                  status = "fail",
+                  failure_kind = "gate",
+                  isolation = launched.isolation,
+                }
+              elseif capability_reference
+                  and not vim.deep_equal(
+                    capability_reference, payload.capabilities) then
+                aggregate.failures[#aggregate.failures + 1] =
+                  failure("identity", spec, {
+                    "worker capability identity differs from the first sample",
+                  }, launched)
+                aggregate.samples[#aggregate.samples + 1] = {
+                  size = size,
+                  repetition = repetition,
+                  run_index = repetition,
+                  status = "fail",
+                  failure_kind = "identity",
+                  isolation = launched.isolation,
+                }
+              else
+                local fixture_identity = {
+                  schema = payload.manifest.schema,
+                  digest = payload.manifest.digest,
+                  rows = payload.manifest.rows,
+                  seed = payload.manifest.seed,
+                  first_line = payload.manifest.first_line,
+                  last_line = payload.manifest.last_line,
+                }
+                local fixture_reference = fixture_reference_by_size[size]
+                if fixture_reference
+                    and not vim.deep_equal(
+                      fixture_reference, fixture_identity) then
+                  aggregate.failures[#aggregate.failures + 1] =
+                    failure("fixture_identity", spec, {
+                      "fixture identity differs across repetitions",
+                    }, launched)
+                  aggregate.samples[#aggregate.samples + 1] = {
+                    size = size,
+                    repetition = repetition,
+                    run_index = repetition,
+                    status = "fail",
+                    failure_kind = "fixture_identity",
+                    isolation = launched.isolation,
+                  }
+                else
+                  capability_reference = capability_reference
+                    or vim.deepcopy(payload.capabilities)
+                  fixture_reference_by_size[size] =
+                    fixture_reference or fixture_identity
+                  aggregate.samples[#aggregate.samples + 1] = {
+                    size = size,
+                    repetition = repetition,
+                    run_index = repetition,
+                    status = "pass",
+                    process = {
+                      wall_ns = launched.wall_ns,
+                      exit_code = launched.code,
+                      signal = launched.signal,
+                      stdout_tail = tail(launched.stdout),
+                      stderr_tail = tail(launched.stderr),
+                    },
+                    isolation = launched.isolation,
+                    worker = payload,
+                    derived = derived,
+                  }
+                end
+              end
             end
           end
         end
@@ -1209,10 +1376,19 @@ function M.execute(options)
   end
 
   aggregate.capabilities = capability_reference or {}
-  aggregate.fixture = fixture_identity(aggregate.samples, sizes)
+  aggregate.fixture = fixture_identity(aggregate.samples, sizes, repetitions)
   for _, size in ipairs(sizes) do
-    local row = aggregate_size(size, aggregate.samples)
-    if row then
+    local aggregated, row = pcall(
+      aggregate_size, size, aggregate.samples, repetitions)
+    if not aggregated then
+      aggregate.failures[#aggregate.failures + 1] = {
+        kind = "aggregation",
+        size = size,
+        messages = {
+          "size aggregation raised: " .. tostring(row),
+        },
+      }
+    elseif row then
       aggregate.aggregates[#aggregate.aggregates + 1] = row
     end
   end
@@ -1224,12 +1400,57 @@ function M.execute(options)
         reasons = { "authoritative_sizes" },
       }
     else
-      local compatible, reasons = metrics.compatible(aggregate, baseline)
-      if compatible then
+      local checked, compatible, reasons =
+        pcall(metrics.compatible, aggregate, baseline)
+      if not checked then
         aggregate.comparison = {
-          status = "compatible",
-          rows = assert(metrics.compare(aggregate, baseline)),
+          status = "invalid",
+          reasons = {
+            "baseline compatibility check raised: " .. tostring(compatible),
+          },
         }
+      elseif compatible then
+        local compared, rows, compare_reasons =
+          pcall(metrics.compare, aggregate, baseline)
+        local finite_rows = compared and type(rows) == "table"
+        if finite_rows then
+          for _, row in ipairs(rows) do
+            if type(row) ~= "table"
+                or not metrics.finite(row.current)
+                or not metrics.finite(row.baseline)
+                or row.baseline <= 0
+                or not metrics.finite(row.ratio)
+                or not metrics.finite(row.percent) then
+              finite_rows = false
+              break
+            end
+          end
+        end
+        if not compared then
+          aggregate.comparison = {
+            status = "invalid",
+            reasons = {
+              "baseline comparison raised: " .. tostring(rows),
+            },
+          }
+        elseif not finite_rows then
+          aggregate.comparison = {
+            status = "invalid",
+            reasons = {
+              "baseline comparison produced invalid numeric data",
+            },
+          }
+        elseif not rows then
+          aggregate.comparison = {
+            status = "incompatible",
+            reasons = compare_reasons,
+          }
+        else
+          aggregate.comparison = {
+            status = "compatible",
+            rows = rows,
+          }
+        end
       else
         aggregate.comparison = {
           status = "incompatible",
@@ -1238,11 +1459,12 @@ function M.execute(options)
       end
     end
     if aggregate.comparison.status ~= "compatible" then
+      local prefix = aggregate.comparison.status == "invalid"
+          and "invalid baseline: " or "incompatible baseline: "
       aggregate.failures[#aggregate.failures + 1] = {
         kind = "baseline",
         messages = {
-          "incompatible baseline: "
-            .. table.concat(aggregate.comparison.reasons, ", "),
+          prefix .. table.concat(aggregate.comparison.reasons, ", "),
         },
       }
     end
@@ -1314,7 +1536,7 @@ function M.format_table(aggregate)
         size,
         display_ms(row.source.p95),
         display_ms(open and open.p95),
-        display_ms(open and open.p95),
+        display_ms(row.first_view.p95),
         display_ms(action_max),
         display_ms(row.heartbeat.max_gap_ns.max),
         display_mib(row.memory.peak_rss_bytes.p95)

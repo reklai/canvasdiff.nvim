@@ -346,6 +346,7 @@ local original_set_extmark = API.nvim_buf_set_extmark
 local projection_capture = {}
 local git_executable = vim.fn.exepath("git")
 local fixture_build_started = false
+local resident_observation
 
 local function track_timer(timer, owner)
   if timer then
@@ -506,7 +507,7 @@ local function stop_heartbeat_window()
   heartbeat_last_ns = nil
 end
 
-local function operation(callback)
+local function operation(callback, label)
   assert(current_measurement, "plugin operation executed outside an action")
   start_heartbeat_window()
   local started = now_ns()
@@ -516,6 +517,11 @@ local function operation(callback)
     current_measurement.operation_ns + elapsed
   current_measurement.operation_count =
     current_measurement.operation_count + 1
+  if label == "first_view" then
+    assert(current_measurement.first_view_ns == nil,
+      "first-view operation was measured more than once")
+    current_measurement.first_view_ns = elapsed
+  end
   -- Establish a real event-loop observation once without charging the wait to
   -- plugin operation latency. Later windows only observe naturally due work.
   if result.heartbeat.ticks == 0 then
@@ -729,6 +735,43 @@ local function move_to_primary_row(row)
   }
 end
 
+local function sample_paged_resident(label, navigation)
+  if not (state and state.paged and state.paged.list) then
+    return true
+  end
+  local current, resident_error = state.paged.list:resident_stats()
+  assert(current, resident_error)
+  if not resident_observation then
+    resident_observation = {
+      pages = 0,
+      bytes = 0,
+      max_pages = current.max_pages,
+      max_bytes = current.max_bytes,
+      samples = 0,
+      navigation_samples = 0,
+      scope = "live_after_first_view_and_actions",
+      first_sample = label,
+    }
+  end
+  assert(current.max_pages == resident_observation.max_pages
+      and current.max_bytes == resident_observation.max_bytes,
+    "paged resident limits changed during replay")
+  resident_observation.pages =
+    math.max(resident_observation.pages, current.pages)
+  resident_observation.bytes =
+    math.max(resident_observation.bytes, current.bytes)
+  resident_observation.samples = resident_observation.samples + 1
+  if navigation then
+    resident_observation.navigation_samples =
+      resident_observation.navigation_samples + 1
+  end
+  resident_observation.last_sample = label
+  if result.paging.mode == "paged" then
+    result.paging.cache.resident = resident_observation
+  end
+  return true
+end
+
 local function observe_paging()
   local logical = canvas.logical(state)
   local row_count = logical.row_count()
@@ -744,6 +787,7 @@ local function observe_paging()
       projection = state.paged.projection and state.paged.projection:stats() or {},
       scheduler = state.paged.scheduler and state.paged.scheduler:stats() or {},
     }
+    assert(sample_paged_resident("open_first_view", false))
   else
     result.paging = {
       mode = "eager",
@@ -812,6 +856,9 @@ handlers.open = function()
   state = assert(operation(function()
     return fm.open({ lens = assert(lens.get("all")) })
   end))
+  operation(function()
+    vim.cmd("redraw")
+  end, "first_view")
   observe_lens("all", "open")
   observe_initial_content()
   observe_paging()
@@ -1514,13 +1561,19 @@ local function execute_plan()
     local handler = handlers[action.name]
     local ok, observations = xpcall(function()
       assert(handler, "no worker handler for action " .. tostring(action.name))
-      return handler(action.arguments)
+      local observed = handler(action.arguments)
+      if action.name ~= "open" then
+        assert(sample_paged_resident(
+          "after_" .. action.name, action.class == "navigation"))
+      end
+      return observed
     end, debug.traceback)
     record.wall_ns = now_ns() - started
     record.operation_ns = current_measurement.operation_ns
     record.elapsed_ns = record.operation_ns
     record.oracle_ns = math.max(0, record.wall_ns - record.operation_ns)
     record.operation_count = current_measurement.operation_count
+    record.first_view_ns = current_measurement.first_view_ns
     current_measurement = nil
     record.status = ok and "ok" or "fail"
     if ok then

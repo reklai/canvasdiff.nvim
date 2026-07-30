@@ -14,6 +14,8 @@ local IDENTITY_PATHS = {
   "host_fingerprint",
   "capabilities.rss_source",
   "capabilities.hwm_source",
+  "capabilities.procfs",
+  "capabilities.paged_canvas",
 }
 
 function M.finite(value)

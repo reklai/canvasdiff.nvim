@@ -252,6 +252,17 @@ local function validate_worker(payload, expected)
         "action arguments mismatch")
       check(metrics.finite(action.operation_ns) and action.operation_ns >= 0,
         "operation duration must be finite")
+      if action.name == "open" then
+        check(metrics.finite(action.first_view_ns)
+            and action.first_view_ns >= 0
+            and metrics.finite(action.operation_ns)
+            and action.first_view_ns < action.operation_ns
+            and action.operation_count >= 2,
+          "open first-view duration must be finite")
+      else
+        check(action.first_view_ns == nil or action.first_view_ns == vim.NIL,
+          "only open may publish first-view duration")
+      end
       check(action.elapsed_ns == action.operation_ns,
         "elapsed duration must contain operation time only")
       check(metrics.finite(action.oracle_ns) and action.oracle_ns >= 0,
@@ -382,6 +393,22 @@ local function validate_worker(payload, expected)
         and type(paging.projection) == "table"
         and finite_integer(paging.projection.logical_rows),
       "paged cache/projection values must be finite")
+    local resident = type(paging.cache) == "table"
+        and paging.cache.resident or nil
+    check(type(resident) == "table"
+        and finite_integer(resident.pages) and resident.pages >= 0
+        and finite_integer(resident.bytes) and resident.bytes >= 0
+        and finite_integer(resident.max_pages) and resident.max_pages >= 0
+        and finite_integer(resident.max_bytes) and resident.max_bytes >= 0
+        and finite_integer(resident.samples) and resident.samples >= 2
+        and finite_integer(resident.navigation_samples)
+        and resident.navigation_samples >= 1
+        and resident.scope == "live_after_first_view_and_actions"
+        and resident.first_sample == "open_first_view"
+        and type(resident.last_sample) == "string"
+        and resident.pages <= resident.max_pages
+        and resident.bytes <= resident.max_bytes,
+      "paged resident evidence must be finite and bounded")
     for _, values in ipairs({
       paging.cache or {}, paging.projection or {}, paging.scheduler or {},
     }) do
@@ -507,6 +534,30 @@ T["live_scale_worker_replays one real row and rejects corrupted evidence"] = fun
       assert(vim.tbl_contains(mutation_errors, case.message),
         case.name .. ": " .. vim.inspect(mutation_errors))
     end
+  end, debug.traceback)
+  cleanup_launch(run)
+  assert(ok, failure)
+end
+
+T["live_scale_worker_publishes bounded paged resident evidence at 100k"] = function()
+  local run = launch_worker({ rows = 100000, timeout = 900000 })
+  local ok, failure = xpcall(function()
+    assert(run.process.code == 0 and (run.process.signal or 0) == 0, (
+      "worker failed: code=%s signal=%s\nstdout:\n%s\nstderr:\n%s"
+    ):format(run.process.code, run.process.signal,
+      run.process.stdout or "", run.process.stderr or ""))
+    local payload = read_json(run.output)
+    local valid, errors = validate_worker(payload, {
+      rows = 100000, seed = 1729, run_index = 1,
+    })
+    assert(valid, table.concat(errors, "\n"))
+    H.eq(payload.paging.mode, "paged")
+    local resident = payload.paging.cache.resident
+    assert(resident.samples >= 2)
+    assert(resident.navigation_samples >= 1)
+    H.eq(resident.first_sample, "open_first_view")
+    assert(resident.pages <= resident.max_pages)
+    assert(resident.bytes <= resident.max_bytes)
   end, debug.traceback)
   cleanup_launch(run)
   assert(ok, failure)

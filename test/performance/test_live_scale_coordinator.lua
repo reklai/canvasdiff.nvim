@@ -84,18 +84,23 @@ end
 local function valid_payload(rows, run_index)
   local trace = {}
   for index, planned in ipairs(actions.plan(rows, 1729)) do
+    local operation_ns = planned.name == "open"
+        and rows + 2000 or rows + index
     trace[index] = {
       index = index,
       name = planned.name,
       arguments = vim.deepcopy(planned.arguments),
-      operation_ns = rows + index,
-      elapsed_ns = rows + index,
+      operation_ns = operation_ns,
+      elapsed_ns = operation_ns,
       oracle_ns = index,
-      wall_ns = rows + index * 2,
-      operation_count = 1,
+      wall_ns = operation_ns + index,
+      operation_count = planned.name == "open" and 2 or 1,
       status = "ok",
       observations = action_observation(planned.name),
     }
+    if planned.name == "open" then
+      trace[index].first_view_ns = rows + 777
+    end
   end
 
   return {
@@ -167,7 +172,7 @@ local function valid_payload(rows, run_index)
     },
     memory = {
       samples = {
-        memory_sample("before_fixture", 100, 1000, 1000),
+        memory_sample("worker_start", 100, 1000, 1000),
         memory_sample("after_fixture", 200, 2000, 2000),
         memory_sample("after_app_load", 300, 3000, 3000),
         memory_sample("after_replay", 400, 4000, 4000),
@@ -186,6 +191,11 @@ local function valid_payload(rows, run_index)
           bytes = 200,
           max_pages = 8,
           max_bytes = 532512,
+          samples = 3,
+          navigation_samples = 2,
+          scope = "live_after_first_view_and_actions",
+          first_sample = "open_first_view",
+          last_sample = "after_random_jump",
         },
       },
       projection = {
@@ -273,7 +283,9 @@ T["live_scale_coordinator_aggregates development sizes and publishes atomically"
   H.eq(aggregate.aggregates[1].phases.fixture_build,
     { count = 1, p50 = 2, p95 = 2, max = 2 })
   H.eq(aggregate.aggregates[2].actions.open,
-    { count = 1, p50 = 1001, p95 = 1001, max = 1001 })
+    { count = 1, p50 = 3000, p95 = 3000, max = 3000 })
+  H.eq(aggregate.aggregates[2].first_view,
+    { count = 1, p50 = 1777, p95 = 1777, max = 1777 })
   H.eq(aggregate.aggregates[1].heartbeat.max_gap_ns.max, 50000000)
   H.eq(aggregate.aggregates[1].memory.peak_rss_bytes.p95, 4000)
   H.eq(aggregate.aggregates[1].memory.retained_heap_bytes.p95, 250)
@@ -386,7 +398,6 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
 
   local baseline = coordinator.execute({
     repetitions = 1,
-    sizes = { 1, 1000, 10000, 100000, 1000000 },
     environment = fake_environment(),
     launch = function(spec)
       return { code = 0, signal = 0,
@@ -396,7 +407,6 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
 
   local compatible = coordinator.execute({
     repetitions = 1,
-    sizes = { 1, 1000, 10000, 100000, 1000000 },
     environment = fake_environment(),
     baseline = baseline,
     launch = function(spec)
@@ -413,7 +423,6 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
 
   local current = coordinator.execute({
     repetitions = 1,
-    sizes = { 1, 1000, 10000, 100000, 1000000 },
     environment = fake_environment(),
     baseline = baseline,
     launch = function(spec)
@@ -428,6 +437,144 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
   H.eq(current.failures[#current.failures].kind, "baseline")
   H.eq(current.failures[#current.failures].messages,
     { "incompatible baseline: host_fingerprint" })
+end
+
+T["live_scale_coordinator_treats every explicit size override as development"] = function()
+  local canonical = { 1, 1000, 10000, 100000, 1000000 }
+  local function launch(spec)
+    return {
+      code = 0,
+      signal = 0,
+      payload = valid_payload(spec.rows, spec.run_index),
+    }
+  end
+  local explicit = coordinator.execute({
+    repetitions = 1,
+    sizes = canonical,
+    environment = fake_environment(),
+    launch = launch,
+  })
+  local defaulted = coordinator.execute({
+    repetitions = 1,
+    environment = fake_environment(),
+    launch = launch,
+  })
+
+  H.eq(explicit.authoritative, false)
+  H.eq(defaulted.authoritative, true)
+end
+
+T["live_scale_coordinator_validation is total and overflow continues"] = function()
+  for _, mutate in ipairs({
+    function(payload) payload.phases[1].name = vim.NIL end,
+    function(payload) payload.adapters.source[1].name = vim.NIL end,
+    function(payload) payload.memory.samples[1].name = vim.NIL end,
+  }) do
+    local payload = valid_payload(1, 1)
+    mutate(payload)
+    local called, valid, errors = pcall(coordinator.validate_worker, payload, {
+      rows = 1, seed = 1729, run_index = 1,
+    })
+    assert(called, "validation must be total over decoded JSON")
+    H.eq(valid, nil)
+    assert(type(errors) == "table" and #errors > 0)
+  end
+
+  local malformed = coordinator.execute({
+    repetitions = 1,
+    sizes = { 1, 1000 },
+    environment = fake_environment(),
+    launch = function(spec)
+      local payload = valid_payload(spec.rows, spec.run_index)
+      if spec.rows == 1 then
+        payload.phases[1].name = vim.NIL
+        payload = vim.json.encode(payload)
+      end
+      return { code = 0, signal = 0, payload = payload }
+    end,
+  })
+  H.eq(malformed.failures[1].kind, "validation")
+  H.eq(malformed.samples[2].status, "pass")
+  H.eq(malformed.aggregates[1].size, 1000)
+
+  local aggregate = coordinator.execute({
+    repetitions = 1,
+    sizes = { 1, 1000 },
+    environment = fake_environment(),
+    launch = function(spec)
+      local payload = valid_payload(spec.rows, spec.run_index)
+      if spec.rows == 1 then
+        for _, sample in ipairs(payload.adapters.source) do
+          sample.elapsed_ns = 1e308
+        end
+      end
+      return { code = 0, signal = 0, payload = payload }
+    end,
+  })
+
+  H.eq(aggregate.status, "fail")
+  H.eq(aggregate.failures[1].kind, "derived_metrics")
+  H.eq(aggregate.failures[1].messages,
+    { "source timing sum must be finite" })
+  H.eq(aggregate.samples[2].status, "pass")
+  H.eq(#aggregate.aggregates, 1)
+  H.eq(aggregate.aggregates[1].size, 1000)
+end
+
+T["live_scale_coordinator_requires unique memory checkpoints and fixture identity"] = function()
+  local payload = valid_payload(1, 1)
+  payload.memory.samples[2].name = "worker_start"
+  local valid, errors = coordinator.validate_worker(payload, {
+    rows = 1, seed = 1729, run_index = 1,
+  })
+  H.eq(valid, nil)
+  assert(vim.tbl_contains(errors, "duplicate memory sample worker_start"))
+  assert(vim.tbl_contains(errors, "missing memory sample after_fixture"))
+
+  payload = valid_payload(1, 1)
+  payload.manifest.first_line = "forged"
+  valid, errors = coordinator.validate_worker(payload, {
+    rows = 1, seed = 1729, run_index = 1,
+  })
+  H.eq(valid, nil)
+  assert(vim.tbl_contains(errors, "fixture first line mismatch"))
+
+  local aggregate = coordinator.execute({
+    repetitions = 2,
+    sizes = { 1 },
+    environment = fake_environment(),
+    launch = function(spec)
+      local worker = valid_payload(spec.rows, spec.run_index)
+      if spec.repetition == 2 then
+        worker.manifest.digest = string.rep("b", 64)
+      end
+      return { code = 0, signal = 0, payload = worker }
+    end,
+  })
+  H.eq(aggregate.status, "fail")
+  H.eq(aggregate.failures[1].kind, "fixture_identity")
+  H.eq(#aggregate.aggregates, 0)
+end
+
+T["live_scale_coordinator_gate failure does not establish capabilities"] = function()
+  local aggregate = coordinator.execute({
+    repetitions = 1,
+    sizes = { 1, 1000 },
+    environment = fake_environment(),
+    launch = function(spec)
+      local payload = valid_payload(spec.rows, spec.run_index)
+      if spec.rows == 1 then
+        payload.heartbeat.max_gap_ns = 100000001
+        payload.capabilities.rss_source = "different"
+      end
+      return { code = 0, signal = 0, payload = payload }
+    end,
+  })
+
+  H.eq(vim.tbl_map(function(item) return item.kind end, aggregate.failures),
+    { "gate" })
+  H.eq(aggregate.samples[2].status, "pass")
+  H.eq(aggregate.capabilities.rss_source, "libuv.resident_set_memory")
 end
 
 T["live_scale_coordinator_refuses checked in development output"] = function()

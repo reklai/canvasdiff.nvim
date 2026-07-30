@@ -19,6 +19,8 @@ local function aggregate()
     capabilities = {
       rss_source = "uv.resident_set_memory",
       hwm_source = "procfs.VmHWM",
+      procfs = true,
+      paged_canvas = true,
     },
     provenance = {
       source_revision = "0123456789abcdef",
@@ -74,6 +76,8 @@ T["live_scale_metrics_compatible checks every binding identity path in order"] =
     "host_fingerprint",
     "capabilities.rss_source",
     "capabilities.hwm_source",
+    "capabilities.procfs",
+    "capabilities.paged_canvas",
   }
 
   for _, path in ipairs(paths) do
@@ -98,9 +102,15 @@ T["live_scale_metrics_compatible checks every binding identity path in order"] =
   baseline.schema = "different"
   baseline.seed = 1
   baseline.capabilities.hwm_source = "different"
+  baseline.capabilities.procfs = false
   local compatible, reasons = metrics.compatible(current, baseline)
   assert(not compatible)
-  H.eq(reasons, { "schema", "seed", "capabilities.hwm_source" })
+  H.eq(reasons, {
+    "schema",
+    "seed",
+    "capabilities.hwm_source",
+    "capabilities.procfs",
+  })
 end
 
 T["live_scale_metrics_compatible records provenance without treating it as identity"] = function()
