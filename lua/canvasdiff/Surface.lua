@@ -286,6 +286,41 @@ function Surface:capture_view(win)
   return session.capture(self.state, win)
 end
 
+--- Retire this source lifetime for a branch change and return only the
+--- ownership and semantic view data a fresh Surface may inherit.
+---
+--- Disposal happens inside this operation so callers cannot accidentally
+--- recollect repository state while the old controllers are still live.
+function Surface:retire_for_ref_change(preferred_win)
+  if not self:is_alive() then
+    return nil
+  end
+  local graph = self:canvas_snapshot()
+  local capture_order = {}
+  if preferred_win then
+    capture_order[#capture_order + 1] = preferred_win
+  end
+  for _, win in ipairs(graph.canvas) do
+    if win ~= preferred_win then
+      capture_order[#capture_order + 1] = win
+    end
+  end
+  for _, win in ipairs(capture_order) do
+    local _, observed = self:capture_view(win)
+    if observed then
+      break
+    end
+  end
+  local replacement = {
+    canvas_buf = self.canvas_buf,
+    ownership = self:handoff(),
+    displaced = graph.canvas,
+    session = vim.deepcopy(self.state and self.state.session_snapshot or nil),
+  }
+  self:dispose("branch_changed")
+  return replacement
+end
+
 --- Run only work captured from this exact live generation.
 function Surface:guard(generation, callback)
   if generation ~= self.generation or not self:is_alive() then

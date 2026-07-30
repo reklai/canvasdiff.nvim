@@ -61,6 +61,7 @@ function App.new(opts)
     surfaces = {},
     opened = {},
     compare_request = 0,
+    ref_request = 0,
     global_maps = {},
     global_map_epoch = 0,
     global_map_syncing = false,
@@ -1070,7 +1071,8 @@ function App:open(opts)
   -- Precedence, most to least specific: an explicit lens from the caller; the older
   -- `base` string a command passed; the lens the session saved; the base an OLDER
   -- session saved (payloads predating lenses); the configured default.
-  local sess = config.options.session.enabled and session.load(root) or nil
+  local sess = opts._session
+    or (config.options.session.enabled and session.load(root) or nil)
   local l = opts.lens
     or (opts.base and lens.from_base(opts.base))
     or (sess and lens.valid(sess.lens) and sess.lens)
@@ -1150,14 +1152,20 @@ end
   end
 
   local previous = surface_for_window(self, win)
-  local ownership = previous and previous:handoff() or nil
+  local replacement = opts._replacement
+  local ownership = replacement and replacement.ownership
+    or (previous and previous:handoff() or nil)
   -- Which hosts were actually DISPLAYING the outgoing review. A replacement
   -- has a canvas buffer of its own now, so inheriting a window is no longer
   -- enough to keep showing the review in it -- the ones that were on the old
   -- canvas have to be moved onto the new one below, or a remote tab would sit
   -- on a retired buffer.
   local displaced = {}
-  if previous then
+  if replacement then
+    for _, host in ipairs(replacement.displaced or {}) do
+      displaced[#displaced + 1] = host
+    end
+  elseif previous then
     for _, host in ipairs(previous:canvas_windows()) do
       displaced[#displaced + 1] = host
     end
@@ -2555,6 +2563,262 @@ local function format_branch(item)
   return source.format_ref(item)
 end
 
+local function window_cwd(win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return nil
+  end
+  local tab = vim.api.nvim_win_get_tabpage(win)
+  local ok, cwd = pcall(vim.fn.getcwd,
+    vim.api.nvim_win_get_number(win),
+    vim.api.nvim_tabpage_get_number(tab))
+  return ok and vim.fs.normalize(cwd) or nil
+end
+
+local function ref_origin_alive(app, request)
+  if app.ref_request ~= request.token
+      or not vim.api.nvim_win_is_valid(request.win)
+      or vim.api.nvim_win_get_buf(request.win) ~= request.buf
+      or window_cwd(request.win) ~= request.cwd then
+    return false
+  end
+  local owner = surface_for_window(app, request.win)
+  if not request.surface then
+    return owner == nil
+  end
+  if owner ~= request.surface
+      or request.surface.state.root ~= request.root
+      or not request.surface:guard(request.generation)
+      or request.surface:is_showing() ~= request.visible then
+    return false
+  end
+  if request.origin == "sidebar" then
+    local side = request.surface.controllers.sidebar
+    return side ~= nil
+      and sidebar.is_sidebar_win(side, request.win)
+      and sidebar.canvas_win(side, request.win) == request.host_win
+      and canvas_showing(request.surface.state, request.host_win)
+  end
+  if request.origin == "canvas" then
+    return request.host_win == request.win
+      and canvas_showing(request.surface.state, request.win)
+  end
+  if request.visible then
+    return request.host_win ~= nil
+      and canvas_showing(request.surface.state, request.host_win)
+  end
+  return true
+end
+
+local function begin_ref_request(app, kind)
+  -- Mutation requests and comparisons are distinct monotonic domains, but a
+  -- new mutation invalidates both: no older picker may cross the Git boundary
+  -- after the user has expressed a newer ref intent.
+  app.ref_request = app.ref_request + 1
+  app.compare_request = app.compare_request + 1
+  local request = {
+    token = app.ref_request,
+    kind = kind,
+    win = vim.api.nvim_get_current_win(),
+  }
+  request.buf = vim.api.nvim_win_get_buf(request.win)
+  request.cwd = window_cwd(request.win)
+  request.surface = surface_for_window(app, request.win)
+  request.generation = request.surface and request.surface.generation or nil
+  request.visible = request.surface and request.surface:is_showing() or false
+  if request.surface then
+    local side = request.surface.controllers.sidebar
+    if side and sidebar.is_sidebar_win(side, request.win) then
+      request.origin = "sidebar"
+      request.host_win = sidebar.canvas_win(side, request.win)
+    elseif canvas_showing(request.surface.state, request.win) then
+      request.origin = "canvas"
+      request.host_win = request.win
+    else
+      request.origin = "excursion"
+      request.host_win = request.surface:canvas_windows()[1]
+    end
+    request.root = request.surface.state.root
+  else
+    request.root = request.cwd and source.root(request.cwd) or nil
+    if not request.root then
+      local dir = buf_dir(request.buf)
+      request.root = dir and source.root(dir) or nil
+    end
+  end
+  return request
+end
+
+local function branch_refresh_failure(message)
+  local err = "branch changed, but Canvas refresh failed: " .. tostring(message)
+  ui.warn(err)
+  return nil, err
+end
+
+local function leave_retired_canvas(host, replacement)
+  if not (host and vim.api.nvim_win_is_valid(host)
+      and replacement and replacement.canvas_buf
+      and vim.api.nvim_win_get_buf(host) == replacement.canvas_buf) then
+    return
+  end
+  local landing = replacement.ownership
+    and replacement.ownership.landings
+    and replacement.ownership.landings[host] or nil
+  if landing and vim.api.nvim_buf_is_valid(landing)
+      and vim.api.nvim_buf_is_loaded(landing) then
+    pcall(vim.api.nvim_win_set_buf, host, landing)
+    return
+  end
+  pcall(vim.api.nvim_win_call, host, function() vim.cmd("enew") end)
+end
+
+local function rebuild_after_ref_change(app, request)
+  if not request.surface then
+    return true
+  end
+  if not request.surface:guard(request.generation) then
+    return branch_refresh_failure("originating Canvas is no longer live")
+  end
+
+  -- The ownership operation invalidates the old generation and disposes every
+  -- controller/store before App:open can recollect against the new HEAD.
+  local replacement = request.surface:retire_for_ref_change(request.host_win)
+  if not replacement then
+    return branch_refresh_failure("could not retire the originating Canvas")
+  end
+  if not request.visible then
+    return true
+  end
+  local host = request.host_win
+  if not (host and vim.api.nvim_win_is_valid(host)) then
+    return branch_refresh_failure("originating Canvas window is no longer valid")
+  end
+
+  local opened, open_err
+  local called, call_err = pcall(vim.api.nvim_win_call, host, function()
+    opened, open_err = app:open({
+      _root = request.root,
+      _replacement = replacement,
+      _session = replacement.session,
+      lens = lens.get("all"),
+    })
+  end)
+  if not called then
+    leave_retired_canvas(host, replacement)
+    return branch_refresh_failure(call_err)
+  end
+  if not opened then
+    leave_retired_canvas(host, replacement)
+    return branch_refresh_failure(open_err or "could not reopen Canvas")
+  end
+  return true
+end
+
+local function choose_ref(app, kind)
+  local request = begin_ref_request(app, kind)
+  if not ref_origin_alive(app, request) then
+    return
+  end
+  if not request.root then
+    local err = "not inside a git repository"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local branches, inspect_err = source.branches(request.root)
+  if not ref_origin_alive(app, request) then
+    return
+  end
+  if not branches then
+    ui.warn(inspect_err)
+    return nil, inspect_err
+  end
+  local choices = kind == "checkout"
+    and source.local_branches(branches)
+    or source.remote_tracking_branches(branches)
+  if #choices == 0 then
+    local err = kind == "checkout"
+      and "no local branches found"
+      or "no remote-tracking branches found"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local result, result_err
+  vim.ui.select(choices, {
+    prompt = kind == "checkout"
+      and "CanvasDiff switch local branch:"
+      or "CanvasDiff create tracking branch:",
+    kind = kind == "checkout"
+      and "canvasdiff_branch_checkout"
+      or "canvasdiff_branch_track",
+    format_item = format_branch,
+  }, function(selected)
+    if not selected or not ref_origin_alive(app, request) then
+      return
+    end
+    local offered = false
+    for _, item in ipairs(choices) do
+      if item == selected then
+        offered = true
+        break
+      end
+    end
+    if not offered then
+      return
+    end
+    if kind == "checkout" and selected.current then
+      result = true
+      return
+    end
+
+    local local_name
+    if kind == "track" then
+      local_name, result_err = source.tracking_branch_name(selected)
+      if not local_name then
+        ui.warn(result_err)
+        return
+      end
+    end
+    local modified = source.modified_buffer_in_root(request.root)
+    if not ref_origin_alive(app, request) then
+      return
+    end
+    if modified then
+      result_err = "cannot switch branches: modified buffer " .. modified
+      ui.warn(result_err)
+      return
+    end
+    -- Last ownership check before the irreversible Git boundary.
+    if not ref_origin_alive(app, request) then
+      return
+    end
+
+    local changed
+    if kind == "checkout" then
+      changed, result_err = source.switch_branch(request.root, selected.ref)
+    else
+      changed, result_err = source.track_branch(
+        request.root, local_name, selected.ref)
+    end
+    if not changed then
+      ui.warn(result_err)
+      return
+    end
+    result, result_err = rebuild_after_ref_change(app, request)
+  end)
+  return result, result_err
+end
+
+--- Select and switch to one exact local branch.
+function App:checkout()
+  return choose_ref(self, "checkout")
+end
+
+--- Create a local branch that tracks one exact remote-tracking ref.
+function App:track()
+  return choose_ref(self, "track")
+end
+
 local function compare_origin_alive(app, request, unpublished_buf)
   if app.compare_request ~= request.token
       or not vim.api.nvim_win_is_valid(request.win) then
@@ -2588,6 +2852,7 @@ end
 function App:compare()
   -- Invalidate before any repository or editor call: injected adapters and UI
   -- callbacks may reenter, and "newer" begins when this request is invoked.
+  self.ref_request = self.ref_request + 1
   self.compare_request = self.compare_request + 1
   local token = self.compare_request
   local win = vim.api.nvim_get_current_win()

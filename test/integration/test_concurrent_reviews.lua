@@ -307,4 +307,49 @@ T["concurrent_ a command acts on the review whose window you are in"] = function
   end)
 end
 
+T["concurrent_ delayed checkout stays bound to its originating repository"] =
+function()
+  with_two_reviews(function(ctx)
+    for _, review in ipairs({ ctx.a, ctx.b }) do
+      local made = vim.system(
+        { "git", "branch", "topic" }, { cwd = review.root, text = true }):wait()
+      assert(made.code == 0, made.stderr)
+    end
+
+    local real_select = vim.ui.select
+    local call
+    vim.ui.select = function(items, opts, callback)
+      call = { items = items, opts = opts, callback = callback }
+    end
+    vim.api.nvim_set_current_win(ctx.a.win)
+    local invoked, invoke_err = pcall(ctx.fm.checkout)
+    if not invoked then
+      vim.ui.select = real_select
+      error(invoke_err)
+    end
+    assert(call, "checkout opened its picker")
+
+    vim.api.nvim_set_current_win(ctx.b.win)
+    local topic
+    for _, item in ipairs(call.items) do
+      if item.name == "topic" then topic = item end
+    end
+    assert(topic, "repository A's exact topic ref is selectable")
+    call.callback(topic)
+    vim.ui.select = real_select
+
+    local function branch(root)
+      local result = vim.system(
+        { "git", "branch", "--show-current" }, { cwd = root, text = true }):wait()
+      assert(result.code == 0, result.stderr)
+      return vim.trim(result.stdout)
+    end
+    H.eq(branch(ctx.a.root), "topic",
+      "the delayed choice mutates only its captured repository")
+    H.eq(branch(ctx.b.root), "main",
+      "current focus cannot redirect the choice into another review")
+    assert(ctx.b.surface:is_alive(), "the peer review remains live")
+  end)
+end
+
 return T

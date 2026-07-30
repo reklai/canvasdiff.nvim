@@ -61,6 +61,53 @@ local function remove_fixture(root)
 end
 
 return {
+  ["e2e: branch checkout rebuilds the visible review at its semantic hunk"] =
+  function()
+    local root = H.git_fixture({
+      committed = { ["src/a.txt"] = "base\nshared\n" },
+      worktree = { ["src/a.txt"] = "worktree\nshared\n" },
+    })
+    local made = vim.system(
+      { "git", "branch", "topic" }, { cwd = root, text = true }):wait()
+    assert(made.code == 0, made.stderr)
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local old = assert(fm.open())
+    local old_surface = old.surface
+    local target
+    for row, line in ipairs(vim.api.nvim_buf_get_lines(old.buf, 0, -1, false)) do
+      if line == "+worktree" then target = row end
+    end
+    assert(target, "fixture exposes the worktree hunk")
+    vim.api.nvim_win_set_cursor(0, { target, 0 })
+
+    local real_select = vim.ui.select
+    vim.ui.select = function(items, opts, callback)
+      local topic
+      for _, item in ipairs(items) do
+        if item.name == "topic" then topic = item end
+      end
+      callback(assert(topic, "topic is selectable"))
+    end
+    local called, changed, checkout_err = pcall(fm.checkout)
+    vim.ui.select = real_select
+    assert(called, changed)
+    assert(changed, checkout_err)
+
+    local branch = vim.system(
+      { "git", "branch", "--show-current" }, { cwd = root, text = true }):wait()
+    assert(branch.code == 0, branch.stderr)
+    H.eq(vim.trim(branch.stdout), "topic")
+    assert(not old_surface:is_alive(), "the source Surface was retired")
+    assert(old.buf ~= vim.api.nvim_get_current_buf(), "a fresh Canvas is visible")
+    H.eq(vim.api.nvim_get_current_line(), "+worktree",
+      "the semantic hunk was restored after checkout")
+
+    fm.close()
+    remove_fixture(root)
+  end,
+
   ["e2e: open renders alphabetical, jump+edit+back round-trip"] = function()
     local root = H.git_fixture({
       committed = { ["src/z.lua"] = "return 1\n", ["src/a.lua"] = "return 2\n", ["top.txt"] = "t\n" },

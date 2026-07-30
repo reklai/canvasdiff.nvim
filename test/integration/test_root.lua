@@ -764,6 +764,12 @@ local function picker_fixture()
   local root = H.git_fixture({ committed = { ["a.txt"] = "base\n" } })
   git(root, { "branch", "master" })
   git(root, { "branch", "zeta" })
+  git(root, { "config", "remote.origin.url", "." })
+  git(root, { "config", "remote.origin.fetch",
+    "+refs/heads/*:refs/remotes/origin/*" })
+  git(root, { "config", "remote.upstream.url", "." })
+  git(root, { "config", "remote.upstream.fetch",
+    "+refs/heads/*:refs/remotes/upstream/*" })
   git(root, { "update-ref", "refs/remotes/origin/topic", "HEAD" })
   git(root, { "symbolic-ref", "refs/remotes/origin/HEAD",
     "refs/remotes/origin/topic" })
@@ -789,6 +795,334 @@ local function item_named(items, name)
     end
   end
   error("missing picker item " .. name .. " in " .. vim.inspect(names(items)))
+end
+
+local function head_branch(root)
+  return git(root, { "branch", "--show-current" })
+end
+
+local function picker_call(items, opts, callback)
+  return { items = items, opts = opts, callback = callback }
+end
+
+T["root_ checkout picker is local-only, cancellable, and switches exact refs"] =
+function()
+  local root = picker_fixture()
+  in_cwd(root, function(fm, msgs)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = picker_call(items, opts, callback)
+      callback(nil)
+    end
+    local ok, err = xpcall(function()
+      H.eq(fm.checkout(), nil, "picker cancellation has no result")
+      H.eq(#calls, 1)
+      H.eq(calls[1].opts.prompt, "CanvasDiff switch local branch:")
+      H.eq(names(calls[1].items), { "main", "master", "zeta" })
+      for _, item in ipairs(calls[1].items) do
+        H.eq(item.kind, "local", "checkout never offers a remote ref")
+      end
+      H.eq(calls[1].opts.format_item(item_named(calls[1].items, "zeta")),
+        "zeta [checked out]")
+      H.eq(head_branch(root), "zeta", "cancelling cannot mutate HEAD")
+      H.eq(#msgs, 0, "cancellation is silent")
+
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, "zeta"))
+      end
+      H.eq(fm.checkout(), true, "selecting current is a successful no-op")
+      H.eq(head_branch(root), "zeta")
+
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, "main"))
+      end
+      H.eq(fm.checkout(), true)
+      H.eq(head_branch(root), "main", "the exact selected local ref becomes HEAD")
+      assert(not require("canvasdiff.canvas").is_canvas_buf(
+        vim.api.nvim_get_current_buf()),
+        "checkout without an active Canvas leaves the editor closed")
+    end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ track picker excludes defaults and locals and reports collisions"] =
+function()
+  local root = picker_fixture()
+  git(root, { "update-ref", "refs/remotes/origin/feature/api", "HEAD" })
+  in_cwd(root, function(fm, msgs)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = picker_call(items, opts, callback)
+      callback(nil)
+    end
+    local ok, err = xpcall(function()
+      H.eq(fm.track(), nil)
+      H.eq(calls[1].opts.prompt, "CanvasDiff create tracking branch:")
+      H.eq(names(calls[1].items), {
+        "origin/feature/api", "origin/topic", "upstream/topic",
+      })
+      for _, item in ipairs(calls[1].items) do
+        H.eq(item.kind, "remote")
+        assert(not item.remote_default, "symbolic remote defaults are excluded")
+        H.eq(calls[1].opts.format_item(item),
+          item.name .. " [remote-tracking ref]")
+      end
+      H.eq(head_branch(root), "zeta")
+      H.eq(#msgs, 0, "tracking cancellation is silent")
+
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, "origin/feature/api"))
+      end
+      local tracked, track_err = fm.track()
+      assert(tracked, track_err)
+      H.eq(head_branch(root), "feature/api",
+        "the remote path derives the local tracking branch name")
+      H.eq(git(root, { "rev-parse", "--symbolic-full-name", "@{upstream}" }),
+        "refs/remotes/origin/feature/api")
+
+      git(root, { "switch", "zeta" })
+      local changed, collision = fm.track()
+      H.eq(changed, nil)
+      assert(collision
+        and collision:find("already exists; use :CanvasDiff checkout", 1, true),
+        tostring(collision))
+      H.eq(head_branch(root), "zeta", "a derived-name collision cannot move HEAD")
+      assert(msgs[#msgs].msg:find(":CanvasDiff checkout", 1, true),
+        vim.inspect(msgs))
+    end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+  end)
+  vim.fn.delete(root, "rf")
+
+  local empty = H.git_fixture({ committed = { ["empty.txt"] = "one\n" } })
+  in_cwd(empty, function(fm, msgs)
+    local before = git(empty, { "rev-parse", "HEAD" })
+    local changed, err = fm.track()
+    H.eq(changed, nil)
+    assert(err and err:find("remote", 1, true), tostring(err))
+    H.eq(git(empty, { "rev-parse", "HEAD" }), before,
+      "an empty remote-ref set cannot mutate Git")
+    assert(#msgs > 0)
+  end)
+  vim.fn.delete(empty, "rf")
+end
+
+T["root_ branch mutation refuses modified repository buffers before Git"] =
+function()
+  for _, operation in ipairs({
+    { name = "checkout", choice = "main" },
+    { name = "track", choice = "origin/topic" },
+  }) do
+    local root = picker_fixture()
+    in_cwd(root, function(fm, msgs)
+      local path = vim.fs.joinpath(root, "a.txt")
+      local buf = vim.fn.bufadd(path)
+      vim.fn.bufload(buf)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved" })
+      local real_select = vim.ui.select
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, operation.choice))
+      end
+      local changed, err = fm[operation.name]()
+      vim.ui.select = real_select
+      H.eq(changed, nil)
+      assert(err and err:find("cannot switch branches: modified buffer", 1, true),
+        tostring(err))
+      assert(err:find(path, 1, true), err)
+      H.eq(head_branch(root), "zeta",
+        operation.name .. " must stop before the Git mutation")
+      assert(msgs[#msgs].msg:find(path, 1, true), vim.inspect(msgs))
+      vim.api.nvim_set_option_value("modified", false, { buf = buf })
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+    vim.fn.delete(root, "rf")
+  end
+end
+
+T["root_ checkout replaces visible Canvas and disposes hidden Canvas"] = function()
+  local root = picker_fixture()
+  local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  file:write("worktree line\nshared hunk\n")
+  file:close()
+  in_cwd(root, function(fm)
+    fm.setup({
+      watch = { enabled = false },
+      sidebar = { enabled = false },
+      scrollbar = { enabled = false },
+      statuscolumn = { enabled = false },
+      highlight = { enabled = false },
+      virt = { enabled = false },
+      session = { enabled = false },
+    })
+    local old = assert(fm.open())
+    local old_surface = old.surface
+    local old_buf = old.buf
+    local target
+    for row, line in ipairs(vim.api.nvim_buf_get_lines(old_buf, 0, -1, false)) do
+      if line == "+worktree line" then target = row end
+    end
+    assert(target, "fixture exposes a semantic hunk")
+    vim.api.nvim_win_set_cursor(0, { target, 0 })
+    local real_select = vim.ui.select
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "main"))
+    end
+    local ok, err = fm.checkout()
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(head_branch(root), "main")
+    assert(not old_surface:is_alive(), "the old Surface is invalidated")
+    local new_buf = vim.api.nvim_get_current_buf()
+    assert(new_buf ~= old_buf, "a fresh Canvas replaces the obsolete source state")
+    assert(require("canvasdiff.canvas").is_canvas_buf(new_buf),
+      "the valid host displays the fresh Canvas")
+    assert(vim.api.nvim_get_option_value("winbar", { win = 0 })
+      :find("HEAD → WORKTREE", 1, true),
+      "branch changes always reopen at HEAD → WORKTREE")
+    H.eq(vim.api.nvim_get_current_line(), "+worktree line",
+      "the semantic path and hunk survive replacement")
+  end)
+  vim.fn.delete(root, "rf")
+
+  root = picker_fixture()
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false } })
+    local old = assert(fm.open())
+    local old_surface = old.surface
+    vim.cmd("enew")
+    assert(not old_surface:is_showing(), "the review is live but hidden")
+    local real_select = vim.ui.select
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "main"))
+    end
+    local ok, err = fm.checkout()
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(head_branch(root), "main")
+    assert(not old_surface:is_alive(), "a hidden obsolete Surface is disposed")
+    assert(not require("canvasdiff.canvas").is_canvas_buf(
+      vim.api.nvim_get_current_buf()),
+      "hidden branch switching does not reopen a Canvas")
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ post-switch collection failure keeps the new branch and reports it"] =
+function()
+  local root = picker_fixture()
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("dirty\n")
+  dirty:close()
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false } })
+    local old = assert(fm.open())
+    local old_surface = old.surface
+    local old_buf = old.buf
+    local real_sections = source.sections
+    local real_select = vim.ui.select
+    source.sections = function()
+      return nil, "injected collection failure"
+    end
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "main"))
+    end
+    local invoked, changed, err = pcall(fm.checkout)
+    source.sections = real_sections
+    vim.ui.select = real_select
+    assert(invoked, changed)
+    H.eq(changed, nil)
+    assert(err and err:find(
+      "branch changed, but Canvas refresh failed: injected collection failure",
+      1, true), tostring(err))
+    H.eq(head_branch(root), "main", "refresh failure never reverse-switches")
+    assert(not old_surface:is_alive(), "the obsolete Surface stays invalid")
+    assert(vim.api.nvim_get_current_buf() ~= old_buf,
+      "the host no longer displays the retired Canvas after refresh failure")
+    local drained = false
+    vim.schedule(function() drained = true end)
+    assert(vim.wait(500, function() return drained end, 10), "the loop drained")
+    assert(not vim.api.nvim_buf_is_valid(old_buf),
+      "the retired Canvas buffer is reclaimable after refresh failure")
+    local reported = false
+    for _, message in ipairs(msgs) do
+      if message.msg:find("branch changed, but Canvas refresh failed:", 1, true) then
+        reported = true
+      end
+    end
+    assert(reported, vim.inspect(msgs))
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ delayed branch pickers are fenced by exact request identity"] = function()
+  local root = picker_fixture()
+  local other = H.git_fixture({ committed = { ["other.txt"] = "other\n" } })
+  in_cwd(root, function(fm)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false } })
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = picker_call(items, opts, callback)
+    end
+
+    vim.cmd("split")
+    local closed_win = vim.api.nvim_get_current_win()
+    fm.checkout()
+    vim.api.nvim_win_close(closed_win, true)
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(head_branch(root), "zeta", "a closed origin window fences its callback")
+
+    local old = assert(fm.open())
+    local old_surface = old.surface
+    calls = {}
+    fm.checkout()
+    assert(fm.open(), "replace the originating Surface")
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(head_branch(root), "zeta", "a replaced Surface fences its callback")
+    assert(not old_surface:is_alive())
+
+    calls = {}
+    fm.checkout()
+    fm.track()
+    H.eq(#calls, 2)
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(head_branch(root), "zeta", "a newer picker invalidates the older callback")
+
+    calls = {}
+    fm.checkout()
+    fm.compare()
+    H.eq(#calls, 2)
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(head_branch(root), "zeta",
+      "an ordinary comparison request also invalidates a mutation callback")
+
+    vim.cmd("enew")
+    calls = {}
+    fm.checkout()
+    vim.api.nvim_set_current_dir(other)
+    calls[1].callback(item_named(calls[1].items, "main"))
+    H.eq(head_branch(root), "zeta", "cwd drift fences the captured repository")
+    H.eq(head_branch(other), "main", "the new cwd repository is untouched too")
+    vim.api.nvim_set_current_dir(root)
+    vim.ui.select = real_select
+  end)
+  vim.fn.delete(root, "rf")
+  vim.fn.delete(other, "rf")
 end
 
 T["root_ compare picker orders metadata choices and cancels silently"] = function()
