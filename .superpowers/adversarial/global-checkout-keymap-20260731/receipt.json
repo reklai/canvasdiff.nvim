@@ -1,0 +1,356 @@
+{
+  "ended_at": "2026-07-31T04:53:50+09:00",
+  "final_verdict": "passed",
+  "findings": [
+    {
+      "category": "vim-help-global-description",
+      "disposition": "parked",
+      "reviewer": "task2-review",
+      "severity": "Minor"
+    },
+    {
+      "category": "readme-refresh-comment",
+      "disposition": "parked",
+      "reviewer": "task2-review",
+      "severity": "Minor"
+    },
+    {
+      "category": "leaked-global-map-test-isolation",
+      "disposition": "fixed",
+      "reviewer": "controller-verification",
+      "severity": "Important"
+    },
+    {
+      "category": "callback-dedup-suppresses-second-lhs-warning",
+      "disposition": "parked",
+      "reviewer": "reviewer-a",
+      "severity": "Minor"
+    },
+    {
+      "category": "foreign-takeover-toctou-before-native-set",
+      "disposition": "open",
+      "reviewer": "reviewer-b",
+      "severity": "Important"
+    },
+    {
+      "category": "foreign-takeover-toctou-before-native-set",
+      "disposition": "fixed",
+      "reviewer": "repair2-rereview",
+      "severity": "Important"
+    }
+  ],
+  "fix_rounds": 2,
+  "git_mode": "clean-worktree",
+  "guardrails": [
+    {
+      "kind": "regression-test",
+      "path": "test/unit/test_config.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/unit/test_keys.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_lens.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_root.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/unit/test_cheatsheet.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_cheatsheet_float.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/integration/test_concurrent_reviews.lua"
+    },
+    {
+      "kind": "regression-test",
+      "path": "test/unit/test_keys.lua"
+    }
+  ],
+  "run_id": "global-checkout-keymap-20260731",
+  "schema_version": 1,
+  "stages": [
+    {
+      "elapsed_ms": 252000,
+      "ended_at": "2026-07-31T04:31:38+09:00",
+      "name": "task1-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:27:26+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 125000,
+      "ended_at": "2026-07-31T04:33:43+09:00",
+      "name": "task1-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:31:38+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 214000,
+      "ended_at": "2026-07-31T04:37:17+09:00",
+      "name": "task2-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:33:43+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 121000,
+      "ended_at": "2026-07-31T04:39:18+09:00",
+      "name": "task2-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:37:17+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 141000,
+      "ended_at": "2026-07-31T04:41:39+09:00",
+      "name": "verification-repair1-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:39:18+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 43000,
+      "ended_at": "2026-07-31T04:42:22+09:00",
+      "name": "verification-repair1-rereview",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "medium",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:41:39+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 283000,
+      "ended_at": "2026-07-31T04:47:05+09:00",
+      "name": "reviewer-a",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:42:22+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 283000,
+      "ended_at": "2026-07-31T04:47:05+09:00",
+      "name": "reviewer-b",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:42:22+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 144000,
+      "ended_at": "2026-07-31T04:49:29+09:00",
+      "name": "repair2-writer",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:47:05+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 59000,
+      "ended_at": "2026-07-31T04:50:28+09:00",
+      "name": "repair2-rereview",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "medium",
+      "requested_model": "gpt-5.6-terra",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:49:29+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    },
+    {
+      "elapsed_ms": 187000,
+      "ended_at": "2026-07-31T04:53:35+09:00",
+      "name": "final-whole-change-review",
+      "observed_effort": null,
+      "observed_model": null,
+      "requested_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "routing_status": "unverified",
+      "started_at": "2026-07-31T04:50:28+09:00",
+      "token_usage": {
+        "cached_input": null,
+        "input": null,
+        "output": null,
+        "status": "unavailable"
+      }
+    }
+  ],
+  "started_at": "2026-07-31T04:27:26+09:00",
+  "task_label": "Global checkout keymap and comparison exits",
+  "trigger_reasons": [
+    "public-contract-lifecycle-multi-file"
+  ],
+  "verification": [
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-baseline-config.log make test SUITE=unit FILTER=^config_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-baseline-keys.log make test SUITE=unit FILTER=^keys_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-keymap-config-green.log make test SUITE=unit FILTER=^config_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-keymap-keys-green.log make test SUITE=unit FILTER=^keys_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-comparison-exits.log make test SUITE=integration FILTER=^lens_step",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-comparison-landings.log make test SUITE=integration FILTER=comparison-exits",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-checkout-cheatsheet-unit.log make test SUITE=unit FILTER=^cheatsheet_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-checkout-cheatsheet-integration.log make test SUITE=integration FILTER=^cheatsheet_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-docs-architecture.log make architecture",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-focused-checkout-red-repair1.log make test SUITE=integration FILTER=checkout",
+      "exit_code": 2,
+      "status": "failed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-focused-checkout-green-repair1.log make test SUITE=integration FILTER=checkout",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-concurrent-green-repair1.log make test SUITE=integration FILTER=^concurrent_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-keymap-toctou-red-repair2.log make test SUITE=unit FILTER=keytrans-takeover",
+      "exit_code": 1,
+      "status": "failed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-keymap-toctou-green-repair2.log make test SUITE=unit FILTER=keytrans-takeover",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-keymap-keys-green-repair2.log make test SUITE=unit FILTER=^keys_",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "NVIM_LOG_FILE=/tmp/canvasdiff-global-checkout-full.log make test",
+      "exit_code": 0,
+      "status": "passed"
+    }
+  ]
+}
