@@ -387,6 +387,39 @@ T["keys_global changing an owned lhs action replaces its callback"] = function()
   config.setup({})
 end
 
+T["keys_global post-initialization keytrans takeover survives an action swap"] = function()
+  local lhs = "gAg"
+  delete_global(lhs)
+  local fm = require("canvasdiff")
+  fm.setup({ keymaps = { global = {
+    compare = lhs, checkout = false,
+  } } })
+
+  local real_keytrans = vim.fn.keytrans
+  local foreign = function() end
+  vim.fn.keytrans = function(value)
+    vim.keymap.set("n", lhs, foreign, { desc = "Keytrans takeover" })
+    return real_keytrans(value)
+  end
+  local ok, err = pcall(function()
+    capture_notifications(function()
+      fm.setup({ keymaps = { global = {
+        compare = false, checkout = lhs,
+      } } })
+    end)
+  end)
+  vim.fn.keytrans = real_keytrans
+  assert(ok, err)
+
+  assert(rawequal(assert(global_map(lhs)).callback, foreign),
+    "a post-initialization foreign takeover must survive the action swap")
+  fm.setup({ keymaps = { global = no_global_maps() } })
+  assert(rawequal(assert(global_map(lhs)).callback, foreign),
+    "foreign takeover remains outside CanvasDiff cleanup authority")
+  delete_global(lhs)
+  config.setup({})
+end
+
 T["keys_global rejects cross-action effective collisions before mutation"] = function()
   local old_leader = vim.g.mapleader
   vim.g.mapleader = " "

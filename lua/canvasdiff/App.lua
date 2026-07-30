@@ -54,9 +54,8 @@ function App.new(opts)
   local effects = opts.global_keymap_effects or {
     get = native_get_keymap,
     set = function(mode, lhs, callback, map_opts)
-      local native_opts = vim.deepcopy(map_opts)
-      native_opts.callback = callback
-      return native_set_keymap(mode, lhs, "", native_opts)
+      map_opts.callback = callback
+      return native_set_keymap(mode, lhs, "", map_opts)
     end,
     del = native_del_keymap,
   }
@@ -421,6 +420,13 @@ local function reconcile_global_keymaps(app)
   for _, lhs in native_ipairs(desired_order) do
     if not kept[lhs] then
       local request = desired[lhs]
+      local dispatch = GLOBAL_ACTIONS[request.action]
+      local callback = function()
+        return dispatch(app)
+      end
+      -- Finish all replaceable Lua preparation before the final observable
+      -- ownership snapshot that grants authority to the captured native set.
+      local tentative = expected_record(lhs, request, callback)
       local occupied, inspect_err = current_global_map(app, lhs)
       if inspect_err then
         return settle_global_ledger(app, candidates, {
@@ -447,11 +453,6 @@ local function reconcile_global_keymaps(app)
           occupied = occupied,
         }
       else
-        local dispatch = GLOBAL_ACTIONS[request.action]
-        local callback = function()
-          return dispatch(app)
-        end
-        local tentative = expected_record(lhs, request, callback)
         local set_ok, set_err = native_pcall(app.global_map_effects.set,
           "n", request.configured_lhs, callback, {
           desc = request.desc,
