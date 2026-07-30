@@ -119,6 +119,20 @@ read-only: two-dot compares tips, while three-dot replaces A with the merge
 base. The comparison picker only discovers refs and publishes one of those
 lenses; it never checks out, fetches, or writes refs.
 
+Ref handling has one deliberately narrow boundary:
+
+```text
+ref metadata → role-based picker → exact full-ref Git operation
+             → invalidated Surface → HEAD → WORKTREE recollection
+```
+
+Comparison is read-only. Checkout offers local branches only; tracking offers
+non-symbolic remote-tracking refs only and creates a local tracking branch
+without fetching. Before either mutation, the modified-buffer guard covers the
+whole repository. Git remains the final authority for saved worktree changes
+that an operation would overwrite. The mutation surface exposes no force,
+stash, detached-HEAD, or deletion path.
+
 Stage cycling is a file mutation, so `App` re-reads porcelain status for the
 exact section identity before choosing a direction. Any unstaged state stages
 the whole file; staged-only state resets that file from HEAD. Repository
@@ -152,6 +166,13 @@ make test SUITE=fault FILTER='^hl_'   # a group, filtered by test name
 directory. A test file must live in exactly one group, and no two groups may
 claim the same filename — otherwise a reported failure does not say which file
 it came from.
+
+The supported branch lifecycle is: discover role-appropriate metadata; select
+an exact full ref; block unsaved repository buffers; checkout a local branch or
+create its local tracking branch; retire the old Surface; then recollect the
+new `HEAD → WORKTREE` review. A visible review restores its semantic position;
+a hidden one remains closed. Collection failure reports the new branch state
+without reviving the retired Surface.
 
 Always redirect Neovim's log outside the checkout when running the suite:
 

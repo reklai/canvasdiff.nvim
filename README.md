@@ -95,7 +95,7 @@ And once you're a screen deep and that header has scrolled off, two things say w
 you are — always the same answer:
 
 - **The winbar** names the file under the topline, next to the lens:
-  `CanvasDiff: worktree vs HEAD │ src/canvas.lua`. It follows you as you scroll, so the
+  `CanvasDiff: HEAD → WORKTREE │ src/canvas.lua`. It follows you as you scroll, so the
   answer is on the canvas itself rather than only off to the side.
 - **The sidebar's highlighted row** tracks the same section — resolved from the
   topline, not the cursor, so the two can't disagree.
@@ -280,11 +280,13 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff close       " close it
 :CanvasDiff refresh     " re-scan and splice in what changed, keeping your place
 :CanvasDiff compare     " choose two branches/revisions and compare them
-:CanvasDiff all         " everything: worktree vs HEAD   (the default)
-:CanvasDiff unstaged    " what you haven't staged: worktree vs index
-:CanvasDiff staged      " what you have staged: index vs HEAD
-:CanvasDiff main..topic " compare the two commit tips (read-only)
-:CanvasDiff main...topic " merge-base(main, topic) vs topic (read-only)
+:CanvasDiff checkout    " switch to one local branch
+:CanvasDiff track       " create and switch to a local branch tracking one remote ref
+:CanvasDiff all         " everything: HEAD → worktree   (the default)
+:CanvasDiff unstaged    " what you haven't staged: index → worktree
+:CanvasDiff staged      " what you have staged: HEAD → index
+:CanvasDiff main..topic " compare main → topic (read-only)
+:CanvasDiff main...topic " compare merge-base(main, topic) → topic (read-only)
 ```
 
 All of them complete with `<Tab>`.
@@ -323,8 +325,8 @@ A bare revision such as `:CanvasDiff main` remains a worktree lens: it shows
 your editable worktree against that ref. Ranges compare committed content and
 are therefore read-only:
 
-- `A..B` compares the two tips directly: A vs B.
-- `A...B` compares `merge-base(A, B)` vs B, showing what B introduced since
+- `A..B` compares the two tips directly: A → B.
+- `A...B` compares `merge-base(A, B)` → B, showing what B introduced since
   the histories diverged.
 - Either omitted endpoint means `HEAD`, so `main..` is `main..HEAD` and
   `...topic` is `HEAD...topic`.
@@ -333,8 +335,15 @@ are therefore read-only:
 `vim.ui.select` pickers: first the base, then the comparison ref. Base choices
 prioritize `origin/HEAD`, other remote HEADs, then local `main`/`master`; the
 second picker puts the current branch (or detached HEAD) first. Full ref
-identities stay internal, and the picker never checks out, fetches, or mutates
-a branch.
+identities stay internal. `origin/main` is a local remote-tracking ref from
+the last fetch, not a network lookup: compare never fetches or checks out.
+
+`:CanvasDiff checkout` lists local branches only and switches to the selected
+one. `:CanvasDiff track` lists non-symbolic remote-tracking refs, then creates
+and switches to a local tracking branch for the selection without fetching.
+Both mutations are blocked if any repository buffer has unsaved changes; Git
+can still refuse saved changes that the switch would overwrite. Neither command
+offers force, stash, detached-HEAD, or deletion operations.
 
 Stage cycling is file-level and follows Git's current XY state, not a stale
 screen snapshot. Staging is refused while a modified loaded buffer aliases the
