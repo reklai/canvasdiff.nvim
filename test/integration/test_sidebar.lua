@@ -270,6 +270,11 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(vim.api.nvim_get_option_value("winfixwidth", { win = side_win }), true)
   H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = st.win }), false,
     "canvas window must never get winfixbuf")
+  H.eq(vim.api.nvim_get_option_value("winbar", { win = side_win }),
+    "Files changed (3)")
+  local side_buf = vim.api.nvim_win_get_buf(side_win)
+  H.eq(#vim.api.nvim_buf_get_lines(side_buf, 0, -1, false), 6,
+    "the title is a winbar, not a selectable tree row")
   sidebar.close(lease)
   H.eq(sidebar.is_open(lease), false)
 end
@@ -292,6 +297,11 @@ local function sidebar_win(lease, tab)
       return win
     end
   end
+end
+
+local function sidebar_winbar(lease, tab)
+  return vim.api.nvim_get_option_value(
+    "winbar", { win = assert(sidebar_win(lease, tab)) })
 end
 
 local function sidebar_buf(lease, tab)
@@ -344,7 +354,10 @@ T["sidebar_win select on a dir folds it and active falls back to the dir"] = fun
   local sbuf = sidebar_buf(lease)
   local side_win = sidebar_win(lease)
   vim.api.nvim_win_set_cursor(side_win, { 1, 0 }) -- a/ dir row
+  H.eq(sidebar_winbar(lease), "Files changed (3)")
   sidebar.select(lease)
+  H.eq(sidebar_winbar(lease), "Files changed (3)",
+    "folding tree rows does not change the file count")
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(lines[1], "▸ a/", "dir folded")
   H.eq(#lines, 5, "a/one.txt hidden")
@@ -471,6 +484,7 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   st.root = root
   local lease = assert(sidebar.open(st, { width = 30 }))
   local sbuf = sidebar_buf(lease)
+  H.eq(sidebar_winbar(lease), "Files changed (1)")
   H.eq(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false), 2, "dir + one file")
 
   local abs = vim.fs.joinpath(root, "m", "b.txt")
@@ -485,9 +499,42 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   H.eq(result.empty, false)
 
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
+  H.eq(sidebar_winbar(lease), "Files changed (2)",
+    "the title follows the refreshed section count")
   H.eq(#lines, 3, "new file appears in the sidebar after reconcile")
   assert(lines[3]:find("b.txt", 1, true), "b.txt rendered: " .. lines[3])
   sidebar.close(lease)
+end
+
+T["sidebar_integration title follows lens section counts"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a0\n", ["b.txt"] = "b0\n" },
+    worktree = { ["a.txt"] = "a1\n", ["b.txt"] = "b1\n" },
+  })
+  assert(require("canvasdiff.source").stage(root, {
+    path = "b.txt", unstaged = "M",
+  }))
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  local ok, err = xpcall(function()
+    local lenses = require("canvasdiff.diff").lens
+    local st = assert(fm.open({ lens = lenses.get("unstaged") }))
+    local lease = assert(st.surface.controllers.sidebar)
+
+    H.eq(sidebar_winbar(lease), "Files changed (1)")
+    assert(fm.set_lens(lenses.get("all")))
+    H.eq(sidebar_winbar(lease), "Files changed (2)",
+      "the title follows the newly published lens sections")
+  end, debug.traceback)
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
 end
 
 -- --- Final-review regression tests: window-lifecycle traps -------------
@@ -500,6 +547,18 @@ T["sidebar_win is_sidebar_win identifies only the live sidebar window"] = functi
   H.eq(sidebar.is_sidebar_win(lease, -1), false)
   sidebar.close(lease)
   H.eq(sidebar.is_sidebar_win(lease, side_win), false, "false once the sidebar is closed")
+end
+
+T["sidebar_win refresh preserves a foreign winbar replacement"] = function()
+  local _, lease = open_with_sidebar()
+  local win = assert(sidebar_win(lease))
+  vim.api.nvim_set_option_value("winbar", "Foreign title", {
+    win = win, scope = "local",
+  })
+
+  sidebar.refresh(lease)
+  H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), "Foreign title")
+  sidebar.close(lease)
 end
 
 T["sidebar_integration toggle from inside the sidebar redirects instead of throwing E1513"] = function()
@@ -637,6 +696,9 @@ T["sidebar_win close() recovers a stranded last-window sidebar instead of errori
   -- window in the whole editor, and close() really does hit E444.
   vim.cmd("silent only")
   local st = canvas.open({ big_section("a/one.txt", "a") }, {})
+  vim.api.nvim_set_option_value("winbar", "Host title", {
+    win = st.win, scope = "local",
+  })
   local lease = assert(sidebar.open(st, { width = 30 }))
   H.eq(#vim.api.nvim_tabpage_list_wins(0), 2, "canvas + sidebar are the session's only two windows")
 
@@ -649,6 +711,7 @@ T["sidebar_win close() recovers a stranded last-window sidebar instead of errori
   H.eq(sidebar.is_open(lease), false)
   H.eq(vim.api.nvim_win_is_valid(win), true, "the stranded window survives, recovered rather than abandoned")
   H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = win }), false, "winfixbuf cleared")
+  H.eq(vim.api.nvim_get_option_value("winbar", { win = win }), "Host title")
   local buf = vim.api.nvim_win_get_buf(win)
   H.eq(vim.api.nvim_get_option_value("modifiable", { buf = buf }), true, "usable scratch buffer left behind")
 end

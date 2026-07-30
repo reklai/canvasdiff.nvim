@@ -139,6 +139,10 @@ local WINDOW_OPTIONS = {
   { name = "foldenable", value = false },
 }
 
+local function sidebar_title(state)
+  return ("Files changed (%d)"):format(#((state and state.sections) or {}))
+end
+
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffSidebarDir", {
     link = "Directory",
@@ -219,6 +223,32 @@ local function owned_pair(view)
   end
   local ok, showing = pcall(vim.api.nvim_win_get_buf, view.win)
   return ok and showing == view.buf
+end
+
+local function update_winbar(lease, view)
+  if not (view_active(lease, view) and owned_pair(view)) then
+    return false
+  end
+  local title = sidebar_title(lease.state)
+  local previous = view.applied_options.winbar
+  local actual = vim.api.nvim_get_option_value("winbar", { win = view.win })
+  if not view_active(lease, view) then
+    return false
+  end
+  if previous ~= nil and actual ~= previous then
+    return false
+  end
+  if previous == nil then
+    view.prior_options.winbar = actual
+  end
+  vim.api.nvim_set_option_value("winbar", title, {
+    win = view.win, scope = "local",
+  })
+  if not view_active(lease, view) then
+    return false
+  end
+  view.applied_options.winbar = title
+  return true
 end
 
 local function default_snapshot(lease)
@@ -645,6 +675,10 @@ local function refresh_view(lease, view, observed)
   for id in pairs(old_ids) do
     delete_mark(view, id)
   end
+  update_winbar(lease, view)
+  if not view_active(lease, view) then
+    return false
+  end
   view.entries = entries
   view.active_mark = nil
   view.render_epoch = view.render_epoch + 1
@@ -698,6 +732,18 @@ sync_view = function(lease, view, observed, preferred_canvas)
   return view_active(lease, view)
 end
 
+local function restore_owned_option(view, win, name)
+  local prior = view.prior_options[name]
+  local applied = view.applied_options[name]
+  local ok, actual = pcall(
+    vim.api.nvim_get_option_value, name, { win = win })
+  if ok and actual == applied then
+    pcall(vim.api.nvim_set_option_value, name, prior, {
+      win = win, scope = "local",
+    })
+  end
+end
+
 local function restore_surviving_window(view, win, buf)
   if not (valid_win(win) and valid_buf(buf) and vim.api.nvim_win_get_buf(win) == buf) then
     return
@@ -711,6 +757,8 @@ local function restore_surviving_window(view, win, buf)
   if ok_fixed then
     winfixbuf_owned = fixed == view.applied_options.winfixbuf
   end
+  local ok_winbar, winbar = pcall(
+    vim.api.nvim_get_option_value, "winbar", { win = win })
   pcall(vim.api.nvim_set_option_value, "winfixbuf", false, {
     win = win,
     scope = "local",
@@ -720,25 +768,27 @@ local function restore_surviving_window(view, win, buf)
     local ok_set = pcall(vim.api.nvim_win_set_buf, win, scratch)
     if not ok_set and valid_buf(scratch) then
       pcall(vim.api.nvim_buf_delete, scratch, { force = true })
-    end
-  end
-
-  for _, option in ipairs(WINDOW_OPTIONS) do
-    local prior = view.prior_options[option.name]
-    local applied = view.applied_options[option.name]
-    local restore = option.name == "winfixbuf" and winfixbuf_owned
-    local ok, actual
-    if option.name ~= "winfixbuf" then
-      ok, actual = pcall(vim.api.nvim_get_option_value, option.name, { win = win })
-      restore = ok and actual == applied
-    end
-    if restore then
-      pcall(vim.api.nvim_set_option_value, option.name, prior, {
+    elseif ok_winbar then
+      pcall(vim.api.nvim_set_option_value, "winbar", winbar, {
         win = win,
         scope = "local",
       })
     end
   end
+
+  for _, option in ipairs(WINDOW_OPTIONS) do
+    if option.name == "winfixbuf" then
+      if winfixbuf_owned then
+        pcall(vim.api.nvim_set_option_value, option.name, view.prior_options[option.name], {
+          win = win,
+          scope = "local",
+        })
+      end
+    else
+      restore_owned_option(view, win, option.name)
+    end
+  end
+  restore_owned_option(view, win, "winbar")
 end
 
 local function close_view(lease, view, dismiss)
@@ -898,6 +948,11 @@ local function create_view(lease, tab, host_win, observed)
     vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
     set_modifiable(buf, false)
 
+    local inherited_winbar = vim.api.nvim_get_option_value("winbar", { win = host_win })
+    if not view_active(lease, view) then
+      error("sidebar open was superseded while reading host window options", 0)
+    end
+
     local win = vim.api.nvim_open_win(buf, false, {
       split = "left",
       width = lease.width,
@@ -914,6 +969,13 @@ local function create_view(lease, tab, host_win, observed)
     end
     view.win = win
     lease.views_by_win[win] = view
+    vim.api.nvim_set_option_value("winbar", inherited_winbar, {
+      win = win,
+      scope = "local",
+    })
+    if not view_active(lease, view) then
+      error("sidebar open was superseded while inheriting host window options", 0)
+    end
 
     for _, option in ipairs(WINDOW_OPTIONS) do
       view.prior_options[option.name] = vim.api.nvim_get_option_value(option.name, { win = win })
@@ -922,6 +984,10 @@ local function create_view(lease, tab, host_win, observed)
         win = win,
         scope = "local",
       })
+    end
+    update_winbar(lease, view)
+    if not view_active(lease, view) then
+      error("sidebar open was superseded while setting window options", 0)
     end
 
     local actions = {
