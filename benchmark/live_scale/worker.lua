@@ -94,6 +94,8 @@ local result = {
       unstage_exact = false,
       primary_absent = true,
       paths_exact = true,
+      cycle_path_exact = false,
+      tree_exact = false,
     },
     refs = {
       branch_exact = false,
@@ -1275,6 +1277,9 @@ local function exact_index_delta(before, after, added_path, removed_path)
     and vim.deep_equal(removed, expected_removed)
 end
 
+local staged_cycle_path
+local staged_cycle_tree
+
 handlers.stage = function(arguments)
   set_lens_named("unstaged", "stage preflight")
   local section_index = assert(section_by_path(arguments.path))
@@ -1284,6 +1289,9 @@ handlers.stage = function(arguments)
 
   local before_name_status = cached_name_status()
   local before_paths = cached_paths(before_name_status)
+  staged_cycle_path = arguments.path
+  staged_cycle_tree = must_git("write-tree"):gsub("%s+$", "")
+  result.correctness.index.tree_before = staged_cycle_tree
   local disk = assert(read_all(vim.fs.joinpath(fixture_root, arguments.path)))
   local changed, err = operation(function()
     return fm.toggle_stage()
@@ -1316,10 +1324,15 @@ handlers.stage = function(arguments)
     bytes_exact = result.correctness.index.stage_exact,
     primary_absent = primary_absent,
     paths_exact = paths_exact,
+    tree_before = staged_cycle_tree,
   }
 end
 
 handlers.unstage = function(arguments)
+  result.correctness.index.cycle_path_exact =
+    staged_cycle_path ~= nil and arguments.path == staged_cycle_path
+  assert(result.correctness.index.cycle_path_exact,
+    "unstage action did not target the sidecar staged by this cycle")
   set_lens_named("staged", "unstage preflight")
   local section_index = assert(section_by_path(arguments.path))
   local start0 = assert(canvas.section_rows(state, section_index))
@@ -1345,9 +1358,13 @@ handlers.unstage = function(arguments)
     result.correctness.index.primary_absent and primary_absent
   result.correctness.index.paths_exact =
     result.correctness.index.paths_exact and paths_exact
+  local tree_after = must_git("write-tree"):gsub("%s+$", "")
+  result.correctness.index.tree_after = tree_after
+  result.correctness.index.tree_exact =
+    staged_cycle_tree ~= nil and tree_after == staged_cycle_tree
   assert(result.correctness.index.unstage_exact,
     "unstage action did not restore exact HEAD bytes in the index")
-  assert(primary_absent and paths_exact,
+  assert(primary_absent and paths_exact and result.correctness.index.tree_exact,
     "unstage action changed index paths outside the bounded sidecar")
   return {
     path = arguments.path,
@@ -1360,6 +1377,10 @@ handlers.unstage = function(arguments)
     bytes_exact = result.correctness.index.unstage_exact,
     primary_absent = primary_absent,
     paths_exact = paths_exact,
+    cycle_path_exact = result.correctness.index.cycle_path_exact,
+    tree_before = staged_cycle_tree,
+    tree_after = tree_after,
+    tree_exact = result.correctness.index.tree_exact,
   }
 end
 

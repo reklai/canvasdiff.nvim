@@ -85,6 +85,20 @@ T["live_scale_actions_plan includes the complete lifecycle semantic set"] = func
   end
 end
 
+T["live_scale_actions_plan stages and unstages the same bounded sidecar"] = function()
+  local stage_path, unstage_path
+  for _, action in ipairs(actions.plan(1000000, 1729)) do
+    if action.name == "stage" then
+      stage_path = action.arguments.path
+    elseif action.name == "unstage" then
+      unstage_path = action.arguments.path
+    end
+  end
+  H.eq(stage_path, "unstaged.txt")
+  H.eq(unstage_path, stage_path,
+    "the mutation pair must restore the exact file it staged")
+end
+
 T["live_scale_actions_plan rejects non-finite rows and seeds"] = function()
   local non_finite = { math.huge, -math.huge, 0 / 0 }
 

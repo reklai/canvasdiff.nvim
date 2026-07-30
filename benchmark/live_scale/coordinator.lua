@@ -344,6 +344,17 @@ local function validate_action_observation(action, check)
         and type(observation.before_name_status) == "table"
         and type(observation.after_name_status) == "table",
       action.name .. " scoped index evidence is required")
+    if action.name == "stage" then
+      check(type(observation.tree_before) == "string"
+          and observation.tree_before:match("^[0-9a-f]+$") ~= nil,
+        "stage tree snapshot is required")
+    else
+      check(observation.cycle_path_exact == true
+          and observation.tree_exact == true
+          and type(observation.tree_before) == "string"
+          and observation.tree_after == observation.tree_before,
+        "unstage must restore the staged sidecar and exact index tree")
+    end
     for _, records in ipairs({
       observation.before_name_status or {},
       observation.after_name_status or {},
@@ -505,7 +516,11 @@ function M.validate_worker(payload, expected)
         and index.stage_exact == true
         and index.unstage_exact == true
         and index.primary_absent == true
-        and index.paths_exact == true,
+        and index.paths_exact == true
+        and index.cycle_path_exact == true
+        and index.tree_exact == true
+        and type(index.tree_before) == "string"
+        and index.tree_after == index.tree_before,
       "index identities were not preserved")
     local refs = correctness.refs
     check(type(refs) == "table"
@@ -982,9 +997,10 @@ local function derive_worker(payload)
     source_ns = next_value
   end
 
-  local peak_rss = 0
+  local peak_rss, peak_heap = 0, 0
   local retained_heap
   for _, sample in ipairs(payload.memory.samples) do
+    peak_heap = math.max(peak_heap, sample.heap_bytes)
     if metrics.finite(sample.rss_bytes) then
       peak_rss = math.max(peak_rss, sample.rss_bytes)
     end
@@ -997,6 +1013,12 @@ local function derive_worker(payload)
   end
   if not metrics.finite(retained_heap) then
     return nil, { "retained heap derivation must be finite" }
+  end
+  local lines_per_second =
+    math.floor(payload.rows * 1000000000 / source_ns)
+  if not metrics.finite(lines_per_second) or lines_per_second <= 0
+      or not metrics.finite(peak_heap) or peak_heap <= 0 then
+    return nil, { "throughput and peak heap derivation must be finite" }
   end
   local first_view_ns
   for _, action in ipairs(payload.trace) do
@@ -1011,7 +1033,9 @@ local function derive_worker(payload)
   return {
     source_ns = source_ns,
     peak_rss_bytes = peak_rss,
+    peak_heap_bytes = peak_heap,
     retained_heap_bytes = retained_heap,
+    lines_per_second = lines_per_second,
     first_view_ns = first_view_ns,
   }
 end
@@ -1035,7 +1059,8 @@ end
 local function aggregate_size(size, samples, repetitions)
   local phases, action_values = {}, {}
   local source_values, first_view_values, heartbeat_values = {}, {}, {}
-  local peak_rss_values, retained_heap_values = {}, {}
+  local peak_rss_values, peak_heap_values, retained_heap_values = {}, {}, {}
+  local throughput_values = {}
   for _, sample in ipairs(samples) do
     if sample.size == size and sample.status == "pass" then
       local payload = sample.worker
@@ -1052,8 +1077,12 @@ local function aggregate_size(size, samples, repetitions)
         payload.heartbeat.max_gap_ns
       peak_rss_values[#peak_rss_values + 1] =
         sample.derived.peak_rss_bytes
+      peak_heap_values[#peak_heap_values + 1] =
+        sample.derived.peak_heap_bytes
       retained_heap_values[#retained_heap_values + 1] =
         sample.derived.retained_heap_bytes
+      throughput_values[#throughput_values + 1] =
+        sample.derived.lines_per_second
     end
   end
   if #source_values ~= repetitions then
@@ -1067,12 +1096,14 @@ local function aggregate_size(size, samples, repetitions)
     actions = action_summaries,
     operations = vim.deepcopy(action_summaries),
     source = metrics.summary(source_values),
+    lines_per_second = metrics.summary(throughput_values),
     first_view = metrics.summary(first_view_values),
     heartbeat = {
       max_gap_ns = metrics.summary(heartbeat_values),
     },
     memory = {
       peak_rss_bytes = metrics.summary(peak_rss_values),
+      peak_heap_bytes = metrics.summary(peak_heap_values),
       retained_heap_bytes = metrics.summary(retained_heap_values),
     },
     verdict = "pass",
@@ -1481,17 +1512,17 @@ function M.execute(options)
               "baseline comparison raised: " .. tostring(rows),
             },
           }
+        elseif not rows then
+          aggregate.comparison = {
+            status = "incompatible",
+            reasons = compare_reasons,
+          }
         elseif not finite_rows then
           aggregate.comparison = {
             status = "invalid",
             reasons = {
               "baseline comparison produced invalid numeric data",
             },
-          }
-        elseif not rows then
-          aggregate.comparison = {
-            status = "incompatible",
-            reasons = compare_reasons,
           }
         else
           aggregate.comparison = {

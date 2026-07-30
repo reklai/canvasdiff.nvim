@@ -78,10 +78,25 @@ function M.compatible(current, baseline)
   return true, reasons
 end
 
-local function aggregate_by_size(aggregate)
+local function aggregate_by_size(aggregate, label)
+  if type(aggregate) ~= "table" or type(aggregate.aggregates) ~= "table" then
+    return nil, { label .. ".aggregates" }
+  end
   local by_size = {}
-  for _, row in ipairs(aggregate.aggregates or {}) do
+  for _, row in ipairs(aggregate.aggregates) do
+    if type(row) ~= "table" or type(row.size) ~= "number"
+        or by_size[row.size] ~= nil then
+      return nil, { label .. ".aggregates" }
+    end
     by_size[row.size] = row
+  end
+  for _, size in ipairs(AUTHORITATIVE_SIZES) do
+    if by_size[size] == nil then
+      return nil, { ("%s.aggregates[%d]"):format(label, size) }
+    end
+  end
+  if #aggregate.aggregates ~= #AUTHORITATIVE_SIZES then
+    return nil, { label .. ".aggregates" }
   end
   return by_size
 end
@@ -93,30 +108,55 @@ function M.compare(current, baseline)
   end
 
   local comparison = {}
-  local current_by_size = aggregate_by_size(current)
-  local baseline_by_size = aggregate_by_size(baseline)
+  local current_by_size, current_error = aggregate_by_size(current, "current")
+  if not current_by_size then
+    return nil, current_error
+  end
+  local baseline_by_size, baseline_error =
+    aggregate_by_size(baseline, "baseline")
+  if not baseline_by_size then
+    return nil, baseline_error
+  end
   for _, size in ipairs(AUTHORITATIVE_SIZES) do
     local current_row = current_by_size[size]
     local baseline_row = baseline_by_size[size]
-    if current_row and baseline_row then
-      local operations = vim.tbl_keys(current_row.operations or {})
-      table.sort(operations)
-      for _, operation in ipairs(operations) do
-        local current_summary = current_row.operations[operation]
-        local baseline_summary = (baseline_row.operations or {})[operation]
-        if current_summary and baseline_summary then
-          local current_value = current_summary.p95
-          local baseline_value = baseline_summary.p95
-          comparison[#comparison + 1] = {
-            size = current_row.size,
-            operation = operation,
-            current = current_value,
-            baseline = baseline_value,
-            ratio = current_value / baseline_value,
-            percent = (current_value / baseline_value - 1) * 100,
-          }
-        end
+    if type(current_row.operations) ~= "table"
+        or next(current_row.operations) == nil then
+      return nil, {
+        ("current.aggregates[%d].operations"):format(size),
+      }
+    end
+    local operations = vim.tbl_keys(current_row.operations)
+    table.sort(operations)
+    for _, operation in ipairs(operations) do
+      local current_summary = current_row.operations[operation]
+      local baseline_summary = type(baseline_row.operations) == "table"
+          and baseline_row.operations[operation] or nil
+      local path =
+        ("baseline.aggregates[%d].operations.%s.p95"):format(size, operation)
+      if type(current_summary) ~= "table"
+          or not M.finite(current_summary.p95)
+          or current_summary.p95 <= 0 then
+        return nil, {
+          ("current.aggregates[%d].operations.%s.p95")
+            :format(size, operation),
+        }
       end
+      if type(baseline_summary) ~= "table"
+          or not M.finite(baseline_summary.p95)
+          or baseline_summary.p95 <= 0 then
+        return nil, { path }
+      end
+      local current_value = current_summary.p95
+      local baseline_value = baseline_summary.p95
+      comparison[#comparison + 1] = {
+        size = current_row.size,
+        operation = operation,
+        current = current_value,
+        baseline = baseline_value,
+        ratio = current_value / baseline_value,
+        percent = (current_value / baseline_value - 1) * 100,
+      }
     end
   end
   return comparison

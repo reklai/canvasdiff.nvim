@@ -1,6 +1,7 @@
 local H = require("helpers")
 local actions = require("benchmark.live_scale.actions")
 local coordinator = require("benchmark.live_scale.coordinator")
+local metrics = require("benchmark.live_scale.metrics")
 
 local T = {}
 
@@ -59,7 +60,7 @@ local function action_observation(name)
       },
     }
   elseif name == "stage" or name == "unstage" then
-    return {
+    local observation = {
       bytes_exact = true,
       primary_absent = true,
       paths_exact = true,
@@ -68,6 +69,15 @@ local function action_observation(name)
       before_name_status = {},
       after_name_status = {},
     }
+    if name == "stage" then
+      observation.tree_before = SHA
+    else
+      observation.cycle_path_exact = true
+      observation.tree_exact = true
+      observation.tree_before = SHA
+      observation.tree_after = SHA
+    end
+    return observation
   elseif name == "close_reopen" then
     return {
       equivalence = {
@@ -152,6 +162,10 @@ local function valid_payload(rows, run_index)
         unstage_exact = true,
         primary_absent = true,
         paths_exact = true,
+        cycle_path_exact = true,
+        tree_exact = true,
+        tree_before = SHA,
+        tree_after = SHA,
       },
       refs = { branch_exact = true, range_exact = true },
       git_failure = { caught = true, error = "injected" },
@@ -430,6 +444,27 @@ T["live_scale_coordinator_rejects untrusted numbers and incompatible baseline"] 
   H.eq(compatible.comparison.status, "compatible")
   assert(#compatible.comparison.rows > 0)
   H.eq(compatible.comparison.rows[1].ratio, 1)
+  for _, row in ipairs(compatible.aggregates) do
+    assert(metrics.finite(row.lines_per_second.p95)
+        and row.lines_per_second.p95 > 0)
+    assert(metrics.finite(row.memory.peak_heap_bytes.p95)
+        and row.memory.peak_heap_bytes.p95 > 0)
+  end
+
+  local truncated = vim.deepcopy(baseline)
+  truncated.aggregates = {}
+  local rejected = coordinator.execute({
+    repetitions = 1,
+    environment = fake_environment(),
+    baseline = truncated,
+    launch = function(spec)
+      return { code = 0, signal = 0,
+        payload = valid_payload(spec.rows, spec.run_index) }
+    end,
+  })
+  H.eq(rejected.status, "fail")
+  assert(rejected.comparison.status ~= "compatible")
+  assert(#rejected.comparison.reasons > 0)
 
   baseline.host_fingerprint = string.rep("b", 64)
 

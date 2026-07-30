@@ -26,14 +26,14 @@ local function aggregate()
       source_revision = "0123456789abcdef",
       tree_digest = "abcdef0123456789",
     },
-    aggregates = {
-      {
-        size = 1,
+    aggregates = vim.tbl_map(function(size)
+      return {
+        size = size,
         operations = {
           open = { p95 = 10 },
         },
-      },
-    },
+      }
+    end, { 1, 1000, 10000, 100000, 1000000 }),
   }
 end
 
@@ -141,15 +141,15 @@ T["live_scale_metrics_compare reports p95 ratios for compatible aggregates"] = f
   local baseline = aggregate()
   baseline.aggregates[1].operations.open.p95 = 8
 
-  H.eq(metrics.compare(current, baseline), {
-    {
-      size = 1,
-      operation = "open",
-      current = 10,
-      baseline = 8,
-      ratio = 1.25,
-      percent = 25,
-    },
+  local comparison = assert(metrics.compare(current, baseline))
+  H.eq(#comparison, 5)
+  H.eq(comparison[1], {
+    size = 1,
+    operation = "open",
+    current = 10,
+    baseline = 8,
+    ratio = 1.25,
+    percent = 25,
   })
 end
 
@@ -159,16 +159,54 @@ T["live_scale_metrics_compare orders rows by authoritative size rather than aggr
   current.aggregates = {
     { size = 1000, operations = { open = { p95 = 20 } } },
     { size = 1, operations = { open = { p95 = 10 } } },
+    { size = 10000, operations = { open = { p95 = 30 } } },
+    { size = 100000, operations = { open = { p95 = 40 } } },
+    { size = 1000000, operations = { open = { p95 = 50 } } },
   }
   baseline.aggregates = {
     { size = 1000, operations = { open = { p95 = 10 } } },
     { size = 1, operations = { open = { p95 = 8 } } },
+    { size = 10000, operations = { open = { p95 = 15 } } },
+    { size = 100000, operations = { open = { p95 = 20 } } },
+    { size = 1000000, operations = { open = { p95 = 25 } } },
   }
 
   H.eq(metrics.compare(current, baseline), {
     { size = 1, operation = "open", current = 10, baseline = 8, ratio = 1.25, percent = 25 },
     { size = 1000, operation = "open", current = 20, baseline = 10, ratio = 2, percent = 100 },
+    { size = 10000, operation = "open", current = 30, baseline = 15, ratio = 2, percent = 100 },
+    { size = 100000, operation = "open", current = 40, baseline = 20, ratio = 2, percent = 100 },
+    { size = 1000000, operation = "open", current = 50, baseline = 25, ratio = 2, percent = 100 },
   })
+end
+
+T["live_scale_metrics_compare rejects missing sizes and operations"] = function()
+  local current = aggregate()
+  local baseline = aggregate()
+  current.aggregates = {}
+  baseline.aggregates = {}
+  for _, size in ipairs({ 1, 1000, 10000, 100000, 1000000 }) do
+    current.aggregates[#current.aggregates + 1] = {
+      size = size,
+      operations = { open = { p95 = size + 10 } },
+    }
+    baseline.aggregates[#baseline.aggregates + 1] = {
+      size = size,
+      operations = { open = { p95 = size + 5 } },
+    }
+  end
+
+  local missing_size = vim.deepcopy(baseline)
+  table.remove(missing_size.aggregates)
+  local rows, reasons = metrics.compare(current, missing_size)
+  H.eq(rows, nil)
+  H.eq(reasons, { "baseline.aggregates[1000000]" })
+
+  local missing_operation = vim.deepcopy(baseline)
+  missing_operation.aggregates[1].operations.open = nil
+  rows, reasons = metrics.compare(current, missing_operation)
+  H.eq(rows, nil)
+  H.eq(reasons, { "baseline.aggregates[1].operations.open.p95" })
 end
 
 return T

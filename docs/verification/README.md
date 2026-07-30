@@ -19,7 +19,7 @@ one never dirties the tree.
 | `eager-baseline.json` | the frozen small-canvas baseline the regression gate compares against |
 | `chaos-campaign.json` | the Phase 7 deliberate-breakage campaigns, both harnesses |
 | `live-acceptance.json` | the Phase 8 live acceptance session |
-| `live-scale.json` | the untouched real-Git five-size baseline for compatible optimization comparisons |
+| `live-scale.json` | the post-optimization real-Git five-size result and future compatible comparison baseline |
 
 The million-row lane's artifact is not checked in: it is machine-specific by
 construction (RSS budgets against the host allocator), so a committed copy

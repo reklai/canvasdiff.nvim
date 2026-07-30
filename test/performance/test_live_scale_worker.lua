@@ -166,6 +166,15 @@ local function validate_action_observation(action, check)
         and type(o.before_name_status) == "table"
         and type(o.after_name_status) == "table",
       action.name .. " scoped index evidence is required")
+    if action.name == "stage" then
+      check(type(o.tree_before) == "string" and o.tree_before ~= "",
+        "stage tree snapshot is required")
+    else
+      check(o.cycle_path_exact == true and o.tree_exact == true
+          and type(o.tree_before) == "string"
+          and o.tree_after == o.tree_before,
+        "unstage must restore the staged sidecar and exact index tree")
+    end
     for _, records in ipairs({
       o.before_name_status or {}, o.after_name_status or {},
     }) do
@@ -302,7 +311,11 @@ local function validate_worker(payload, expected)
         and correctness.index.stage_exact == true
         and correctness.index.unstage_exact == true
         and correctness.index.primary_absent == true
-        and correctness.index.paths_exact == true,
+        and correctness.index.paths_exact == true
+        and correctness.index.cycle_path_exact == true
+        and correctness.index.tree_exact == true
+        and type(correctness.index.tree_before) == "string"
+        and correctness.index.tree_after == correctness.index.tree_before,
       "index identities were not preserved")
     check(type(correctness.refs) == "table"
         and correctness.refs.branch_exact == true
@@ -552,6 +565,10 @@ T["live_scale_worker_publishes bounded paged resident evidence at 100k"] = funct
     })
     assert(valid, table.concat(errors, "\n"))
     H.eq(payload.paging.mode, "paged")
+    H.eq(payload.correctness.index.cycle_path_exact, true)
+    H.eq(payload.correctness.index.tree_exact, true)
+    H.eq(payload.correctness.index.tree_after,
+      payload.correctness.index.tree_before)
     local heartbeat = payload.heartbeat
     assert(type(heartbeat.max_gap) == "table",
       "worker must attribute its maximum heartbeat gap")
