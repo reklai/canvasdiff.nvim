@@ -85,4 +85,16 @@ T["live_scale_actions_plan includes the complete lifecycle semantic set"] = func
   end
 end
 
+T["live_scale_actions_plan rejects non-finite rows and seeds"] = function()
+  local non_finite = { math.huge, -math.huge, 0 / 0 }
+
+  for _, value in ipairs(non_finite) do
+    local rows_ok = pcall(actions.plan, value, 1729)
+    assert(not rows_ok, "rows must reject non-finite integers")
+
+    local seed_ok = pcall(actions.plan, 1000, value)
+    assert(not seed_ok, "seed must reject non-finite integers")
+  end
+end
+
 return T

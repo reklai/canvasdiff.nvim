@@ -18,8 +18,13 @@ local REBUILD_CYCLES = 3
 local LCG_MODULUS = 2147483647
 local LCG_MULTIPLIER = 48271
 
+local function is_finite(value)
+  return value == value and value ~= math.huge and value ~= -math.huge
+end
+
 local function assert_positive_integer(value, name)
-  assert(type(value) == "number" and value == math.floor(value) and value >= 1,
+  assert(type(value) == "number" and is_finite(value)
+      and value == math.floor(value) and value >= 1,
     name .. " must be a positive integer")
 end
 
@@ -56,7 +61,7 @@ end
 
 function M.plan(rows, seed)
   assert_positive_integer(rows, "rows")
-  assert(type(seed) == "number" and seed == math.floor(seed),
+  assert(type(seed) == "number" and is_finite(seed) and seed == math.floor(seed),
     "seed must be an integer")
 
   local plan = {}
