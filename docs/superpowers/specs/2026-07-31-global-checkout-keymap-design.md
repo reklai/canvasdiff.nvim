@@ -89,6 +89,19 @@ Refresh the current diff
 This is a copy-only clarification. The refresh implementation and its
 position-preserving behavior do not change.
 
+Branch comparison has two distinct exits, both documented in the README and
+key help:
+
+- `<Tab>` or `<Shift-Tab>` leaves the committed, read-only comparison and
+  returns the same canvas to `HEAD → WORKTREE`;
+- `q` closes the canvas and restores the buffer that the review took over.
+
+When comparison starts from a normal buffer, that buffer is the close landing.
+When it changes the lens of an already-open canvas, `q` retains the canvas's
+original landing buffer instead of treating the canvas buffer as its own
+destination. `:CanvasDiff all` and `:CanvasDiff close` remain the command
+equivalents. No additional exit mapping is introduced.
+
 ## Error handling
 
 - Invalid global keymap shapes continue to fail validation with an
@@ -117,7 +130,13 @@ Tests must prove:
    callback;
 9. the cheatsheet and README expose both global actions;
 10. refresh help uses exactly `Refresh the current diff`;
-11. existing checkout safety and branch-selection tests remain passing.
+11. range comparison help explains the working-tree and close exits;
+12. `<Tab>` and `<Shift-Tab>` return a range comparison to
+    `HEAD → WORKTREE`;
+13. `q` restores the initiating buffer for a newly opened comparison and the
+    original canvas landing buffer for a comparison started from an existing
+    canvas;
+14. existing checkout safety and branch-selection tests remain passing.
 
 Focused configuration, key ownership, callback, cheatsheet, and documentation
 tests precede one fresh authoritative full-suite run. Review follows the
@@ -131,4 +150,5 @@ Neovim/Git trust and platform boundary.
 - adding buffer-local checkout mappings;
 - changing `<leader>lb`;
 - changing the behavior of `r`;
+- adding a dedicated comparison-exit key;
 - replacing Neovim's mapping APIs or CanvasDiff's ownership protocol.
