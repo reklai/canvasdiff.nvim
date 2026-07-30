@@ -20,6 +20,8 @@ C.words = {
   toggle   = { action = "toggle" },
   refresh  = { action = "refresh" },
   compare  = { action = "compare" },
+  checkout = { action = "checkout" },
+  track    = { action = "track" },
   -- Lenses. States, not flips: see the public facade's set_lens.
   unstaged = { action = "set_lens", lens = "unstaged" },
   all      = { action = "set_lens", lens = "all" },
@@ -28,7 +30,8 @@ C.words = {
 
 --- Completion candidates, in the order they should be offered.
 C.candidate_order = {
-  "open", "close", "toggle", "refresh", "compare", "all", "unstaged", "staged",
+  "open", "close", "toggle", "refresh", "compare", "checkout", "track",
+  "all", "unstaged", "staged",
 }
 
 -- `git diff --staged` (and its `--cached` synonym) means index-vs-HEAD, which the

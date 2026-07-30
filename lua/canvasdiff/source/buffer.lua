@@ -145,6 +145,47 @@ function M.modified(root, file)
   return false
 end
 
+local function absolute(path)
+  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+end
+
+local function within(root, path)
+  if root == path then
+    return true
+  end
+  local separator = root:sub(-1) == "/" and "" or "/"
+  return path:sub(1, #root + #separator) == root .. separator
+end
+
+--- First modified normal buffer whose normalized or real path is under root.
+--- @param root string
+--- @return string|nil
+function M.modified_in_root(root)
+  if type(root) ~= "string" or root == "" then
+    return nil
+  end
+  local normalized_root = absolute(root)
+  local real_root = vim.uv.fs_realpath(normalized_root)
+  local paths = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf)
+        and vim.api.nvim_get_option_value("buftype", { buf = buf }) == ""
+        and vim.api.nvim_get_option_value("modified", { buf = buf }) then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name ~= "" then
+        local normalized = absolute(name)
+        local real = vim.uv.fs_realpath(normalized)
+        if within(normalized_root, normalized)
+            or (real_root and real and within(real_root, real)) then
+          paths[#paths + 1] = normalized
+        end
+      end
+    end
+  end
+  table.sort(paths)
+  return paths[1]
+end
+
 --- Byte-exact text of a loaded buffer, as it sits on disk.
 ---
 --- `nvim_buf_get_lines` returns bare lines: Neovim strips `\r` on read and

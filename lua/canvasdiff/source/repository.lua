@@ -307,6 +307,83 @@ function M.branches(root)
   return refs
 end
 
+local function local_branch_name(full_ref)
+  if type(full_ref) ~= "string"
+      or not full_ref:match("^refs/heads/.+$") then
+    return nil, "local branch ref must match refs/heads/<name>"
+  end
+  return full_ref:sub(#"refs/heads/" + 1)
+end
+
+local function validate_remote_ref(full_remote_ref)
+  if type(full_remote_ref) ~= "string"
+      or not full_remote_ref:match("^refs/remotes/[^/]+/.+$") then
+    return nil, "remote branch ref must match refs/remotes/<remote>/<name>"
+  end
+  if full_remote_ref:match("/HEAD$") then
+    return nil, "symbolic remote HEAD cannot be tracked"
+  end
+  return true
+end
+
+--- Switch to one validated, existing local branch without remote guessing.
+--- @param root string
+--- @param full_ref string
+--- @return true|nil
+--- @return string|nil
+function M.switch_branch(root, full_ref)
+  local name, validation_err = local_branch_name(full_ref)
+  if not name then
+    return nil, validation_err
+  end
+  local res = run(root, { "switch", "--no-guess", "--", name })
+  if res.code ~= 0 then
+    return nil, command_error("git switch", res)
+  end
+  return true
+end
+
+--- Create and switch to one validated local branch tracking an exact remote ref.
+--- @param root string
+--- @param local_name string
+--- @param full_remote_ref string
+--- @return true|nil
+--- @return string|nil
+function M.track_branch(root, local_name, full_remote_ref)
+  local valid_remote, remote_err = validate_remote_ref(full_remote_ref)
+  if not valid_remote then
+    return nil, remote_err
+  end
+
+  if type(local_name) ~= "string" or local_name == "" then
+    return nil, "local branch name must be a non-empty string"
+  end
+  local format = run(root, { "check-ref-format", "--branch", local_name })
+  if format.code ~= 0 then
+    return nil, command_error("git check-ref-format --branch", format)
+  end
+
+  local local_ref = "refs/heads/" .. local_name
+  local collision = run(root, {
+    "show-ref", "--verify", "--quiet", "--", local_ref,
+  })
+  if collision.code == 0 then
+    return nil, ("local branch '%s' already exists; use :CanvasDiff checkout")
+      :format(local_name)
+  end
+  if collision.code ~= 1 then
+    return nil, command_error("git show-ref --verify", collision)
+  end
+
+  local res = run(root, {
+    "switch", "--no-guess", "--track", "-c", local_name, "--", full_remote_ref,
+  })
+  if res.code ~= 0 then
+    return nil, command_error("git switch --track", res)
+  end
+  return true
+end
+
 --- Resolve the common ancestor of two commit-ish refs.
 --- @param root string
 --- @param left string

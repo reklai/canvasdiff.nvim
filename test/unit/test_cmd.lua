@@ -15,7 +15,7 @@ end
 T["cmd_parse each word maps to its action"] = function()
   for word, want in pairs({
     open = "open", close = "close", toggle = "toggle", refresh = "refresh",
-    compare = "compare",
+    compare = "compare", checkout = "checkout", track = "track",
     unstaged = "set_lens", all = "set_lens", staged = "set_lens",
   }) do
     H.eq(cmd.parse({ word }).action, want, "'" .. word .. "' should be " .. want)
@@ -96,18 +96,22 @@ T["cmd_parse omitted range endpoints mean HEAD"] = function()
 end
 
 T["cmd_parse reserved words beat same-named branches"] = function()
-  -- A branch literally named "close" must not hijack the subcommand.
-  H.eq(cmd.parse({ "close" }).action, "close")
-  H.eq(cmd.parse({ "close" }).rev, nil)
+  -- A branch literally named after an action must not hijack the subcommand.
+  for _, word in ipairs({ "close", "checkout", "track" }) do
+    H.eq(cmd.parse({ word }).action, word)
+    H.eq(cmd.parse({ word }).rev, nil)
+  end
 end
 
 -- --- completion --------------------------------------------------------
 
 T["cmd_complete filters by prefix and offers every word"] = function()
   H.eq(cmd.complete("", {}), {
-    "open", "close", "toggle", "refresh", "compare", "all", "unstaged", "staged",
+    "open", "close", "toggle", "refresh", "compare", "checkout", "track",
+    "all", "unstaged", "staged",
   })
-  H.eq(cmd.complete("c", {}), { "close", "compare" })
+  H.eq(cmd.complete("c", {}), { "close", "compare", "checkout" })
+  H.eq(cmd.complete("t", {}), { "toggle", "track" })
   H.eq(cmd.complete("un"), { "unstaged" })
   H.eq(cmd.complete("s"), { "staged" })
   H.eq(cmd.complete("zzz"), {})
@@ -172,6 +176,11 @@ T["cmd_plan a lens word resolves its lens rather than passing a name"] = functio
   local outcome = cmd.plan(cmd.parse({ "staged" }))
   H.eq(outcome.call, "set_lens")
   H.eq(outcome.argument, require("canvasdiff.diff").lens.get("staged"))
+end
+
+T["cmd_plan checkout and track retain their reserved operation names"] = function()
+  H.eq(cmd.plan(cmd.parse({ "checkout" })), { call = "checkout" })
+  H.eq(cmd.plan(cmd.parse({ "track" })), { call = "track" })
 end
 
 T["cmd_plan a bare ref becomes a branch change"] = function()

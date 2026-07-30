@@ -16,6 +16,20 @@ local function write(root, rel, content)
   f:close()
 end
 
+local function read(root, rel)
+  local f = assert(io.open(vim.fs.joinpath(root, rel), "rb"))
+  local content = assert(f:read("*a"))
+  f:close()
+  return content
+end
+
+local function with_git_fixture(spec, run)
+  local root = H.git_fixture(spec)
+  local ok, err = xpcall(function() run(root) end, debug.traceback)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 return {
   ["source_ facade exports exactly repository and collection operations"] = function()
     local names = vim.tbl_keys(source)
@@ -30,6 +44,7 @@ return {
       "format_ref",
       "local_branches",
       "merge_base",
+      "modified_buffer_in_root",
       "remote_name",
       "remote_tracking_branches",
       "resolve_commit",
@@ -39,6 +54,8 @@ return {
       "show",
       "show_head",
       "stage",
+      "switch_branch",
+      "track_branch",
       "tracking_branch_name",
       "unstage",
       "worktree_text",
@@ -296,6 +313,152 @@ return {
     assert(local_tip ~= remote_tip,
       "Git-disambiguated completion names must resolve both distinct tips")
     vim.fn.delete(root, "rf")
+  end,
+  ["git: switch_branch selects the exact local ref and preserves saved changes"] = function()
+    with_git_fixture({
+      committed = { ["saved.txt"] = "base\n", ["branch.txt"] = "base\n" },
+    }, function(root)
+      sh(root, { "git", "switch", "-c", "topic" })
+      write(root, "branch.txt", "topic\n")
+      sh(root, { "git", "add", "-A" })
+      sh(root, { "git", "commit", "-m", "topic tip" })
+      sh(root, { "git", "switch", "main" })
+      write(root, "saved.txt", "saved worktree bytes\r\n")
+
+      local switched, err = source.switch_branch(root, "refs/heads/topic")
+      H.eq(switched, true, err)
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/topic")
+      H.eq(read(root, "saved.txt"), "saved worktree bytes\r\n",
+        "a non-conflicting saved modification survives byte-for-byte")
+      H.eq(sh(root, { "git", "status", "--porcelain=v1" }), " M saved.txt\n",
+        "the preserved saved change remains an unstaged worktree modification")
+    end)
+  end,
+  ["git: switch_branch returns Git refusal without changing conflicting work"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "switch", "-c", "topic" })
+      write(root, "a.txt", "topic\n")
+      sh(root, { "git", "add", "-A" })
+      sh(root, { "git", "commit", "-m", "topic tip" })
+      sh(root, { "git", "switch", "main" })
+      write(root, "a.txt", "saved conflicting bytes\r\n")
+      local before_head = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" }))
+      local before_bytes = read(root, "a.txt")
+
+      local switched, err = source.switch_branch(root, "refs/heads/topic")
+      H.eq(switched, nil)
+      assert(err and err:find("local changes", 1, true),
+        "the bounded diagnostic must retain Git's refusal: " .. tostring(err))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before_head)
+      H.eq(read(root, "a.txt"), before_bytes)
+      H.eq(sh(root, { "git", "status", "--porcelain=v1" }), " M a.txt\n",
+        "Git refusal leaves the worktree status unchanged")
+    end)
+  end,
+  ["git: switch_branch rejects option-looking and non-local identities before Git"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "branch", "topic" })
+      local before = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" }))
+      for _, invalid in ipairs({
+        "--topic",
+        "refs/remotes/origin/topic",
+        "topic",
+        "refs/heads/",
+      }) do
+        local switched, err = source.switch_branch(root, invalid)
+        H.eq(switched, nil, invalid)
+        assert(type(err) == "string" and err ~= "", invalid .. " needs a diagnostic")
+        H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before,
+          invalid .. " must not reach a branch-changing Git operation")
+      end
+    end)
+  end,
+  ["git: switch_branch never guesses a same-named remote for a stale local ref"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "remote", "add", "origin", "." })
+      sh(root, { "git", "update-ref", "refs/remotes/origin/topic", "HEAD" })
+      local before = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" }))
+
+      local switched, err = source.switch_branch(root, "refs/heads/topic")
+      H.eq(switched, nil)
+      assert(type(err) == "string" and err ~= "", "stale local ref needs a diagnostic")
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before,
+        "--no-guess must prevent implicit remote tracking")
+      local absent = vim.system({
+        "git", "-C", root, "show-ref", "--verify", "--quiet", "--",
+        "refs/heads/topic",
+      }, { text = true }):wait()
+      H.eq(absent.code, 1, "remote guessing must not create a local branch")
+    end)
+  end,
+  ["git: track_branch creates the exact local branch and exact upstream"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "remote", "add", "origin", "." })
+      sh(root, { "git", "update-ref", "refs/remotes/origin/feature/api", "HEAD" })
+
+      local tracked, err = source.track_branch(
+        root, "feature/api", "refs/remotes/origin/feature/api")
+      H.eq(tracked, true, err)
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/feature/api")
+      H.eq(vim.trim(sh(root, {
+        "git", "rev-parse", "--symbolic-full-name", "@{upstream}",
+      })), "refs/remotes/origin/feature/api")
+    end)
+  end,
+  ["git: track_branch rejects collisions and symbolic remote defaults"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "branch", "feature/api" })
+      sh(root, { "git", "update-ref", "refs/remotes/origin/feature/api", "HEAD" })
+      sh(root, { "git", "symbolic-ref", "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/feature/api" })
+      local before = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" }))
+
+      local collision, collision_err = source.track_branch(
+        root, "feature/api", "refs/remotes/origin/feature/api")
+      H.eq(collision, nil)
+      assert(collision_err and collision_err:find("already exists", 1, true),
+        tostring(collision_err))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before)
+
+      local symbolic, symbolic_err = source.track_branch(
+        root, "other", "refs/remotes/origin/HEAD")
+      H.eq(symbolic, nil)
+      assert(symbolic_err and symbolic_err:find("HEAD", 1, true),
+        tostring(symbolic_err))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })), before)
+      local absent = vim.system({
+        "git", "-C", root, "show-ref", "--verify", "--quiet", "--",
+        "refs/heads/other",
+      }, { text = true }):wait()
+      H.eq(absent.code, 1, "symbolic remote rejection creates no branch")
+    end)
+  end,
+  ["git: full refs prevent same-named local and remote switch redirection"] = function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "remote", "add", "origin", "." })
+      local local_oid = vim.trim(sh(root, { "git", "rev-parse", "HEAD" }))
+      sh(root, { "git", "branch", "origin/topic", local_oid })
+      sh(root, { "git", "commit", "--allow-empty", "-m", "remote-only tip" })
+      local remote_oid = vim.trim(sh(root, { "git", "rev-parse", "HEAD" }))
+      sh(root, { "git", "update-ref", "refs/remotes/origin/topic", remote_oid })
+
+      local switched, switch_err =
+        source.switch_branch(root, "refs/heads/origin/topic")
+      H.eq(switched, true, switch_err)
+      H.eq(vim.trim(sh(root, { "git", "rev-parse", "HEAD" })), local_oid,
+        "local checkout must not guess the same-named remote")
+
+      local tracked, track_err =
+        source.track_branch(root, "tracked-topic", "refs/remotes/origin/topic")
+      H.eq(tracked, true, track_err)
+      H.eq(vim.trim(sh(root, { "git", "rev-parse", "HEAD" })), remote_oid,
+        "tracking must use the exact full remote ref")
+      H.eq(vim.trim(sh(root, {
+        "git", "rev-parse", "--symbolic-full-name", "@{upstream}",
+      })), "refs/remotes/origin/topic")
+    end)
   end,
   ["git: merge_base resolves refs to their common commit"] = function()
     local root = H.git_fixture({ committed = { ["common.txt"] = "base\n" } })
@@ -713,6 +876,64 @@ return {
       end
     end
     vim.fn.delete(root, "rf")
+  end,
+  ["source: modified_buffer_in_root returns only the first normal repository path"] = function()
+    local root = H.git_fixture({
+      committed = {
+        ["loaded.txt"] = "loaded\n",
+        ["nested/a.txt"] = "a\n",
+        ["nested/z.txt"] = "z\n",
+      },
+    })
+    local sibling = root .. "-sibling"
+    vim.fn.mkdir(sibling, "p")
+    sh(sibling, { "git", "init", "-b", "main" })
+    write(sibling, "sibling.txt", "sibling\n")
+    local buffers = {}
+    local function keep(buf)
+      buffers[#buffers + 1] = buf
+      return buf
+    end
+
+    local loaded = keep(vim.fn.bufadd(vim.fs.joinpath(root, "loaded.txt")))
+    vim.fn.bufload(loaded)
+
+    local sibling_buf =
+      keep(vim.fn.bufadd(vim.fs.joinpath(sibling, "sibling.txt")))
+    vim.fn.bufload(sibling_buf)
+    vim.api.nvim_buf_set_lines(sibling_buf, 0, -1, false, { "unsaved sibling" })
+
+    local unnamed = keep(vim.api.nvim_create_buf(true, false))
+    vim.api.nvim_buf_set_lines(unnamed, 0, -1, false, { "unsaved unnamed" })
+
+    local special = keep(vim.api.nvim_create_buf(false, true))
+    vim.api.nvim_buf_set_name(special, vim.fs.joinpath(root, "special.txt"))
+    vim.api.nvim_buf_set_lines(special, 0, -1, false, { "unsaved special" })
+
+    local ok, err = xpcall(function()
+      H.eq(source.modified_buffer_in_root(root), nil,
+        "sibling, unnamed, special, and loaded-unmodified buffers do not block")
+
+      local z = keep(vim.fn.bufadd(vim.fs.joinpath(root, "nested", "z.txt")))
+      vim.fn.bufload(z)
+      vim.api.nvim_set_option_value("modified", true, { buf = z })
+      local a = keep(vim.fn.bufadd(vim.fs.joinpath(root, "nested", "a.txt")))
+      vim.fn.bufload(a)
+      vim.api.nvim_set_option_value("modified", true, { buf = a })
+
+      H.eq(source.modified_buffer_in_root(root),
+        vim.fs.joinpath(root, "nested", "a.txt"),
+        "matching absolute paths are returned in deterministic sorted order")
+    end, debug.traceback)
+    for _, buf in ipairs(buffers) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.api.nvim_set_option_value, "modified", false, { buf = buf })
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+    vim.fn.delete(root, "rf")
+    vim.fn.delete(sibling, "rf")
+    assert(ok, err)
   end,
   ["source: a stable replacement cannot clear a deleted target's alias history"] = function()
     local root = H.git_fixture({

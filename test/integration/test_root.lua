@@ -65,6 +65,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   local names = vim.tbl_keys(first)
   table.sort(names)
   H.eq(names, {
+    "checkout",
     "close",
     "command",
     "command_complete",
@@ -81,6 +82,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "toggle",
     "toggle_base",
     "toggle_stage",
+    "track",
   })
   for _, name in ipairs(names) do
     H.eq(type(first[name]), "function", name .. " is callable")

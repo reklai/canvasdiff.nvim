@@ -52,6 +52,12 @@ return {
   compare = function()
     return app:compare()
   end,
+  checkout = function()
+    return app:checkout()
+  end,
+  track = function()
+    return app:track()
+  end,
   set_range = function(spec)
     return app:set_range(spec)
   end,
