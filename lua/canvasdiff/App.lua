@@ -2552,20 +2552,7 @@ local function comparison_choices(branches)
 end
 
 local function format_branch(item)
-  local labels = {}
-  if item.current then
-    labels[#labels + 1] = "current"
-  end
-  if item.remote_default then
-    labels[#labels + 1] = "remote default"
-  end
-  if item.kind == "local" or item.kind == "remote" then
-    labels[#labels + 1] = item.kind
-  end
-  if #labels == 0 then
-    return item.name
-  end
-  return item.name .. " [" .. table.concat(labels, "] [") .. "]"
+  return source.format_ref(item)
 end
 
 local function compare_origin_alive(app, request, unpublished_buf)
@@ -2663,7 +2650,7 @@ function App:compare()
   local comparisons = comparison_choices(branches)
 
   vim.ui.select(bases, {
-    prompt = "CanvasDiff base:",
+    prompt = "CanvasDiff compare from (base):",
     kind = "canvasdiff_branch_base",
     format_item = format_branch,
   }, function(base)
@@ -2671,7 +2658,8 @@ function App:compare()
       return
     end
     vim.ui.select(comparisons, {
-      prompt = "CanvasDiff compare:",
+      prompt = "CanvasDiff compare to ("
+        .. lens.range(base.name, "target", "...").label .. "):",
       kind = "canvasdiff_branch_compare",
       format_item = format_branch,
     }, function(other)

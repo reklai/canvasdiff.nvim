@@ -119,13 +119,13 @@ end
 
 T["lens_named the three fixed lenses point at the right pair of sides"] = function()
   H.eq(lens.get("all"), { id = "all", old = "HEAD", new = "worktree",
-    label = "worktree vs HEAD" })
+    label = "HEAD → WORKTREE" })
   H.eq(lens.get("unstaged"), { id = "unstaged", old = ":0", new = "worktree",
-    label = "worktree vs index (unstaged)" })
+    label = "INDEX → WORKTREE (unstaged)" })
   -- The one the plugin could not express at all before: staged is index vs HEAD,
   -- so the NEW side is the index rather than the worktree.
   H.eq(lens.get("staged"), { id = "staged", old = "HEAD", new = ":0",
-    label = "index vs HEAD (staged)" })
+    label = "HEAD → INDEX (staged)" })
   H.eq(lens.get("nonsense"), nil)
 end
 
@@ -136,11 +136,23 @@ T["lens_named get returns a copy, so state cannot corrupt the table"] = function
 end
 
 T["lens_branch compares the worktree against a ref"] = function()
-  H.eq(lens.branch("main"),
-    { id = "branch:main", old = "main", new = "worktree", label = "worktree vs main" })
+  H.eq(lens.branch("refs/heads/main").label, "refs/heads/main → WORKTREE")
   H.eq(lens.branch("origin/main").id, "branch:origin/main", "the ref is part of the id")
   H.eq(lens.branch(""), nil, "no ref, no lens")
   H.eq(lens.branch(nil), nil)
+end
+
+T["lens_labels describe the directional comparison identity"] = function()
+  H.eq(lens.get("all").label, "HEAD → WORKTREE")
+  H.eq(lens.get("unstaged").label, "INDEX → WORKTREE (unstaged)")
+  H.eq(lens.get("staged").label, "HEAD → INDEX (staged)")
+  H.eq(lens.branch("refs/heads/main").label, "refs/heads/main → WORKTREE")
+  H.eq(
+    lens.range("main", "topic", "..").label,
+    "main → topic")
+  H.eq(
+    lens.range("main", "topic", "...").label,
+    "merge-base(main, topic) → topic")
 end
 
 T["lens_branch is_branch distinguishes arbitrary refs from fixed lenses"] = function()

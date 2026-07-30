@@ -27,23 +27,16 @@ L.INDEX_REV = ":0"
 --- @field label string  human text for the on-screen indicator
 --- @field operator string? ".." | "..." for a committed range
 
---- The three fixed lenses. `branch` is built per-ref by L.branch.
----
---- Labels read "new vs old" because that is the direction a diff is read in, and
---- they name the git concept rather than our own vocabulary -- someone who knows
---- `git diff` should recognise which one they are looking at immediately.
+--- The three fixed lens identities. `branch` is built per-ref by L.branch.
 L.named = {
   all = {
     id = "all", old = "HEAD", new = "worktree",
-    label = "worktree vs HEAD",
   },
   unstaged = {
     id = "unstaged", old = L.INDEX_REV, new = "worktree",
-    label = "worktree vs index (unstaged)",
   },
   staged = {
     id = "staged", old = "HEAD", new = L.INDEX_REV,
-    label = "index vs HEAD (staged)",
   },
 }
 
@@ -74,6 +67,41 @@ local function branch_shape(l)
     and l.id == "branch:" .. l.old
 end
 
+--- Is this a lens identity we are willing to act on? Guards a restored session
+--- payload, which is on disk and hand-editable, from putting nonsense sides on
+--- `state` where every reader would then trust them.
+function L.valid(l)
+  return range_shape(l) or branch_shape(l) or named_shape(l)
+end
+
+local function label_for(l)
+  if l.id == "all" then return "HEAD → WORKTREE" end
+  if l.id == "unstaged" then return "INDEX → WORKTREE (unstaged)" end
+  if l.id == "staged" then return "HEAD → INDEX (staged)" end
+  if range_shape(l) then
+    if l.operator == "..." then
+      return ("merge-base(%s, %s) → %s"):format(l.old, l.new, l.new)
+    end
+    return ("%s → %s"):format(l.old, l.new)
+  end
+  if branch_shape(l) then
+    return ("%s → WORKTREE"):format(l.old)
+  end
+end
+
+--- Return a trusted copy whose display label is derived from comparison identity.
+function L.normalize(l)
+  if not L.valid(l) then return nil end
+  local out = {
+    id = l.id,
+    old = l.old,
+    new = l.new,
+    operator = l.operator,
+  }
+  out.label = label_for(l)
+  return out
+end
+
 --- A read-only comparison between two committed refs.
 ---
 --- Two-dot compares the tips directly. Three-dot resolves the left side to the
@@ -85,19 +113,12 @@ function L.range(left, right, operator)
       or (operator ~= ".." and operator ~= "...") then
     return nil
   end
-  local label
-  if operator == "..." then
-    label = right .. " vs merge-base(" .. left .. ")"
-  else
-    label = right .. " vs " .. left
-  end
-  return {
+  return L.normalize({
     id = "range:" .. left .. operator .. right,
     old = left,
     new = right,
     operator = operator,
-    label = label,
-  }
+  })
 end
 
 --- True when `l` is an intact committed-range lens.
@@ -113,12 +134,11 @@ function L.branch(ref)
   if type(ref) ~= "string" or ref == "" then
     return nil
   end
-  return {
+  return L.normalize({
     id = "branch:" .. ref,
     old = ref,
     new = "worktree",
-    label = "worktree vs " .. ref,
-  }
+  })
 end
 
 --- True when `l` is one of the arbitrary-ref lenses built by L.branch.
@@ -138,7 +158,7 @@ function L.get(name)
   if not l then
     return nil
   end
-  return { id = l.id, old = l.old, new = l.new, label = l.label }
+  return L.normalize(l)
 end
 
 --- True when this lens's sections map onto files the user can actually edit.
@@ -177,13 +197,6 @@ function L.to_base(lens)
   return nil
 end
 
---- Is this a lens we are willing to act on? Guards a restored session payload,
---- which is on disk and hand-editable, from putting a nonsense new side on `state`
---- where every reader would then trust it.
-function L.valid(l)
-  return range_shape(l) or branch_shape(l) or named_shape(l)
-end
-
 --- The lens a state is looking through.
 ---
 --- Falls back to translating the older `state.base` string, so a state built before
@@ -191,7 +204,7 @@ end
 --- everywhere instead of needing every call site to know about the transition.
 function L.of(state)
   if state and L.valid(state.lens) then
-    return state.lens
+    return L.normalize(state.lens)
   end
   return L.from_base(state and state.base)
 end

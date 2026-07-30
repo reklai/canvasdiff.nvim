@@ -853,7 +853,7 @@ T["session_ committed range API is read-only and restores on reopen"] = function
     assert(changed, change_err)
     local winbar = vim.api.nvim_get_option_value(
       "winbar", { win = vim.api.nvim_get_current_win() })
-    assert(winbar:find("HEAD vs topic", 1, true),
+    assert(winbar:find("topic → HEAD", 1, true),
       "the normalized two-dot label reaches the live canvas: " .. winbar)
 
     fm.close()
@@ -864,7 +864,7 @@ T["session_ committed range API is read-only and restores on reopen"] = function
     fm.open()
     local restored = vim.api.nvim_get_option_value(
       "winbar", { win = vim.api.nvim_get_current_win() })
-    assert(restored:find("HEAD vs topic", 1, true),
+    assert(restored:find("topic → HEAD", 1, true),
       "reopen must collect the saved range before rendering: " .. restored)
     fm.close()
   end)
@@ -873,6 +873,38 @@ T["session_ committed range API is read-only and restores on reopen"] = function
     "range open/close cannot write the index or worktree")
   H.eq(git({ "symbolic-ref", "--short", "HEAD" }), before_branch,
     "range mode cannot checkout either endpoint")
+  vim.fn.delete(root, "rf")
+end
+
+T["session_ restored lens derives its live label from identity"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "base\n" },
+    worktree = { ["a.txt"] = "changed\n" },
+  })
+  system.write_file(session.path_for(root), vim.json.encode({
+    version = 2,
+    lens = {
+      id = "branch:main",
+      old = "main",
+      new = "worktree",
+      label = "worktree vs main",
+    },
+    collapsed = {},
+    folds = {},
+    folded_seen = {},
+  }))
+
+  in_repo(root, {}, function(fm)
+    local st = assert(fm.open())
+    H.eq(model.lens.of(st), model.lens.branch("main"),
+      "the live lens is normalized instead of trusting persisted display text")
+    local winbar = vim.api.nvim_get_option_value(
+      "winbar", { win = vim.api.nvim_get_current_win() })
+    assert(winbar:find("main → WORKTREE", 1, true),
+      "the winbar derives the comparison direction from lens identity: " .. winbar)
+    fm.close()
+  end)
+
   vim.fn.delete(root, "rf")
 end
 

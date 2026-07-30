@@ -38,6 +38,7 @@ return {
     get = lens.get,
     is_branch = lens.is_branch,
     is_range = lens.is_range,
+    normalize = lens.normalize,
     of = lens.of,
     range = lens.range,
     same = lens.same,

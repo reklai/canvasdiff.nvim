@@ -824,10 +824,14 @@ T["root_ compare picker orders metadata choices and cancels silently"] = functio
     }, "comparison choices put the current branch first and exclude remote HEAD")
     H.eq(calls[1].items[1].ref, "refs/remotes/origin/HEAD",
       "picker execution identity is the unambiguous full ref")
-    assert(calls[1].opts.format_item(calls[1].items[1]):find(
-      "remote default", 1, true), "the symbolic default is labeled")
-    assert(calls[2].opts.format_item(calls[2].items[1]):find(
-      "current", 1, true), "the current branch is labeled")
+    H.eq(calls[1].opts.prompt, "CanvasDiff compare from (base):")
+    H.eq(
+      calls[2].opts.prompt,
+      "CanvasDiff compare to (merge-base(origin/HEAD, target) → target):")
+    H.eq(calls[1].opts.format_item(calls[1].items[1]),
+      "origin/HEAD [default for origin]")
+    H.eq(calls[2].opts.format_item(calls[2].items[1]),
+      "zeta [checked out]")
     H.eq(vim.api.nvim_get_current_buf(), before,
       "cancelling the second prompt changes no window")
     H.eq(#msgs, 0, "cancellation is silent")

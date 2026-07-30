@@ -166,6 +166,9 @@ function M.load(root)
   if not ok or type(data) ~= "table" or data.version ~= VERSION then
     return nil
   end
+  if data.lens ~= nil then
+    data.lens = lens.normalize(data.lens)
+  end
   return data
 end
 

@@ -10,14 +10,14 @@ return {
       old = "main",
       new = "topic",
       operator = "..",
-      label = "topic vs main",
+      label = "main → topic",
     })
     H.eq(lens.range("main", "topic", "..."), {
       id = "range:main...topic",
       old = "main",
       new = "topic",
       operator = "...",
-      label = "topic vs merge-base(main)",
+      label = "merge-base(main, topic) → topic",
     })
     H.eq(lens.range("", "topic", ".."), nil, "an omitted endpoint is normalized by the parser")
     H.eq(lens.range("main", "", ".."), nil)
