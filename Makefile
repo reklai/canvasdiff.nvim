@@ -1,5 +1,6 @@
 .PHONY: test unit integration e2e fault architecture \
-	bench-eager bench-paged bench-chaos bench-regression bench-acceptance verify
+	bench-eager bench-paged bench-chaos bench-regression bench-acceptance \
+	bench-live-scale verify
 
 # FILTER is a Lua pattern matched against test NAMES; SUITE selects one intent
 # directory under test/. They compose: `make test SUITE=fault FILTER='^hl_'`.
@@ -53,6 +54,13 @@ bench-regression: bench-eager
 bench-acceptance:
 	NVIM_LOG_FILE=$(OUT)-acceptance.log $(NVIM_BENCH) \
 		-l benchmark/acceptance/run.lua $(OUT)-acceptance.json
+
+# The expensive real-Git ladder: one isolated worker per requested size.
+LIVE_REPS ?= 1
+bench-live-scale:
+	NVIM_LOG_FILE=$(OUT)-live-scale.log $(NVIM_BENCH) \
+		-l benchmark/live_scale/run.lua $(OUT)-live-scale.json \
+		$(LIVE_REPS) "$(SIZES)" "$(BASELINE)"
 
 # Everything a publication audit has to show, in one command.
 verify:

@@ -1,4 +1,77 @@
-# Isolated eager-canvas baseline
+# Benchmark operators
+
+## Live Git scale campaign
+
+The live-scale lane replays CanvasDiff against fresh, deterministic real-Git
+fixtures with exactly 1, 1,000, 10,000, 100,000, and 1,000,000 changed content
+lines. Each size and repetition gets a fresh headless Neovim worker and an
+isolated temporary repository.
+
+Run the authoritative five-size ladder with its default single repetition:
+
+```sh
+make bench-live-scale OUT=/tmp/canvasdiff-live-baseline
+```
+
+`LIVE_REPS` defaults to `1`. More repetitions multiply both runtime and work.
+For a non-authoritative development run, override the ordered sizes explicitly:
+
+```sh
+make bench-live-scale \
+  OUT=/tmp/canvasdiff-live-dev \
+  SIZES=1,1000 \
+  LIVE_REPS=1
+```
+
+A `SIZES` override is always recorded as non-authoritative and cannot publish
+`docs/verification/live-scale.json`. Compare a new authoritative run with the
+checked-in baseline only on the same compatible host and measurement setup:
+
+```sh
+make bench-live-scale \
+  OUT=/tmp/canvasdiff-live-current \
+  LIVE_REPS=1 \
+  BASELINE=docs/verification/live-scale.json
+```
+
+Comparison refuses mismatched schema/profile, authoritative sizes, repetition
+count, seed, fixture/config identity, host fingerprint, or RSS/HWM capability
+sources. Source revisions and tree digests are provenance, so they may differ
+between the baseline and an optimization.
+
+The aggregate uses schema `canvasdiff.live_scale/v1`. Its top level records the
+overall status/verdict, authoritative flag and size ladder, repetitions and
+seed, environment/host/provenance identity, capability and fixture identity,
+portable thresholds, configuration digest, raw `samples`, per-size
+`aggregates`, structured `failures`, cleanup evidence, and output path. Each
+successful sample retains the worker's phase timings, Git/source adapter
+timings, action trace and observations, correctness evidence, heartbeat,
+memory checkpoints, paging/extmark state, cleanup, and process diagnostics.
+Per-size summaries report sample count plus p50, p95, and maximum phase,
+operation, source, first-view, heartbeat-gap, peak-RSS, and retained-heap
+metrics. A requested baseline adds either compatible ratio rows or precise
+incompatibility reasons.
+
+This is an expensive lane. Expect minutes rather than seconds and reserve at
+least 1 GiB of free temporary disk for the largest worktree, Git objects, and
+diagnostic output. Workers run sequentially and each has a 15-minute timeout,
+so one default ladder has a 75-minute failure-path ceiling. Temporary fixture
+directories are removed after each worker; failed cleanup is itself a gate.
+
+Fixture construction is deliberately timed as `fixture_build`, but it starts
+before the heartbeat and is excluded from CanvasDiff plugin latency. Do not
+quote fixture time, total process time, or Git repository creation time as
+plugin latency. Use source, open/first-view, and operation metrics for plugin
+claims.
+
+RSS and HWM are observational in this first machine-dependent baseline.
+Linux, with supported current-RSS and peak-RSS sources, is the authoritative
+memory boundary. Other platforms may report capabilities, but they do not
+create or relax a Linux memory gate. Portable correctness, responsiveness,
+paging, cleanup, finite-metric, and no-unhandled-error gates still apply
+everywhere they are supported.
+
+## Isolated eager-canvas baseline
 
 This lane freezes the ordinary-project performance of CanvasDiff's current
 eager renderer before the paged `Projection` replaces it.

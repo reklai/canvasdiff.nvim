@@ -19,12 +19,56 @@ one never dirties the tree.
 | `eager-baseline.json` | the frozen small-canvas baseline the regression gate compares against |
 | `chaos-campaign.json` | the Phase 7 deliberate-breakage campaigns, both harnesses |
 | `live-acceptance.json` | the Phase 8 live acceptance session |
+| `live-scale.json` | the untouched real-Git five-size baseline for compatible optimization comparisons |
 
 The million-row lane's artifact is not checked in: it is machine-specific by
 construction (RSS budgets against the host allocator), so a committed copy
 would read as a promise about hardware it was never measured on. Reproduce it
 with `make bench-paged` and compare against the gates in
 `benchmark/paged/README.md`.
+
+The live-scale artifact is also host-specific, but is checked in as
+observational evidence and a compatible same-host comparison input rather than
+a universal latency or memory promise. Its portable gates cover exact content
+and action correctness, heartbeat responsiveness, paging bounds, cleanup, and
+the absence of crashes or unhandled worker errors.
+
+Run the authoritative five-size ladder:
+
+```sh
+make bench-live-scale OUT=/tmp/canvasdiff-live-baseline LIVE_REPS=1
+```
+
+Use a short, explicitly non-authoritative ladder while developing:
+
+```sh
+make bench-live-scale \
+  OUT=/tmp/canvasdiff-live-dev \
+  SIZES=1,1000 \
+  LIVE_REPS=1
+```
+
+Compare an authoritative run only with a compatible baseline:
+
+```sh
+make bench-live-scale \
+  OUT=/tmp/canvasdiff-live-current \
+  LIVE_REPS=1 \
+  BASELINE=docs/verification/live-scale.json
+```
+
+The JSON records environment, host and capability identity; fixture/config
+identity; portable thresholds; raw samples with phases, actions, observations,
+correctness, heartbeat, memory, paging and cleanup evidence; per-size
+p50/p95/max aggregates; structured failures; and optional comparison ratios.
+Fixture construction time is reported separately and excluded from plugin
+latency. Do not present fixture-build or total-process time as CanvasDiff
+latency.
+
+Allow minutes of runtime, at least 1 GiB of free temporary disk, and a
+worst-case 15-minute timeout per sequential worker. Linux is the authoritative
+RSS/HWM boundary; the initial latency and memory values are observational and
+must not be generalized into cross-host budgets.
 
 ## Status
 
