@@ -805,6 +805,36 @@ local function picker_call(items, opts, callback)
   return { items = items, opts = opts, callback = callback }
 end
 
+T["root_ checkout without a Surface resolves the current buffer before window cwd"] =
+function()
+  local root_a = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+  local root_b = H.git_fixture({ committed = { ["b.txt"] = "b\n" } })
+  git(root_a, { "branch", "a-topic" })
+  git(root_b, { "branch", "b-topic" })
+  in_cwd(root_b, function(fm)
+    vim.cmd("edit " .. vim.fn.fnameescape(vim.fs.joinpath(root_a, "a.txt")))
+    vim.cmd("lcd " .. vim.fn.fnameescape(root_b))
+    local real_select = vim.ui.select
+    local offered
+    vim.ui.select = function(items, opts, callback)
+      offered = names(items)
+      callback(item_named(items, "a-topic"))
+    end
+    local ok, err = fm.checkout()
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(offered, { "a-topic", "main" },
+      "the picker enumerates the current buffer's repository")
+    H.eq(head_branch(root_a), "a-topic",
+      "the current buffer's repository receives the mutation")
+    H.eq(head_branch(root_b), "main",
+      "the invoking window cwd repository is never mutated")
+    vim.cmd("enew")
+  end)
+  vim.fn.delete(root_a, "rf")
+  vim.fn.delete(root_b, "rf")
+end
+
 T["root_ checkout picker is local-only, cancellable, and switches exact refs"] =
 function()
   local root = picker_fixture()
@@ -846,6 +876,54 @@ function()
     vim.ui.select = real_select
     assert(ok, err)
   end)
+  vim.fn.delete(root, "rf")
+end
+
+T["root_ exact live current checkout is a no-op before modified-buffer and lifecycle guards"] =
+function()
+  local root = picker_fixture()
+  local marker_dir = H.tmpdir()
+  local marker = vim.fs.joinpath(marker_dir, "hook-ran")
+  local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+  local hook_file = assert(io.open(hook, "w"))
+  hook_file:write("#!/bin/sh\nprintf ran > "
+    .. vim.fn.shellescape(marker) .. "\nexit 41\n")
+  hook_file:close()
+  assert(vim.uv.fs_chmod(hook, 493))
+  local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+  dirty:write("worktree\n")
+  dirty:close()
+
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false } })
+    local st = assert(fm.open())
+    local old_surface, old_buf = st.surface, st.buf
+    local file_buf = vim.fn.bufadd(vim.fs.joinpath(root, "a.txt"))
+    vim.fn.bufload(file_buf)
+    vim.api.nvim_buf_set_lines(file_buf, 0, -1, false, { "unsaved" })
+    local real_select = vim.ui.select
+    vim.ui.select = function(items, opts, callback)
+      callback(item_named(items, "zeta"))
+    end
+    local changed, err = fm.checkout()
+    vim.ui.select = real_select
+
+    H.eq(changed, true, err)
+    H.eq(err, nil)
+    H.eq(head_branch(root), "zeta")
+    assert(old_surface:is_alive(), "a no-op keeps the exact Surface alive")
+    H.eq(st.surface, old_surface)
+    H.eq(vim.api.nvim_get_current_buf(), old_buf,
+      "a no-op keeps the exact visible Canvas buffer")
+    H.eq(vim.uv.fs_stat(marker), nil, "git switch and its hook were not invoked")
+    H.eq(#msgs, 0, "a successful no-op is silent")
+    vim.api.nvim_set_option_value("modified", false, { buf = file_buf })
+    vim.api.nvim_buf_delete(file_buf, { force = true })
+  end)
+  vim.fn.delete(marker_dir, "rf")
   vim.fn.delete(root, "rf")
 end
 
@@ -945,6 +1023,37 @@ function()
   end
 end
 
+T["root_ branch mutation refuses named file-backed acwrite buffers before Git"] =
+function()
+  for _, operation in ipairs({
+    { name = "checkout", choice = "main" },
+    { name = "track", choice = "origin/topic" },
+  }) do
+    local root = picker_fixture()
+    in_cwd(root, function(fm)
+      local path = vim.fs.joinpath(root, "generated.txt")
+      local buf = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_set_option_value("buftype", "acwrite", { buf = buf })
+      vim.api.nvim_buf_set_name(buf, path)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "unsaved generated text" })
+      local real_select = vim.ui.select
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, operation.choice))
+      end
+      local changed, err = fm[operation.name]()
+      vim.ui.select = real_select
+      H.eq(changed, nil)
+      assert(err and err:find(path, 1, true),
+        "the refusal names the acwrite file path: " .. tostring(err))
+      H.eq(head_branch(root), "zeta",
+        operation.name .. " must stop before Git")
+      vim.api.nvim_set_option_value("modified", false, { buf = buf })
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+    vim.fn.delete(root, "rf")
+  end
+end
+
 T["root_ checkout replaces visible Canvas and disposes hidden Canvas"] = function()
   local root = picker_fixture()
   local file = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
@@ -1016,7 +1125,66 @@ T["root_ checkout replaces visible Canvas and disposes hidden Canvas"] = functio
   vim.fn.delete(root, "rf")
 end
 
-T["root_ hidden branch switch replaces the persisted comparison lens"] =
+T["root_ nonzero post-checkout hooks still rebuild checkout and track Surfaces"] =
+function()
+  for _, operation in ipairs({
+    {
+      name = "checkout", choice = "main", expected_head = "main",
+      diagnostic = "injected checkout app hook",
+    },
+    {
+      name = "track", choice = "origin/topic", expected_head = "topic",
+      diagnostic = "injected track app hook",
+    },
+  }) do
+    local root = picker_fixture()
+    local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+    dirty:write("worktree\n")
+    dirty:close()
+    local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+    local hook_file = assert(io.open(hook, "w"))
+    hook_file:write("#!/bin/sh\nprintf '", operation.diagnostic,
+      "\\n' >&2\nexit 37\n")
+    hook_file:close()
+    assert(vim.uv.fs_chmod(hook, 493))
+
+    in_cwd(root, function(fm, msgs)
+      fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+        scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+        highlight = { enabled = false }, virt = { enabled = false },
+        session = { enabled = false } })
+      local old = assert(fm.open())
+      local old_surface, old_buf = old.surface, old.buf
+      local real_select = vim.ui.select
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, operation.choice))
+      end
+      local changed, warning = fm[operation.name]()
+      vim.ui.select = real_select
+
+      H.eq(changed, true, warning)
+      assert(warning and warning:find(operation.diagnostic, 1, true),
+        "the successful mutation returns the hook warning: " .. tostring(warning))
+      H.eq(head_branch(root), operation.expected_head)
+      assert(not old_surface:is_alive(), "the old Surface is retired")
+      assert(vim.api.nvim_get_current_buf() ~= old_buf,
+        "the visible Surface is rebuilt from authoritative HEAD")
+      assert(canvas.is_canvas_buf(vim.api.nvim_get_current_buf()))
+      assert(vim.api.nvim_get_option_value("winbar", { win = 0 })
+        :find("HEAD → WORKTREE", 1, true))
+      local reported = false
+      for _, message in ipairs(msgs) do
+        if message.msg:find(operation.diagnostic, 1, true) then
+          reported = true
+        end
+      end
+      assert(reported, "the hook warning is reported: " .. vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end
+end
+
+T["root_ hidden branch switch invalidates the persisted comparison lens"] =
 function()
   local root = picker_fixture()
   local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
@@ -1044,10 +1212,8 @@ function()
     vim.ui.select = real_select
     assert(changed, err)
     H.eq(head_branch(root), "main")
-    local persisted = assert(require("canvasdiff.session").load(root))
-    H.eq(persisted.lens.id, "all")
-    H.eq(persisted.collapsed, {},
-      "comparison-shaped fold state is not persisted across branch identity")
+    H.eq(require("canvasdiff.session").load(root), nil,
+      "the runtime tombstone hides every pre-switch comparison payload")
 
     local reopened = assert(fm.open())
     H.eq(reopened.lens.id, "all",
@@ -1097,6 +1263,70 @@ function()
   end)
   os.remove(saved)
   vim.fn.delete(root, "rf")
+end
+
+T["root_ session-save failure cannot resurrect a pre-switch comparison"] =
+function()
+  for _, scenario in ipairs({
+    { name = "hidden review" },
+    { name = "visible rebuild failure", rebuild_fails = true },
+  }) do
+    local root = picker_fixture()
+    local dirty = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+    dirty:write("dirty\n")
+    dirty:close()
+    local saved = require("canvasdiff.session").path_for(root)
+    in_cwd(root, function(fm)
+      fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+        scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+        highlight = { enabled = false }, virt = { enabled = false },
+        session = { enabled = true } })
+      local session_mod = require("canvasdiff.session")
+      local branch_lens = require("canvasdiff.diff").lens.branch("refs/heads/main")
+      local old = assert(fm.open({ lens = branch_lens }))
+      old.collapsed["a.txt"] = "user"
+      session_mod.save(old)
+      assert(session_mod.load(root), "seed the old branch session")
+      if not scenario.rebuild_fails then
+        vim.cmd("enew")
+      end
+
+      local real_save = session_mod.save
+      local real_sections = source.sections
+      local real_select = vim.ui.select
+      session_mod.save = function()
+        error("injected retirement session-save failure")
+      end
+      if scenario.rebuild_fails then
+        source.sections = function()
+          return nil, "injected post-switch rebuild failure"
+        end
+      end
+      vim.ui.select = function(items, opts, callback)
+        callback(item_named(items, "main"))
+      end
+      local invoked, changed, err = pcall(fm.checkout)
+      session_mod.save = real_save
+      source.sections = real_sections
+      vim.ui.select = real_select
+
+      assert(invoked, changed)
+      if scenario.rebuild_fails then
+        H.eq(changed, nil)
+        assert(err and err:find("refresh failed", 1, true), tostring(err))
+      else
+        H.eq(changed, true, err)
+      end
+      H.eq(head_branch(root), "main")
+      local reopened = assert(fm.open())
+      H.eq(reopened.lens.id, "all",
+        scenario.name .. " must ignore the old branch session")
+      H.eq(reopened.collapsed, {},
+        scenario.name .. " must not restore old comparison folds")
+    end)
+    os.remove(saved)
+    vim.fn.delete(root, "rf")
+  end
 end
 
 T["root_ stale current picker metadata still switches the exact selected ref"] =

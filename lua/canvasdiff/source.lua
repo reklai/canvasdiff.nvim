@@ -10,6 +10,7 @@ return {
   branches = repository.branches,
   buffer_modified = buffer.modified,
   changed_files = repository.changed_files,
+  current_branch = repository.current_branch,
   diff_files = repository.diff_files,
   file_stream = collect.file_stream,
   files = collect.files,

@@ -319,6 +319,26 @@ local function local_branch_name(root, full_ref)
   return full_ref:sub(#"refs/heads/" + 1)
 end
 
+local function symbolic_head(root)
+  local res = run(root, { "symbolic-ref", "--quiet", "HEAD" })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil
+  end
+  local ref = res.stdout:gsub("[\r\n]+$", "")
+  if not ref:match("^refs/heads/.+$") then
+    return nil
+  end
+  return ref
+end
+
+--- Resolve the exact local ref to which HEAD is currently attached.
+--- Detached, unborn, and unreadable HEAD states have no local branch identity.
+--- @param root string
+--- @return string|nil
+function M.current_branch(root)
+  return symbolic_head(root)
+end
+
 local function validate_remote_ref(full_remote_ref)
   if type(full_remote_ref) ~= "string"
       or not full_remote_ref:match("^refs/remotes/[^/]+/.+$") then
@@ -342,7 +362,11 @@ function M.switch_branch(root, full_ref)
   end
   local res = run(root, { "switch", "--no-guess", "--", name })
   if res.code ~= 0 then
-    return nil, command_error("git switch", res)
+    local err = command_error("git switch", res)
+    if symbolic_head(root) == full_ref then
+      return true, err
+    end
+    return nil, err
   end
   return true
 end
@@ -388,7 +412,20 @@ function M.track_branch(root, local_name, full_remote_ref)
     "switch", "--no-guess", "--track", "-c", local_name, "--", full_remote_ref,
   })
   if res.code ~= 0 then
-    return nil, command_error("git switch --track", res)
+    local err = command_error("git switch --track", res)
+    local head_matches = symbolic_head(root) == local_ref
+    local local_exists = run(root, {
+      "show-ref", "--verify", "--quiet", "--", local_ref,
+    }).code == 0
+    local upstream = run(root, {
+      "rev-parse", "--symbolic-full-name", "@{upstream}",
+    })
+    local upstream_ref = upstream.code == 0 and upstream.stdout
+      and upstream.stdout:gsub("[\r\n]+$", "") or nil
+    if head_matches and local_exists and upstream_ref == full_remote_ref then
+      return true, err
+    end
+    return nil, err
   end
   return true
 end

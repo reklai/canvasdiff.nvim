@@ -157,7 +157,16 @@ local function within(root, path)
   return path:sub(1, #root + #separator) == root .. separator
 end
 
---- First modified normal buffer whose normalized or real path is under root.
+local function repository_file_buffer(buf)
+  local buftype = vim.api.nvim_get_option_value("buftype", { buf = buf })
+  if buftype ~= "" and buftype ~= "acwrite" then
+    return false
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  return name ~= "" and not name:match("^%a[%w+.-]*://")
+end
+
+--- First modified file-backed buffer whose normalized or real path is under root.
 --- @param root string
 --- @return string|nil
 function M.modified_in_root(root)
@@ -169,16 +178,14 @@ function M.modified_in_root(root)
   local paths = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(buf)
-        and vim.api.nvim_get_option_value("buftype", { buf = buf }) == ""
+        and repository_file_buffer(buf)
         and vim.api.nvim_get_option_value("modified", { buf = buf }) then
       local name = vim.api.nvim_buf_get_name(buf)
-      if name ~= "" then
-        local normalized = absolute(name)
-        local real = vim.uv.fs_realpath(normalized)
-        if within(normalized_root, normalized)
-            or (real_root and real and within(real_root, real)) then
-          paths[#paths + 1] = normalized
-        end
+      local normalized = absolute(name)
+      local real = vim.uv.fs_realpath(normalized)
+      if within(normalized_root, normalized)
+          or (real_root and real and within(real_root, real)) then
+        paths[#paths + 1] = normalized
       end
     end
   end

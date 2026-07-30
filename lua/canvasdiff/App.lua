@@ -1184,6 +1184,7 @@ end
     previous:dispose("replaced")
   end
   st.root = root
+  session.activate(st)
   st.lens = l
   -- Kept alongside, for the session payload and for anything still speaking the
   -- older vocabulary. nil for `staged` and branch lenses, which it cannot express.
@@ -2639,10 +2640,10 @@ local function begin_ref_request(app, kind)
     end
     request.root = request.surface.state.root
   else
-    request.root = request.cwd and source.root(request.cwd) or nil
+    local dir = buf_dir(request.buf)
+    request.root = dir and source.root(dir) or nil
     if not request.root then
-      local dir = buf_dir(request.buf)
-      request.root = dir and source.root(dir) or nil
+      request.root = request.cwd and source.root(request.cwd) or nil
     end
   end
   return request
@@ -2775,6 +2776,16 @@ local function choose_ref(app, kind)
         return
       end
     end
+    if kind == "checkout" then
+      local live_ref = source.current_branch(request.root)
+      if not ref_origin_alive(app, request) then
+        return
+      end
+      if live_ref == selected.ref then
+        result, result_err = true, nil
+        return
+      end
+    end
     local modified = source.modified_buffer_in_root(request.root)
     if not ref_origin_alive(app, request) then
       return
@@ -2789,18 +2800,29 @@ local function choose_ref(app, kind)
       return
     end
 
-    local changed
+    local changed, mutation_warning
     if kind == "checkout" then
-      changed, result_err = source.switch_branch(request.root, selected.ref)
+      changed, mutation_warning =
+        source.switch_branch(request.root, selected.ref)
     else
-      changed, result_err = source.track_branch(
+      changed, mutation_warning = source.track_branch(
         request.root, local_name, selected.ref)
     end
     if not changed then
+      result_err = mutation_warning
       ui.warn(result_err)
       return
     end
-    result, result_err = rebuild_after_ref_change(app, request)
+    if mutation_warning then
+      ui.warn(mutation_warning)
+    end
+    session.invalidate(request.root)
+    local rebuilt, rebuild_err = rebuild_after_ref_change(app, request)
+    if not rebuilt then
+      result, result_err = nil, rebuild_err
+      return
+    end
+    result, result_err = true, mutation_warning
   end)
   return result, result_err
 end

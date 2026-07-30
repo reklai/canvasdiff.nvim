@@ -49,6 +49,7 @@ return {
       "branches",
       "buffer_modified",
       "changed_files",
+      "current_branch",
       "diff_files",
       "file_stream",
       "files",
@@ -346,6 +347,48 @@ return {
         "the preserved saved change remains an unstaged worktree modification")
     end)
   end,
+  ["git: switch_branch reconciles a nonzero post-checkout hook after HEAD moved"] =
+  function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "branch", "topic" })
+      local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+      write(root, ".git/hooks/post-checkout",
+        "#!/bin/sh\nprintf 'injected checkout hook failure\\n' >&2\nexit 23\n")
+      assert(vim.uv.fs_chmod(hook, 493))
+
+      local switched, warning =
+        source.switch_branch(root, "refs/heads/topic")
+
+      H.eq(switched, true, warning)
+      assert(warning and warning:find("injected checkout hook failure", 1, true),
+        "post-mutation success retains Git's hook diagnostic: " .. tostring(warning))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/topic", "authoritative HEAD proves the mutation landed")
+    end)
+  end,
+  ["git: switch_branch keeps hook failure when authoritative HEAD does not match"] =
+  function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "branch", "topic" })
+      local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+      write(root, ".git/hooks/post-checkout", table.concat({
+        "#!/bin/sh",
+        "git symbolic-ref HEAD refs/heads/main",
+        "printf 'hook left the wrong HEAD\\n' >&2",
+        "exit 31",
+        "",
+      }, "\n"))
+      assert(vim.uv.fs_chmod(hook, 493))
+
+      local switched, err =
+        source.switch_branch(root, "refs/heads/topic")
+
+      H.eq(switched, nil)
+      assert(err and err:find("hook left the wrong HEAD", 1, true), tostring(err))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/main", "a mismatched final state is never reported as success")
+    end)
+  end,
   ["git: switch_branch returns Git refusal without changing conflicting work"] = function()
     with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
       sh(root, { "git", "switch", "-c", "topic" })
@@ -463,6 +506,59 @@ return {
       H.eq(vim.trim(sh(root, {
         "git", "rev-parse", "--symbolic-full-name", "@{upstream}",
       })), "refs/remotes/origin/feature/api")
+    end)
+  end,
+  ["git: track_branch reconciles a nonzero hook only when HEAD and upstream match"] =
+  function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "remote", "add", "origin", "." })
+      sh(root, { "git", "update-ref", "refs/remotes/origin/feature/api", "HEAD" })
+      local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+      write(root, ".git/hooks/post-checkout",
+        "#!/bin/sh\nprintf 'injected tracking hook failure\\n' >&2\nexit 29\n")
+      assert(vim.uv.fs_chmod(hook, 493))
+
+      local tracked, warning = source.track_branch(
+        root, "feature/api", "refs/remotes/origin/feature/api")
+
+      H.eq(tracked, true, warning)
+      assert(warning and warning:find("injected tracking hook failure", 1, true),
+        "post-mutation tracking success retains Git's diagnostic: "
+          .. tostring(warning))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/feature/api")
+      H.eq(vim.trim(sh(root, {
+        "git", "rev-parse", "--symbolic-full-name", "@{upstream}",
+      })), "refs/remotes/origin/feature/api")
+    end)
+  end,
+  ["git: track_branch keeps hook failure when the requested upstream is absent"] =
+  function()
+    with_git_fixture({ committed = { ["a.txt"] = "base\n" } }, function(root)
+      sh(root, { "git", "remote", "add", "origin", "." })
+      sh(root, { "git", "update-ref", "refs/remotes/origin/feature/api", "HEAD" })
+      local hook = vim.fs.joinpath(root, ".git", "hooks", "post-checkout")
+      write(root, ".git/hooks/post-checkout", table.concat({
+        "#!/bin/sh",
+        "git branch --unset-upstream feature/api",
+        "printf 'hook removed requested upstream\\n' >&2",
+        "exit 43",
+        "",
+      }, "\n"))
+      assert(vim.uv.fs_chmod(hook, 493))
+
+      local tracked, err = source.track_branch(
+        root, "feature/api", "refs/remotes/origin/feature/api")
+
+      H.eq(tracked, nil)
+      assert(err and err:find("hook removed requested upstream", 1, true),
+        tostring(err))
+      H.eq(vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
+        "refs/heads/feature/api", "the primitive never reverse-switches partial state")
+      local upstream = vim.system(
+        { "git", "rev-parse", "--symbolic-full-name", "@{upstream}" },
+        { cwd = root, text = true }):wait()
+      assert(upstream.code ~= 0, "the mismatched upstream remains an honest failure")
     end)
   end,
   ["git: track_branch rejects collisions and symbolic remote defaults"] = function()
@@ -935,7 +1031,8 @@ return {
     end
     vim.fn.delete(root, "rf")
   end,
-  ["source: modified_buffer_in_root returns only the first normal repository path"] = function()
+  ["source: modified_buffer_in_root includes file-backed acwrite and excludes synthetic buffers"] =
+  function()
     local root = H.git_fixture({
       committed = {
         ["loaded.txt"] = "loaded\n",
@@ -982,6 +1079,25 @@ return {
       H.eq(source.modified_buffer_in_root(root),
         vim.fs.joinpath(root, "nested", "a.txt"),
         "matching absolute paths are returned in deterministic sorted order")
+
+      vim.api.nvim_set_option_value("modified", false, { buf = a })
+      vim.api.nvim_set_option_value("modified", false, { buf = z })
+      local acwrite = keep(vim.api.nvim_create_buf(true, false))
+      vim.api.nvim_set_option_value("buftype", "acwrite", { buf = acwrite })
+      vim.api.nvim_buf_set_name(acwrite,
+        vim.fs.joinpath(root, "nested", "a-acwrite.txt"))
+      vim.api.nvim_buf_set_lines(acwrite, 0, -1, false, { "unsaved acwrite" })
+      H.eq(source.modified_buffer_in_root(root),
+        vim.fs.joinpath(root, "nested", "a-acwrite.txt"),
+        "a named file-backed acwrite buffer protects repository bytes")
+
+      vim.api.nvim_set_option_value("modified", false, { buf = acwrite })
+      local uri = keep(vim.api.nvim_create_buf(true, false))
+      vim.api.nvim_set_option_value("buftype", "acwrite", { buf = uri })
+      vim.api.nvim_buf_set_name(uri, "oil://" .. root .. "/synthetic")
+      vim.api.nvim_buf_set_lines(uri, 0, -1, false, { "unsaved uri" })
+      H.eq(source.modified_buffer_in_root(root), nil,
+        "URI-backed acwrite buffers remain outside the file guard")
     end, debug.traceback)
     for _, buf in ipairs(buffers) do
       if vim.api.nvim_buf_is_valid(buf) then

@@ -14,11 +14,53 @@ local T = {}
 T["session_ facade exports exactly the supported persistence operations"] = function()
   local names = vim.tbl_keys(session)
   table.sort(names)
-  H.eq(names, { "capture", "load", "path_for", "restore", "save" })
+  H.eq(names, {
+    "activate", "capture", "invalidate", "load", "path_for", "restore", "save",
+  })
   H.eq(getmetatable(session), nil, "the session facade is a plain table")
   for _, name in ipairs(names) do
     H.eq(type(session[name]), "function", "session." .. name .. " is callable")
   end
+end
+
+T["session_ runtime invalidation rejects stale saves until a new state persists"] =
+function()
+  assert(type(session.activate) == "function"
+      and type(session.invalidate) == "function",
+    "runtime session invalidation operations are missing")
+  local root = H.tmpdir()
+  local stale = {
+    root = root,
+    lens = model.lens.branch("refs/heads/old"),
+    collapsed = { ["old.txt"] = "user" },
+    folded = { ["old/"] = true },
+    folded_seen = {},
+  }
+  session.activate(stale)
+  assert(session.save(stale))
+  assert(session.load(root), "sanity: the old session reached disk")
+
+  session.invalidate(root)
+  H.eq(session.load(root), nil,
+    "an invalidated repository cannot resurrect its pre-switch disk payload")
+  H.eq(session.save(stale), false,
+    "a pre-switch state cannot become authoritative after invalidation")
+  H.eq(session.load(root), nil, "the tombstone survives a stale save attempt")
+
+  local fresh = {
+    root = root,
+    lens = model.lens.get("all"),
+    collapsed = {},
+    folded = {},
+    folded_seen = {},
+  }
+  session.activate(fresh)
+  assert(session.save(fresh), "a post-switch state may become authoritative")
+  local loaded = assert(session.load(root))
+  H.eq(loaded.lens.id, "all")
+  H.eq(loaded.collapsed, {})
+  os.remove(session.path_for(root))
+  vim.fn.delete(root, "rf")
 end
 
 local function bigtext(n, tag)

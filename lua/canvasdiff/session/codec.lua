@@ -89,7 +89,7 @@ end
 --- showing) a semantic view/cursor anchor to disk. Entirely pcall-guarded --
 --- session persistence must never break closing the canvas.
 function M.save(state)
-  pcall(function()
+  local ok, err = pcall(function()
     if not state or not state.root then
       return
     end
@@ -151,6 +151,7 @@ function M.save(state)
     local path = M.path_for(state.root)
     system.write_file(path, vim.json.encode(data))
   end)
+  return ok, ok and nil or tostring(err)
 end
 
 --- Load a previously saved session for `root`, or nil when there is none /
