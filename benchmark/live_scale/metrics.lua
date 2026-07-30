@@ -1,5 +1,7 @@
 local M = {}
 
+local AUTHORITATIVE_SIZES = { 1, 1000, 10000, 100000, 1000000 }
+
 local IDENTITY_PATHS = {
   "schema",
   "profile",
@@ -57,7 +59,14 @@ end
 function M.compatible(current, baseline)
   local reasons = {}
   for _, path in ipairs(IDENTITY_PATHS) do
-    if not vim.deep_equal(value_at(current, path), value_at(baseline, path)) then
+    local current_value = value_at(current, path)
+    local baseline_value = value_at(baseline, path)
+    if path == "authoritative_sizes" then
+      if not vim.deep_equal(current_value, AUTHORITATIVE_SIZES)
+          or not vim.deep_equal(baseline_value, AUTHORITATIVE_SIZES) then
+        reasons[#reasons + 1] = path
+      end
+    elseif not vim.deep_equal(current_value, baseline_value) then
       reasons[#reasons + 1] = path
     end
   end
@@ -82,10 +91,12 @@ function M.compare(current, baseline)
   end
 
   local comparison = {}
+  local current_by_size = aggregate_by_size(current)
   local baseline_by_size = aggregate_by_size(baseline)
-  for _, current_row in ipairs(current.aggregates or {}) do
-    local baseline_row = baseline_by_size[current_row.size]
-    if baseline_row then
+  for _, size in ipairs(AUTHORITATIVE_SIZES) do
+    local current_row = current_by_size[size]
+    local baseline_row = baseline_by_size[size]
+    if current_row and baseline_row then
       local operations = vim.tbl_keys(current_row.operations or {})
       table.sort(operations)
       for _, operation in ipairs(operations) do

@@ -114,6 +114,18 @@ T["live_scale_metrics_compatible records provenance without treating it as ident
   H.eq(reasons, {})
 end
 
+T["live_scale_metrics_compatible requires the canonical authoritative size order"] = function()
+  local current = aggregate()
+  local baseline = aggregate()
+  local reordered = { 1000, 1, 10000, 100000, 1000000 }
+  current.authoritative_sizes = reordered
+  baseline.authoritative_sizes = vim.deepcopy(reordered)
+
+  local compatible, reasons = metrics.compatible(current, baseline)
+  assert(not compatible, "two matching malformed size lists must still be incompatible")
+  H.eq(reasons, { "authoritative_sizes" })
+end
+
 T["live_scale_metrics_compare reports p95 ratios for compatible aggregates"] = function()
   local current = aggregate()
   local baseline = aggregate()
@@ -128,6 +140,24 @@ T["live_scale_metrics_compare reports p95 ratios for compatible aggregates"] = f
       ratio = 1.25,
       percent = 25,
     },
+  })
+end
+
+T["live_scale_metrics_compare orders rows by authoritative size rather than aggregate input order"] = function()
+  local current = aggregate()
+  local baseline = aggregate()
+  current.aggregates = {
+    { size = 1000, operations = { open = { p95 = 20 } } },
+    { size = 1, operations = { open = { p95 = 10 } } },
+  }
+  baseline.aggregates = {
+    { size = 1000, operations = { open = { p95 = 10 } } },
+    { size = 1, operations = { open = { p95 = 8 } } },
+  }
+
+  H.eq(metrics.compare(current, baseline), {
+    { size = 1, operation = "open", current = 10, baseline = 8, ratio = 1.25, percent = 25 },
+    { size = 1000, operation = "open", current = 20, baseline = 10, ratio = 2, percent = 100 },
   })
 end
 
