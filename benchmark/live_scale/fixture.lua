@@ -2,11 +2,11 @@ local M = {}
 
 local SCHEMA = "canvasdiff.live_scale.fixture/v1"
 local MARKER = ".canvasdiff-live-scale-fixture"
+local EMPTY_CONFIG = ".canvasdiff-empty-gitconfig"
 local MAX_STDERR = 4096
-local GIT_ENV = {
-  GIT_AUTHOR_DATE = "2000-01-01T00:00:00Z",
-  GIT_COMMITTER_DATE = "2000-01-01T00:00:00Z",
-}
+local GIT = vim.fn.exepath("git")
+local owned_roots = {}
+local token_sequence = 0
 
 local SIDECARS = {
   staged = "staged.txt",
@@ -17,8 +17,23 @@ local SIDECARS = {
   rename_to = "rename_to.txt",
 }
 
-local function marker_body(root)
-  return SCHEMA .. "\nroot=" .. root .. "\n"
+local function new_token(root)
+  token_sequence = token_sequence + 1
+  return vim.fn.sha256(table.concat({
+    root,
+    tostring(vim.uv.hrtime()),
+    tostring(owned_roots),
+    tostring(token_sequence),
+  }, "\0"))
+end
+
+local function marker_body(root, token)
+  return table.concat({
+    SCHEMA,
+    "root=" .. root,
+    "token=" .. token,
+    "",
+  }, "\n")
 end
 
 local function exact_root(root)
@@ -84,11 +99,29 @@ local function read_file(path)
   return content
 end
 
+local function path(root, relative)
+  return vim.fs.joinpath(root, relative)
+end
+
 local function git(root, ...)
-  local command = { "git", ... }
+  if GIT == "" then
+    return nil, "Git executable is not available"
+  end
+  local command = { GIT, "-C", root, ... }
   local ok, process = pcall(vim.system, command, {
+    clear_env = true,
     cwd = root,
-    env = GIT_ENV,
+    env = {
+      GIT_AUTHOR_DATE = "2000-01-01T00:00:00Z",
+      GIT_ATTR_NOSYSTEM = "1",
+      GIT_COMMITTER_DATE = "2000-01-01T00:00:00Z",
+      GIT_CONFIG_GLOBAL = path(root, EMPTY_CONFIG),
+      GIT_CONFIG_NOSYSTEM = "1",
+      HOME = root,
+      LANG = "C",
+      LC_ALL = "C",
+      XDG_CONFIG_HOME = root,
+    },
     text = true,
     timeout = 30000,
   })
@@ -118,10 +151,6 @@ local function must_write(path, content)
   if not written then
     error(err, 0)
   end
-end
-
-local function path(root, relative)
-  return vim.fs.joinpath(root, relative)
 end
 
 local function create_base(root)
@@ -209,15 +238,27 @@ function M.build(root, rows, seed)
     return nil, empty_err
   end
 
+  local token = new_token(root)
+  owned_roots[root] = token
   local ok, result = pcall(function()
-    must_write(path(root, MARKER), marker_body(root))
-    must_git(root, "init", "-q", "-b", "main")
-    must_git(root, "config", "user.email",
+    must_write(path(root, MARKER), marker_body(root, token))
+    must_write(path(root, EMPTY_CONFIG), "")
+    must_git(root, "init", "-q", "-b", "main", "--template=")
+    must_git(root, "config", "--local", "user.email",
       "canvasdiff-live-scale@example.invalid")
-    must_git(root, "config", "user.name", "CanvasDiff Live Scale Fixture")
-    must_git(root, "config", "commit.gpgsign", "false")
-    must_git(root, "config", "core.autocrlf", "false")
-    must_write(path(root, ".git/info/exclude"), MARKER .. "\n")
+    must_git(root, "config", "--local", "user.name",
+      "CanvasDiff Live Scale Fixture")
+    must_git(root, "config", "--local", "commit.gpgsign", "false")
+    must_git(root, "config", "--local", "core.autocrlf", "false")
+    assert(vim.fn.mkdir(path(root, ".git/info"), "p") == 1,
+      "could not create isolated Git info directory")
+    assert(vim.fn.mkdir(
+      path(root, ".git/canvasdiff-empty-hooks"), "p") == 1,
+      "could not create isolated Git hooks directory")
+    must_git(root, "config", "--local", "core.hooksPath",
+      ".git/canvasdiff-empty-hooks")
+    must_write(path(root, ".git/info/exclude"),
+      MARKER .. "\n" .. EMPTY_CONFIG .. "\n")
 
     create_base(root)
     create_comparison_refs(root)
@@ -250,6 +291,11 @@ function M.cleanup(root)
     return nil, root_err
   end
 
+  local token = owned_roots[root]
+  if not token then
+    return nil, "cleanup refused: root is not owned by this fixture module instance"
+  end
+
   local marker_path = path(root, MARKER)
   local marker_stat = vim.uv.fs_lstat(marker_path)
   if not marker_stat or marker_stat.type ~= "file" then
@@ -259,7 +305,7 @@ function M.cleanup(root)
   if not marker then
     return nil, "cleanup refused: " .. marker_err
   end
-  if marker ~= marker_body(root) then
+  if marker ~= marker_body(root, token) then
     return nil, "cleanup refused: fixture ownership marker does not match exact root and schema"
   end
 
@@ -272,6 +318,7 @@ function M.cleanup(root)
   if deleted ~= 0 then
     return nil, "could not remove exact fixture root: " .. root
   end
+  owned_roots[root] = nil
   return true
 end
 
