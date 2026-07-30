@@ -180,6 +180,15 @@ T["keys_collisions reports a key claimed twice"] = function()
   H.eq(got[1].actions, { "close", "refresh" })
 end
 
+T["keys_collisions reports global actions claiming the same key"] = function()
+  local km = defaults()
+  km.global.compare = "<leader>lx"
+  km.global.checkout = "<leader>lx"
+  local collision = keys.collisions("global", km)
+  H.eq(collision[1].lhs, "<leader>lx")
+  H.eq(collision[1].actions, { "compare", "checkout" })
+end
+
 T["keys_collisions is empty for the defaults"] = function()
   for _, ctx in ipairs({ "global", "canvas", "sidebar", "file" }) do
     H.eq(keys.collisions(ctx, defaults()), {}, "shipped defaults must not collide in " .. ctx)
@@ -194,19 +203,24 @@ T["keys_help resolves in both contexts and stays collision-free"] = function()
   end
 end
 
-T["keys_compare is a described global action with normalized configuration forms"] = function()
-  H.eq(find(keys.resolved("global", defaults()), "compare"), { "<leader>lb" })
-  local got = keys.resolved("global", defaults())
-  H.eq(got[1].group, "Global")
-  assert(got[1].desc:find("Compare", 1, true), "the global mapping needs useful metadata")
-
+T["keys_global actions are described and independently configurable"] = function()
   local km = defaults()
-  km.global.compare = { "gb", "<leader>lc" }
-  H.eq(find(keys.resolved("global", km), "compare"), { "gb", "<leader>lc" })
-  for _, disabled in ipairs({ false, "", {} }) do
-    km.global.compare = disabled
-    H.eq(find(keys.resolved("global", km), "compare"), {})
+  H.eq(find(keys.resolved("global", km), "compare"), { "<leader>lb" })
+  H.eq(find(keys.resolved("global", km), "checkout"), { "<leader>lc" })
+
+  local by_action = {}
+  for _, mapping in ipairs(keys.resolved("global", km)) do
+    by_action[mapping.action] = mapping
   end
+  H.eq(by_action.compare.desc, "Compare two branches or revisions")
+  H.eq(by_action.checkout.desc, "Checkout a local branch")
+  H.eq(by_action.compare.group, "Global")
+  H.eq(by_action.checkout.group, "Global")
+
+  km.global.compare = { "gb", "gB" }
+  km.global.checkout = false
+  H.eq(find(keys.resolved("global", km), "compare"), { "gb", "gB" })
+  H.eq(find(keys.resolved("global", km), "checkout"), {})
 end
 
 local function global_map(lhs)
@@ -221,6 +235,10 @@ local function delete_global(lhs)
   if map then pcall(vim.keymap.del, "n", map.lhs) end
 end
 
+local function no_global_maps()
+  return { compare = false, checkout = false }
+end
+
 local function capture_notifications(fn)
   local real = vim.notify
   local messages = {}
@@ -233,30 +251,32 @@ local function capture_notifications(fn)
   return messages
 end
 
-T["keys_global compare installs by default and calls the current App instance"] = function()
-  local lhs = "<leader>lb"
-  delete_global(lhs)
+T["keys_global defaults route compare and checkout to the current App"] = function()
+  delete_global("<leader>lb")
+  delete_global("<leader>lc")
   package.loaded["canvasdiff"] = nil
 
   local App = require("canvasdiff.App")
-  local real_compare = App.compare
-  local calls = 0
+  local real_compare, real_checkout = App.compare, App.checkout
+  local calls = { compare = 0, checkout = 0 }
   App.compare = function(self)
-    calls = calls + 1
+    calls.compare = calls.compare + 1
+    return self
+  end
+  App.checkout = function(self)
+    calls.checkout = calls.checkout + 1
     return self
   end
 
   local fm = require("canvasdiff")
-  local installed = assert(global_map(lhs), "requiring the plugin installs the default global map")
-  assert(installed.callback, "the default must be a Lua callback")
-  assert(installed.desc and installed.desc:find("Compare", 1, true),
-    "the installed mapping needs :map/which-key metadata")
-  installed.callback()
-  H.eq(calls, 1, "the callback reaches the App owned by this facade")
+  assert(global_map("<leader>lb")).callback()
+  assert(global_map("<leader>lc")).callback()
+  H.eq(calls, { compare = 1, checkout = 1 })
 
-  fm.setup({ keymaps = { global = { compare = false } } })
-  App.compare = real_compare
-  delete_global(lhs)
+  fm.setup({ keymaps = { global = no_global_maps() } })
+  App.compare, App.checkout = real_compare, real_checkout
+  delete_global("<leader>lb")
+  delete_global("<leader>lc")
   config.setup({})
 end
 
@@ -269,7 +289,7 @@ T["keys_global compare preserves a foreign collision and reports it"] = function
 
   local fm = require("canvasdiff")
   local messages = capture_notifications(function()
-    fm.setup({ keymaps = { global = { compare = lhs } } })
+    fm.setup({ keymaps = { global = { compare = lhs, checkout = false } } })
   end)
   local installed = assert(global_map(lhs))
   assert(rawequal(installed.callback, foreign), "CanvasDiff must not replace a foreign callback")
@@ -282,11 +302,114 @@ T["keys_global compare preserves a foreign collision and reports it"] = function
       and messages[1].message:find("already mapped", 1, true),
     "collision must produce one clear CanvasDiff warning: " .. vim.inspect(messages))
 
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   assert(rawequal(assert(global_map(lhs)).callback, foreign),
     "disabling cannot delete a foreign collision")
   delete_global(lhs)
   config.setup({})
+end
+
+T["keys_global checkout preserves a foreign collision and reports it"] = function()
+  local lhs = "gZd"
+  delete_global(lhs)
+  local foreign = function() end
+  vim.keymap.set("n", lhs, foreign, { desc = "Foreign checkout map" })
+
+  local fm = require("canvasdiff")
+  local messages = capture_notifications(function()
+    fm.setup({ keymaps = { global = { compare = false, checkout = lhs } } })
+  end)
+  assert(rawequal(assert(global_map(lhs)).callback, foreign),
+    "CanvasDiff must not replace a foreign checkout callback")
+  assert(#messages == 1
+      and messages[1].level == vim.log.levels.WARN
+      and messages[1].message:find(lhs, 1, true)
+      and messages[1].message:find("already mapped", 1, true),
+    "checkout collision must produce one clear warning: " .. vim.inspect(messages))
+
+  fm.setup({ keymaps = { global = no_global_maps() } })
+  assert(rawequal(assert(global_map(lhs)).callback, foreign),
+    "disabling checkout cannot delete a foreign collision")
+  delete_global(lhs)
+  config.setup({})
+end
+
+T["keys_global actions rebind and disable independently"] = function()
+  local compare_lhs, checkout_a, checkout_b = "gAa", "gAb", "gAc"
+  local fm = require("canvasdiff")
+  fm.setup({ keymaps = { global = {
+    compare = compare_lhs,
+    checkout = { checkout_a, checkout_b },
+  } } })
+  assert(global_map(compare_lhs))
+  assert(global_map(checkout_a))
+  assert(global_map(checkout_b))
+
+  fm.setup({ keymaps = { global = {
+    compare = false,
+    checkout = checkout_b,
+  } } })
+  H.eq(global_map(compare_lhs), nil)
+  H.eq(global_map(checkout_a), nil)
+  assert(global_map(checkout_b),
+    "disabling compare cannot remove the retained checkout mapping")
+
+  fm.setup({ keymaps = { global = no_global_maps() } })
+end
+
+T["keys_global changing an owned lhs action replaces its callback"] = function()
+  local lhs = "gAd"
+  local fm = require("canvasdiff")
+  local App = require("canvasdiff.App")
+  local real_compare, real_checkout = App.compare, App.checkout
+  local calls = { compare = 0, checkout = 0 }
+  App.compare = function() calls.compare = calls.compare + 1 end
+  App.checkout = function() calls.checkout = calls.checkout + 1 end
+
+  fm.setup({ keymaps = { global = {
+    compare = lhs, checkout = false,
+  } } })
+  local compare_callback = assert(global_map(lhs)).callback
+  compare_callback()
+
+  fm.setup({ keymaps = { global = {
+    compare = false, checkout = lhs,
+  } } })
+  local checkout_callback = assert(global_map(lhs)).callback
+  assert(not rawequal(compare_callback, checkout_callback),
+    "the old action callback cannot be retained")
+  checkout_callback()
+  H.eq(calls, { compare = 1, checkout = 1 })
+
+  fm.setup({ keymaps = { global = no_global_maps() } })
+  App.compare, App.checkout = real_compare, real_checkout
+  delete_global(lhs)
+  config.setup({})
+end
+
+T["keys_global rejects cross-action effective collisions before mutation"] = function()
+  local old_leader = vim.g.mapleader
+  vim.g.mapleader = " "
+  local old_compare, old_checkout = "gAe", "gAf"
+  local collided = "<Space>lx"
+  local fm = require("canvasdiff")
+
+  fm.setup({ keymaps = { global = {
+    compare = old_compare, checkout = old_checkout,
+  } } })
+  local messages = capture_notifications(function()
+    fm.setup({ keymaps = { global = {
+      compare = "<leader>lx", checkout = collided,
+    } } })
+  end)
+  assert(global_map(old_compare) and global_map(old_checkout),
+    "invalid desired state cannot remove the prior valid state")
+  H.eq(global_map(collided), nil)
+  assert(messages[1].level == vim.log.levels.ERROR)
+  assert(messages[1].message:find("same lhs", 1, true))
+
+  fm.setup({ keymaps = { global = no_global_maps() } })
+  vim.g.mapleader = old_leader
 end
 
 T["keys_global compare rebinds and disables only mappings it still owns"] = function()
@@ -295,22 +418,22 @@ T["keys_global compare rebinds and disables only mappings it still owns"] = func
   delete_global(second)
   local fm = require("canvasdiff")
 
-  fm.setup({ keymaps = { global = { compare = first } } })
+  fm.setup({ keymaps = { global = { compare = first, checkout = false } } })
   local original = assert(global_map(first))
-  fm.setup({ keymaps = { global = { compare = first } } })
+  fm.setup({ keymaps = { global = { compare = first, checkout = false } } })
   assert(rawequal(assert(global_map(first)).callback, original.callback),
     "repeated setup is idempotent")
 
-  fm.setup({ keymaps = { global = { compare = { first, second } } } })
+  fm.setup({ keymaps = { global = { compare = { first, second }, checkout = false } } })
   assert(global_map(first) and global_map(second),
     "the list form installs every configured global lhs")
-  fm.setup({ keymaps = { global = { compare = second } } })
+  fm.setup({ keymaps = { global = { compare = second, checkout = false } } })
   H.eq(global_map(first), nil, "rebind removes the old owned map")
   assert(global_map(second), "rebind installs the new map")
 
-  fm.setup({ keymaps = { global = { compare = "" } } })
+  fm.setup({ keymaps = { global = { compare = "", checkout = false } } })
   H.eq(global_map(second), nil, "an empty string disables the owned map")
-  fm.setup({ keymaps = { global = { compare = {} } } })
+  fm.setup({ keymaps = { global = { compare = {}, checkout = false } } })
   H.eq(global_map(second), nil, "an empty list remains disabled")
   delete_global(first)
   delete_global(second)
@@ -322,17 +445,17 @@ T["keys_global compare preserves a mapping that takes over its lhs"] = function(
   delete_global(first)
   delete_global(second)
   local fm = require("canvasdiff")
-  fm.setup({ keymaps = { global = { compare = first } } })
+  fm.setup({ keymaps = { global = { compare = first, checkout = false } } })
 
   local foreign = function() end
   vim.keymap.set("n", first, foreign, { desc = "Took over CanvasDiff lhs" })
-  fm.setup({ keymaps = { global = { compare = second } } })
+  fm.setup({ keymaps = { global = { compare = second, checkout = false } } })
   assert(rawequal(assert(global_map(first)).callback, foreign),
     "rebind cannot remove a map whose callback/metadata no longer prove ownership")
   assert(global_map(second), "the newly requested free lhs still installs")
 
   vim.keymap.set("n", second, foreign, { desc = "Also took over" })
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   assert(rawequal(assert(global_map(second)).callback, foreign),
     "disable cannot remove a taken-over map")
   delete_global(first)
@@ -358,7 +481,7 @@ T["keys_global compare preserves same-callback takeovers with changed behavior m
   }
   for _, case in ipairs(cases) do
     delete_global(case.lhs)
-    fm.setup({ keymaps = { global = { compare = case.lhs } } })
+    fm.setup({ keymaps = { global = { compare = case.lhs, checkout = false } } })
     local installed = assert(global_map(case.lhs))
     local opts = {
       desc = installed.desc,
@@ -371,7 +494,7 @@ T["keys_global compare preserves same-callback takeovers with changed behavior m
     assert(rawequal(takeover.callback, installed.callback),
       "the takeover deliberately retains the callback identity")
 
-    fm.setup({ keymaps = { global = { compare = false } } })
+    fm.setup({ keymaps = { global = no_global_maps() } })
     assert(global_map(case.lhs),
       ("changed %s metadata must make the map foreign"):format(case.field))
     delete_global(case.lhs)
@@ -383,7 +506,7 @@ T["keys_global compare validates a complete list before mutating any lhs"] = fun
   local fm = require("canvasdiff")
   local lhs = "gQi"
   delete_global(lhs)
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   local cases = {
     { value = { lhs, "" }, fragment = "empty" },
     { value = { lhs, 42 }, fragment = "string" },
@@ -394,7 +517,9 @@ T["keys_global compare validates a complete list before mutating any lhs"] = fun
   }
   for _, case in ipairs(cases) do
     local messages = capture_notifications(function()
-      fm.setup({ keymaps = { global = { compare = case.value } } })
+      fm.setup({ keymaps = { global = {
+        compare = case.value, checkout = false,
+      } } })
     end)
     H.eq(global_map(lhs), nil,
       "an invalid complete value cannot leave an earlier list entry installed")
@@ -403,7 +528,7 @@ T["keys_global compare validates a complete list before mutating any lhs"] = fun
         and messages[1].message:find(case.fragment, 1, true),
       "the validation error must be presented: " .. vim.inspect(messages))
   end
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   delete_global(lhs)
   config.setup({})
 end
@@ -412,7 +537,7 @@ T["keys_global compare preserves a same-callback same-behavior foreign reinstall
   local fm = require("canvasdiff")
   local lhs = "gVp"
   delete_global(lhs)
-  fm.setup({ keymaps = { global = { compare = lhs } } })
+  fm.setup({ keymaps = { global = { compare = lhs, checkout = false } } })
   local installed = assert(global_map(lhs))
 
   vim.keymap.set("n", lhs, installed.callback, {
@@ -425,7 +550,7 @@ T["keys_global compare preserves a same-callback same-behavior foreign reinstall
   assert(takeover.lnum ~= installed.lnum or takeover.sid ~= installed.sid,
     "the foreign call site must have distinct observable provenance")
 
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   local survived = assert(global_map(lhs),
     "same callback and behavior do not erase foreign call-site provenance")
   assert(rawequal(survived.callback, installed.callback))
@@ -439,7 +564,7 @@ T["keys_global compare deletion bypasses reentrant public get and delete wrapper
   delete_global(get_lhs)
   delete_global(del_lhs)
 
-  fm.setup({ keymaps = { global = { compare = get_lhs } } })
+  fm.setup({ keymaps = { global = { compare = get_lhs, checkout = false } } })
   local real_get = vim.api.nvim_get_keymap
   local stale = real_get("n")
   local get_calls = 0
@@ -453,7 +578,7 @@ T["keys_global compare deletion bypasses reentrant public get and delete wrapper
     return real_get(mode)
   end
   local get_ok, get_err = pcall(function()
-    fm.setup({ keymaps = { global = { compare = false } } })
+    fm.setup({ keymaps = { global = no_global_maps() } })
   end)
   vim.api.nvim_get_keymap = real_get
   assert(get_ok, get_err)
@@ -461,7 +586,7 @@ T["keys_global compare deletion bypasses reentrant public get and delete wrapper
     "production authentication must use the captured native getter, not a Lua wrapper")
   H.eq(global_map(get_lhs), nil, "the original owned mapping is removed")
 
-  fm.setup({ keymaps = { global = { compare = del_lhs } } })
+  fm.setup({ keymaps = { global = { compare = del_lhs, checkout = false } } })
   local real_del = vim.keymap.del
   local del_calls = 0
   local del_foreign = function() end
@@ -471,7 +596,7 @@ T["keys_global compare deletion bypasses reentrant public get and delete wrapper
     return real_del(mode, target, opts)
   end
   local del_ok, del_err = pcall(function()
-    fm.setup({ keymaps = { global = { compare = false } } })
+    fm.setup({ keymaps = { global = no_global_maps() } })
   end)
   vim.keymap.del = real_del
   assert(del_ok, del_err)
@@ -488,7 +613,7 @@ T["keys_global compare deletion bypasses reentrant public comparison wrappers"] 
   local fm = require("canvasdiff")
   local lhs = "gVe"
   delete_global(lhs)
-  fm.setup({ keymaps = { global = { compare = lhs } } })
+  fm.setup({ keymaps = { global = { compare = lhs, checkout = false } } })
 
   local real_deep_equal = vim.deep_equal
   local comparison_calls = 0
@@ -499,7 +624,7 @@ T["keys_global compare deletion bypasses reentrant public comparison wrappers"] 
     return true
   end
   local ok, err = pcall(function()
-    fm.setup({ keymaps = { global = { compare = false } } })
+    fm.setup({ keymaps = { global = no_global_maps() } })
   end)
   vim.deep_equal = real_deep_equal
   assert(ok, err)
@@ -516,7 +641,7 @@ T["keys_global compare coalesces notification reentry so the newest setup owns t
   local collision_lhs, newest_lhs = "gRa", "gRb"
   delete_global(collision_lhs)
   delete_global(newest_lhs)
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   local foreign = function() end
   vim.keymap.set("n", collision_lhs, foreign, { desc = "Foreign reentry trigger" })
 
@@ -525,11 +650,15 @@ T["keys_global compare coalesces notification reentry so the newest setup owns t
   vim.notify = function(message)
     if not reentered and tostring(message):find(collision_lhs, 1, true) then
       reentered = true
-      fm.setup({ keymaps = { global = { compare = newest_lhs } } })
+      fm.setup({ keymaps = { global = {
+        compare = newest_lhs, checkout = false,
+      } } })
     end
   end
   local ok, err = pcall(function()
-    fm.setup({ keymaps = { global = { compare = collision_lhs } } })
+    fm.setup({ keymaps = { global = {
+      compare = collision_lhs, checkout = false,
+    } } })
   end)
   vim.notify = real_notify
   assert(ok, err)
@@ -537,7 +666,7 @@ T["keys_global compare coalesces notification reentry so the newest setup owns t
   assert(rawequal(assert(global_map(collision_lhs)).callback, foreign))
   assert(global_map(newest_lhs), "the reentrant newest setup installs its map")
 
-  fm.setup({ keymaps = { global = { compare = false } } })
+  fm.setup({ keymaps = { global = no_global_maps() } })
   H.eq(global_map(newest_lhs), nil,
     "the newest map remains in the ownership ledger and is removable")
   delete_global(collision_lhs)
@@ -578,7 +707,9 @@ T["keys_global compare recovers known ownership across set and delete failures"]
   })
 
   config.setup({
-    keymaps = { global = { compare = { set_lhs, later_set_lhs } } },
+    keymaps = { global = {
+      compare = { set_lhs, later_set_lhs }, checkout = false,
+    } },
   })
   fail_set_lhs = later_set_lhs
   capture_notifications(function()
@@ -587,16 +718,18 @@ T["keys_global compare recovers known ownership across set and delete failures"]
   fail_set_lhs = nil
   assert(global_map(set_lhs), "the earlier setter succeeded before the later failure")
   assert(global_map(later_set_lhs), "the injected later setter wrote before it failed")
-  config.setup({ keymaps = { global = { compare = false } } })
+  config.setup({ keymaps = { global = no_global_maps() } })
   app:sync_global_keymaps()
   H.eq(global_map(set_lhs), nil, "the earlier set remains authenticated for cleanup")
   assert(global_map(later_set_lhs),
     "a throwing later setter cannot confer cleanup authority")
 
-  config.setup({ keymaps = { global = { compare = del_lhs } } })
+  config.setup({ keymaps = { global = {
+    compare = del_lhs, checkout = false,
+  } } })
   app:sync_global_keymaps()
   assert(global_map(del_lhs))
-  config.setup({ keymaps = { global = { compare = false } } })
+  config.setup({ keymaps = { global = no_global_maps() } })
   fail_del = true
   capture_notifications(function()
     app:sync_global_keymaps()
@@ -606,10 +739,12 @@ T["keys_global compare recovers known ownership across set and delete failures"]
   app:sync_global_keymaps()
   H.eq(global_map(del_lhs), nil, "a later setup retries cleanup")
 
-  config.setup({ keymaps = { global = { compare = get_lhs } } })
+  config.setup({ keymaps = { global = {
+    compare = get_lhs, checkout = false,
+  } } })
   app:sync_global_keymaps()
   assert(global_map(get_lhs))
-  config.setup({ keymaps = { global = { compare = false } } })
+  config.setup({ keymaps = { global = no_global_maps() } })
   fail_get = true
   capture_notifications(function()
     app:sync_global_keymaps()
@@ -655,7 +790,9 @@ T["keys_global compare never promotes a failed setter's foreign takeover"] = fun
   })
 
   config.setup({
-    keymaps = { global = { compare = { owned_lhs, takeover_lhs } } },
+    keymaps = { global = {
+      compare = { owned_lhs, takeover_lhs }, checkout = false,
+    } },
   })
   capture_notifications(function()
     app:sync_global_keymaps()
@@ -667,7 +804,7 @@ T["keys_global compare never promotes a failed setter's foreign takeover"] = fun
   assert(takeover.lnum ~= first_install.lnum or takeover.sid ~= first_install.sid,
     "the takeover must have different observable provenance")
 
-  config.setup({ keymaps = { global = { compare = false } } })
+  config.setup({ keymaps = { global = no_global_maps() } })
   app:sync_global_keymaps()
   H.eq(global_map(owned_lhs), nil,
     "a later setter failure must not orphan an earlier known-owned mapping")
@@ -686,10 +823,14 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   delete_global(",lb")
 
   local fm = require("canvasdiff")
-  fm.setup({})
+  fm.setup({ keymaps = { global = {
+    compare = "<leader>lb", checkout = false,
+  } } })
   assert(global_map("<Space>lb"), "a Space leader is resolved when installed")
   vim.g.mapleader = ","
-  fm.setup({})
+  fm.setup({ keymaps = { global = {
+    compare = "<leader>lb", checkout = false,
+  } } })
   H.eq(global_map("<Space>lb"), nil, "leader change removes the prior owned expansion")
   assert(global_map(",lb"), "leader change installs the current expansion")
 
@@ -697,7 +838,9 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   local other
   local messages = capture_notifications(function()
     other = require("canvasdiff")
-    other.setup({})
+    other.setup({ keymaps = { global = {
+      compare = "<leader>lb", checkout = false,
+    } } })
   end)
   H.eq(#messages, 1,
     "a second App diagnoses the foreign owner once, not on every reconciliation")
@@ -706,7 +849,7 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   delete_global("<Space>lb")
   delete_global(",lb")
   vim.g.mapleader = old_leader
-  other.setup({ keymaps = { global = { compare = false } } })
+  other.setup({ keymaps = { global = no_global_maps() } })
   config.setup({})
 end
 

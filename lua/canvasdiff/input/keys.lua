@@ -17,7 +17,10 @@ local K = {}
 --- group  section header in the cheatsheet and the helpfile
 --- desc   `desc=` on vim.keymap.set, and the cheatsheet text
 K.specs = {
-  { ctx = "global", action = "compare", group = "Global", desc = "Compare two branches or revisions" },
+  { ctx = "global", action = "compare", group = "Global",
+    desc = "Compare two branches or revisions" },
+  { ctx = "global", action = "checkout", group = "Global",
+    desc = "Checkout a local branch" },
 
   { ctx = "canvas", action = "next_file",  group = "Navigate", desc = "Next file (lands on folded ones too)" },
   { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (lands on folded ones too)" },
@@ -33,7 +36,8 @@ K.specs = {
   { ctx = "canvas", action = "lens_next",  group = "View",     desc = "Next lens: all / unstaged / staged" },
   { ctx = "canvas", action = "lens_prev",  group = "View",     desc = "Previous lens" },
 
-  { ctx = "canvas", action = "refresh",    group = "Canvas",   desc = "Re-scan the repo and splice in what changed (keeps your place)" },
+  { ctx = "canvas", action = "refresh", group = "Canvas",
+    desc = "Refresh the current diff" },
   { ctx = "canvas", action = "stage_cycle", group = "Canvas",  desc = "Stage or unstage this file" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Close the canvas, restore the previous buffer" },
 

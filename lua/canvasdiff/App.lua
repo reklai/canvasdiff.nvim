@@ -43,6 +43,12 @@ local EMPTY_MSG = "-- no changes --"
 local STALE_COMPARE = {}
 local buf_dir
 
+local GLOBAL_ACTION_ORDER = { "compare", "checkout" }
+local GLOBAL_ACTIONS = {
+  compare = function(app) return app:compare() end,
+  checkout = function(app) return app:checkout() end,
+}
+
 function App.new(opts)
   opts = opts or {}
   local effects = opts.global_keymap_effects or {
@@ -164,6 +170,7 @@ end
 local function expected_record(lhs, request, callback)
   return {
     lhs = lhs,
+    action = request.action,
     -- keytrans's display spelling is accepted by keymap.del for Space,
     -- control and terminal keycodes, even though it is not suitable for lookup.
     installed_lhs = vim.fn.keytrans(lhs),
@@ -201,6 +208,7 @@ end
 local function record_from_map(record, map)
   return {
     lhs = record.lhs,
+    action = record.action,
     installed_lhs = map.lhs or record.installed_lhs,
     callback = record.callback,
     identity = map_identity(map),
@@ -275,60 +283,80 @@ local function report_global_collision(collision)
     :format(request.configured_lhs, vim.fn.keytrans(lhs)))
 end
 
+local function validate_global_action(action, raw)
+  if raw == nil or raw == false or raw == "" then
+    return
+  end
+  if native_type(raw) ~= "string" and native_type(raw) ~= "table" then
+    return ("global %s mapping must be a string or list, got %s")
+      :format(action, native_type(raw))
+  end
+  if native_type(raw) == "table" then
+    local max_index, count = 0, 0
+    local index = native_next(raw)
+    while index ~= nil do
+      if native_type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
+        return ("global %s mapping must be a dense list of lhs strings")
+          :format(action)
+      end
+      max_index = math.max(max_index, index)
+      count = count + 1
+      index = native_next(raw, index)
+    end
+    if max_index ~= count then
+      return ("global %s mapping must be a dense list of lhs strings")
+        :format(action)
+    end
+  end
+end
+
 local function desired_global_maps()
   local global_config = config.options.keymaps.global or {}
-  local raw = global_config.compare
-  if raw ~= nil and raw ~= false and raw ~= "" then
-    if native_type(raw) ~= "string" and native_type(raw) ~= "table" then
-      return nil, nil, ("global compare mapping must be a string or list, got %s")
-        :format(native_type(raw))
-    end
-    if native_type(raw) == "table" then
-      local max_index, count = 0, 0
-      local index = native_next(raw)
-      while index ~= nil do
-        if native_type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
-          return nil, nil, "global compare mapping must be a dense list of lhs strings"
-        end
-        max_index = math.max(max_index, index)
-        count = count + 1
-        index = native_next(raw, index)
-      end
-      if max_index ~= count then
-        return nil, nil, "global compare mapping must be a dense list of lhs strings"
-      end
-    end
+  for _, action in native_ipairs(GLOBAL_ACTION_ORDER) do
+    local err = validate_global_action(action, global_config[action])
+    if err then return nil, nil, err end
   end
 
   local ok, resolved = native_pcall(keys.resolved, "global", config.options.keymaps)
   if not ok then
-    return nil, nil, "could not resolve global compare mappings: " .. tostring(resolved)
+    return nil, nil, "could not resolve global mappings: " .. tostring(resolved)
   end
   local desired, order = {}, {}
   for index, mapping in native_ipairs(resolved) do
+    if not GLOBAL_ACTIONS[mapping.action] then
+      return nil, nil, ("unsupported global mapping action %s")
+        :format(tostring(mapping.action))
+    end
     if native_type(mapping.lhs) ~= "string" then
-      return nil, nil, ("global compare mapping #%d must be a string, got %s")
-        :format(index, native_type(mapping.lhs))
+      return nil, nil, ("global %s mapping #%d must be a string, got %s")
+        :format(mapping.action, index, native_type(mapping.lhs))
     end
     if mapping.lhs == "" then
-      return nil, nil, ("global compare mapping list contains an empty lhs at position %d")
-        :format(index)
+      return nil, nil,
+        ("global %s mapping list contains an empty lhs at position %d")
+          :format(mapping.action, index)
     end
     local lhs_ok, lhs = native_pcall(global_lhs, mapping.lhs)
     if not lhs_ok or native_type(lhs) ~= "string" or lhs == "" then
-      return nil, nil, ("invalid global compare lhs %q: %s")
-        :format(mapping.lhs, tostring(lhs))
+      return nil, nil, ("invalid global %s lhs %q: %s")
+        :format(mapping.action, mapping.lhs, tostring(lhs))
     end
     if #lhs > 50 then
       return nil, nil,
-        ("global compare lhs %q exceeds Neovim's 50-byte maximum after termcode expansion")
-          :format(mapping.lhs)
+        ("global %s lhs %q exceeds Neovim's 50-byte maximum after termcode expansion")
+          :format(mapping.action, mapping.lhs)
     end
     if desired[lhs] then
-      return nil, nil, ("global compare mappings %q and %q resolve to the same lhs")
-        :format(desired[lhs].configured_lhs, mapping.lhs)
+      return nil, nil,
+        ("global mappings %s %q and %s %q resolve to the same lhs")
+          :format(
+            desired[lhs].action,
+            desired[lhs].configured_lhs,
+            mapping.action,
+            mapping.lhs)
     end
     desired[lhs] = {
+      action = mapping.action,
       configured_lhs = mapping.lhs,
       desc = mapping.desc,
     }
@@ -379,7 +407,10 @@ local function reconcile_global_keymaps(app)
     if app.global_map_pending then
       return settle_global_ledger(app, candidates)
     end
-    if desired[record.lhs] and owns_global_map(record, map) then
+    local request = desired[record.lhs]
+    if request
+        and record.action == request.action
+        and owns_global_map(record, map) then
       kept[record.lhs] = record_from_map(record, map)
     end
   end
@@ -400,7 +431,15 @@ local function reconcile_global_keymaps(app)
       if app.global_map_pending then
         return settle_global_ledger(app, candidates)
       end
-      if occupied then
+      local prior_owned
+      for _, record in native_ipairs(app.global_maps) do
+        if record.lhs == lhs and owns_global_map(record, occupied) then
+          prior_owned = record
+          break
+        end
+      end
+
+      if occupied and not prior_owned then
         collisions[#collisions + 1] = {
           kind = "collision",
           request = request,
@@ -408,11 +447,11 @@ local function reconcile_global_keymaps(app)
           occupied = occupied,
         }
       else
+        local dispatch = GLOBAL_ACTIONS[request.action]
         local callback = function()
-          return app:compare()
+          return dispatch(app)
         end
         local tentative = expected_record(lhs, request, callback)
-        candidates[#candidates + 1] = tentative
         local set_ok, set_err = native_pcall(app.global_map_effects.set,
           "n", request.configured_lhs, callback, {
           desc = request.desc,
@@ -441,7 +480,7 @@ local function reconcile_global_keymaps(app)
               :format(request.configured_lhs),
           })
         end
-        candidates[#candidates] = record_from_map(tentative, installed)
+        candidates[#candidates + 1] = record_from_map(tentative, installed)
         if app.global_map_pending then
           return settle_global_ledger(app, candidates)
         end

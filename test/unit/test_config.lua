@@ -28,6 +28,7 @@ end
 
 T["config_ setup is optional and defaults are live without it"] = function()
   H.eq(config.options.keymaps.global.compare, "<leader>lb")
+  H.eq(config.options.keymaps.global.checkout, "<leader>lc")
   H.eq(config.options.keymaps.canvas.close, "q")
   H.eq(config.options.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
   H.eq(config.options.keymaps.file.back, "<C-Space>")
@@ -56,8 +57,17 @@ T["config_ disabling survives the merge"] = function()
     },
   }, function(opts)
     H.eq(opts.keymaps.global.compare, false)
+    H.eq(opts.keymaps.global.checkout, "<leader>lc",
+      "disabling compare leaves checkout at its default")
     H.eq(opts.keymaps.canvas.close, false)
     H.eq(opts.keymaps.sidebar.close, {})
+  end)
+  with_setup({
+    keymaps = { global = { checkout = false } },
+  }, function(opts)
+    H.eq(opts.keymaps.global.compare, "<leader>lb")
+    H.eq(opts.keymaps.global.checkout, false,
+      "disabling checkout leaves compare at its default")
   end)
 end
 

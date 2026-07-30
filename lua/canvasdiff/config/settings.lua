@@ -73,10 +73,10 @@ end
 M.defaults = {
   keymaps = {
     global = {
-      -- The only process-wide default. App installs it conservatively: an
-      -- existing user/plugin mapping wins, and setup only removes callbacks
-      -- whose exact identity and metadata still prove CanvasDiff ownership.
+      -- Process-wide defaults. App installs each conservatively: an existing
+      -- user/plugin mapping wins, and setup removes only authenticated ownership.
       compare = "<leader>lb",
+      checkout = "<leader>lc",
     },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" },
