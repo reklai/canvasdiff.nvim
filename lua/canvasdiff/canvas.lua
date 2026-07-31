@@ -64,4 +64,5 @@ return {
   set_collapsed = Canvas.set_collapsed,
   show = Canvas.show,
   touch = Canvas.touch,
+  win_showing_canvas = Canvas.win_showing_canvas,
 }

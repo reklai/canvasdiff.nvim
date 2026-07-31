@@ -3,11 +3,7 @@ local fold = require("canvasdiff.diff").fold
 
 local M = {}
 
-local function canvas_showing(state, win)
-  win = win or state.win
-  return win and vim.api.nvim_win_is_valid(win)
-    and vim.api.nvim_win_get_buf(win) == state.buf
-end
+local canvas_showing = canvas.win_showing_canvas
 
 --- The section index `count` steps from section `i` in direction `dir`. `wrap`
 --- selects the Ctrl+N / Ctrl+P semantics over ]f / [f's clamping.

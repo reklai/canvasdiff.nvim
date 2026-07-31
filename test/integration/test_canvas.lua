@@ -59,6 +59,7 @@ return {
       "set_collapsed",
       "show",
       "touch",
+      "win_showing_canvas",
     })
 
     local format_names = vim.tbl_keys(canvas.format)

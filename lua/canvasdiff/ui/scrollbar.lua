@@ -167,10 +167,7 @@ function S.is_open(lease)
   return owned_window(lease)
 end
 
-local function canvas_showing(state)
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and vim.api.nvim_win_get_buf(state.win) == state.buf
-end
+local canvas_showing = canvas.win_showing_canvas
 
 --- The canvas window's TEXT geometry: how many rows actually hold buffer lines, and
 --- how far down the first of them starts.

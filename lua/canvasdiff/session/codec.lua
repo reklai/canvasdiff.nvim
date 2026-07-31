@@ -12,10 +12,7 @@ local M = {}
 
 local VERSION = 2
 
-local function win_showing_canvas(state)
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and vim.api.nvim_win_get_buf(state.win) == state.buf
-end
+local win_showing_canvas = canvas.win_showing_canvas
 
 local function index_of_path(state, path)
   for i, sec in ipairs(state.sections) do

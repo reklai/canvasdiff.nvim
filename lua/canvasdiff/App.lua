@@ -645,11 +645,7 @@ end
 local pivot
 
 --- Is one concrete window displaying this Canvas?
-local function canvas_showing(st, win)
-  win = win or st.win
-  return win and vim.api.nvim_win_is_valid(win)
-    and vim.api.nvim_win_get_buf(win) == st.buf
-end
+local canvas_showing = canvas.win_showing_canvas
 
 --- Show a navigation outcome's diagnostic, and hand its result back.
 ---

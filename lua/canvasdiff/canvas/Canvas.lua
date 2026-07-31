@@ -606,11 +606,15 @@ function M.locate(state, row0)
   return ans, row0 - starts[ans] + 1
 end
 
-local function win_showing_canvas(state, win)
+--- Is one concrete window (default: the canvas's own) displaying this
+--- canvas buffer right now? Exported so every consumer shares one
+--- definition instead of a per-module copy.
+function M.win_showing_canvas(state, win)
   win = win or state.win
   return win and vim.api.nvim_win_is_valid(win)
     and vim.api.nvim_win_get_buf(win) == state.buf
 end
+local win_showing_canvas = M.win_showing_canvas
 
 local function win_view_info(win)
   return vim.api.nvim_win_call(win, function()
