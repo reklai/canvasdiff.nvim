@@ -19,14 +19,27 @@ function W.escape(text)
   return tostring(text or ""):gsub("%%", "%%%%")
 end
 
+--- A coloured bar is a mode indicator, like macro-recording: the READ-ONLY
+--- tint says "this comparison cannot be edited" in peripheral vision, before
+--- the label is read. Groups are `default = true` so colourschemes win; the
+--- read-only default was chosen by luminance measurement against the builtin
+--- scheme and tokyonight-moon (numbers in the introducing commit), the same
+--- method as CanvasDiffFileBar.
+function W.ensure_hl_groups()
+  vim.api.nvim_set_hl(0, "CanvasDiffWinbar", { link = "WinBar", default = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffWinbarReadOnly", { link = "Visual", default = true })
+end
+
 --- The breadcrumb: comparison on the left, the file under the topline after
 --- it. `%<` truncates the path, never the comparison.
 function W.text(st, path)
-  local label = W.escape(lens.of(st).label)
+  local l = lens.of(st)
+  local group = lens.is_range(l) and "CanvasDiffWinbarReadOnly" or "CanvasDiffWinbar"
+  local out = "%#" .. group .. "#" .. W.escape(l.label)
   if not path then
-    return label
+    return out
   end
-  return label .. " · %<" .. W.escape(canvas.format.escape_path(path))
+  return out .. " · %<" .. W.escape(canvas.format.escape_path(path))
 end
 
 --- Cached write. Runs on every WinScrolled, and writing 'winbar' forces a
@@ -46,6 +59,7 @@ function W.apply(st, win, text)
       return
     end
   end
+  W.ensure_hl_groups()
   st.winbar_text_by_win[win] = text
   pcall(vim.api.nvim_set_option_value, "winbar", text, { win = win, scope = "local" })
 end
