@@ -99,6 +99,8 @@ you are — always the same answer:
   `HEAD → WORKTREE · src/canvas.lua`. The comparison stays on the left and the
   file under the topline follows after it as you scroll. A branch comparison
   reads `READ-ONLY  main → topic` instead — read-only mode also tints the bar.
+  Its right edge names the cheatsheet key (`<leader>lh help` by default);
+  rebinding or disabling `help` moves or removes the reminder.
 - **The sidebar winbar** is a collection title such as `Files changed (12)`.
   Its count is the number of changed files, even when directories are folded.
 - **The sidebar's highlighted row** tracks the same file as the canvas.
