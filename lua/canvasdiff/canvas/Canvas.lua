@@ -43,16 +43,13 @@ local function ensure_hl_groups()
   -- Background only matters here: the filename's own colour comes from
   -- CanvasDiffFileHeader above, at a higher priority.
   vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { link = "Folded", default = true })
-  -- The diff row tints. Aliases so they are tunable without redefining the groups
-  -- your ordinary vimdiff uses -- see the note in render.HL_GROUP.
-  --
-  -- To quieten them, which is the usual want once you notice how much of the screen
-  -- they cover, point them at something with less contrast against Normal:
-  --   vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "CursorLine" })
-  -- Measured under tokyonight-moon: DiffAdd is +27 luminance over Normal and
-  -- DiffDelete +13, where CursorLine is +15 and ColorColumn is -7.
-  vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffDel", { link = "DiffDelete", default = true })
+  -- The diff row tints -- CanvasDiffAdd/CanvasDiffDel plus the gutter-bar pair --
+  -- defined in render next to blend() because their default VALUES are computed
+  -- there per highlight.diff mode ("quiet" derives them from the live scheme;
+  -- "classic" restores the raw DiffAdd/DiffDelete links). Aliases so they are
+  -- tunable without redefining the groups your ordinary vimdiff uses -- see the
+  -- notes on render.HL_GROUP and render.ensure_diff_hl.
+  render.ensure_diff_hl()
   -- Deleted lines, which are virtual rather than buffer rows. Its own group rather
   -- than reusing CanvasDiffDel so you can dim the ghosts without touching anything else --
   -- the usual want, since the point of ghosting a deletion is that it is context for

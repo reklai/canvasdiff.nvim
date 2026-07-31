@@ -244,6 +244,7 @@ require("canvasdiff").setup({
   glyphs = {
     ctx = " ", del = "-", add = "+",   -- diff row prefixes
     file = "▎", folded = "▸", open = "▾", minus = "−",
+    gutter = "▎",                      -- statuscolumn bar (highlight.diff = "gutter")
     staged = "●", unstaged = "○", stale = " ●",
     scroll_file = "‒", scroll_bar = "❘",
   },
@@ -450,6 +451,8 @@ require("canvasdiff").setup({
     enabled = true,     -- syntax + word-diff highlighting of hunk content
     margin = 100,       -- rows beyond the viewport kept highlighted
     debounce_ms = 30,   -- scroll debounce before re-applying highlights
+    diff = "quiet",     -- row colouring: "quiet" derived tints, "classic" raw
+                        -- DiffAdd/DiffDelete, "gutter" statuscolumn bars only
   },
   watch = {
     enabled = true,     -- auto-refresh the canvas on save/focus/external changes
@@ -665,16 +668,41 @@ context for the line that replaced them rather than something to study on their 
 
 ### How diff rows are coloured
 
-Four overridable groups, all `default = true` so your colourscheme wins:
+Three modes, picked with `highlight.diff`:
+
+- **`"quiet"`** (the default) — derived low-intensity tints: your scheme's
+  `DiffAdd`/`DiffDelete` background blended **60% toward `Normal`'s**. Colourschemes
+  tune those groups for a two-pane vimdiff, where a whole-window wash is the point;
+  on a canvas much of the screen is tinted, so the raw wash spends the strongest
+  visual channel saying "this line is involved" — the least interesting fact once
+  word-diff marks the tokens. The factor is measured, not felt: at 60%, every probed
+  syntax token (`@comment` as the dim extreme, `Function`/`String` as bright ones)
+  keeps its luminance delta on a tinted row within 15% of its delta on an untinted
+  one, under both the builtin dark scheme and tokyonight-moon — at 50% the worst case
+  degrades by 19%. When a scheme gives a diff group **no background at all** (builtin
+  `DiffDelete` is foreground-only), the tint derives from a fixed green/red pair
+  instead, so quiet never renders an invisible deletion.
+- **`"classic"`** — the raw `DiffAdd`/`DiffDelete` links: exactly what your vimdiff
+  looks like, if that's the loudness you want.
+- **`"gutter"`** — no row tints at all. The statuscolumn carries a coloured bar
+  glyph (`▎`, the `gutter` glyph slot) beside each added or deleted row —
+  `CanvasDiffGutterAdd`/`CanvasDiffGutterDel`, defaulting to `Added`/`Removed` —
+  including on ghost-deletion virtual rows. Needs `statuscolumn.enabled = true`;
+  without it CanvasDiff warns once and behaves as `"quiet"`.
+
+Six overridable groups, all `default = true` so your colourscheme (or an explicit
+`nvim_set_hl` of your own) always wins over the derived defaults:
 
 | Group | Default | Marks |
 | --- | --- | --- |
-| `CanvasDiffAdd` | `DiffAdd` | an added row's background |
-| `CanvasDiffDel` | `DiffDelete` | a removed row's background |
+| `CanvasDiffAdd` | derived quiet tint (`DiffAdd` in classic) | an added row's background |
+| `CanvasDiffDel` | derived quiet tint (`DiffDelete` in classic) | a removed row's background |
 | `CanvasDiffWordAdd` | **bold + underline** | the changed span within an added line |
 | `CanvasDiffWordDel` | **bold + underline** | the changed span within a removed line |
+| `CanvasDiffGutterAdd` | `Added` | the gutter bar on an added row |
+| `CanvasDiffGutterDel` | `Removed` | the gutter bar on a removed/ghost row |
 
-Two deliberate choices behind that, both arrived at by measurement:
+Two more deliberate choices behind that, both arrived at by measurement:
 
 **Row tints stop at end-of-text.** They used to set `hl_eol`, which fills the rest of
 the *screen line* — so a three-character edit painted colour to the right edge of a
@@ -697,12 +725,17 @@ states the exact extent where a background only says "somewhere in here".
 The `+`/`-` prefixes stay regardless — they're the only **shape**-based channel, so
 they're what survives red/green colour blindness and a monochrome terminal.
 
-To quieten the row tints, which is the usual want once you notice how much screen they
-cover:
+To pick a different loudness wholesale, switch the mode rather than redefining groups:
+
+```lua
+require("canvasdiff").setup({ highlight = { diff = "classic" } })  -- or "gutter"
+```
+
+And to tune a single group, define it yourself — an explicit definition always beats
+the derived default:
 
 ```lua
 vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "CursorLine" })
-vim.api.nvim_set_hl(0, "CanvasDiffDel", { link = "CursorLine" })
 ```
 
 The canvas auto-refreshes on `:write`, on regaining focus, and on file

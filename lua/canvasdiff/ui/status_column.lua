@@ -1,7 +1,16 @@
 local canvas = require("canvasdiff.canvas")
+local config = require("canvasdiff.config")
 local fold = require("canvasdiff.diff").fold
 
 local M = {}
+
+-- The bar the gutter mode draws per changed row, foreground-coloured so it
+-- reads without claiming a background. Defined by the canvas's group setup
+-- (render.ensure_diff_hl), which runs before any statuscolumn can draw.
+local GUTTER_HL = {
+  add = "CanvasDiffGutterAdd",
+  del = "CanvasDiffGutterDel",
+}
 
 local STATUSCOL_EXPR = "%!v:lua.require'canvasdiff.ui.status_column'.text()"
 local next_id = 0
@@ -691,23 +700,47 @@ end
 
 --- Testable renderer for an exact lease, drawn window and 1-based buffer row.
 --- Unlike text(), owner callback failures remain observable here.
-function M.render(lease, win, lnum)
+---
+--- `virtnum` is Neovim's v:virtnum for the drawn screen row: nonzero means a
+--- virtual line, and the only virtual lines the canvas draws are ghost
+--- deletions. It matters only under highlight.diff = "gutter", where those
+--- rows carry the deletion bar; every other mode renders exactly as before.
+function M.render(lease, win, lnum, virtnum)
   if not active(lease) or not showing(lease.state, win) then
     return ""
   end
 
+  -- Under "gutter" every row gains a one-cell bar column: the coloured glyph
+  -- on add/del rows, padding elsewhere so the line numbers stay aligned.
+  local gutter = config.diff_mode() == "gutter"
+  local glyph = gutter and config.glyphs.gutter or ""
+  local pad = gutter and (" "):rep(vim.fn.strdisplaywidth(glyph)) or ""
+
   local state = lease.state
   local index, offset = canvas.locate(state, lnum - 1)
   if not index then
-    return "     "
+    return pad .. "     "
   end
   local section = state.sections[index]
   if not section or fold.hidden(state, section.path) then
-    return "     "
+    return pad .. "     "
   end
   local entry = section.entries[offset]
   if not entry or entry.kind == "file_hdr" or entry.kind == "hunk_hdr" then
-    return "     "
+    return pad .. "     "
+  end
+  if gutter then
+    -- A ghost deletion's virtual row reads as a deletion, whatever kind its
+    -- anchor row is -- and never repeats the anchor's line number below.
+    local ghost = virtnum ~= nil and virtnum ~= 0
+    local group = GUTTER_HL[ghost and "del" or entry.kind]
+    if group then
+      pad = "%#" .. group .. "#" .. glyph .. "%*"
+    end
+    if entry.new_lnum and not ghost then
+      return pad .. ("%4d "):format(entry.new_lnum)
+    end
+    return pad .. "     "
   end
   if entry.new_lnum then
     return ("%4d "):format(entry.new_lnum)
@@ -729,7 +762,7 @@ function M.text()
   if not lease then
     return ""
   end
-  local ok, result = pcall(M.render, lease, win, vim.v.lnum)
+  local ok, result = pcall(M.render, lease, win, vim.v.lnum, vim.v.virtnum)
   return ok and result or ""
 end
 

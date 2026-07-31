@@ -323,7 +323,8 @@ default. >lua
       statuscolumn = { enabled = true },
       session      = { enabled = true },
       paged        = { enabled = true, min_rows = 20000 },
-      highlight    = { enabled = true, margin = 100, debounce_ms = 30 },
+      highlight    = { enabled = true, margin = 100, debounce_ms = 30,
+                       diff = "quiet" },
       watch        = { enabled = true, debounce_ms = 200 },
       virt         = {
         enabled      = true,
@@ -362,6 +363,30 @@ You will notice three differences on such a review:
 
 Set `paged = { enabled = false }` to always use the ordinary canvas, at the
 cost of memory on very large reviews. Below the threshold nothing changes.
+
+                                                  *canvasdiff-highlight-diff*
+Diff row colouring~
+
+`highlight.diff` picks how added and removed rows are coloured:
+
+- `"quiet"` (default): derived low-intensity tints. Your scheme's
+  `DiffAdd`/`DiffDelete` background is blended 60% toward `Normal`'s, so the
+  rows read without washing out the syntax highlighting on top of them. When
+  the scheme gives a diff group no background at all (the builtin scheme's
+  `DiffDelete` is foreground-only), the tint derives from a fixed green/red
+  pair instead of rendering invisibly.
+- `"classic"`: the raw `DiffAdd`/`DiffDelete` links -- what your two-pane
+  vimdiff looks like.
+- `"gutter"`: no row tints. The statuscolumn carries a coloured bar (the
+  `gutter` glyph, default `▎`) beside each added or deleted row, including
+  ghost-deletion virtual rows, via `CanvasDiffGutterAdd`/`CanvasDiffGutterDel`
+  (defaults: `Added`/`Removed`). Requires `statuscolumn.enabled = true`;
+  without it CanvasDiff warns once and behaves as `"quiet"`.
+
+Every group involved is defined with `default = true`: a colourscheme or an
+explicit `nvim_set_hl()` of `CanvasDiffAdd`/`CanvasDiffDel` always wins over
+the derived defaults, in every mode. Word-diff emphasis, the `+`/`-` prefixes
+and deleted-line ghosts are unaffected by the mode.
 
                                                           *canvasdiff-glyphs*
 Glyphs~

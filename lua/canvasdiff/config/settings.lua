@@ -17,6 +17,8 @@ local DEFAULT_GLYPHS = {
   folded = "▸",
   open = "▾",
   minus = "−",
+  -- the statuscolumn bar drawn on add/del rows under highlight.diff = "gutter"
+  gutter = "▎",
   -- sidebar markers
   staged = "●",
   unstaged = "○",
@@ -44,7 +46,7 @@ M.glyphs = vim.deepcopy(DEFAULT_GLYPHS)
 --- colourscheme.
 M.ASCII_GLYPHS = {
   ctx = " ", del = "-", add = "+",
-  file = "|", folded = ">", open = "v", minus = "-",
+  file = "|", folded = ">", open = "v", minus = "-", gutter = "|",
   staged = "*", unstaged = "o", stale = " !",
   scroll_file = "-", scroll_bar = "|",
 }
@@ -177,6 +179,12 @@ M.defaults = {
     enabled = true,
     margin = 100,
     debounce_ms = 30,
+    -- How diff rows are coloured: "quiet" (derived low-intensity tints, the
+    -- scheme's DiffAdd/DiffDelete blended toward Normal), "classic" (the raw
+    -- DiffAdd/DiffDelete links, as colourschemes tune them for two-pane
+    -- vimdiff), or "gutter" (no row tints; the statuscolumn carries a
+    -- coloured bar per add/del row instead -- needs statuscolumn.enabled).
+    diff = "quiet",
   },
   watch = {
     enabled = true,
@@ -219,6 +227,41 @@ M.options = vim.deepcopy(M.defaults)
 -- tbl_deep_extend accepts `canvas.colapse` without complaint, and the only
 -- symptom is a keymap that never appears.
 M.user_opts = {}
+
+local DIFF_MODES = { quiet = true, classic = true, gutter = true }
+
+-- One warning per configuration for the gutter-without-statuscolumn
+-- downgrade. diff_mode() is consulted per rendered row, so warning from every
+-- resolution would flood; setup() resets the latch because a new configuration
+-- deserves a fresh report.
+local warned_gutter_downgrade = false
+
+--- The EFFECTIVE diff-row colouring mode, which is the configured one except
+--- for a single degradation: "gutter" needs the statuscolumn to carry its bar,
+--- so with `statuscolumn.enabled = false` it warns once and behaves as
+--- "quiet" rather than silently rendering add/del rows with no marking at all.
+function M.diff_mode()
+  local mode = M.options.highlight.diff
+  if not DIFF_MODES[mode] then
+    -- setup() already reported and reset an invalid value; this guards direct
+    -- mutation of M.options only.
+    return "quiet"
+  end
+  if mode == "gutter" and not M.options.statuscolumn.enabled then
+    if not warned_gutter_downgrade then
+      warned_gutter_downgrade = true
+      -- vim.notify directly: config sits below the ui domain and must not
+      -- require upward into it. Same prefix ui.notifications stamps.
+      vim.notify(
+        'CanvasDiff: highlight.diff = "gutter" needs statuscolumn.enabled'
+          .. ' = true; colouring diff rows as "quiet" instead',
+        vim.log.levels.WARN
+      )
+    end
+    return "quiet"
+  end
+  return mode
+end
 
 -- Action names from the pre-1.0 flat keymaps table. Their presence as a
 -- top-level string is an unambiguous legacy marker: in the current shape every
@@ -298,6 +341,16 @@ function M.setup(opts)
   end
   M.user_opts = vim.deepcopy(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+  warned_gutter_downgrade = false
+
+  -- Reported AND reset rather than merely reported: an unknown mode left live
+  -- would make every consumer of highlight.diff re-validate it, and the
+  -- symptom of forgetting would be rows silently rendered with no colouring.
+  if not DIFF_MODES[M.options.highlight.diff] then
+    report(('highlight.diff must be "quiet", "classic" or "gutter", got %s')
+      :format(vim.inspect(M.options.highlight.diff)))
+    M.options.highlight.diff = M.defaults.highlight.diff
+  end
 
   -- Glyphs are live configuration state rather than part of M.options: formatting
   -- reads this exact table through the canvas facade. Reset first, or two setup()

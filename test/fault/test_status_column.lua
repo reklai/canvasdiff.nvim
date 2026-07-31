@@ -1653,6 +1653,67 @@ T["statuscol_ text maps rows to new-file numbers"] = function()
   statuscol.detach(lease)
 end
 
+T["statuscol_ gutter mode carries a coloured bar on add and del rows"] = function()
+  detach_tracked()
+  local config = require("canvasdiff.config")
+  config.setup({ highlight = { diff = "gutter" } })
+  local ok, err = xpcall(function()
+    local st = canvas.open({
+      model.build_section("a.txt", "one\ntwo\n", "one\ntwo\nthree\n", "M"),
+      -- A wholly deleted file keeps its deletions as REAL rows (no result view
+      -- to ghost them into), so this is where a del row can carry the bar.
+      model.build_section("gone.txt", "x\ny\n", "", "D"),
+    }, {})
+    vim.api.nvim_set_current_win(st.win)
+    local lease = statuscol.attach(st, {
+      windows = function() return { st.win } end,
+    })
+    vim.g.statusline_winid = st.win
+
+    local function row_of(kind)
+      for i, section in ipairs(st.sections) do
+        local s0 = (canvas.section_rows(st, i))
+        for off, entry in ipairs(section.entries) do
+          if entry.kind == kind then
+            return s0 + off - 1, entry
+          end
+        end
+      end
+    end
+
+    local add_row, add_entry = row_of("add")
+    assert(add_row, "sanity: an add row exists")
+    H.eq(statuscol.render(lease, st.win, add_row + 1),
+      ("%%#CanvasDiffGutterAdd#▎%%*%4d "):format(add_entry.new_lnum),
+      "an added row carries the add bar before its number")
+
+    local del_row = row_of("del")
+    assert(del_row, "sanity: the deleted file keeps a del row in the buffer")
+    H.eq(statuscol.render(lease, st.win, del_row + 1),
+      "%#CanvasDiffGutterDel#▎%*     ",
+      "a deleted row carries the del bar and no new-file number")
+
+    local ctx_row, ctx_entry = row_of("ctx")
+    assert(ctx_row, "sanity: a ctx row exists")
+    H.eq(statuscol.render(lease, st.win, ctx_row + 1),
+      (" %4d "):format(ctx_entry.new_lnum),
+      "unmarked rows pad the gutter cell so the numbers stay aligned")
+
+    -- Ghost deletions are virtual lines; the only virtual rows the canvas ever
+    -- draws. Their statuscolumn row carries the deletion bar rather than
+    -- repeating the anchor row's number.
+    H.eq(statuscol.render(lease, st.win, add_row + 1, 1),
+      "%#CanvasDiffGutterDel#▎%*     ",
+      "a ghost's virtual row reads as a deletion, not as its anchor")
+
+    vim.g.statusline_winid = nil
+    statuscol.detach(lease)
+  end, debug.traceback)
+  config.setup({})
+  detach_tracked()
+  assert(ok, err)
+end
+
 T["statuscol_ renders for the drawn window even while focus is elsewhere"] = function()
   detach_tracked()
   local st = canvas.open(three_sections(), {})

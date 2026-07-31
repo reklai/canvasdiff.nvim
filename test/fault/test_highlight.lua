@@ -1323,9 +1323,12 @@ T["hl_rows the row tints go through overridable CanvasDiff aliases"] = function(
     assert(next(direct) ~= nil, g .. " must be defined, or the diff rows render unstyled")
   end
   -- `default = true` throughout, so a colourscheme that defines these wins.
+  -- The shipped default is a computed quiet tint (a bg, no link); "classic"
+  -- restores the DiffAdd link; an override may be anything with a background.
   local linked = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
   assert(linked.link == "DiffAdd" or linked.bg,
-    "CanvasDiffAdd should default to DiffAdd (or be overridden), got: " .. vim.inspect(linked))
+    "CanvasDiffAdd should carry a quiet tint, the classic link, or an override, got: "
+    .. vim.inspect(linked))
 end
 
 -- The word-diff marks have to beat the row tint they sit inside, and a BACKGROUND
@@ -1349,6 +1352,129 @@ T["hl_rows word-diff marks emphasise by attribute, not by a competing background
     assert(h.bold or h.underline or h.reverse or h.italic or h.undercurl,
       name .. " must carry at least one attribute, or it marks nothing")
   end
+end
+
+-- --- highlight.diff modes ----------------------------------------------------
+--
+-- The default row tints are DERIVED: the scheme's DiffAdd/DiffDelete background
+-- blended toward Normal's, because colourschemes tune those groups for a
+-- two-pane vimdiff where a whole-window wash is the point. "classic" restores
+-- the raw links; "gutter" drops the tints for a statuscolumn bar.
+
+local config = require("canvasdiff.config")
+local render = require("canvasdiff.canvas.format")
+
+local function count_row_tints(buf)
+  local tinted = 0
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })) do
+    local d = m[4]
+    if d and (d.hl_group == "CanvasDiffAdd" or d.hl_group == "CanvasDiffDel") then
+      tinted = tinted + 1
+    end
+  end
+  return tinted
+end
+
+T["hl_rows blend interpolates channelwise and tolerates a missing endpoint"] = function()
+  H.eq(render.blend(0x000000, 0xffffff, 0), "#000000")
+  H.eq(render.blend(0x000000, 0xffffff, 1), "#ffffff")
+  H.eq(render.blend(0x004080, 0x808080, 0.5), "#406080")
+  -- A missing endpoint yields the other unchanged: a scheme without a Normal
+  -- background (transparent terminals) keeps the raw tint rather than crashing
+  -- or inventing black.
+  H.eq(render.blend(nil, 0x123456, 0.6), "#123456")
+  H.eq(render.blend(0x123456, nil, 0.6), "#123456")
+  H.eq(render.blend(nil, nil, 0.6), nil)
+end
+
+T["hl_rows quiet default derives tints distinct from both DiffAdd and Normal"] = function()
+  config.setup({})
+  local st = canvas.open({
+    model.build_section("quiet.lua", OLD, NEW, "M"),
+  }, {})
+  assert(count_row_tints(st.buf) > 0, "sanity: quiet still tints the rows")
+
+  local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
+  local raw = vim.api.nvim_get_hl(0, { name = "DiffAdd", link = false })
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  assert(add.bg, "quiet CanvasDiffAdd must carry a computed background")
+  assert(add.bg ~= raw.bg, "the quiet tint must sit below the raw DiffAdd wash")
+  assert(add.bg ~= normal.bg, "and still read against Normal")
+
+  -- Builtin DiffDelete carries NO background at all; without the fixed
+  -- fallback pair, quiet would blend nothing toward Normal and deletions
+  -- would render invisible.
+  local del = vim.api.nvim_get_hl(0, { name = "CanvasDiffDel", link = false })
+  assert(del.bg,
+    "quiet CanvasDiffDel needs a background even when the scheme's DiffDelete has none")
+  assert(del.bg ~= normal.bg, "and it must be visible against Normal")
+end
+
+T["hl_rows classic restores the raw DiffAdd and DiffDelete links"] = function()
+  config.setup({ highlight = { diff = "classic" } })
+  local ok, err = pcall(function()
+    canvas.open({ model.build_section("classic.lua", OLD, NEW, "M") }, {})
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }).link, "DiffAdd")
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffDel", link = true }).link, "DiffDelete")
+  end)
+  config.setup({})
+  assert(ok, err)
+
+  -- Switching back re-derives the quiet tints on the next open: the plugin
+  -- replaces its OWN previous definition, and only its own (see the user
+  -- override test below).
+  canvas.open({ model.build_section("classic2.lua", OLD, NEW, "M") }, {})
+  local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
+  H.eq(add.link, nil, "quiet re-takes the group it defined itself")
+  assert(add.bg, "with a computed background")
+end
+
+T["hl_rows a user definition of CanvasDiffAdd survives every ensure"] = function()
+  vim.api.nvim_set_hl(0, "CanvasDiffAdd", { bg = 0x123456 })
+  local ok, err = pcall(function()
+    config.setup({})
+    canvas.open({ model.build_section("override.lua", OLD, NEW, "M") }, {})
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false }).bg, 0x123456,
+      "a derived default must never clobber an explicit user definition")
+  end)
+  vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
+  config.setup({})
+  assert(ok, err)
+end
+
+T["hl_rows gutter drops the row tints in favour of the statuscolumn bar"] = function()
+  config.setup({ highlight = { diff = "gutter" } })
+  local ok, err = pcall(function()
+    local st = canvas.open({ model.build_section("gutter.lua", OLD, NEW, "M") }, {})
+    H.eq(count_row_tints(st.buf), 0, "gutter mode must place no add/del row tints")
+    for group, target in pairs({
+      CanvasDiffGutterAdd = "Added",
+      CanvasDiffGutterDel = "Removed",
+    }) do
+      H.eq(vim.api.nvim_get_hl(0, { name = group, link = true }).link, target,
+        group .. " must default to " .. target)
+    end
+  end)
+  config.setup({})
+  assert(ok, err)
+end
+
+T["hl_rows gutter without the statuscolumn behaves as quiet"] = function()
+  local warned = 0
+  local real_notify = vim.notify
+  vim.notify = function(_, level)
+    if level == vim.log.levels.WARN then warned = warned + 1 end
+  end
+  local ok, err = pcall(function()
+    config.setup({ highlight = { diff = "gutter" }, statuscolumn = { enabled = false } })
+    local st = canvas.open({ model.build_section("gutterless.lua", OLD, NEW, "M") }, {})
+    assert(count_row_tints(st.buf) > 0,
+      "with no statuscolumn to carry the bar, the rows keep their quiet tints")
+    H.eq(warned, 1, "the downgrade warns exactly once, however many rows resolve it")
+  end)
+  vim.notify = real_notify
+  config.setup({})
+  assert(ok, err)
 end
 
 return T

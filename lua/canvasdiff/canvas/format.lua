@@ -62,6 +62,20 @@ local HL_GROUP = {
   add = "CanvasDiffAdd",
 }
 
+--- The row group for one entry kind under the EFFECTIVE highlight.diff mode.
+---
+--- Gating here, at the single lookup both the eager canvas and the paged
+--- projection resolve through, is what makes "gutter" mean the same thing in
+--- both: no add/del row tint anywhere, with the statuscolumn carrying the
+--- per-row bar instead. Headers and binary rows keep their groups -- gutter
+--- only trades away the tints the bar replaces.
+local function row_group(kind)
+  if (kind == "add" or kind == "del") and config.diff_mode() == "gutter" then
+    return nil
+  end
+  return HL_GROUP[kind]
+end
+
 --- The sidebar's stage-mark block, ready to append to a header or placeholder:
 --- one leading space before the marks, nothing at all when the section carries
 --- no status facts (a range lens's sections never do -- collect's range branch
@@ -165,6 +179,142 @@ function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffUnstaged", { link = "DiagnosticWarn", default = true })
 end
 
+--- Channelwise linear interpolation between two 24-bit RGB colours.
+---
+--- `factor` is the fraction moved from `bg_a` toward `bg_b`: 0 is `bg_a`
+--- unchanged, 1 is `bg_b`. Either endpoint may be nil -- a transparent scheme
+--- has no Normal background to blend toward, and builtin DiffDelete carries no
+--- background at all -- in which case the OTHER endpoint comes back unchanged
+--- rather than inventing black or erroring. Returns "#rrggbb", or nil when
+--- both endpoints are missing.
+function R.blend(bg_a, bg_b, factor)
+  if bg_a == nil and bg_b == nil then
+    return nil
+  end
+  if bg_a == nil or bg_b == nil then
+    return ("#%06x"):format(bg_a or bg_b)
+  end
+  local function channel(shift)
+    local a = math.floor(bg_a / shift) % 256
+    local b = math.floor(bg_b / shift) % 256
+    return math.floor(a + (b - a) * factor + 0.5)
+  end
+  return ("#%02x%02x%02x"):format(channel(65536), channel(256), channel(1))
+end
+
+-- How far a quiet tint moves from the scheme's diff background toward
+-- Normal's. 0.6 by measurement (Rec.709 luma, builtin dark scheme and
+-- tokyonight-moon): at 0.6 every probed syntax token -- @comment as the dim
+-- extreme, Function and String as bright ones -- keeps its luminance delta on
+-- a tinted row within 15% of its delta on an untinted one (worst case
+-- @comment on a tokyonight-moon added row: 74.1 untinted vs 63.2 tinted,
+-- -14.7%). At 0.5 that same case degrades by 19.1%, so 0.6 is the least
+-- blending that meets the budget.
+local QUIET_FACTOR = 0.6
+
+-- What quiet derives from when the scheme's own group carries no background.
+-- Not hypothetical: builtin DiffDelete is foreground-only (discovered in the
+-- winbar work), and blending nothing toward Normal would return Normal's own
+-- background -- an INVISIBLE deletion tint. A fixed green/red pair blended
+-- 60% toward Normal lands close to what schemes that do tint their diff rows
+-- pick anyway.
+local QUIET_FALLBACK_BG = { add = 0x2ea043, del = 0xdb4444 }
+
+-- What this module itself last defined each diff group as, keyed by group
+-- name, stored as the nvim_get_hl readback. The quiet tints are COMPUTED
+-- values, and `default = true` means "only if the group is not already
+-- defined" -- so without this record a mode switch (or a re-derive against a
+-- changed scheme) would be a silent no-op: the second default call cannot
+-- replace the first. Comparing the group's current definition against this
+-- record is what lets ensure_diff_hl force-replace exactly the definitions it
+-- authored while never touching a user's or a colourscheme's.
+local applied_diff_hl = {}
+
+-- The comparison shape for "is this definition the one we authored?".
+--
+-- The `default` marker is stripped before comparing, and that is load-bearing
+-- for colourscheme switches: `:hi clear` (which schemes run first) restores a
+-- group to its registered default VALUE but reports it without the flag, so
+-- comparing flags too would misread our own surviving definition as a foreign
+-- override and leave a stale tint derived from the previous scheme in place.
+-- Values still separate ours from everyone else's: a user or scheme override
+-- carries different attributes, or it changes nothing.
+local function authorship_shape(definition)
+  local shape = {}
+  for key, value in pairs(definition or {}) do
+    if key ~= "default" then
+      shape[key] = value
+    end
+  end
+  return shape
+end
+
+--- Define one diff group as a default, replacing only our own prior authorship.
+local function set_diff_default(group, spec)
+  local current = authorship_shape(
+    vim.api.nvim_get_hl(0, { name = group, link = true }))
+  if next(current) ~= nil then
+    if not vim.deep_equal(current, applied_diff_hl[group]) then
+      -- Someone else defined this group -- a user, a colourscheme, or an
+      -- earlier explicit override. Theirs always wins over a derived default.
+      return
+    end
+    if vim.deep_equal(current, authorship_shape(spec)) then
+      return
+    end
+    -- Ours, and stale (the mode or the derived colour changed). `force` is
+    -- how a default-flagged definition replaces an existing one; it is safe
+    -- here ONLY because the current value just proved to be our own.
+    spec = vim.tbl_extend("force", spec, { force = true })
+  end
+  vim.api.nvim_set_hl(0, group, spec)
+  applied_diff_hl[group] = authorship_shape(
+    vim.api.nvim_get_hl(0, { name = group, link = true }))
+end
+
+--- Define the diff-row groups for the EFFECTIVE highlight.diff mode.
+---
+--- "classic" is the raw links; "quiet" (and "gutter", whose ghost deletions
+--- still resolve through CanvasDiffDel) derives low-intensity tints: the
+--- scheme's DiffAdd/DiffDelete background blended QUIET_FACTOR toward
+--- Normal's. Colourschemes tune those groups for a two-pane vimdiff where a
+--- whole-window wash is the point; on a canvas most of the screen is tinted,
+--- so the raw wash spends the strongest visual channel on the least
+--- interesting fact. All definitions are defaults: an explicit user or
+--- colourscheme definition of any CanvasDiff* group always wins.
+function R.ensure_diff_hl()
+  local mode = config.diff_mode()
+  if mode == "classic" then
+    set_diff_default("CanvasDiffAdd", { link = "DiffAdd", default = true })
+    set_diff_default("CanvasDiffDel", { link = "DiffDelete", default = true })
+  else
+    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    for kind, group in pairs({ add = "CanvasDiffAdd", del = "CanvasDiffDel" }) do
+      local source = vim.api.nvim_get_hl(0, {
+        name = kind == "add" and "DiffAdd" or "DiffDelete",
+        link = false,
+      })
+      local tint =
+        R.blend(source.bg or QUIET_FALLBACK_BG[kind], normal.bg, QUIET_FACTOR)
+      -- As a number, matching the nvim_get_hl readback shape, so the
+      -- "already exactly this" comparison in set_diff_default can hold.
+      local spec = { bg = tonumber(tint:sub(2), 16), default = true }
+      -- gui colours cannot be blended into cterm indices; carry the source's
+      -- cterm background through unchanged so a 256-colour terminal keeps
+      -- classic-loud tints rather than invisible ones.
+      spec.ctermbg = source.ctermbg
+      set_diff_default(group, spec)
+    end
+  end
+  -- The bar the statuscolumn draws per add/del row in gutter mode. Defined in
+  -- every mode (they are two names in a table either way) so a mode switch
+  -- between opens never races their existence. Added/Removed rather than
+  -- DiffAdd/DiffDelete: the bar is one glyph of FOREGROUND, and Added/Removed
+  -- are the standard foreground-carrying statements of the same two facts.
+  set_diff_default("CanvasDiffGutterAdd", { link = "Added", default = true })
+  set_diff_default("CanvasDiffGutterDel", { link = "Removed", default = true })
+end
+
 --- Byte spans of the trailing marker glyphs on a sidebar row, a canvas file
 --- header, or a folded placeholder, each with the highlight group it needs,
 --- innermost-last order irrelevant to the caller.
@@ -266,7 +416,7 @@ end
 function R.section_hl(section)
   local marks = {}
   for i, e in ipairs(section.entries) do
-    local group = HL_GROUP[e.kind]
+    local group = row_group(e.kind)
     if group then
       marks[#marks + 1] = { row = i - 1, group = group }
     end
@@ -275,7 +425,7 @@ function R.section_hl(section)
 end
 
 function R.entry_hl(entry)
-  return entry and HL_GROUP[entry.kind] or nil
+  return entry and row_group(entry.kind) or nil
 end
 
 return R
