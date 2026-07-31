@@ -124,13 +124,22 @@ Commit ranges compare committed content and are read-only:
     A...B       compare merge-base(A, B) vs B
 
 An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
-`HEAD...topic`. File jumps and stage cycling are declined in a range lens.
+`HEAD...topic`. The winbar breadcrumb shows the refs you asked for, marked
+READ-ONLY. File jumps and stage cycling are declined in a range lens.
 Press <Tab> or <S-Tab> to leave a range at HEAD vs WORKTREE. `q` closes the
 review and restores the buffer from which its canvas was entered.
 
-The canvas winbar uses `source → destination · current/file`. The sidebar
-winbar uses `Files changed (N)`, where N counts changed files rather than
-visible directory rows.
+The canvas winbar is a breadcrumb: the comparison stays on the left, and the
+file under the topline follows it as you scroll, as in
+`HEAD → WORKTREE · src/canvas.lua`. A committed range renders
+`READ-ONLY  A → B` and tints the whole bar, so the mode is visible before the
+label is read. The right edge names the cheatsheet key, `<leader>lh help` by
+default; it follows the configured `help` key and is absent when that key is
+disabled.
+
+The sidebar winbar reads `Files changed (N)  +A −D`. N counts changed files
+rather than visible directory rows; the stats are the whole changeset's, and
+are omitted when nothing is changed.
 
 `--staged` and `--cached` are likewise refused by name rather than accepted as
 synonyms, because `--staged` is one keystroke away from `unstaged` and the two
