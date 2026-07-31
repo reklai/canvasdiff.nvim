@@ -2237,7 +2237,7 @@ function App:toggle_stage(path, owned_surface, generation)
   local st = surface.state
   local current_lens = lens.of(st)
   if lens.is_range(current_lens) then
-    local err = "committed ranges cannot be staged or unstaged"
+    local err = "READ-ONLY comparison — staging needs a worktree lens (press Tab)"
     ui.warn(err)
     return nil, err
   end

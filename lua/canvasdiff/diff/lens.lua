@@ -7,7 +7,7 @@
 ---
 --- The new side is what decides whether the canvas is a workspace or a viewer.
 --- `new = "worktree"` means every section maps onto a file you can open and edit,
---- so <CR>/<M-CR> work and the canvas is somewhere you get things done.
+--- so <CR>/<C-Space> work and the canvas is somewhere you get things done.
 --- `new = "index"` cannot be edited as text -- but it is still ACTIONABLE, since
 --- unstaging moves that content back into the worktree. That is the line: a lens
 --- whose new side is neither of those (commit vs commit) would make the canvas a

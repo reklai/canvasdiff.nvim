@@ -33,8 +33,8 @@ K.specs = {
   { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas at the same spot" },
 
   { ctx = "canvas", action = "collapse",   group = "View",     desc = "Fold or unfold this file (unfolds the directory when that is what hides it)" },
-  { ctx = "canvas", action = "lens_next",  group = "View",     desc = "Next lens: all / unstaged / staged" },
-  { ctx = "canvas", action = "lens_prev",  group = "View",     desc = "Previous lens" },
+  { ctx = "canvas", action = "lens_next",  group = "View",     desc = "Next lens: all / unstaged / staged (exits a READ-ONLY range)" },
+  { ctx = "canvas", action = "lens_prev",  group = "View",     desc = "Previous lens (exits a READ-ONLY range)" },
 
   { ctx = "canvas", action = "refresh", group = "Canvas",
     desc = "Refresh the current diff" },

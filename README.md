@@ -97,7 +97,8 @@ you are — always the same answer:
 
 - **The canvas winbar** is a breadcrumb:
   `HEAD → WORKTREE · src/canvas.lua`. The comparison stays on the left and the
-  file under the topline follows after it as you scroll.
+  file under the topline follows after it as you scroll. A branch comparison
+  reads `READ-ONLY  main → topic` instead — read-only mode also tints the bar.
 - **The sidebar winbar** is a collection title such as `Files changed (12)`.
   Its count is the number of changed files, even when directories are folded.
 - **The sidebar's highlighted row** tracks the same file as the canvas.
@@ -288,7 +289,7 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff unstaged    " what you haven't staged: index → worktree
 :CanvasDiff staged      " what you have staged: HEAD → index
 :CanvasDiff main..topic " compare main → topic (read-only)
-:CanvasDiff main...topic " compare merge-base(main, topic) → topic (read-only)
+:CanvasDiff main...topic " compare main → topic since the merge base (read-only)
 ```
 
 All of them complete with `<Tab>`.
@@ -333,6 +334,10 @@ are therefore read-only:
   the histories diverged.
 - Either omitted endpoint means `HEAD`, so `main..` is `main..HEAD` and
   `...topic` is `HEAD...topic`.
+
+Either way the breadcrumb shows the refs you asked for, marked `READ-ONLY`, and
+the whole winbar is tinted (`CanvasDiffWinbarReadOnly`, default measured the
+same way as `CanvasDiffFileBar`).
 
 `<Tab>` or `<Shift-Tab>` leaves a read-only range at `HEAD → WORKTREE`.
 Pressing `q` closes the review and restores the buffer from which that

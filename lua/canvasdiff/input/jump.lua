@@ -92,7 +92,7 @@ end
 --- and restore the canvas viewport semantically.
 function M.enter(store, state, opts)
   opts = opts or {}
-  local back_keys = opts.back_keys or { "<M-CR>" }
+  local back_keys = opts.back_keys or { "<C-Space>" }
   local win = opts.win or state.win
   if not (win and vim.api.nvim_win_is_valid(win))
       or vim.api.nvim_win_get_buf(win) ~= state.buf then
@@ -106,14 +106,20 @@ function M.enter(store, state, opts)
     return { ok = false }
   end
 
-  -- The staged lens's new side is the index, which is not a file you can open --
-  -- editing the worktree copy instead would silently put you in a buffer whose
-  -- content is NOT what the canvas is showing. Name the way out rather than just
-  -- refusing: unstaging moves that content back into the worktree, where it is
-  -- editable again.
-  if not lens.editable(lens.of(state)) then
+  -- Two different refusals for two different facts. The staged lens's new side
+  -- is the index, which is not a file you can open -- editing the worktree copy
+  -- instead would silently put you in a buffer whose content is NOT what the
+  -- canvas is showing; unstaging moves that content back where it is editable.
+  -- A committed range has no editable side at all. Both name the way out
+  -- rather than just refusing, in the breadcrumb's own vocabulary.
+  local l = lens.of(state)
+  if not lens.editable(l) then
+    if lens.is_range(l) then
+      return declined("warn",
+        "READ-ONLY comparison — press Tab to return to HEAD → WORKTREE and edit")
+    end
     return declined("warn",
-      "staged view is not editable — unstage it to edit, or press B for the worktree")
+      "staged view is not editable — unstage it (s) to edit, or press Tab for the worktree")
   end
 
   local section = state.sections[i]

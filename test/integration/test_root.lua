@@ -224,7 +224,7 @@ T["root_ toggle_stage declines committed ranges and missing XY without mutation"
     st.lens = require("canvasdiff.diff").lens.range("HEAD", "HEAD", "..")
     local changed, err = fm.toggle_stage()
     H.eq(changed, nil)
-    assert(err and err:find("committed", 1, true), tostring(err))
+    H.eq(err, "READ-ONLY comparison — staging needs a worktree lens (press Tab)")
     assert(source.changed_files(root)[1].unstaged)
 
     st.lens = require("canvasdiff.diff").lens.get("all")
@@ -2762,7 +2762,7 @@ T["root_ multi-window excursion compare returns the exact origin host"] = functi
     H.eq(surface.excursion.excursion, nil,
       "presenting a committed range consumes the editable excursion")
     local mapping = vim.api.nvim_buf_call(excursion_buf, function()
-      return vim.fn.maparg("<M-CR>", "n", false, true)
+      return vim.fn.maparg("<C-Space>", "n", false, true)
     end)
     H.eq(mapping, {}, "the stale return mapping is removed from the file buffer")
 
