@@ -12,7 +12,10 @@
 --
 -- Injected hostility is expected to be REFUSED or SURVIVED, never absorbed
 -- silently: a failing Git call must leave a review that still closes cleanly,
--- and an unwritable session directory must not take the review with it.
+-- an unwritable session directory must not take the review with it, and a
+-- branch deleted out from under a saved or remembered lens must be refused
+-- (a pivot onto it) or degraded to the default lens (a reopen through it) --
+-- never allowed to dismantle the review that was already on screen.
 
 local H = require("helpers")
 
@@ -49,6 +52,29 @@ local function body(tag, revision)
     end
   end
   return table.concat(out, "\n") .. "\n"
+end
+
+--- Run one Git command against the fixture repository, the way the OUTSIDE
+--- world would -- vim.system, not canvasdiff.os, whose failures other actions
+--- inject. Fixture-side Git is harness infrastructure, so a failure here is a
+--- broken campaign, not a finding: assert it.
+local function git(dir, cmd)
+  local result = vim.system(cmd, { cwd = dir, text = true }):wait()
+  assert(result.code == 0, ("%s failed: %s")
+    :format(table.concat(cmd, " "), result.stderr or ""))
+  return result.stdout or ""
+end
+
+--- The bounded branch pool the campaign creates and deletes from. Pivot
+--- candidates DELIBERATELY include names that were never created or have been
+--- deleted meanwhile: pivoting onto a missing ref is the hostile case, and it
+--- must refuse without dismantling the review it would have replaced.
+local POOL = { "chaos-0", "chaos-1", "chaos-2", "chaos-3" }
+
+local function ref_candidates(world)
+  local out = { world.default_branch, "HEAD" }
+  vim.list_extend(out, POOL)
+  return out
 end
 
 -- --- invariants --------------------------------------------------------------
@@ -136,6 +162,67 @@ local function check(world)
   assert(now <= world.baseline_buffers + world.peak_reviews + 1, (
     "canvas buffers are accumulating: %d now, %d at the start, peak %d reviews"
   ):format(now, world.baseline_buffers, world.peak_reviews))
+
+  -- The remembered pre-comparison exit must itself be somewhere <Tab> can go:
+  -- a valid lens and never a range. A range recorded here would make "leave
+  -- the comparison" mean "enter another one", forever.
+  local lens = require("canvasdiff.diff.lens")
+  for _, surface in pairs(world.surfaces) do
+    local st = surface:is_alive() and surface.state or nil
+    local back = st and st.return_lens
+    if back ~= nil then
+      assert(lens.valid(back), "return_lens does not satisfy lens.valid: "
+        .. vim.inspect(back, { newline = " ", indent = "" }))
+      assert(not lens.is_range(back),
+        "return_lens is a range, so leaving a comparison could never finish")
+    end
+  end
+
+  -- A refused pivot must leave the review it would have replaced on screen:
+  -- a live Surface whose primary window still exists must be showing its own
+  -- canvas buffer there, not whatever a half-applied pivot left behind.
+  for _, surface in pairs(world.surfaces) do
+    local st = surface:is_alive() and surface.state or nil
+    local win = st and st.win
+    if win and st.buf and vim.api.nvim_win_is_valid(win) then
+      assert(vim.api.nvim_win_get_buf(win) == st.buf,
+        "a live Surface's window no longer shows its canvas buffer")
+    end
+  end
+
+  -- A reopen-through-the-session either produced a review that is actually on
+  -- screen, or refused cleanly -- in which case nothing of the closed review
+  -- may survive it: no live Surface, and none of the augroup kinds a Surface
+  -- owns. Consumed here so the stricter form binds exactly one action.
+  local reopen = world.pending_reopen
+  world.pending_reopen = nil
+  if reopen then
+    if reopen.opened then
+      local showing = false
+      for _, surface in pairs(world.surfaces) do
+        local st = surface:is_alive() and surface.state or nil
+        local buf = st and st.buf
+        if buf then
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_buf(win) == buf then
+              showing = true
+            end
+          end
+        end
+      end
+      assert(showing, "session_reopen produced a review that is not showing")
+    else
+      for _, surface in pairs(world.surfaces) do
+        assert(not surface:is_alive(),
+          "session_reopen refused but left a live Surface behind")
+      end
+      for name in pairs(canvasdiff_augroups()) do
+        local kind = name:match("^canvasdiff%.(%a+)%.%d+$")
+        assert(not (kind == "session" or kind == "close" or kind == "winbar"),
+          ("session_reopen refused but augroup %s leaked"):format(name))
+      end
+    end
+  end
 end
 Chaos.check = check
 
@@ -173,6 +260,31 @@ local function record(world, name, detail)
   end
 end
 
+--- First window in this tab showing a canvas buffer -- layout order, so a
+--- replayed seed lands on the same one.
+local function canvas_window()
+  local canvas = require("canvasdiff.canvas")
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if canvas.is_canvas_buf(vim.api.nvim_win_get_buf(win)) then
+      return win
+    end
+  end
+end
+
+--- Change what the review compares: pivot in place when one is showing, open
+--- with an explicit lens when none is. The split exists because set_lens and
+--- friends open INTERNALLY when nothing is showing and return only `true` --
+--- a Surface the harness never saw, which the ownership checks would then
+--- misread as a leak. An explicit lens that no longer resolves refuses the
+--- open (typo feedback), and that refusal is an expected outcome here.
+local function pivot_or_open(world, l)
+  if canvas_window() then
+    world.plugin.set_lens(l)
+  else
+    remember(world, world.plugin.open({ lens = l }))
+  end
+end
+
 ACTIONS.open = function(world)
   local state = world.plugin.open()
   remember(world, state)
@@ -195,8 +307,10 @@ ACTIONS.refresh = function(world)
 end
 
 ACTIONS.set_lens = function(world)
+  -- The real lens table, not its id: App:set_lens refuses a bare string, so
+  -- passing "all" tested nothing but the refusal message.
   local id = world.rng.pick({ "all", "unstaged", "staged" })
-  world.plugin.set_lens(id)
+  pivot_or_open(world, require("canvasdiff.diff.lens").get(id))
   record(world, "set_lens", id)
 end
 
@@ -280,6 +394,100 @@ ACTIONS.jump_back = function(world)
   record(world, "jump_back")
 end
 
+ACTIONS.git_branch = function(world)
+  -- The pool is bounded so a campaign recreates names it deleted earlier and
+  -- deletes names a lens still remembers: that collision is the point.
+  local name = "chaos-" .. world.rng.next(4)
+  git(world.dir, { "git", "branch", "-f", name })
+  world.branches[name] = true
+  record(world, "git_branch", name)
+end
+
+ACTIONS.git_branch_delete = function(world)
+  local names = vim.tbl_keys(world.branches)
+  if #names == 0 then
+    return record(world, "git_branch_delete", "noop")
+  end
+  -- tbl_keys order is not deterministic; a replayed seed must pick the same
+  -- victim, so the pick happens over a sorted copy.
+  table.sort(names)
+  local name = world.rng.pick(names)
+  git(world.dir, { "git", "branch", "-D", name })
+  world.branches[name] = nil
+  record(world, "git_branch_delete", name)
+end
+
+ACTIONS.git_commit = function(world)
+  -- Ranges need history that actually moves: advance a pooled file and commit
+  -- everything, index changes included. `--allow-empty` keeps the action
+  -- total when a stage_cycle already committed the worktree's whole story.
+  world.revision = world.revision + 1
+  local name = world.rng.pick({ "a.txt", "b.txt", "c.txt" })
+  local file = io.open(vim.fs.joinpath(world.dir, name), "wb")
+  if file then
+    file:write(body(name:sub(1, 1), world.revision))
+    file:close()
+  end
+  git(world.dir, { "git", "add", "-A" })
+  git(world.dir, { "git", "commit", "-m", "chaos r" .. world.revision, "--allow-empty" })
+  record(world, "git_commit", name)
+end
+
+ACTIONS.set_range = function(world)
+  -- Both endpoints come from the candidate list, so a range regularly names a
+  -- branch that no longer exists. That pivot is EXPECTED to refuse; the
+  -- invariants after the action assert the review it would have replaced is
+  -- still on screen.
+  local refs = ref_candidates(world)
+  local left = world.rng.pick(refs)
+  local right = world.rng.pick(refs)
+  local operator = world.rng.chance(50) and ".." or "..."
+  local ok = pcall(function()
+    pivot_or_open(world,
+      require("canvasdiff.diff.lens").range(left, right, operator))
+  end)
+  record(world, "set_range", left .. operator .. right)
+  assert(ok, "set_range threw instead of refusing")
+end
+
+ACTIONS.set_branch = function(world)
+  -- Same posture as set_range: a deleted candidate must refuse, not throw and
+  -- not tear down the current review.
+  local ref = world.rng.pick(ref_candidates(world))
+  local ok = pcall(function()
+    pivot_or_open(world, require("canvasdiff.diff.lens").branch(ref))
+  end)
+  record(world, "set_branch", ref)
+  assert(ok, "set_branch threw instead of refusing")
+end
+
+ACTIONS.stage_cycle = function(world)
+  -- Drive staging the way a user does: from inside a canvas window with the
+  -- cursor on some row. Without one -- or on a READ-ONLY comparison -- the
+  -- entry point must refuse.
+  local win = canvas_window()
+  if win then
+    vim.api.nvim_set_current_win(win)
+    local rows = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+    pcall(vim.api.nvim_win_set_cursor, win, { world.rng.next(rows) + 1, 0 })
+  end
+  local ok = pcall(function() world.plugin.toggle_stage() end)
+  record(world, "stage_cycle")
+  assert(ok, "stage_cycle threw instead of refusing")
+end
+
+ACTIONS.session_reopen = function(world)
+  -- A restart in miniature. Closing SAVES the session -- deliberately not
+  -- invalidated -- and reopening restores through it, so a saved lens whose
+  -- branch was deleted meanwhile must degrade to the default lens rather than
+  -- fail the open or leak the review. The check consumes pending_reopen.
+  world.plugin.close()
+  local state = world.plugin.open()
+  remember(world, state)
+  world.pending_reopen = { opened = state ~= nil }
+  record(world, "session_reopen", state and "opened" or "refused")
+end
+
 local ACTION_NAMES = {}
 for name in pairs(ACTIONS) do
   ACTION_NAMES[#ACTION_NAMES + 1] = name
@@ -302,6 +510,15 @@ function Chaos.run(opts)
       ["a.txt"] = body("a", 1), ["b.txt"] = body("b", 1),
     },
   })
+  -- Two pool branches exist from the start, so deletions bite immediately
+  -- instead of waiting for a git_branch to have happened first. The default
+  -- branch is read rather than assumed: it is a pivot candidate, and the one
+  -- that must always resolve.
+  git(dir, { "git", "branch", POOL[1] })
+  git(dir, { "git", "branch", POOL[2] })
+  local default_branch = vim.trim(
+    git(dir, { "git", "symbolic-ref", "--short", "HEAD" }))
+
   vim.api.nvim_set_current_dir(dir)
   package.loaded["canvasdiff"] = nil
   local plugin = require("canvasdiff")
@@ -336,6 +553,8 @@ function Chaos.run(opts)
     revision = 1,
     peak_reviews = 0,
     baseline_buffers = #canvas_buffers(),
+    branches = { [POOL[1]] = true, [POOL[2]] = true },
+    default_branch = default_branch ~= "" and default_branch or "main",
   }
   for step = 1, actions do
     local name = rng.pick(ACTION_NAMES)

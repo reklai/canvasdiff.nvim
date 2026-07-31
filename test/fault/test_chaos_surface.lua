@@ -1,11 +1,14 @@
 -- The Surface-level chaos campaign, run as part of the ordinary suite.
 --
 -- Where `test_chaos.lua` hammers the engine, this hammers everything above it
--- against a real Git fixture: opening, closing, refreshing, pivoting lenses,
--- splitting and closing windows, writing to the worktree, and injecting Git
--- and session-write failures -- asserting after every action that no augroup
--- outlives the Surface that owned it and that no two live Surfaces claim one
--- canvas buffer.
+-- against a real Git fixture: opening, closing, refreshing, pivoting lenses
+-- (including branch and range pivots onto refs that were deleted meanwhile),
+-- creating, deleting and committing to branches under a live review, staging,
+-- close-and-reopen through the saved session, splitting and closing windows,
+-- writing to the worktree, and injecting Git and session-write failures --
+-- asserting after every action that no augroup outlives the Surface that
+-- owned it, that no two live Surfaces claim one canvas buffer, and that a
+-- remembered return lens is always somewhere <Tab> can actually go.
 
 local H = require("helpers")
 local Chaos = require("fault.chaos_surface")
