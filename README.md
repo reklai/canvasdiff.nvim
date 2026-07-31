@@ -409,6 +409,16 @@ last looked. If a saved comparison points at a branch that no longer exists,
 opening falls back to the default lens — with a message saying so. Set
 `session.enabled = false` to turn this off entirely.
 
+Reopening also returns to the **lens** you were last looking through. Within
+one Neovim session that memory is in-memory and per repository — close in
+`staged`, reopen in `staged`, even with sessions disabled and even for
+read-only comparisons. An explicit request always wins (`:CanvasDiff
+unstaged` opens unstaged no matter what was remembered); with neither a
+request nor a memory, a fresh Neovim falls back to the session file, then to
+the configured default. A remembered comparison whose branch has since been
+deleted degrades to the default lens with the same "no longer resolves"
+message as a saved one.
+
 ## Configuration
 
 ```lua

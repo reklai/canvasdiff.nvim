@@ -421,6 +421,13 @@ repositories never share a position. Disable it with
 `session = { enabled = false }`. A saved comparison whose branch no longer
 exists falls back to the default lens on open, with a message saying so.
 
+The lens is also remembered in memory, per repository, for the current Neovim
+session -- close in `staged`, reopen in `staged`, even with sessions disabled.
+Opening resolves the comparison most-specific first: an explicit lens from the
+caller, then an explicit base, then the in-memory last lens, then the session
+file, then the configured default. A remembered comparison whose ref has since
+died degrades to the default lens with the same message as a saved one.
+
 Because close-then-open restores your position, it is also the repair for a
 canvas that has somehow diverged from what Git reports -- press `q`, then
 `:CanvasDiff`. That is why there is no separate hard-rebuild key.

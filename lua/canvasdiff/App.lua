@@ -64,6 +64,13 @@ function App.new(opts)
   return setmetatable({
     surfaces = {},
     opened = {},
+    -- The lens each repository's review was showing when it was closed,
+    -- keyed by root. Written by App:close, read by App:open between the
+    -- explicit and session tiers: a mid-session reopen returns to the
+    -- comparison you left, whether or not sessions are enabled. In-memory
+    -- and per-App on purpose -- the session FILE remains the only carrier
+    -- across instances.
+    last_lens_by_root = {},
     compare_request = 0,
     ref_request = 0,
     global_maps = {},
@@ -1156,24 +1163,31 @@ function App:open(opts)
   -- Load any saved session BEFORE collection, so a restored lens is honored
   -- from the very first source.files call -- not just after the fact.
   --
-  -- Precedence, most to least specific: an explicit lens from the caller; the older
-  -- `base` string a command passed; the lens the session saved; the base an OLDER
-  -- session saved (payloads predating lenses); the configured default.
+  -- Precedence, most to least specific: an explicit lens from the caller; the
+  -- older `base` string a command passed; the lens this App last showed for
+  -- this repository (recorded at close); the lens the session saved; the base
+  -- an OLDER session saved (payloads predating lenses); the configured
+  -- default. Memory outranks the file deliberately: mid-session, "the lens I
+  -- just left" is what a reopen means, and the file only ever answers a fresh
+  -- instance, which has no memory.
   local sess = opts._session
     or (config.options.session.enabled and session.load(root) or nil)
+  local remembered = lens.normalize(self.last_lens_by_root[root])
   local l = opts.lens
     or (opts.base and lens.from_base(opts.base))
+    or remembered
     or (sess and lens.valid(sess.lens) and sess.lens)
     or (sess and sess.base and lens.from_base(sess.base))
     or lens.from_base(config.options.base)
-  -- The session's lens passed a SHAPE check only; whether its refs still
-  -- resolve is decided by collection below. Remember where it came from, so
-  -- a saved comparison over a deleted branch degrades to the default lens
-  -- instead of failing the open -- same posture as the paged fallback: a
-  -- saved lens that cannot be collected is a reason to fall back, not to
+  -- A remembered or saved lens passed a SHAPE check only; whether its refs
+  -- still resolve is decided by collection below. Remember where it came
+  -- from, so a comparison over a since-deleted branch degrades to the default
+  -- lens instead of failing the open -- same posture as the paged fallback: a
+  -- recalled lens that cannot be collected is a reason to fall back, not to
   -- fail the review. An EXPLICIT lens still errors; that is typo feedback.
-  local lens_from_session = opts.lens == nil and opts.base == nil
-    and sess ~= nil and lens.valid(sess.lens) or false
+  local lens_remembered = opts.lens == nil and opts.base == nil
+    and (remembered ~= nil or (sess ~= nil and lens.valid(sess.lens)))
+    or false
 
   -- Transaction boundary: collection and model construction finish before
 --- Choose the canvas the review actually needs.
@@ -1227,7 +1241,7 @@ end
   if opts._guard and not opts._guard() then
     return nil, STALE_COMPARE
   end
-  if not sections and lens_from_session then
+  if not sections and lens_remembered then
     local fallback = lens.from_base(config.options.base)
     if not lens.same(fallback, l) then
       -- Re-collect BEFORE announcing the fallback: "showing X" is a promise,
@@ -1765,6 +1779,16 @@ function App:close()
   -- tab-local command policy: retire the hosts in this workspace, but keep the
   -- review alive when another tab still owns a view of the same canvas.
   local st = surface.state
+  -- Remember the comparison this review is showing, so a reopen returns to
+  -- it (the in-memory tier of App:open's precedence chain). A normalized
+  -- COPY, never the live table: the state graph dies with the Surface, and a
+  -- later pivot in a still-alive review must not mutate the record. Ranges
+  -- are remembered too -- a dead ref degrades at open, same as a saved one.
+  local function remember_lens()
+    if st.root then
+      self.last_lens_by_root[st.root] = lens.normalize(lens.of(st))
+    end
+  end
   local tab = vim.api.nvim_get_current_tabpage()
   surface:canvas_windows()
   local hosts = surface:host_windows(tab)
@@ -1772,10 +1796,12 @@ function App:close()
     -- The final host may already have vanished and queued its deferred
     -- WinClosed recheck. An explicit close in that gap still owns teardown.
     if #surface:host_windows() == 0 then
+      remember_lens()
       surface:dispose("explicit")
     end
     return
   end
+  remember_lens()
   local wins = surface:tab_canvas_windows(tab)
   local landings = {}
   for _, win in ipairs(wins) do

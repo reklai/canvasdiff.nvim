@@ -1007,4 +1007,147 @@ function()
   vim.fn.delete(root, "rf")
 end
 
+-- ---------------------------------------------------------------------------
+-- The last-lens tier: an App remembers, per repository root and entirely in
+-- memory, the lens each review was showing when it closed, and a reopen
+-- returns to it. Precedence, most to least specific: opts.lens > opts.base >
+-- in-memory last lens > session-file lens > session-file base > config
+-- default. The memory is the RULE for mid-session reopens; the session file
+-- answers only a fresh instance, which has no memory.
+-- ---------------------------------------------------------------------------
+
+--- a.txt is PARTLY staged (HEAD "one", index "two", worktree "three"), so all
+--- three named lenses genuinely differ and an assertion on one cannot pass by
+--- accident through another.
+local function partly_staged_repo()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "one\n" } })
+  local function write(body)
+    local f = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+    f:write(body); f:close()
+  end
+  write("two\n")
+  local res = vim.system({ "git", "add", "a.txt" }, { cwd = root }):wait()
+  assert(res.code == 0, "git add failed: " .. (res.stderr or ""))
+  write("three\n")
+  return root
+end
+
+T["session_ a reopen returns to the last lens even with sessions disabled"] =
+function()
+  local root = partly_staged_repo()
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    assert(fm.open())
+    assert(fm.set_lens(model.lens.get("staged")))
+    fm.close()
+    H.eq(vim.uv.fs_stat(session.path_for(root)) ~= nil, false,
+      "sanity: nothing reached disk with sessions disabled")
+    local st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "staged",
+      "a mid-session reopen returns to the lens the review last showed")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["session_ an explicit lens or base outranks the remembered lens"] = function()
+  local root = partly_staged_repo()
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    assert(fm.open())
+    assert(fm.set_lens(model.lens.get("staged")))
+    fm.close()
+    local st = assert(fm.open({ lens = model.lens.get("unstaged") }))
+    H.eq(model.lens.of(st).id, "unstaged",
+      "opts.lens outranks the remembered lens")
+    fm.close()
+    -- The memory now says `unstaged`; the older base vocabulary must still win.
+    st = assert(fm.open({ base = "HEAD" }))
+    H.eq(model.lens.of(st).id, "all",
+      "opts.base outranks the remembered lens")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["session_ the remembered lens outranks the session file mid-session"] =
+function()
+  local root = partly_staged_repo()
+  in_repo(root, {}, function(fm)
+    assert(fm.open())
+    assert(fm.set_lens(model.lens.get("staged")))
+    fm.close()
+    -- Rewrite the session file behind the App's back. A mid-session reopen
+    -- must answer from memory, proving the file is not the carrier here.
+    local forged = { root = root, lens = model.lens.get("unstaged") }
+    session.activate(forged)
+    assert(session.save(forged))
+    local st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "staged",
+      "mid-session, the in-memory last lens outranks the session file")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+T["session_ a fresh instance with no memory falls back to the session file"] =
+function()
+  local root = partly_staged_repo()
+  local saved = { root = root, lens = model.lens.get("staged") }
+  session.activate(saved)
+  assert(session.save(saved))
+  -- in_repo re-requires the facade, so this App has no in-memory record of
+  -- any earlier review of this repository: tier 3 is empty, tier 4 answers.
+  in_repo(root, {}, function(fm)
+    local st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "staged",
+      "with no in-memory record, the saved session decides the lens")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+-- The remembered lens is a preference, not a contract -- exactly like a saved
+-- one. A remembered comparison whose branch died between close and reopen
+-- falls back to the configured default with the same warning, instead of
+-- refusing the open.
+T["session_ a remembered comparison whose ref is gone falls back like a saved one"] =
+function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "one\n" } })
+  local function sh(c)
+    local res = vim.system(c, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(c, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "branch", "topic" })
+
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    assert(fm.open({ lens = model.lens.range("main", "topic", "..") }))
+    fm.close()
+    sh({ "git", "branch", "-D", "topic" })
+
+    local warnings = {}
+    local orig_notify = vim.notify
+    vim.notify = function(msg, level)
+      warnings[#warnings + 1] = { msg = msg, level = level }
+    end
+    local ok, err = pcall(function()
+      local st = assert(fm.open(), "open must succeed via the fallback lens")
+      H.eq(model.lens.of(st).id, "all",
+        "the dead remembered range degrades to the default lens")
+    end)
+    vim.notify = orig_notify
+    assert(ok, err)
+
+    local fallback_warnings = 0
+    for _, w in ipairs(warnings) do
+      if w.msg:find("no longer resolves", 1, true) then
+        fallback_warnings = fallback_warnings + 1
+      end
+    end
+    assert(fallback_warnings == 1,
+      "the fallback explains itself with exactly one warning, got "
+      .. fallback_warnings)
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
 return T

@@ -1644,12 +1644,16 @@ T["root_ comparison exits restore the originating canvas landing"] = function()
     H.eq(vim.api.nvim_get_current_buf(), origin,
       "q restores the buffer that initiated a newly opened comparison")
 
-    -- Phase 2: comparison stacked on an existing working canvas. The lens is
-    -- pinned explicitly: the canvas state singleton otherwise reopens with
-    -- whatever lens the previous test (or Phase 1) left, which decides whether
-    -- the comparison records a return lens at all.
+    -- Phase 2: comparison stacked on an existing working canvas. Phase 1's q
+    -- closed a comparison, and an App remembers the last lens each repository
+    -- showed -- a bare open() here would return to that range. The explicit
+    -- lens asserts the precedence rule instead: opts.lens outranks the
+    -- remembered one, which also decides whether this comparison records a
+    -- return lens at all (range-over-range would not).
     local lens = require("canvasdiff.diff").lens
     local state = assert(app:open({ lens = lens.get("all") }))
+    H.eq(lens.of(state).id, "all",
+      "an explicit lens outranks the lens remembered from Phase 1's close")
     local original_landing = origin
     app:compare()
     calls[3].callback(item_named(calls[3].items, "main"))
