@@ -126,9 +126,14 @@ canvas back and takes you there, rather than doing nothing.
 A 1-column scrollbar minimap floats over the canvas's right edge, showing
 file boundaries (─), add/del density per stretch of lines (│, colored), and
 a highlighted thumb tracking your current viewport across the whole canvas.
-Double-click a line in the canvas (`<2-LeftMouse>`) to jump into that file,
-same as `<CR>`. It's purely visual and non-focusable — your mouse wheel still
-works normally on the canvas window underneath it. satellite.nvim / nvim-scrollbar
+The bar scrolls, too: press the thumb and drag to scrub the viewport live,
+or click anywhere else on the bar to jump straight to that spot in the
+review — on a virtualized canvas the landing section expands on its own.
+Clicks anywhere off that one column are untouched: single-click still places
+the cursor, and double-click (`<2-LeftMouse>`) still jumps into that file,
+same as `<CR>`. The float itself stays non-focusable — your mouse wheel
+works normally on the canvas window underneath it, and with `mouse=` unset
+the bar is simply display-only. satellite.nvim / nvim-scrollbar
 still function on the canvas window, but they draw at the same right edge as
 the built-in bar — disable one (`scrollbar = { enabled = false }`).
 
@@ -772,7 +777,8 @@ What's here today:
   entry, `<CR>`-to-scroll) plus `<C-n>`/`<C-p>` section cycling, both live
   updated as the canvas reconciles.
 - A scrollbar minimap (file boundaries, add/del density, viewport thumb)
-  overlaid on the canvas, plus double-click-to-jump.
+  overlaid on the canvas — drag the thumb or click the track to scrub —
+  plus double-click-to-jump.
 - Folding at two scopes: **z** then **a** (or just **c**) folds a file on the canvas,
   folding a directory puts everything under it away, and both look the same
   in the canvas, the tree, and every file motion.

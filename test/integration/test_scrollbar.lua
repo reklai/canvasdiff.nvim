@@ -9,7 +9,7 @@ local T = {}
 T["scrollbar facade exposes the bounded API and no flat compatibility path"] = function()
   local names = vim.tbl_keys(scrollbar)
   table.sort(names)
-  H.eq(names, { "close", "column", "is_open", "line_kinds", "open", "update" })
+  H.eq(names, { "close", "column", "is_open", "line_kinds", "locate", "open", "update" })
   H.eq(package.searchpath("canvasdiff.scrollbar", package.path), nil,
     "consumers must enter through require('canvasdiff.ui').scrollbar")
 end
@@ -261,6 +261,370 @@ T["scroll_win zero-height canvas window hides instead of erroring"] = function()
   H.eq(scrollbar.is_open(lease), true, "bar re-shows once height returns")
   vim.cmd("only")
   scrollbar.close(lease)
+end
+
+-- ---------------------------------------------------------------------------
+-- Mouse: thumb dragging and track jumps.
+--
+-- These use the spike's IN-PROCESS recipe (spikes/2026-08-01-minimap-click-
+-- routing): a -l test process never runs the main input loop, so a queued
+-- mouse event can never dispatch a mapping here. nvim_input_mouse queues the
+-- event, getchar(0) consumes it RAW -- which updates the position that
+-- getmousepos() reads -- and then the canvas buffer's mapping callback is
+-- invoked directly. That exercises the handlers against real position
+-- resolution (including the float's mouse transparency); real end-to-end
+-- dispatch is covered by the child --embed case at the bottom.
+-- ---------------------------------------------------------------------------
+
+--- The canvas buffer's expr-mapping callback for `lhs`, or nil.
+local function mouse_cb(buf, lhs)
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if H.norm_lhs(m.lhs) == H.norm_lhs(lhs) then
+      return m.callback
+    end
+  end
+end
+
+--- Queue one mouse event at 1-based SCREEN coordinates and consume it raw,
+--- so getmousepos() reports exactly this event to the next callback call.
+local function feed_mouse(action, srow, scol)
+  vim.api.nvim_input_mouse("left", action, "", 0, srow - 1, scol - 1)
+  assert(vim.fn.getchar(0) ~= 0, "the queued mouse event was consumed")
+end
+
+--- The scrub is applied via vim.schedule (expr evaluation holds the
+--- textlock, where a view change silently does not stick); run the queue dry
+--- before asserting on the viewport.
+local function drain_schedule()
+  local done = false
+  vim.schedule(function() done = true end)
+  assert(vim.wait(1000, function() return done end, 5), "main loop drained")
+end
+
+local function topline(win)
+  return vim.api.nvim_win_call(win, function() return vim.fn.line("w0") end)
+end
+
+--- Canvas at the top, thumb re-rendered, and the geometry every mouse test
+--- needs: float screen position, bar height, canvas line count.
+local function mouse_stage(st, lease)
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = 1, lnum = 1 })
+  end)
+  scrollbar.update(lease, st)
+  local w = assert(bar_win(), "the scrollbar float is open")
+  local fpos = vim.fn.win_screenpos(w)
+  local height = vim.api.nvim_win_get_height(w)
+  local total = vim.api.nvim_buf_line_count(st.buf)
+  assert(total > height, "the canvas must be taller than the bar to scroll")
+  return { frow = fpos[1], fcol = fpos[2], height = height, total = total }
+end
+
+T["scroll_mouse press on the track jumps the viewport once"] = function()
+  local st, lease = open_with_bar()
+  local geo = mouse_stage(st, lease)
+  local press = assert(mouse_cb(st.buf, "<LeftMouse>"),
+    "the canvas buffer owns a <LeftMouse> mapping")
+  local release = assert(mouse_cb(st.buf, "<LeftRelease>"))
+
+  -- scrolled to the top, the thumb hugs the top rows: the bar's LAST row is
+  -- bare track
+  feed_mouse("press", geo.frow + geo.height - 1, geo.fcol)
+  H.eq(press(), "<Ignore>", "a press on the bar is consumed, not forwarded")
+  drain_schedule()
+  H.eq(topline(st.win), scrollbar.locate(geo.height, geo.height, geo.total),
+    "the viewport jumped to the pressed row's proportional position")
+  H.eq(topline(st.win), geo.total - geo.height + 1,
+    "the bottom track row means the last full screen")
+
+  feed_mouse("release", geo.frow + geo.height - 1, geo.fcol)
+  H.eq(release(), "<Ignore>", "the release that ends a bar gesture is consumed")
+  scrollbar.close(lease)
+end
+
+T["scroll_mouse dragging the thumb scrubs live, clamped, until release"] = function()
+  local st, lease = open_with_bar()
+  local geo = mouse_stage(st, lease)
+  local press = assert(mouse_cb(st.buf, "<LeftMouse>"))
+  local drag = assert(mouse_cb(st.buf, "<LeftDrag>"))
+  local release = assert(mouse_cb(st.buf, "<LeftRelease>"))
+
+  -- at the top the thumb occupies bar row 1: pressing it arms without moving
+  feed_mouse("press", geo.frow, geo.fcol)
+  H.eq(press(), "<Ignore>", "a press on the thumb is consumed")
+  drain_schedule()
+  H.eq(topline(st.win), 1, "arming the drag does not jump the viewport")
+
+  local mid = math.floor(geo.height / 2)
+  feed_mouse("drag", geo.frow + mid - 1, geo.fcol)
+  H.eq(drag(), "<Ignore>", "an armed drag is consumed")
+  drain_schedule()
+  H.eq(topline(st.win), scrollbar.locate(mid, geo.height, geo.total),
+    "a mid-bar drag scrubs the viewport proportionally")
+
+  -- drags keep firing after the pointer leaves the bar (spike Q3): clamp.
+  -- Bottom screen row, 20 columns into the canvas body.
+  feed_mouse("drag", vim.o.lines, math.max(geo.fcol - 20, 1))
+  H.eq(drag(), "<Ignore>", "an off-bar drag still belongs to the armed gesture")
+  drain_schedule()
+  H.eq(topline(st.win), geo.total - geo.height + 1,
+    "a drag past the bar's end clamps to the last full screen")
+
+  feed_mouse("release", vim.o.lines, math.max(geo.fcol - 20, 1))
+  H.eq(release(), "<Ignore>", "the release disarms the drag")
+  local before = topline(st.win)
+  feed_mouse("drag", geo.frow + 1, geo.fcol)
+  H.eq(drag(), "<LeftDrag>", "a drag after release falls through untouched")
+  drain_schedule()
+  H.eq(topline(st.win), before, "a disarmed drag never scrubs")
+  scrollbar.close(lease)
+end
+
+T["scroll_mouse off-bar events fall through untouched"] = function()
+  local st, lease = open_with_bar()
+  local geo = mouse_stage(st, lease)
+  local press = assert(mouse_cb(st.buf, "<LeftMouse>"))
+  local drag = assert(mouse_cb(st.buf, "<LeftDrag>"))
+  local release = assert(mouse_cb(st.buf, "<LeftRelease>"))
+
+  -- canvas body, well left of the bar column
+  feed_mouse("press", geo.frow + 3, math.max(geo.fcol - 25, 1))
+  H.eq(press(), "<LeftMouse>",
+    "an off-bar press is returned for the default click to handle")
+  drain_schedule()
+  H.eq(topline(st.win), 1, "no scrub was scheduled for an off-bar press")
+  H.eq(drag(), "<LeftDrag>", "an unarmed drag falls through")
+  H.eq(release(), "<LeftRelease>", "an unarmed release falls through")
+
+  -- the bar COLUMN but off the canvas window entirely (the command-line row
+  -- at the bottom of the screen): still never a bar hit
+  feed_mouse("press", vim.o.lines, geo.fcol)
+  H.eq(press(), "<LeftMouse>",
+    "a press below the canvas window falls through even on the bar column")
+  drain_schedule()
+  H.eq(topline(st.win), 1)
+  scrollbar.close(lease)
+end
+
+T["scroll_mouse mappings and drag state die with the lease"] = function()
+  local st, lease = open_with_bar()
+  local geo = mouse_stage(st, lease)
+  assert(mouse_cb(st.buf, "<LeftMouse>"), "open installs the press mapping")
+  assert(mouse_cb(st.buf, "<LeftDrag>"), "open installs the drag mapping")
+  assert(mouse_cb(st.buf, "<LeftRelease>"), "open installs the release mapping")
+
+  -- arm a drag, then tear the lease down mid-gesture
+  local press = mouse_cb(st.buf, "<LeftMouse>")
+  feed_mouse("press", geo.frow, geo.fcol)
+  H.eq(press(), "<Ignore>")
+  scrollbar.close(lease)
+
+  H.eq(mouse_cb(st.buf, "<LeftMouse>"), nil, "close removes the press mapping")
+  H.eq(mouse_cb(st.buf, "<LeftDrag>"), nil, "close removes the drag mapping")
+  H.eq(mouse_cb(st.buf, "<LeftRelease>"), nil, "close removes the release mapping")
+  drain_schedule()
+  H.eq(topline(st.win), 1, "no stale scrub survives the lease")
+end
+
+T["scroll_mouse never clobbers an existing canvas mouse mapping"] = function()
+  local st = canvas.open({ big_section("a.txt", "a"), big_section("b.txt", "b") }, {})
+  local fired = 0
+  vim.keymap.set("n", "<LeftMouse>", function() fired = fired + 1 end,
+    { buffer = st.buf })
+  local lease = assert(scrollbar.open(st, {}))
+
+  local cb = assert(mouse_cb(st.buf, "<LeftMouse>"))
+  cb()
+  H.eq(fired, 1, "the pre-existing mapping is still the one installed")
+
+  scrollbar.close(lease)
+  assert(mouse_cb(st.buf, "<LeftMouse>"),
+    "close removes only the mappings the lease itself installed")
+  vim.keymap.del("n", "<LeftMouse>", { buffer = st.buf })
+end
+
+T["scroll_mouse far scrub on a virtualized canvas lands on an auto-expanded section"] = function()
+  local st = canvas.open({
+    big_section("a/one.txt", "a"),
+    big_section("b/two.txt", "b"),
+    big_section("c/three.txt", "c"),
+    big_section("d/four.txt", "d"),
+    big_section("e/five.txt", "e"),
+    big_section("f/six.txt", "f"),
+  }, {})
+  local lease = assert(scrollbar.open(st, {}))
+  local virt = require("canvasdiff.runtime").virtualizer
+  local vlease = virt.attach(st, { enabled = false })
+  local opts = {
+    enabled = true, max_files = 3, max_lines = 1000000,
+    margin = 10, max_expanded = 2,
+  }
+
+  local ok, err = xpcall(function()
+    local geo = mouse_stage(st, lease)
+    virt.apply(vlease, opts)
+    local last = st.sections[6].path
+    assert(st.collapsed[last], "sanity: the far bottom section auto-collapsed")
+
+    -- the collapse shrank the canvas: re-stage so the drag speaks the
+    -- virtualized geometry, then scrub from the thumb to the bar's bottom
+    geo = mouse_stage(st, lease)
+    local press = assert(mouse_cb(st.buf, "<LeftMouse>"))
+    local drag = assert(mouse_cb(st.buf, "<LeftDrag>"))
+    local release = assert(mouse_cb(st.buf, "<LeftRelease>"))
+    feed_mouse("press", geo.frow, geo.fcol)
+    H.eq(press(), "<Ignore>")
+    feed_mouse("drag", geo.frow + geo.height - 1, geo.fcol)
+    H.eq(drag(), "<Ignore>")
+    drain_schedule()
+    H.eq(topline(st.win), geo.total - geo.height + 1,
+      "the drag scrubbed to the bottom of the virtualized canvas")
+    feed_mouse("release", geo.frow + geo.height - 1, geo.fcol)
+    H.eq(release(), "<Ignore>")
+
+    -- the scroll-driven virtualizer pass (WinScrolled never fires headlessly)
+    virt.apply(vlease, opts)
+    H.eq(st.collapsed[last], nil,
+      "the section under the scrubbed viewport was auto-expanded")
+    assert(st.collapsed[st.sections[1].path],
+      "the newly-far top collapsed in its place")
+  end, debug.traceback)
+  pcall(virt.detach, vlease)
+  pcall(scrollbar.close, lease)
+  assert(ok, err)
+end
+
+-- ---------------------------------------------------------------------------
+-- End-to-end: the spike's CHILD --embed recipe. The child's main loop
+-- dispatches queued mouse input between RPC requests, so this is real mapping
+-- dispatch through the real plugin -- pinning that a plain click still places
+-- the cursor and <2-LeftMouse> still jumps with the bar's mappings installed.
+-- ---------------------------------------------------------------------------
+
+local CHILD_SETUP = [==[
+local root, repo = ...
+vim.opt.runtimepath:prepend(root)
+vim.env.XDG_STATE_HOME = vim.fs.joinpath(
+  vim.uv.os_tmpdir(), "canvasdiff_mouse_state_" .. vim.uv.hrtime())
+vim.api.nvim_set_current_dir(repo)
+local fm = require("canvasdiff")
+fm.setup({})
+local st = fm.open()
+assert(type(st) == "table" and st.surface, "open returned a live state")
+local lease = st.surface.controllers.scrollbar
+assert(lease and lease.win and vim.api.nvim_win_is_valid(lease.win),
+  "the scrollbar float is open")
+_G.st = st
+vim.api.nvim_win_call(st.win, function()
+  vim.fn.winrestview({ topline = 1, lnum = 1 })
+end)
+vim.api.nvim_win_set_cursor(st.win, { 1, 0 })
+local info = vim.fn.getwininfo(st.win)[1]
+return {
+  canvas = {
+    win = st.win,
+    buf = st.buf,
+    winbar = info.winbar,
+    screenpos = vim.fn.win_screenpos(st.win),
+    total = vim.api.nvim_buf_line_count(st.buf),
+  },
+  float = {
+    height = vim.api.nvim_win_get_height(lease.win),
+    screenpos = vim.fn.win_screenpos(lease.win),
+  },
+}
+]==]
+
+T["scroll_mouse end-to-end default click and double-click jump keep working"] = function()
+  local function lines150(tag, changed)
+    local out = {}
+    for i = 1, 150 do
+      out[i] = ("%s line %d"):format(tag, i)
+      if changed and i % 8 == 0 then
+        out[i] = out[i] .. " CHANGED"
+      end
+    end
+    return table.concat(out, "\n") .. "\n"
+  end
+  local repo = H.git_fixture({
+    committed = { ["a.txt"] = lines150("a"), ["b.txt"] = lines150("b") },
+    worktree = {
+      ["a.txt"] = lines150("a", true),
+      ["b.txt"] = lines150("b", true),
+    },
+  })
+  local chan = vim.fn.jobstart(
+    { vim.v.progpath, "--headless", "--embed", "--clean" }, { rpc = true })
+  assert(chan > 0, "child nvim started")
+
+  local ok, err = xpcall(function()
+    local function lua(code, ...)
+      return vim.rpcrequest(chan, "nvim_exec_lua", code, { ... })
+    end
+    local function mouse(action, srow, scol) -- 1-based screen coordinates
+      vim.rpcrequest(chan, "nvim_input_mouse", "left", action, "", 0,
+        srow - 1, scol - 1)
+    end
+    local function wait_child(code, what)
+      local deadline = vim.uv.hrtime() + 5e9
+      while vim.uv.hrtime() < deadline do
+        local value = lua(code)
+        if value ~= nil and value ~= false and value ~= vim.NIL then
+          return value
+        end
+        vim.wait(20)
+      end
+      error("timed out waiting for: " .. what)
+    end
+
+    local info = lua(CHILD_SETUP, H.project_root, repo)
+    local crow, ccol = info.canvas.screenpos[1], info.canvas.screenpos[2]
+    local frow, fcol = info.float.screenpos[1], info.float.screenpos[2]
+
+    -- 1. an off-bar click passes THROUGH the installed <LeftMouse> mapping
+    --    and places the cursor, exactly as with no mapping at all
+    local target_row = crow + info.canvas.winbar + 7
+    mouse("press", target_row, ccol + 3)
+    mouse("release", target_row, ccol + 3)
+    local landed = wait_child(
+      ("local c = vim.api.nvim_win_get_cursor(%d); return c[1] > 1 and c[1]")
+        :format(info.canvas.win),
+      "the default click to move the canvas cursor")
+    H.eq(landed, lua("return vim.fn.getmousepos().line"),
+      "the cursor sits on the buffer line under the pointer")
+
+    -- 2. a track press on the bar scrubs the viewport (real dispatch of the
+    --    mapping plus its scheduled apply)
+    mouse("press", frow + info.float.height - 1, fcol)
+    mouse("release", frow + info.float.height - 1, fcol)
+    local expected = scrollbar.locate(
+      info.float.height, info.float.height, info.canvas.total)
+    local top = wait_child(
+      ("local t = vim.api.nvim_win_call(%d, function() return vim.fn.line('w0') end); return t > 1 and t")
+        :format(info.canvas.win),
+      "the bar press to scrub the viewport")
+    H.eq(top, expected, "the track press jumped to the proportional position")
+
+    -- 3. double-click on a canvas row still runs the jump action: the canvas
+    --    window ends up showing the real file (an excursion)
+    local dbl_row = crow + info.canvas.winbar + 2
+    for _ = 1, 2 do
+      mouse("press", dbl_row, ccol + 3)
+      mouse("release", dbl_row, ccol + 3)
+    end
+    local name = wait_child(
+      ([[local b = vim.api.nvim_win_get_buf(%d)
+         if b == %d then return false end
+         return vim.api.nvim_buf_get_name(b)]])
+        :format(info.canvas.win, info.canvas.buf),
+      "the double-click jump to open the real file")
+    assert(name:find("%.txt$"),
+      "the jump landed in a fixture file, got: " .. tostring(name))
+  end, debug.traceback)
+
+  pcall(vim.fn.jobstop, chan)
+  pcall(vim.fn.delete, repo, "rf")
+  assert(ok, err)
 end
 
 local function plain_state(win, label)

@@ -97,7 +97,12 @@ status column~
 
 scrollbar~
     A density map of where the changes are in the whole review, not just in
-    the visible window.
+    the visible window. It scrolls, too: drag the thumb with the mouse to
+    scrub the canvas live, or press anywhere else on the bar to jump to
+    that spot. Clicks off the bar column keep their normal meaning --
+    single-click places the cursor, double-click jumps into the file.
+    Needs 'mouse' enabled (the default); without it the bar is
+    display-only.
 
 Each file's canvas header -- the tinted bar of an expanded file, or the `▸`
 placeholder of a folded one -- carries the file's stage state after its

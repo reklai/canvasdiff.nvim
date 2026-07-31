@@ -930,6 +930,12 @@ T["keys_install every canvas mapping is registered with a desc"] = function()
   for _, m in ipairs(keys.resolved("canvas", config.options.keymaps)) do
     expected[#expected + 1] = H.norm_lhs(m.lhs)
   end
+  -- The minimap scrollbar owns the mouse gesture keys on the canvas buffer
+  -- (thumb drag / track jump; part of scrollbar.enabled, not of the keymaps
+  -- registry). They are held to the same desc rule by the loop above.
+  for _, lhs in ipairs({ "<LeftMouse>", "<LeftDrag>", "<LeftRelease>" }) do
+    expected[#expected + 1] = H.norm_lhs(lhs)
+  end
   table.sort(expected)
 
   fm.close()

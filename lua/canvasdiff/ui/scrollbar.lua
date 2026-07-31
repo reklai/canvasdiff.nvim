@@ -109,6 +109,28 @@ function S.column(kinds, height, top0, bot0)
   return cells
 end
 
+--- The pure inverse of the thumb: which topline does bar row `bar_row` name?
+---
+--- The float is exactly the canvas window's text height, so `bar_height`
+--- doubles as the viewport height and the answer ranges over the real scroll
+--- range [1, total - height + 1] -- the same positions the thumb itself can
+--- occupy. Row 1 means "top of the canvas", the last row means "the last full
+--- screen", and everything between is linear interpolation, rounded to the
+--- nearest topline.
+---
+--- Clamped on every side, because drag events keep firing after the pointer
+--- leaves the bar (spike Q3) and arrive carrying out-of-range rows.
+function S.locate(bar_row, bar_height, total_lines)
+  if type(bar_height) ~= "number" or bar_height <= 1 then
+    return 1
+  end
+  local total = math.max(type(total_lines) == "number" and total_lines or 1, 1)
+  local max_top = math.max(total - bar_height + 1, 1)
+  local row = math.min(math.max(type(bar_row) == "number" and bar_row or 1, 1), bar_height)
+  local top = 1 + math.floor((row - 1) * (max_top - 1) / (bar_height - 1) + 0.5)
+  return math.min(math.max(top, 1), max_top)
+end
+
 local NS = vim.api.nvim_create_namespace("canvasdiff.scrollbar")
 local next_lease_id = 0
 
@@ -201,6 +223,178 @@ local function float_config(state)
   }
 end
 
+-- ---------------------------------------------------------------------------
+-- Mouse: thumb dragging and track jumps.
+--
+-- Routing is the spike's answer (spikes/2026-08-01-minimap-click-routing): the
+-- non-focusable float is mouse-transparent, so press/drag/release over it
+-- dispatch on the CANVAS buffer -- that is where the mappings live, and
+-- mappings on the float's own buffer would be dead code. They are EXPR
+-- mappings so that "not ours" behaves exactly as if no mapping existed:
+-- returning the key (noremap) hands the event to the default -- cursor
+-- placement keeps working, and a double click still arrives as its own
+-- <2-LeftMouse> key, so the jump mapping is untouched. With 'mouse' empty no
+-- event ever reaches these handlers and the feature is simply inert.
+-- ---------------------------------------------------------------------------
+
+--- The 1-based bar row under the pointer, or nil when the pointer is off the
+--- bar (which is the fall-through signal).
+---
+--- Per spike Q2 the float NEVER appears in getmousepos(): `winid` is the
+--- canvas window beneath, so the hit-test is column math on the canvas --
+--- `wincol == width` means the bar column (the float covers the canvas's last
+--- column), and `winrow` counts the winbar, which is subtracted off. Never
+--- `pos.line`: deletion ghosts are virtual lines, so buffer lines and screen
+--- rows diverge under the pointer.
+local function bar_row_under_pointer(lease)
+  if not owned_window(lease) then
+    return nil
+  end
+  local state = lease.state
+  if type(state) ~= "table" or not valid_win(state.win) then
+    return nil
+  end
+  local pos = vim.fn.getmousepos()
+  if pos.winid ~= state.win
+      or pos.wincol ~= vim.api.nvim_win_get_width(state.win) then
+    return nil
+  end
+  local geo = text_geometry(state.win)
+  local row = pos.winrow - geo.row
+  if row < 1 or row > geo.height then
+    return nil
+  end
+  return row, geo.height
+end
+
+--- Scroll the canvas so `bar_row` names its topline, one main-loop tick from
+--- now. Deferred because expr-mapping evaluation holds the textlock, where a
+--- view change silently does not stick (measured: winrestview succeeds and
+--- the topline stays put). The topline is recomputed at apply time -- a
+--- splice may have changed the line count since the event.
+---
+--- The cursor rides along, clamped into the new screenful: a topline the
+--- cursor is not inside is normalized away on the next redraw (measured), so
+--- scrubbing without moving the cursor would visibly snap back.
+local function scrub(lease, bar_row, bar_height)
+  vim.schedule(function()
+    if not active(lease) then
+      return
+    end
+    local state = lease.state
+    if type(state) ~= "table"
+        or not (valid_win(state.win) and valid_buf(state.buf))
+        or not canvas_showing(state) then
+      return
+    end
+    local total = vim.api.nvim_buf_line_count(state.buf)
+    local top = S.locate(bar_row, bar_height, total)
+    vim.api.nvim_win_call(state.win, function()
+      local last = math.min(top + text_geometry(state.win).height - 1, total)
+      local lnum = math.min(math.max(vim.fn.line("."), top), last)
+      vim.fn.winrestview({ topline = top, lnum = lnum })
+    end)
+    if active(lease) then
+      -- WinScrolled follows on the next redraw in a live session, but keep
+      -- the thumb honest even where it never fires (headless).
+      S.update(lease)
+    end
+  end)
+end
+
+--- <LeftMouse>: press on the thumb arms a drag; press on the track jumps
+--- once to that row's proportional position (and owns the rest of the
+--- gesture, so a follow-up drag scrubs from where the thumb just landed
+--- instead of falling into a half-default visual drag). Anything off the bar
+--- falls through untouched.
+local function on_press(lease)
+  local row, height = bar_row_under_pointer(lease)
+  if not row then
+    lease.drag = nil
+    return "<LeftMouse>"
+  end
+  lease.drag = { height = height }
+  local thumb = lease.thumb
+  if not (thumb and row >= thumb.lo and row <= thumb.hi) then
+    scrub(lease, row, height)
+  end
+  return "<Ignore>"
+end
+
+--- <LeftDrag>: while armed, scrub live. The pointer may have wandered off
+--- the bar -- drags keep firing (spike Q3) and may resolve to a different
+--- window entirely, so the row comes from SCREEN coordinates against the
+--- float's own position and is clamped to the bar's ends.
+local function on_drag(lease)
+  if not lease.drag then
+    return "<LeftDrag>"
+  end
+  if not owned_window(lease) then
+    lease.drag = nil
+    return "<LeftDrag>"
+  end
+  local fpos = vim.fn.win_screenpos(lease.win)
+  local height = vim.api.nvim_win_get_height(lease.win)
+  local row = math.min(
+    math.max(vim.fn.getmousepos().screenrow - fpos[1] + 1, 1), height)
+  scrub(lease, row, height)
+  return "<Ignore>"
+end
+
+--- <LeftRelease>: disarm a gesture this lease owns; otherwise untouched.
+local function on_release(lease)
+  if not lease.drag then
+    return "<LeftRelease>"
+  end
+  lease.drag = nil
+  return "<Ignore>"
+end
+
+local function norm_lhs(lhs)
+  return vim.fn.keytrans(vim.keycode(lhs))
+end
+
+--- Buffer-local expr mappings on the canvas buffer, coexisting with the
+--- keymaps system: a lhs anything else already claimed there (a user binding
+--- an action to <LeftMouse>, say) is left alone, and close removes only what
+--- this lease itself installed.
+local function install_mouse(lease)
+  local state = lease.state
+  local buf = type(state) == "table" and state.buf or nil
+  if not valid_buf(buf) then
+    return
+  end
+  local handlers = {
+    ["<LeftMouse>"] = function() return on_press(lease) end,
+    ["<LeftDrag>"] = function() return on_drag(lease) end,
+    ["<LeftRelease>"] = function() return on_release(lease) end,
+  }
+  local taken = {}
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    taken[norm_lhs(m.lhs)] = true
+  end
+  lease.mouse_lhs = {}
+  for lhs, handler in pairs(handlers) do
+    if not taken[norm_lhs(lhs)] then
+      vim.keymap.set("n", lhs, handler, {
+        buffer = buf,
+        expr = true,
+        desc = "CanvasDiff: minimap scrollbar drag / track jump",
+      })
+      lease.mouse_lhs[#lease.mouse_lhs + 1] = lhs
+    end
+  end
+end
+
+local function remove_mouse(lease, buf)
+  if valid_buf(buf) then
+    for _, lhs in ipairs(lease.mouse_lhs or {}) do
+      pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+    end
+  end
+  lease.mouse_lhs = nil
+end
+
 local function hide(lease)
   if not exact(lease) then
     return false
@@ -288,6 +482,18 @@ function S.update(lease, state)
   local hidden = fold.hidden_set(state.sections, state.collapsed, state.folded)
   local cells = S.column(S.line_kinds(state.sections, hidden), height, info.top0, info.bot0)
 
+  -- The rendered thumb's bar-row extent, kept for the press hit-test: a press
+  -- inside it arms a drag, outside it jumps. This is the same geometry the
+  -- extmarks below draw, recorded rather than recomputed.
+  local thumb_lo, thumb_hi
+  for r, cell in ipairs(cells) do
+    if cell.thumb then
+      thumb_lo = thumb_lo or r
+      thumb_hi = r
+    end
+  end
+  lease.thumb = thumb_lo and { lo = thumb_lo, hi = thumb_hi } or nil
+
   local lines = {}
   for r = 1, #cells do
     lines[r] = cells[r].char
@@ -336,6 +542,7 @@ function S.close(lease)
   local autocmd_ids = lease.autocmd_ids
   local win = lease.win
   local buf = lease.buf
+  local canvas_buf = type(lease.state) == "table" and lease.state.buf or nil
   local release = lease.callbacks and lease.callbacks.release
   local claimed = lease.claimed
 
@@ -346,7 +553,13 @@ function S.close(lease)
   lease.state = nil
   lease.opts = nil
   lease.callbacks = {}
+  -- An in-flight gesture dies with its lease: no queued scrub can pass the
+  -- active() gate again, and the mappings leave with the canvas buffer's maps.
+  lease.drag = nil
+  lease.thumb = nil
   lease.phase = "disposed"
+
+  remove_mouse(lease, canvas_buf)
 
   local group_deleted = group_id and pcall(vim.api.nvim_del_augroup_by_id, group_id)
   if not group_deleted then
@@ -508,6 +721,10 @@ function S.open(state, opts, callbacks)
       error("scrollbar open was superseded while creating its group", 0)
     end
     install_autocmds(lease)
+    install_mouse(lease)
+    if not active(lease) then
+      error("scrollbar open was superseded while installing mouse handlers", 0)
+    end
     S.update(lease)
     if not active(lease) then
       error("scrollbar open was superseded during initial draw", 0)
