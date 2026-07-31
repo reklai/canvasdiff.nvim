@@ -1323,6 +1323,17 @@ end
   end
 
   if previous then
+    -- A replacing open is a teardown path like the sweep above: the retired
+    -- review's close never runs, so this is the only place its lens can
+    -- reach the last-lens memory. Keyed by the RETIRED review's root -- on a
+    -- cross-root replace the record must answer for the repository the old
+    -- review was showing, not the one opening now, or a stale earlier entry
+    -- (or, with sessions on, an older session file promoted over nothing)
+    -- would answer that root's next reopen. Same-root this is harmless: the
+    -- successor's own teardown overwrites it.
+    if previous.state and previous.state.root then
+      self.last_lens_by_root[previous.state.root] = lens.of(previous.state)
+    end
     previous:dispose("replaced")
   end
   st.root = root
@@ -2892,6 +2903,18 @@ local function rebuild_after_ref_change(app, request)
     request.host_win, lens.get("all"))
   if not replacement then
     return branch_refresh_failure("could not retire the originating Canvas")
+  end
+  -- The retire above is a teardown path too, so it must land in the
+  -- last-lens memory -- but NOT as lens.of(the retired state):
+  -- retire_for_ref_change overwrites state.lens with the replacement lens
+  -- BEFORE disposing, so the pre-checkout lens is already gone here. That
+  -- replacement lens is also the correct record: the checkout deliberately
+  -- resets the review to `all` and invalidates the session file, so when the
+  -- reopen below fails (or the review is not visible), a stale memory entry
+  -- would otherwise decide the next open and resurrect the pre-checkout
+  -- comparison over that deliberate reset.
+  if request.root then
+    app.last_lens_by_root[request.root] = lens.get("all")
   end
   if not request.visible then
     return true

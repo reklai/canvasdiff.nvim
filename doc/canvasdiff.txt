@@ -382,7 +382,8 @@ Diff row colouring~
   pair instead of rendering invisibly.
 - `"classic"`: the raw `DiffAdd`/`DiffDelete` links -- what your two-pane
   vimdiff looks like.
-- `"gutter"`: no row tints. The statuscolumn carries a coloured bar (the
+- `"gutter"`: buffer rows lose their tints; ghost-deletion virtual rows keep
+  a faint quiet-derived wash. The statuscolumn carries a coloured bar (the
   `gutter` glyph, default `▎`) beside each added or deleted row, including
   ghost-deletion virtual rows, via `CanvasDiffGutterAdd`/`CanvasDiffGutterDel`
   (defaults: `Added`/`Removed`). Requires `statuscolumn.enabled = true`;

@@ -1182,11 +1182,41 @@ function()
     H.eq(surface:is_alive(), false, "the sweep retired the hostless review")
     H.eq(model.lens.of(st).id, "all",
       "sanity: this open read the memory before the sweep recorded")
-    -- Open-over-open replaces the current review WITHOUT recording (its
-    -- close never ran), so `staged` here can only have come from the sweep.
+    -- Open-over-open records the replaced review's lens too, but only AFTER
+    -- this open has already read the memory tier -- so `staged` here can
+    -- still only have come from the sweep, not from the replacement dispose.
     st = assert(fm.open())
     H.eq(model.lens.of(st).id, "staged",
       "a review retired by the sweep is remembered like any other close")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
+-- A replacing open is the remaining close-free teardown: the retired review's
+-- App:close never runs and no window ever vanishes, so the replaced-dispose
+-- path must record the memory itself -- or the lens is simply lost with
+-- sessions disabled.
+T["session_ a review retired by a replacing open still remembers its lens"] =
+function()
+  local root = partly_staged_repo()
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    local st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "all", "sanity: opened on the default lens")
+    assert(fm.set_lens(model.lens.get("staged")))
+    -- Open over the live review from its own canvas window: the review is
+    -- disposed with reason "replaced" and nothing else ever tears it down.
+    -- The memory tier is read BEFORE the replacement dispose, so THIS open
+    -- still sees an empty memory and falls through to the default -- the
+    -- recording answers the NEXT open.
+    st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "all",
+      "sanity: this open read the (empty) memory before the replacement recorded")
+    -- Sessions are disabled and no other teardown has run, so `staged` here
+    -- can only have come from the replaced-dispose recording.
+    st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "staged",
+      "a review retired by a replacing open is remembered like a close")
     fm.close()
   end)
   vim.fn.delete(root, "rf")

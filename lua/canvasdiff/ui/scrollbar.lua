@@ -313,7 +313,9 @@ local function on_press(lease)
     lease.drag = nil
     return "<LeftMouse>"
   end
-  lease.drag = { height = height }
+  -- A plain armed flag: drags recompute the live height themselves (the
+  -- window may resize mid-gesture), so nothing from press time is carried.
+  lease.drag = true
   local thumb = lease.thumb
   if not (thumb and row >= thumb.lo and row <= thumb.hi) then
     scrub(lease, row, height)

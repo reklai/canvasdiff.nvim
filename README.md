@@ -85,7 +85,7 @@ peripheral vision instead of being one more line among diff lines:
   local M = {}
  -  return nil
  +  return M
-████ src/sidebar.lua  (+2 −0) ██████████████████████████
+████ src/sidebar.lua  (+2 −0) ○ ████████████████████████
 ```
 
 The trailing `●○` is the file's stage state — the same markers, colours and order as
@@ -699,7 +699,10 @@ Three modes, picked with `highlight.diff`:
   instead, so quiet never renders an invisible deletion.
 - **`"classic"`** — the raw `DiffAdd`/`DiffDelete` links: exactly what your vimdiff
   looks like, if that's the loudness you want.
-- **`"gutter"`** — no row tints at all. The statuscolumn carries a coloured bar
+- **`"gutter"`** — buffer rows lose their tints; ghost-deletion virtual rows keep
+  their faint quiet-derived wash (word-diff never reaches into virtual text, so the
+  wash stays a ghost's clearest "deleted" signal). The statuscolumn carries a
+  coloured bar
   glyph (`▎`, the `gutter` glyph slot) beside each added or deleted row —
   `CanvasDiffGutterAdd`/`CanvasDiffGutterDel`, defaulting to `Added`/`Removed` —
   including on ghost-deletion virtual rows. Needs `statuscolumn.enabled = true`;

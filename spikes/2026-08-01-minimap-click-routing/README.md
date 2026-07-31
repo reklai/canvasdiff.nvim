@@ -15,7 +15,7 @@ fixture, with logging `<LeftMouse>`/`<LeftDrag>`/`<LeftRelease>` mappings
 registered on BOTH the canvas buffer and the scrollbar buffer. Two phases:
 in-process (this `-l` script) and a child `nvim --headless --embed --clean`
 driven over RPC, because those two turn out to have different powers (Q4).
-Verified on NVIM v0.12.4. Result: **SPIKE PASS** (25/25 checks).
+Verified on NVIM v0.12.4. Result: **SPIKE PASS** (28/28 checks).
 
 ## The four answers
 
