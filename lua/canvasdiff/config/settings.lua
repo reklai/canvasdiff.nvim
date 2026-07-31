@@ -125,6 +125,10 @@ M.defaults = {
       -- jumplist.
       lens_next  = "<Tab>",
       lens_prev  = "<S-Tab>",
+      -- Brings the sidebar back after `q` (in the sidebar) closed it, and
+      -- puts it away again. Inert to take, like the rest of the editing
+      -- family above: `o` is open-line, which nomodifiable refuses with E21.
+      sidebar    = "o",
       -- The convention in every scratch buffer, so it costs nothing to learn.
       -- It DOES cost macro recording on the canvas -- `q` is inert by the
       -- "does anything visible happen" test, but qa..q records fine on a

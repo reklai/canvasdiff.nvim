@@ -68,7 +68,9 @@ From the sidebar: **Enter**, **z** then **a**, **c**, or a double-click
 scrolls the canvas to the file under the cursor — without unfolding it — or folds
 that directory if you're on a directory row. If you're away in a file at the time, it
 brings the canvas back first and then goes there. **q** closes just the sidebar
-(the canvas stays open). Set `sidebar.enabled = false` to turn it off.
+(the canvas stays open) — **o** on the canvas, or `:CanvasDiff sidebar`, brings
+it back. Set `sidebar.enabled = false` to turn off the auto-open; the toggle
+still works either way.
 
 ### Knowing where you are
 
@@ -287,6 +289,7 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff open        " open it
 :CanvasDiff close       " close it
 :CanvasDiff refresh     " re-scan and splice in what changed, keeping your place
+:CanvasDiff sidebar     " toggle the file-tree sidebar
 :CanvasDiff compare     " choose two local branches and compare them
 :CanvasDiff checkout    " switch to one local branch
 :CanvasDiff track       " create and switch to a local branch tracking one remote ref
@@ -297,7 +300,9 @@ The rest exist so you can drive it from your own mappings and scripts:
 :CanvasDiff main...topic " compare main → topic since the merge base (read-only)
 ```
 
-All of them complete with `<Tab>`.
+All of them complete with `<Tab>`. The words are matched before revision
+parsing, so a branch literally named `close` or `sidebar` can't hijack the
+subcommand — spell such a branch a way only git reads, like `heads/sidebar`.
 
 ### The lens
 
@@ -415,6 +420,7 @@ require("canvasdiff").setup({
       unstage    = "u",      -- unstage this file (never touches the worktree)
       lens_next  = "<Tab>",  -- cycle the lens forward (all / unstaged / staged)
       lens_prev  = "<S-Tab>",-- and back
+      sidebar    = "o",      -- toggle the file-tree sidebar
       close      = "q",      -- close the canvas
       help       = "<leader>lh", -- show the keybind cheatsheet
     },
@@ -498,6 +504,7 @@ have about a second between taps).
 | `stage` | `s` | **s** | Stage every unstaged change in this file |
 | `unstage` | `u` | **u** | Unstage this file; never touches the worktree |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens forward / back: all ⇄ unstaged ⇄ staged |
+| `sidebar` | `o` | **o** | Toggle the file-tree sidebar (works even with `sidebar.enabled = false`) |
 | `close` | `q` | **q** | Back out: leave a stacked comparison, else close the canvas and restore the previous buffer |
 
 | Sidebar | Default | How you press it | Action |

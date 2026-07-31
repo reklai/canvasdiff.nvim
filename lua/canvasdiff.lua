@@ -16,6 +16,10 @@ return {
   toggle = function()
     return app:toggle()
   end,
+  --- Toggle the file-tree sidebar of the showing review.
+  sidebar = function()
+    return app:toggle_sidebar()
+  end,
   refresh = function()
     return app:refresh()
   end,

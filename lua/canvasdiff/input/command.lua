@@ -19,6 +19,7 @@ C.words = {
   close    = { action = "close" },
   toggle   = { action = "toggle" },
   refresh  = { action = "refresh" },
+  sidebar  = { action = "sidebar" },
   compare  = { action = "compare" },
   checkout = { action = "checkout" },
   track    = { action = "track" },
@@ -30,8 +31,8 @@ C.words = {
 
 --- Completion candidates, in the order they should be offered.
 C.candidate_order = {
-  "open", "close", "toggle", "refresh", "compare", "checkout", "track",
-  "all", "unstaged", "staged",
+  "open", "close", "toggle", "refresh", "sidebar", "compare", "checkout",
+  "track", "all", "unstaged", "staged",
 }
 
 -- `git diff --staged` (and its `--cached` synonym) means index-vs-HEAD, which the
@@ -45,7 +46,7 @@ local REFUSED_FLAGS = {
 }
 
 --- @class CanvasDiffParse
---- @field action string  "toggle"|"open"|"close"|"refresh"|"set_lens"|"rev"|"range"|"error"
+--- @field action string  "toggle"|"open"|"close"|"refresh"|"sidebar"|"set_lens"|"rev"|"range"|"error"
 --- @field base string|nil
 --- @field lens string|nil  named lens id, set only when action is "set_lens"
 --- @field rev string|nil

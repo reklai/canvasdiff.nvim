@@ -87,6 +87,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "set_lens",
     "set_range",
     "setup",
+    "sidebar",
     "stage",
     "toggle",
     "toggle_base",

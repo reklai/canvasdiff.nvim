@@ -88,7 +88,9 @@ Alongside it you may see:
 
 sidebar~
     A file tree of everything in the review. Selecting an entry moves the
-    canvas to that file. Toggle it off with `sidebar = { enabled = false }`.
+    canvas to that file. `q` in the sidebar closes just the sidebar; `o` on
+    the canvas, or |:CanvasDiff| `sidebar`, brings it back. Turn off the
+    auto-open with `sidebar = { enabled = false }` -- the toggle still works.
 
 status column~
     Per-line markers showing added, removed and context lines.
@@ -167,6 +169,11 @@ mean OPPOSITE things.
 :CanvasDiff refresh     Re-collect from Git and splice in what changed, so the
                         same TEXT stays under your cursor.
 
+:CanvasDiff sidebar     Toggle the file-tree sidebar of the open review.
+                        Works even when `sidebar.enabled` is false -- that
+                        flag governs auto-open only. Warns when no review is
+                        showing rather than opening one.
+
 :CanvasDiff compare     Choose a base and comparison ref with two
                         `vim.ui.select` prompts. Does not checkout or fetch.
 
@@ -182,6 +189,10 @@ mean OPPOSITE things.
 
 Completion is available for every word above. At most one argument is
 accepted; anything else reports what was wrong rather than guessing.
+
+Words are matched before revision parsing, so a branch literally named
+`close` or `sidebar` cannot hijack the subcommand; spell such a branch a way
+only git reads, like `heads/sidebar`.
 
 ==============================================================================
 7. MAPPINGS                                               *canvasdiff-mappings*
@@ -211,6 +222,7 @@ On the canvas~
     ]h  /  [h               Next / previous hunk
     CTRL-N  /  CTRL-P       Cycle to the next / previous file
     <Tab>  /  <S-Tab>       Next / previous lens
+    o                       Toggle the sidebar
     r                       Refresh the current diff
     s                       Stage this file's changes
     u                       Unstage this file
@@ -222,7 +234,8 @@ In the sidebar~
     <CR>, za, c, <2-LeftMouse>      Select this entry
     s                               Stage this file's changes
     u                               Unstage this file
-    q                               Close the review
+    q                               Close the sidebar (canvas stays open;
+                                    `o` on the canvas reopens it)
     <leader>lh                      Show keybind cheatsheet
 
 Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
@@ -277,6 +290,7 @@ default. >lua
           cycle_prev = "<C-p>",
           lens_next  = "<Tab>",
           lens_prev  = "<S-Tab>",
+          sidebar    = "o",
           refresh    = "r",
           stage      = "s",
           unstage    = "u",
@@ -391,6 +405,11 @@ canvasdiff.close()                                      *canvasdiff.close()*
 
 canvasdiff.toggle()                                    *canvasdiff.toggle()*
         Open, or close if already open.
+
+canvasdiff.sidebar()                                  *canvasdiff.sidebar()*
+        Toggle the file-tree sidebar of the showing review. Independent of
+        `sidebar.enabled`, which governs auto-open only. Warns when no
+        review is showing.
 
 canvasdiff.refresh()                                  *canvasdiff.refresh()*
         Re-collect from Git and splice in what changed.

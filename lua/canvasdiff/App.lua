@@ -972,6 +972,7 @@ local function canvas_actions(app, surface, st, cfg)
       function() app:unstage(nil, surface, generation) end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
+    sidebar    = owned_action(surface, generation, function() app:toggle_sidebar() end),
     cycle_next = owned_action(surface, generation, function(owner, win)
       if motions.cycle(st, win, 1) then after_motion(owner, win) end
     end),
@@ -1022,6 +1023,85 @@ buf_dir = function(buf)
   end
   local dir = vim.fn.fnamemodify(name, ":p:h")
   return vim.fn.isdirectory(dir) == 1 and dir or nil
+end
+
+--- Open the file-tree sidebar for `surface`, claiming its one sidebar lease.
+---
+--- This is the ONLY open path: App:open drives it when `sidebar.enabled`, and
+--- App:toggle_sidebar drives the same function on demand -- one lifecycle,
+--- one set of lease/ownership rules, whichever way the sidebar appears.
+local function open_sidebar(app, surface, st)
+  local generation = surface.generation
+  sidebar.open(st, config.options.sidebar, {
+    claim = function(lease)
+      if not surface:guard(generation)
+          or surface.controllers.sidebar ~= nil then
+        return false
+      end
+      surface.controllers.sidebar = lease
+      return true
+    end,
+    alive = function(lease)
+      return surface:guard(generation)
+        and surface.controllers.sidebar == lease
+    end,
+    snapshot = function(lease)
+      if not surface:guard(generation)
+          or surface.controllers.sidebar ~= lease then
+        return { hosts = {}, canvas = {} }
+      end
+      return surface:canvas_snapshot()
+    end,
+    on_shape_change = function(lease, changed_state, source_win)
+      if surface.controllers.sidebar ~= lease then
+        return
+      end
+      surface:guard(generation, function()
+        sync_after_collapse(surface, changed_state)
+        if source_win then
+          set_winbar(changed_state, nil, source_win)
+        else
+          refresh_winbars(surface)
+        end
+      end)
+    end,
+    on_locate = function(lease, changed_state, canvas_win, path)
+      if surface.controllers.sidebar ~= lease then
+        return
+      end
+      surface:guard(generation, function(owner)
+        owner:capture_view(canvas_win)
+        set_winbar(changed_state, nil, canvas_win, path)
+      end)
+    end,
+    on_return = function(lease, _, host_win)
+      if surface.controllers.sidebar ~= lease then
+        return false
+      end
+      local returned = false
+      surface:guard(generation, function()
+        returned = app:jump_back(surface, generation, host_win)
+      end)
+      return returned
+    end,
+    on_stage = function(lease, _, path, direction)
+      if surface.controllers.sidebar ~= lease then
+        return false
+      end
+      local changed = false
+      surface:guard(generation, function()
+        changed = app:stage_file(direction, path, surface, generation) or false
+      end)
+      return changed
+    end,
+    release = function(lease)
+      if surface.controllers.sidebar ~= lease then
+        return false
+      end
+      surface.controllers.sidebar = nil
+      return true
+    end,
+  })
 end
 
 --- Open the canvas in the current window for the git repo we're working in.
@@ -1402,76 +1482,7 @@ end
   end
 
   if config.options.sidebar.enabled then
-    sidebar.open(st, config.options.sidebar, {
-      claim = function(lease)
-        if not surface:guard(generation)
-            or surface.controllers.sidebar ~= nil then
-          return false
-        end
-        surface.controllers.sidebar = lease
-        return true
-      end,
-      alive = function(lease)
-        return surface:guard(generation)
-          and surface.controllers.sidebar == lease
-      end,
-      snapshot = function(lease)
-        if not surface:guard(generation)
-            or surface.controllers.sidebar ~= lease then
-          return { hosts = {}, canvas = {} }
-        end
-        return surface:canvas_snapshot()
-      end,
-      on_shape_change = function(lease, changed_state, source_win)
-        if surface.controllers.sidebar ~= lease then
-          return
-        end
-        surface:guard(generation, function()
-          sync_after_collapse(surface, changed_state)
-          if source_win then
-            set_winbar(changed_state, nil, source_win)
-          else
-            refresh_winbars(surface)
-          end
-        end)
-      end,
-      on_locate = function(lease, changed_state, canvas_win, path)
-        if surface.controllers.sidebar ~= lease then
-          return
-        end
-        surface:guard(generation, function(owner)
-          owner:capture_view(canvas_win)
-          set_winbar(changed_state, nil, canvas_win, path)
-        end)
-      end,
-      on_return = function(lease, _, host_win)
-        if surface.controllers.sidebar ~= lease then
-          return false
-        end
-        local returned = false
-        surface:guard(generation, function()
-          returned = self:jump_back(surface, generation, host_win)
-        end)
-        return returned
-      end,
-      on_stage = function(lease, _, path, direction)
-        if surface.controllers.sidebar ~= lease then
-          return false
-        end
-        local changed = false
-        surface:guard(generation, function()
-          changed = self:stage_file(direction, path, surface, generation) or false
-        end)
-        return changed
-      end,
-      release = function(lease)
-        if surface.controllers.sidebar ~= lease then
-          return false
-        end
-        surface.controllers.sidebar = nil
-        return true
-      end,
-    })
+    open_sidebar(self, surface, st)
   end
 
   if config.options.scrollbar.enabled then
@@ -1849,6 +1860,42 @@ function App:toggle()
     return self:open()
   end
 end
+
+--- Toggle the file-tree sidebar of the showing review.
+---
+--- Both directions reuse the sidebar's one lifecycle: OFF is the exact
+--- terminal close Surface disposal drives (sidebar.close retires the lease
+--- and releases the controller slot), ON is the exact open App:open runs when
+--- `sidebar.enabled` -- deliberately WITHOUT that config check here, because
+--- the flag governs auto-open only. A lease that is alive but has no view in
+--- this tab (`q` dismissed it, or its window was :closed by hand) is retired
+--- through the same close path first, so the reopen claims a fresh lease with
+--- no dismissal state left over.
+---
+--- Warns rather than opening a review when nothing is showing, for the same
+--- reason cycle_lens does: a toggle that opens a canvas would make a slip of
+--- the key an expensive surprise.
+function App:toggle_sidebar()
+  local surface = active_surface(self)
+  if not (surface and surface:is_showing()) then
+    ui.warn("no live diff canvas")
+    return
+  end
+  local lease = surface.controllers.sidebar
+  if lease then
+    local was_open = sidebar.is_open(
+      lease, vim.api.nvim_get_current_tabpage())
+    sidebar.close(lease)
+    if was_open then
+      return
+    end
+  end
+  open_sidebar(self, surface, surface.state)
+end
+
+--- `:CanvasDiff sidebar` plans the call `sidebar`, matching the facade's
+--- export; the verb itself is named toggle_sidebar, for what it does.
+App.sidebar = App.toggle_sidebar
 
 --- Re-collect against whatever the state is now pointed at and splice the
 --- difference in, rather than rebuilding the buffer.

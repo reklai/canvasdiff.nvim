@@ -97,7 +97,7 @@ end
 
 T["cmd_parse reserved words beat same-named branches"] = function()
   -- A branch literally named after an action must not hijack the subcommand.
-  for _, word in ipairs({ "close", "checkout", "track" }) do
+  for _, word in ipairs({ "close", "checkout", "track", "sidebar" }) do
     H.eq(cmd.parse({ word }).action, word)
     H.eq(cmd.parse({ word }).rev, nil)
   end
@@ -107,13 +107,13 @@ end
 
 T["cmd_complete filters by prefix and offers every word"] = function()
   H.eq(cmd.complete("", {}), {
-    "open", "close", "toggle", "refresh", "compare", "checkout", "track",
-    "all", "unstaged", "staged",
+    "open", "close", "toggle", "refresh", "sidebar", "compare", "checkout",
+    "track", "all", "unstaged", "staged",
   })
   H.eq(cmd.complete("c", {}), { "close", "compare", "checkout" })
   H.eq(cmd.complete("t", {}), { "toggle", "track" })
   H.eq(cmd.complete("un"), { "unstaged" })
-  H.eq(cmd.complete("s"), { "staged" })
+  H.eq(cmd.complete("s"), { "sidebar", "staged" })
   H.eq(cmd.complete("zzz"), {})
   H.eq(cmd.complete("re"), { "refresh" })
 end

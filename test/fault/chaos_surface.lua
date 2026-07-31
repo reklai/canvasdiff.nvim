@@ -493,6 +493,16 @@ end
 ACTIONS.stage = stage_verb("stage")
 ACTIONS.unstage = stage_verb("unstage")
 
+ACTIONS.sidebar_toggle = function(world)
+  -- With no review showing this must warn-and-refuse; with one showing it
+  -- retires or claims the Surface's one sidebar lease. Either way, never a
+  -- throw -- and the ownership checks after the action assert the lease
+  -- lifecycle left nothing behind.
+  local ok = pcall(function() world.plugin.sidebar() end)
+  record(world, "sidebar_toggle")
+  assert(ok, "sidebar_toggle threw instead of refusing")
+end
+
 ACTIONS.session_reopen = function(world)
   -- A restart in miniature. Closing SAVES the session -- deliberately not
   -- invalidated -- and reopening restores through it, so a saved lens whose

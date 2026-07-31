@@ -1156,6 +1156,132 @@ T["sidebar_fold select on a dir survives a wiped canvas buffer"] = function()
   sidebar.close(lease)
 end
 
+-- --- the sidebar toggle (o, :CanvasDiff sidebar, .sidebar()) -------------
+
+T["sidebar_ o closes and reopens the sidebar without touching the canvas"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = bigtext(40, "a") },
+    worktree = { ["a.txt"] = (bigtext(40, "a"):gsub("a line 5", "a line 5 X")) },
+  })
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  local ok, err = xpcall(function()
+    local st = assert(fm.open())
+    local lease = assert(st.surface.controllers.sidebar)
+    assert(sidebar_win(lease), "the sidebar auto-opened with the canvas")
+    local top_before = vim.api.nvim_win_call(st.win, function()
+      return vim.fn.line("w0")
+    end)
+
+    -- `o` on the canvas closes the sidebar; the canvas is untouched.
+    vim.api.nvim_set_current_win(st.win)
+    vim.api.nvim_feedkeys("o", "x", false)
+    H.eq(sidebar.is_open(lease), false, "o closed the sidebar")
+    H.eq(st.surface.controllers.sidebar, nil, "and released the lease")
+    H.eq(vim.api.nvim_win_get_buf(st.win), st.buf, "the canvas window keeps its buffer")
+    H.eq(vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end),
+      top_before, "and did not scroll")
+
+    -- Toggling again brings it back, tracking the same canvas.
+    fm.sidebar()
+    local lease2 = assert(st.surface.controllers.sidebar, "a fresh lease was claimed")
+    local win2 = assert(sidebar_win(lease2), "the sidebar window is back")
+    sidebar.sync(lease2)
+    assert(active_row(vim.api.nvim_win_get_buf(win2)) ~= nil,
+      "the reopened sidebar tracks the canvas (active row present)")
+    H.eq(vim.api.nvim_win_get_buf(st.win), st.buf, "the canvas is still untouched")
+  end, debug.traceback)
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["sidebar_ the command toggles and warns without a canvas"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a\n" },
+    worktree = { ["a.txt"] = "A\n" },
+  })
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+  local ok, err = xpcall(function()
+    -- No canvas: one warn in the existing vocabulary, nothing opens.
+    local wins_before = #vim.api.nvim_tabpage_list_wins(0)
+    fm.command({ "sidebar" })
+    H.eq(#messages, 1, vim.inspect(messages))
+    assert(messages[1].message:find("no live diff canvas", 1, true),
+      vim.inspect(messages))
+    H.eq(messages[1].level, vim.log.levels.WARN)
+    H.eq(#vim.api.nvim_tabpage_list_wins(0), wins_before, "nothing opened")
+
+    -- With a canvas: twice through the command closes, then reopens.
+    local st = assert(fm.open())
+    local lease = assert(st.surface.controllers.sidebar)
+    assert(sidebar_win(lease), "sanity: the sidebar is open")
+    fm.command({ "sidebar" })
+    H.eq(sidebar.is_open(lease), false, ":CanvasDiff sidebar closed it")
+    fm.command({ "sidebar" })
+    local lease2 = assert(st.surface.controllers.sidebar, ":CanvasDiff sidebar reopened it")
+    assert(sidebar_win(lease2), "and its window exists")
+  end, debug.traceback)
+  vim.notify = real_notify
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+T["sidebar_ toggle works when sidebar.enabled = false"] = function()
+  local orig_cwd = vim.fn.getcwd()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "a\n" },
+    worktree = { ["a.txt"] = "A\n" },
+  })
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({
+    sidebar = { enabled = false },
+    watch = { enabled = false },
+    session = { enabled = false },
+  })
+  local ok, err = xpcall(function()
+    local st = assert(fm.open())
+    H.eq(st.surface.controllers.sidebar, nil,
+      "sidebar.enabled = false means no auto-open")
+
+    -- The flag governs auto-open only; an explicit toggle still opens.
+    fm.sidebar()
+    local lease = assert(st.surface.controllers.sidebar,
+      "the explicit toggle claims a lease despite enabled = false")
+    assert(sidebar_win(lease), "and the sidebar window opened")
+  end, debug.traceback)
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  -- This test disabled the sidebar in live config; put the shared config
+  -- back the way this suite's other full-plugin tests leave it.
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  assert(ok, err)
+end
+
 T["sidebar_fold a nested fold hides only its own subtree"] = function()
   local st = canvas.open({
     big_section("lua/mod/a.lua", "a"),
