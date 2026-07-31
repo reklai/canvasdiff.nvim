@@ -79,10 +79,11 @@ local function label_for(l)
   if l.id == "unstaged" then return "INDEX → WORKTREE (unstaged)" end
   if l.id == "staged" then return "HEAD → INDEX (staged)" end
   if range_shape(l) then
-    if l.operator == "..." then
-      return ("merge-base(%s, %s) → %s"):format(l.old, l.new, l.new)
-    end
-    return ("%s → %s"):format(l.old, l.new)
+    -- Both operators show the refs the user asked for. Three-dot still
+    -- collects from the merge base (source/collect.lua) -- the label hides
+    -- the plumbing, the same presentation choice GitHub makes for PR diffs.
+    -- READ-ONLY is the mode vocabulary; the winbar tint says it in colour.
+    return ("READ-ONLY  %s → %s"):format(l.old, l.new)
   end
   if branch_shape(l) then
     return ("%s → WORKTREE"):format(l.old)

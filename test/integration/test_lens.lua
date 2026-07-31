@@ -149,10 +149,10 @@ T["lens_labels describe the directional comparison identity"] = function()
   H.eq(lens.branch("refs/heads/main").label, "refs/heads/main → WORKTREE")
   H.eq(
     lens.range("main", "topic", "..").label,
-    "main → topic")
+    "READ-ONLY  main → topic")
   H.eq(
     lens.range("main", "topic", "...").label,
-    "merge-base(main, topic) → topic")
+    "READ-ONLY  main → topic")
 end
 
 T["lens_branch is_branch distinguishes arbitrary refs from fixed lenses"] = function()
