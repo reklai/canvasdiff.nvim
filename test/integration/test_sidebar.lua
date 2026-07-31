@@ -271,7 +271,7 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(vim.api.nvim_get_option_value("winfixbuf", { win = st.win }), false,
     "canvas window must never get winfixbuf")
   H.eq(vim.api.nvim_get_option_value("winbar", { win = side_win }),
-    "Files changed (3)")
+    "Files changed (3)  +18 −18")
   local side_buf = vim.api.nvim_win_get_buf(side_win)
   H.eq(#vim.api.nvim_buf_get_lines(side_buf, 0, -1, false), 6,
     "the title is a winbar, not a selectable tree row")
@@ -354,9 +354,9 @@ T["sidebar_win select on a dir folds it and active falls back to the dir"] = fun
   local sbuf = sidebar_buf(lease)
   local side_win = sidebar_win(lease)
   vim.api.nvim_win_set_cursor(side_win, { 1, 0 }) -- a/ dir row
-  H.eq(sidebar_winbar(lease), "Files changed (3)")
+  H.eq(sidebar_winbar(lease), "Files changed (3)  +18 −18")
   sidebar.select(lease)
-  H.eq(sidebar_winbar(lease), "Files changed (3)",
+  H.eq(sidebar_winbar(lease), "Files changed (3)  +18 −18",
     "folding tree rows does not change the file count")
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(lines[1], "▸ a/", "dir folded")
@@ -484,7 +484,7 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   st.root = root
   local lease = assert(sidebar.open(st, { width = 30 }))
   local sbuf = sidebar_buf(lease)
-  H.eq(sidebar_winbar(lease), "Files changed (1)")
+  H.eq(sidebar_winbar(lease), "Files changed (1)  +1 −1")
   H.eq(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false), 2, "dir + one file")
 
   local abs = vim.fs.joinpath(root, "m", "b.txt")
@@ -499,8 +499,8 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   H.eq(result.empty, false)
 
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
-  H.eq(sidebar_winbar(lease), "Files changed (2)",
-    "the title follows the refreshed section count")
+  H.eq(sidebar_winbar(lease), "Files changed (2)  +2 −1",
+    "the title follows the refreshed section count and diffstat")
   H.eq(#lines, 3, "new file appears in the sidebar after reconcile")
   assert(lines[3]:find("b.txt", 1, true), "b.txt rendered: " .. lines[3])
   sidebar.close(lease)
@@ -525,9 +525,9 @@ T["sidebar_integration title follows lens section counts"] = function()
     local st = assert(fm.open({ lens = lenses.get("unstaged") }))
     local lease = assert(st.surface.controllers.sidebar)
 
-    H.eq(sidebar_winbar(lease), "Files changed (1)")
+    H.eq(sidebar_winbar(lease), "Files changed (1)  +1 −1")
     assert(fm.set_lens(lenses.get("all")))
-    H.eq(sidebar_winbar(lease), "Files changed (2)",
+    H.eq(sidebar_winbar(lease), "Files changed (2)  +2 −2",
       "the title follows the newly published lens sections")
   end, debug.traceback)
   pcall(fm.close)

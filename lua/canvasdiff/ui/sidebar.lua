@@ -139,8 +139,22 @@ local WINDOW_OPTIONS = {
   { name = "foldenable", value = false },
 }
 
+--- The collection title, now carrying the changeset's size in the same
+--- vocabulary as each file header: how many files, and how much churn. The
+--- stats ride the count (hunk shows stream-level stats for the same reason);
+--- they vanish with the sections rather than asserting "+0 −0" about nothing.
 local function sidebar_title(state)
-  return ("Files changed (%d)"):format(#((state and state.sections) or {}))
+  local sections = (state and state.sections) or {}
+  local title = ("Files changed (%d)"):format(#sections)
+  if #sections == 0 then
+    return title
+  end
+  local adds, dels = 0, 0
+  for _, s in ipairs(sections) do
+    adds = adds + (s.adds or 0)
+    dels = dels + (s.dels or 0)
+  end
+  return title .. ("  +%d %s%d"):format(adds, render.glyphs.minus, dels)
 end
 
 local function ensure_hl_groups()

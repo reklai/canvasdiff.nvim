@@ -101,8 +101,9 @@ you are — always the same answer:
   reads `READ-ONLY  main → topic` instead — read-only mode also tints the bar.
   Its right edge names the cheatsheet key (`<leader>lh help` by default);
   rebinding or disabling `help` moves or removes the reminder.
-- **The sidebar winbar** is a collection title such as `Files changed (12)`.
-  Its count is the number of changed files, even when directories are folded.
+- **The sidebar winbar** is a collection title such as
+  `Files changed (12)  +340 −128` — the count is files (even when directories
+  are folded), the stats are the whole changeset's.
 - **The sidebar's highlighted row** tracks the same file as the canvas.
 
 **Both follow you into a jump.** Open a file with **Enter** and the sidebar highlights
