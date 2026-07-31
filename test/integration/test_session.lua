@@ -951,4 +951,56 @@ T["session_ restored lens derives its live label from identity"] = function()
   vim.fn.delete(root, "rf")
 end
 
+-- A saved comparison is a preference, not a contract: the branch it names can
+-- be deleted while the editor is shut. Reopening must not hold the whole
+-- canvas hostage to that stale preference -- it falls back to the configured
+-- default lens and says so, the same posture as the paged fallback.
+T["session_ a saved comparison whose ref is gone falls back to the default lens"] =
+function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "one\n" } })
+  local function sh(c)
+    local res = vim.system(c, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(c, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  sh({ "git", "branch", "topic" })
+
+  -- Save a session that points at a range over `topic`, as a real close would.
+  local saved = {
+    root = root,
+    lens = model.lens.range("main", "topic", ".."),
+  }
+  session.activate(saved)
+  assert(session.save(saved))
+  assert(session.load(root), "sanity: the range lens reached disk")
+
+  sh({ "git", "branch", "-D", "topic" })
+
+  local warnings = {}
+  local orig_notify = vim.notify
+  vim.notify = function(msg, level)
+    warnings[#warnings + 1] = { msg = msg, level = level }
+  end
+  local ok, err = pcall(function()
+    in_repo(root, {}, function(fm)
+      assert(fm.open(), "open must succeed via the fallback lens")
+      -- Read the live lens through the same door every test uses: the winbar.
+      local win = vim.api.nvim_get_current_win()
+      local wb = vim.api.nvim_get_option_value("winbar", { win = win })
+      assert(wb:find("HEAD → WORKTREE", 1, true),
+        "fallback landed on the default lens, got: " .. wb)
+      assert(not wb:find("READ-ONLY", 1, true),
+        "the dead range must not be shown")
+    end)
+  end)
+  vim.notify = orig_notify
+  assert(ok, err)
+
+  local saw_fallback = false
+  for _, w in ipairs(warnings) do
+    if w.msg:find("no longer resolves", 1, true) then saw_fallback = true end
+  end
+  assert(saw_fallback, "the fallback explains itself with a warning")
+  vim.fn.delete(root, "rf")
+end
+
 return T

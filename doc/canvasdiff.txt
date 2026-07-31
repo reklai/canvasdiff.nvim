@@ -354,7 +354,8 @@ which files you had collapsed. Reopening restores it.
 
 State is written under |stdpath()| `"state"`, one record per repository, so two
 repositories never share a position. Disable it with
-`session = { enabled = false }`.
+`session = { enabled = false }`. A saved comparison whose branch no longer
+exists falls back to the default lens on open, with a message saying so.
 
 Because close-then-open restores your position, it is also the repair for a
 canvas that has somehow diverged from what Git reports -- press `q`, then

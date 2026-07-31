@@ -1082,6 +1082,14 @@ function App:open(opts)
     or (sess and lens.valid(sess.lens) and sess.lens)
     or (sess and sess.base and lens.from_base(sess.base))
     or lens.from_base(config.options.base)
+  -- The session's lens passed a SHAPE check only; whether its refs still
+  -- resolve is decided by collection below. Remember where it came from, so
+  -- a saved comparison over a deleted branch degrades to the default lens
+  -- instead of failing the open -- same posture as the paged fallback: a
+  -- saved lens that cannot be collected is a reason to fall back, not to
+  -- fail the review. An EXPLICIT lens still errors; that is typo feedback.
+  local lens_from_session = opts.lens == nil and opts.base == nil
+    and sess ~= nil and lens.valid(sess.lens) or false
 
   -- Transaction boundary: collection and model construction finish before
 --- Choose the canvas the review actually needs.
@@ -1134,6 +1142,18 @@ end
   local sections, collect_err = source.sections(root, l, config.options.context)
   if opts._guard and not opts._guard() then
     return nil, STALE_COMPARE
+  end
+  if not sections and lens_from_session then
+    local fallback = lens.from_base(config.options.base)
+    if not lens.same(fallback, l) then
+      ui.warn(("saved comparison %s no longer resolves — showing %s (%s)")
+        :format(l.label, fallback.label, collect_err))
+      l = fallback
+      sections, collect_err = source.sections(root, l, config.options.context)
+      if opts._guard and not opts._guard() then
+        return nil, STALE_COMPARE
+      end
+    end
   end
   if not sections then
     ui.warn(collect_err)
