@@ -1,5 +1,4 @@
 local canvas = require("canvasdiff.canvas")
-local render = canvas.format
 local source = require("canvasdiff.source")
 local config = require("canvasdiff.config")
 local runtime = require("canvasdiff.runtime")
@@ -770,64 +769,23 @@ local function path_under_top(st, win)
   return ok and path or nil
 end
 
-local function winbar_escape(text)
-  return tostring(text or ""):gsub("%%", "%%%%")
-end
-
-local function comparison_breadcrumb(st, path)
-  local label = winbar_escape(lens.of(st).label)
-  if not path then
-    return label
-  end
-  return label .. " · %<" .. winbar_escape(render.escape_path(path))
-end
-
 local function set_winbar(st, text, win, path)
   win = win or (st and st.win)
   if not (st and win and vim.api.nvim_win_is_valid(win)) then
     return
   end
   if text == nil then
-    -- The STICKY part, and the reason this is worth recomputing on scroll: a file
-    -- header scrolls out of view as soon as you are a screen into its diff, and from
-    -- then on nothing IN the canvas says which block you are reading. The sidebar
-    -- knows, but peripherally and only if it is enabled. This keeps the answer on the
-    -- canvas itself.
-    local here = path or path_under_top(st, win)
-    text = comparison_breadcrumb(st, here)
+    -- The STICKY part, and the reason this recomputes on scroll: a file
+    -- header scrolls out of view a screen into its diff, and from then on
+    -- nothing IN the canvas says which block you are reading. Resolving the
+    -- topline path is orchestration; how it is shown belongs to ui.winbar.
+    text = ui.winbar.text(st, path or path_under_top(st, win))
   end
-  -- Skipped when nothing changed, because this runs on every WinScrolled and writing
-  -- 'winbar' forces a redraw of the window. Comparing the resolved string also covers
-  -- the common case of scrolling WITHIN one file, where the text is identical and only
-  -- path_under_top's work was wasted.
-  st.winbar_text_by_win = st.winbar_text_by_win or {}
-  if st.winbar_text_by_win[win] == text then
-    local ok, actual = pcall(
-      vim.api.nvim_get_option_value, "winbar", { win = win })
-    if ok and actual == text then
-      return
-    end
-  end
-  st.winbar_text_by_win[win] = text
-  pcall(vim.api.nvim_set_option_value, "winbar", text, { win = win, scope = "local" })
+  ui.winbar.apply(st, win, text)
 end
 
 local function clear_winbar(st, win)
-  if not (st and win) then
-    return
-  end
-  local owned_text = st.winbar_text_by_win and st.winbar_text_by_win[win] or nil
-  if st.winbar_text_by_win then
-    st.winbar_text_by_win[win] = nil
-  end
-  if not vim.api.nvim_win_is_valid(win) or owned_text == nil then
-    return
-  end
-  local ok, actual = pcall(
-    vim.api.nvim_get_option_value, "winbar", { win = win })
-  if ok and actual == owned_text then
-    pcall(vim.api.nvim_set_option_value, "winbar", "", { win = win, scope = "local" })
-  end
+  ui.winbar.clear(st, win)
 end
 
 local function refresh_winbars(surface)
