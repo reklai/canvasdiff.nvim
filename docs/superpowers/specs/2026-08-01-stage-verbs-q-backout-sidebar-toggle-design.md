@@ -35,6 +35,9 @@ misspelled-name report.
   Config defaults: `stage = "s"`, `unstage = "u"` in both `keymaps.canvas`
   and `keymaps.sidebar`; `stage_cycle` removed from `config/settings.lua`
   defaults and its valid-action list.
+- Public API: `toggle_stage()` in `lua/canvasdiff.lua` is replaced by
+  `stage()` and `unstage()` — same clean pre-alpha removal, no alias. The
+  chaos harness's `stage_cycle` action follows.
 
 ## 2. `q` on the canvas backs out of a stacked comparison
 
