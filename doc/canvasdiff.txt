@@ -129,8 +129,12 @@ An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
 READ-ONLY. File jumps and staging are declined in a range lens.
 Press <Tab> or <S-Tab> to leave a range: the canvas returns to the comparison
 you were looking through when you entered it, or to HEAD vs WORKTREE when the
-canvas opened straight into the range. `q` closes the review and restores the
-buffer from which its canvas was entered.
+canvas opened straight into the range. `q` backs out the same way: on a
+comparison stacked over a working view this session, the first press returns
+to that view, and the next press closes the review and restores the buffer
+from which its canvas was entered. A canvas opened straight into the range
+has nothing to back out to, so one press closes. `:CanvasDiff close` always
+closes in one step.
 
 The canvas winbar is a breadcrumb: the comparison stays on the left, and the
 file under the topline follows it as you scroll, as in

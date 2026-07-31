@@ -1179,4 +1179,73 @@ T["lens_ a transient set_lens refusal keeps the return lens"] = function()
   end)
 end
 
+-- --- the canvas q backs out of a stacked comparison -------------------------
+
+--- Press the canvas close key the way a user does: focus the canvas window
+--- and feed the mapped key, so the test exercises the keymap's action, not
+--- App:close() directly.
+local function feed_close(win)
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_feedkeys(vim.keycode("q"), "x", false)
+end
+
+T["lens_ q pops a stacked comparison back to the recorded lens"] = function()
+  local root = range_return_fixture()
+  local original_buf = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_set_current_buf(original_buf)
+  with_app(root, {}, function(app, win)
+    assert(app:set_lens(lens.get("staged")))
+    assert(app:set_range("main..topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the range is showing, got: " .. winbar_of(win))
+    local surface = assert(app.opened[#app.opened])
+
+    feed_close(win)  -- the q KEY, on a comparison stacked this session
+    assert(surface:is_showing(),
+      "the first q backs out of the comparison instead of closing")
+    assert(winbar_of(win):find("HEAD → INDEX (staged)", 1, true),
+      "q lands where <Tab> would: the recorded lens, got: " .. winbar_of(win))
+
+    feed_close(win)  -- nothing stacked any more: this one closes
+    assert(not surface:is_showing(), "the second q closes the review")
+    H.eq(vim.api.nvim_get_current_buf(), original_buf,
+      "closing restores the buffer the canvas opened over")
+  end)
+  pcall(vim.api.nvim_buf_delete, original_buf, { force = true })
+end
+
+-- PIN: unchanged behavior. A canvas opened straight into a range recorded no
+-- pre-comparison lens, so there is nothing to back out to: one q closes the
+-- review with no intermediate pivot. Passes before and after
+-- back_out_or_close exists, and must keep passing.
+T["lens_ q closes immediately when the comparison was opened directly"] = function()
+  local root = range_return_fixture()
+  with_app(root, { lens = lens.range("main", "topic", "..") }, function(app, win)
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: opened straight into the range, got: " .. winbar_of(win))
+    local surface = assert(app.opened[#app.opened])
+    feed_close(win)
+    assert(not surface:is_showing(),
+      "with nothing to back out to, one q closes the review")
+  end)
+end
+
+-- PIN: scripts that say close get close. App:close() -- the method behind
+-- :CanvasDiff close -- never backs out; one call ends the review even from a
+-- stacked comparison. Passes before and after back_out_or_close exists, and
+-- must keep passing: the back-out lives ONLY in the canvas close key action.
+T["lens_ CanvasDiff close always closes, even stacked"] = function()
+  local root = range_return_fixture()
+  with_app(root, {}, function(app, win)
+    assert(app:set_lens(lens.get("staged")))
+    assert(app:set_range("main..topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the range is showing, got: " .. winbar_of(win))
+    local surface = assert(app.opened[#app.opened])
+    vim.api.nvim_set_current_win(win)
+    app:close()
+    assert(not surface:is_showing(), "close() ends a stacked review in one step")
+  end)
+end
+
 return T

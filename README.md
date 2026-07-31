@@ -40,14 +40,17 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
   the canvas. The diff for that file is regenerated from the file's current
   content (including unsaved edits) and the canvas view is restored to
   roughly where you left it.
-- Press **q** to close the canvas. Closing is non-destructive: you land back on
-  the buffer the canvas opened over, cursor and column intact. The two exits
-  mean different things on purpose — `<CR>` is "I want to work on this file",
-  `q` is "I'm done reading" — so a jump never changes where `q` puts you. If
-  the buffer you came from was deleted meanwhile, it falls back to the file
-  your review last touched, then to the alternate file, and only then to a
-  blank one. `:CanvasDiff close` works from any window in the tab, not just the
-  one showing the canvas.
+- Press **q** to back out of what you're in: on a comparison stacked over a
+  working view this session it returns to that view (the same landing as
+  **Tab**); otherwise it closes the canvas. Closing is non-destructive: you
+  land back on the buffer the canvas opened over, cursor and column intact.
+  The two exits mean different things on purpose — `<CR>` is "I want to work
+  on this file", `q` is "I'm done reading" — so a jump never changes where `q`
+  puts you. If the buffer you came from was deleted meanwhile, it falls back
+  to the file your review last touched, then to the alternate file, and only
+  then to a blank one. `:CanvasDiff close` always closes — it never backs
+  out — and works from any window in the tab, not just the one showing the
+  canvas.
 - Press **r** to refresh: re-scan the repo and splice in whatever changed, without
   moving what you were reading. (`watch` already does this on save and focus — `r` is
   for when you want it now.)
@@ -344,9 +347,12 @@ same way as `CanvasDiffFileBar`).
 `<Tab>` or `<Shift-Tab>` leaves a read-only range and returns to the
 comparison you were looking through when you entered it — `HEAD → WORKTREE`
 when the canvas opened straight into the range.
-Pressing `q` closes the review and restores the buffer from which that
-canvas was entered. `:q` is deliberately left alone — it stays Vim's
-window-close; `q` is the review's close.
+`q` backs out the same way: on a comparison stacked over a working view this
+session, the first press returns to that view, and the next press closes the
+review and restores the buffer from which its canvas was entered. A canvas
+opened straight into the range has nothing to back out to, so one press
+closes. `:q` is deliberately left alone — it stays Vim's window-close; `q`
+is the review's exit, and `:CanvasDiff close` always closes in one step.
 
 `:CanvasDiff compare` (or the default global `<leader>lb`) opens two
 `vim.ui.select` pickers containing local branches only: first the base, then
@@ -492,7 +498,7 @@ have about a second between taps).
 | `stage` | `s` | **s** | Stage every unstaged change in this file |
 | `unstage` | `u` | **u** | Unstage this file; never touches the worktree |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens forward / back: all ⇄ unstaged ⇄ staged |
-| `close` | `q` | **q** | Close the canvas, restore the previous buffer |
+| `close` | `q` | **q** | Back out: leave a stacked comparison, else close the canvas and restore the previous buffer |
 
 | Sidebar | Default | How you press it | Action |
 | --- | --- | --- | --- |

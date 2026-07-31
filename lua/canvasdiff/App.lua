@@ -961,7 +961,9 @@ local function canvas_actions(app, surface, st, cfg)
       function(_, win) open_under_cursor(app, surface, generation, st, cfg, win) end),
     collapse   = owned_action(surface, generation,
       function(_, win) toggle_collapse_under_cursor(surface, st, win) end),
-    close      = owned_action(surface, generation, function() app:close() end),
+    close      = owned_action(surface, generation, function()
+      app:back_out_or_close(surface)
+    end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
     stage      = owned_action(surface, generation,
@@ -2560,6 +2562,30 @@ function App:cycle_lens(delta)
     end
   end
   return self:set_lens(lens.step(current, delta or 1))
+end
+
+--- The canvas q: back out of the thing you are in. A comparison stacked on a
+--- working view this session pops back to that view (same landing as <Tab>,
+--- same clear-on-real-error rule); anything else closes the review. Only the
+--- KEY behaves this way -- :CanvasDiff close and App:close stay pure close,
+--- so scripts that say close get close.
+function App:back_out_or_close(surface)
+  surface = surface or active_surface(self)
+  local st = surface and surface.state
+  if st and lens.is_range(lens.of(st)) then
+    local back = st.return_lens
+    if back and lens.valid(back) then
+      local ok, err = self:set_lens(back)
+      if ok then
+        return ok
+      end
+      if err ~= nil then
+        st.return_lens = nil
+      end
+      return
+    end
+  end
+  return self:close()
 end
 
 --- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.

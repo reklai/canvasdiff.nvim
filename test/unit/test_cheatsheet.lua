@@ -75,7 +75,7 @@ T["cheatsheet_model close stays per column with its own meaning"] = function()
   H.eq(seen["Global"], nil, "differing descs must keep close out of Global")
   H.eq(seen["Canvas"].keys, { "q" })
   H.eq(seen["Sidebar"].keys, { "q" })
-  assert(seen["Canvas"].desc:find("Close the canvas", 1, true),
+  assert(seen["Canvas"].desc:find("close the canvas", 1, true),
     "canvas close describes the canvas: " .. seen["Canvas"].desc)
   assert(seen["Sidebar"].desc:find("Close the sidebar", 1, true),
     "sidebar close describes the sidebar: " .. seen["Sidebar"].desc)

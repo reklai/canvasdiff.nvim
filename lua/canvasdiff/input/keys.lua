@@ -40,7 +40,7 @@ K.specs = {
     desc = "Refresh the current diff" },
   { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this file's changes" },
   { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this file" },
-  { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Close the canvas, restore the previous buffer" },
+  { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Back out: leave a stacked comparison, else close the canvas" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
   { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage this file's changes" },

@@ -1643,13 +1643,22 @@ T["root_ comparison exits restore the originating canvas landing"] = function()
     H.eq(vim.api.nvim_get_current_buf(), origin,
       "q restores the buffer that initiated a newly opened comparison")
 
-    -- Phase 2: comparison replaces the lens of an existing canvas.
-    local state = assert(app:open())
+    -- Phase 2: comparison stacked on an existing working canvas. The lens is
+    -- pinned explicitly: the canvas state singleton otherwise reopens with
+    -- whatever lens the previous test (or Phase 1) left, which decides whether
+    -- the comparison records a return lens at all.
+    local lens = require("canvasdiff.diff").lens
+    local state = assert(app:open({ lens = lens.get("all") }))
     local original_landing = origin
     app:compare()
     calls[3].callback(item_named(calls[3].items, "main"))
     calls[4].callback(item_named(calls[4].items, "zeta"))
     local q_again = assert(mapping_for(state.buf, "q"))
+    -- Stacked on a working view this session, so the first q backs out to
+    -- that view instead of closing; only the second q ends the review.
+    q_again.callback()
+    H.eq(vim.api.nvim_get_current_buf(), state.buf,
+      "q pops the stacked comparison back to the canvas it was stacked on")
     q_again.callback()
     H.eq(vim.api.nvim_get_current_buf(), original_landing,
       "q retains the canvas's original landing rather than landing on itself")
