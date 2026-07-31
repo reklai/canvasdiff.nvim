@@ -7,9 +7,7 @@
 -- stateful owner keeps orchestration and the ui domain keeps presentation.
 
 local canvas = require("canvasdiff.canvas")
-local config = require("canvasdiff.config")
 local diff = require("canvasdiff.diff")
-local input = require("canvasdiff.input")
 
 local lens = diff.lens
 
@@ -32,29 +30,16 @@ function W.ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffWinbarReadOnly", { link = "Visual", default = true })
 end
 
---- hunk keeps a persistent menu bar; the canvas equivalent is one small,
---- right-aligned reminder that a cheatsheet exists at all. It shows the key
---- actually configured (the first, when several), and disappears with the
---- binding -- a hint for a key you removed would be worse than none.
-local function help_tail(keymaps)
-  for _, m in ipairs(input.keys.resolved("canvas", keymaps)) do
-    if m.action == "help" then
-      return "%=" .. W.escape(m.lhs) .. " help"
-    end
-  end
-  return ""
-end
-
 --- The breadcrumb: comparison on the left, the file under the topline after
---- it. `%<` truncates the path, never the comparison or the help tail.
-function W.text(st, path, keymaps)
+--- it. `%<` truncates the path, never the comparison.
+function W.text(st, path)
   local l = lens.of(st)
   local group = lens.is_range(l) and "CanvasDiffWinbarReadOnly" or "CanvasDiffWinbar"
   local out = "%#" .. group .. "#" .. W.escape(l.label)
-  if path then
-    out = out .. " · %<" .. W.escape(canvas.format.escape_path(path))
+  if not path then
+    return out
   end
-  return out .. help_tail(keymaps or config.options.keymaps)
+  return out .. " · %<" .. W.escape(canvas.format.escape_path(path))
 end
 
 --- Cached write. Runs on every WinScrolled, and writing 'winbar' forces a

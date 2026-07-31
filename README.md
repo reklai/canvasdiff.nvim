@@ -100,8 +100,6 @@ you are — always the same answer:
   file under the topline follows after it as you scroll. A range comparison
   (`main..topic`) reads `READ-ONLY  main → topic` instead — read-only mode
   also tints the bar.
-  Its right edge names the cheatsheet key (`<leader>lh help` by default);
-  rebinding or disabling `help` moves or removes the reminder.
 - **The sidebar winbar** is a collection title such as
   `Files changed (12)  +340 −128` — the count is files (even when directories
   are folded), the stats are the whole changeset's.

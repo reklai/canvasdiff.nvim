@@ -655,7 +655,7 @@ return {
       return vim.api.nvim_get_option_value("winbar", { win = cwin })
     end
 
-    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<aaa.txt%=<leader>lh help",
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<aaa.txt",
       "the breadcrumb names the comparison and visible file")
     assert(not wb():find("CanvasDiff:", 1, true))
     assert(not wb():find("│", 1, true))
@@ -671,7 +671,7 @@ return {
       vim.fn.winrestview({ topline = zrow + 20, lnum = zrow + 22 })
     end)
     vim.api.nvim_exec_autocmds("WinScrolled", {})
-    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<zzz.txt%=<leader>lh help",
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<zzz.txt",
       "only the trailing file breadcrumb changes while scrolling")
 
     local pct_row

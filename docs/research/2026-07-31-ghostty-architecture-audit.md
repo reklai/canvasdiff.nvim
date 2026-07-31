@@ -162,8 +162,8 @@ branch's per-task `minor (deferred)` ledger
 | 14 | README:294-295 lowercase "(read-only)" vs `READ-ONLY` (B, T4) | **RATIFIED — no change** | Ruling this audit was asked to make: `READ-ONLY` (upper) is on-screen mode vocabulary — the winbar label (`lens.lua:86`), the staging refusal (App.lua:2236), the jump refusal (`jump.lua:119`). Lowercase "read-only" is ordinary English prose. README:294-295 are prose comments in the command table, so lowercase governs there; README:101 correctly uses both registers in one sentence. |
 | 15 | `jump.lua` param shadows module-local `source` (B, T4) | DEFERRED | `input/jump.lua:221` (`target_win(state, requested, source)`). Rename to `source_win` on next edit of that function. |
 | 16 | `doc/canvasdiff.txt` lacks entries for the new hl groups/label (B, T4) | DEFERRED to branch final review | The branch ledger already assigns this check to the final whole-branch review; it is a docs completeness gate, not code debt. |
-| 17 | `W.text(st, path, {})` yields no tail rather than the config default (B, T5) | DEFERRED | Accepted sharp edge, recorded at acceptance time; the in-tree caller always passes real opts. |
-| 18 | winbar shows literal `<leader>lh`, not the resolved leader (B, T5) | DEFERRED | UX polish; promote on user confusion. Resolution needs the user's actual leader at render time. |
+| 17 | `W.text(st, path, {})` yields no tail rather than the config default (B, T5) | CLOSED | Feature removed 2026-08-01 (help tail deleted); moot. |
+| 18 | winbar shows literal `<leader>lh`, not the resolved leader (B, T5) | CLOSED | Feature removed 2026-08-01 (help tail deleted); moot. |
 | 19 | ASCII glyph variant of the sidebar title untested (B, T6) | DEFERRED | Live-glyph chain verified by reading; promote to a one-line ascii-mode assertion next time sidebar tests are edited. |
 
 Net effect of this pass: one item landed (2), two closed as already-resolved

@@ -133,9 +133,7 @@ The canvas winbar is a breadcrumb: the comparison stays on the left, and the
 file under the topline follows it as you scroll, as in
 `HEAD → WORKTREE · src/canvas.lua`. A committed range renders
 `READ-ONLY  A → B` and tints the whole bar, so the mode is visible before the
-label is read. The right edge names the cheatsheet key, `<leader>lh help` by
-default; it follows the configured `help` key and is absent when that key is
-disabled.
+label is read.
 
 The sidebar winbar reads `Files changed (N)  +A −D`. N counts changed files
 rather than visible directory rows; the stats are the whole changeset's, and
