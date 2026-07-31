@@ -126,8 +126,10 @@ Commit ranges compare committed content and are read-only:
 An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
 `HEAD...topic`. The winbar breadcrumb shows the refs you asked for, marked
 READ-ONLY. File jumps and stage cycling are declined in a range lens.
-Press <Tab> or <S-Tab> to leave a range at HEAD vs WORKTREE. `q` closes the
-review and restores the buffer from which its canvas was entered.
+Press <Tab> or <S-Tab> to leave a range: the canvas returns to the comparison
+you were looking through when you entered it, or to HEAD vs WORKTREE when the
+canvas opened straight into the range. `q` closes the review and restores the
+buffer from which its canvas was entered.
 
 The canvas winbar is a breadcrumb: the comparison stays on the left, and the
 file under the topline follows it as you scroll, as in

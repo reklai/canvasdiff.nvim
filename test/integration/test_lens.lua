@@ -1022,4 +1022,101 @@ T["lens_pivot away from a file that only the old lens had lands somewhere real"]
   vim.fn.delete(root, "rf")
 end
 
+-- --- leaving a comparison goes back where you came from ---------------------
+
+--- A repo where every named lens is a real, distinct comparison AND a topic
+--- branch exists to range against: HEAD has "one", the index "two", the
+--- worktree "three", and topic committed "topic".
+local function range_return_fixture()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "one\n" } })
+  local function sh(c)
+    local res = vim.system(c, { cwd = root, text = true }):wait()
+    assert(res.code == 0, table.concat(c, " ") .. " failed: " .. (res.stderr or ""))
+  end
+  local function write(body)
+    local f = assert(io.open(vim.fs.joinpath(root, "a.txt"), "w"))
+    f:write(body); f:close()
+  end
+  sh({ "git", "switch", "-c", "topic" })
+  write("topic\n")
+  sh({ "git", "add", "-A" })
+  sh({ "git", "commit", "-m", "topic side" })
+  sh({ "git", "switch", "main" })
+  write("two\n")
+  sh({ "git", "add", "a.txt" })  -- index now holds "two"
+  write("three\n")               -- worktree now holds "three"
+  return root
+end
+
+--- Drive a real App against `root`, hand `body` the app and its canvas
+--- window, and tear everything down whether or not the assertions held.
+local function with_app(root, opts, body)
+  local App = require("canvasdiff.App")
+  local app = App.new()
+  local old_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_dir(root)
+  local win
+  local ok, err = xpcall(function()
+    local st, open_err = app:open(opts or {})
+    assert(st, open_err)
+    win = vim.api.nvim_get_current_win()
+    body(app, win)
+  end, debug.traceback)
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+  end
+  pcall(function() app:close() end)
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+local function winbar_of(win)
+  return vim.api.nvim_get_option_value("winbar", { win = win })
+end
+
+T["lens_ tab from a range returns to the pre-comparison lens"] = function()
+  local root = range_return_fixture()
+  with_app(root, {}, function(app, win)
+    assert(app:set_lens(lens.get("staged")))
+    assert(app:set_range("main..topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the range is showing, got: " .. winbar_of(win))
+    app:cycle_lens(1)  -- <Tab>
+    local wb = winbar_of(win)
+    assert(wb:find("HEAD → INDEX (staged)", 1, true),
+      "<Tab> returns to the lens the range was entered from, got: " .. wb)
+  end)
+end
+
+-- PIN: unchanged behavior. A canvas opened straight into a range has no
+-- pre-comparison lens on this state, so <Tab> takes the default exit. This
+-- passes before and after return_lens exists, and must keep passing.
+T["lens_ a canvas opened straight into a range exits to the default"] = function()
+  local root = range_return_fixture()
+  with_app(root, { lens = lens.range("main", "topic", "..") }, function(app, win)
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: opened straight into the range, got: " .. winbar_of(win))
+    app:cycle_lens(1)  -- <Tab>
+    local wb = winbar_of(win)
+    assert(wb:find("HEAD → WORKTREE", 1, true),
+      "with nowhere to return to, <Tab> exits at the default, got: " .. wb)
+  end)
+end
+
+T["lens_ range to range keeps the original return lens"] = function()
+  local root = range_return_fixture()
+  with_app(root, {}, function(app, win)
+    assert(app:set_lens(lens.get("unstaged")))
+    assert(app:set_range("main..topic"))
+    assert(app:set_range("main...topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the second range is showing, got: " .. winbar_of(win))
+    app:cycle_lens(-1)  -- <S-Tab>
+    local wb = winbar_of(win)
+    assert(wb:find("INDEX → WORKTREE (unstaged)", 1, true),
+      "back goes to the comparison the FIRST range was entered from, got: " .. wb)
+  end)
+end
+
 return T

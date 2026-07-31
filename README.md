@@ -341,9 +341,12 @@ Either way the breadcrumb shows the refs you asked for, marked `READ-ONLY`, and
 the whole winbar is tinted (`CanvasDiffWinbarReadOnly`, default measured the
 same way as `CanvasDiffFileBar`).
 
-`<Tab>` or `<Shift-Tab>` leaves a read-only range at `HEAD → WORKTREE`.
+`<Tab>` or `<Shift-Tab>` leaves a read-only range and returns to the
+comparison you were looking through when you entered it — `HEAD → WORKTREE`
+when the canvas opened straight into the range.
 Pressing `q` closes the review and restores the buffer from which that
-canvas was entered.
+canvas was entered. `:q` is deliberately left alone — it stays Vim's
+window-close; `q` is the review's close.
 
 `:CanvasDiff compare` (or the default global `<leader>lb`) opens two
 `vim.ui.select` pickers containing local branches only: first the base, then

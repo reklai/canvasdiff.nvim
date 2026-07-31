@@ -1928,6 +1928,10 @@ pivot = function(surface, target_lens, guard, collected, publish)
     return nil, "no valid diff canvas"
   end
 
+  -- Captured before anything below mutates the state: st.lens is provisionally
+  -- overwritten mid-transaction, and the return-lens record at the commit point
+  -- needs the comparison this pivot LEFT, not the one it installed.
+  local prior_lens = lens.of(st)
   local next_lens = target_lens or lens.of(st)
   local desired, err = collected, nil
   if desired == nil then
@@ -2052,6 +2056,21 @@ pivot = function(surface, target_lens, guard, collected, publish)
         snapshot = committed,
       }
     end
+  end
+  -- Where <Tab> goes when it leaves a comparison. Recorded at the single
+  -- commit point every lens change funnels through, so no caller can forget
+  -- it: entering a range remembers the lens you were looking through, leaving
+  -- one forgets it. Range→range keeps the ORIGINAL — the comparison you came
+  -- from is where "back" goes, however many ranges you visited meanwhile.
+  -- In-memory only: a restored session exits to the default, as before.
+  -- Reached only on success — every failed or stale path returned above, so a
+  -- pivot that rolled back leaves the record exactly as it found it.
+  if lens.is_range(next_lens) then
+    if not lens.is_range(prior_lens) then
+      st.return_lens = prior_lens
+    end
+  else
+    st.return_lens = nil
   end
   local ok, finish_err = finish(true)
   return ok, finish_err, full and true or false
@@ -2482,7 +2501,23 @@ function App:cycle_lens(delta)
     ui.warn("no live diff canvas")
     return
   end
-  return self:set_lens(lens.step(lens.of(surface.state), delta or 1))
+  local current = lens.of(surface.state)
+  -- Leaving a comparison goes back to the lens you entered it from; the
+  -- cycle only ever steps between the three named lenses. A return lens
+  -- that no longer pivots (its branch was deleted meanwhile) is cleared, so
+  -- the next press takes the default exit instead of failing forever.
+  if lens.is_range(current) then
+    local back = surface.state.return_lens
+    if back and lens.valid(back) then
+      local ok = self:set_lens(back)
+      if ok then
+        return ok
+      end
+      surface.state.return_lens = nil
+      return
+    end
+  end
+  return self:set_lens(lens.step(current, delta or 1))
 end
 
 --- Compare the worktree against an arbitrary ref, e.g. `main` or `origin/main`.
