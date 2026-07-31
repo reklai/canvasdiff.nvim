@@ -1667,6 +1667,15 @@ end
           -- BufWinEnter), then decide from every still-valid host across tabs.
           owner:canvas_windows()
           if #owner:host_windows() == 0 then
+            -- `:q` never reaches App:close, so the last-lens memory is
+            -- recorded here as well: the rule is "the lens the review was
+            -- showing when it closed", however it closed. Skipping this
+            -- would leave an OLDER explicit-close record answering the
+            -- next reopen.
+            if owner.state.root then
+              self.last_lens_by_root[owner.state.root] =
+                lens.normalize(lens.of(owner.state))
+            end
             owner:dispose("last_window")
           else
             local side_lease = owner.controllers.sidebar

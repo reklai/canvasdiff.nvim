@@ -1105,6 +1105,37 @@ function()
   vim.fn.delete(root, "rf")
 end
 
+-- The rule is "the lens the review was showing when it closed", HOWEVER it
+-- closed. `:q` on the last canvas window never reaches App:close -- it tears
+-- down through the deferred WinClosed path -- and must update the memory all
+-- the same, or an older explicit-close record would answer the next reopen.
+T["session_ a :q-killed canvas still remembers its lens"] = function()
+  local root = partly_staged_repo()
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    vim.cmd("split")
+    local st = assert(fm.open())
+    local canvas_win = vim.api.nvim_get_current_win()
+    -- Seed the memory with an OLDER close, so this test cannot pass by the
+    -- reopen merely falling through to the configured default.
+    fm.close()
+    st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "all", "sanity: the seeded memory says all")
+    canvas_win = vim.api.nvim_get_current_win()
+    assert(fm.set_lens(model.lens.get("staged")))
+    local surface = assert(st.surface)
+    vim.api.nvim_win_close(canvas_win, false)
+    local disposed = vim.wait(500, function()
+      return not surface:is_alive()
+    end, 10)
+    assert(disposed, "the :q teardown completed")
+    local reopened = assert(fm.open())
+    H.eq(model.lens.of(reopened).id, "staged",
+      "a review killed by :q is remembered like an explicitly closed one")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
 -- The remembered lens is a preference, not a contract -- exactly like a saved
 -- one. A remembered comparison whose branch died between close and reopen
 -- falls back to the configured default with the same warning, instead of
