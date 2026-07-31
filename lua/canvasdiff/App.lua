@@ -2278,6 +2278,8 @@ end
 --- `path`/`owned_surface`/`generation` are owner-only routing arguments used
 --- by the sidebar callback; the public root calls this with no arguments.
 function App:stage_file(direction, path, owned_surface, generation)
+  assert(direction == "stage" or direction == "unstage",
+    "stage_file: direction must be 'stage' or 'unstage', got " .. tostring(direction))
   local surface = owned_surface or active_surface(self)
   if not (surface and surface:is_alive()) then
     local err = "no live diff canvas"

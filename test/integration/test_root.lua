@@ -172,6 +172,37 @@ T["root_ unstage on an unstaged-only file notifies and changes nothing"] = funct
   vim.fn.delete(root, "rf")
 end
 
+-- The one case where the old cycle and the plain verb disagree: the cycle read
+-- a mixed file as "staged first" and would have unstaged it too, while `u` is
+-- strictly index -> HEAD and must leave the worktree half alone.
+T["root_ unstage on a mixed file drops only the staged half"] = function()
+  local root = H.git_fixture({ committed = { ["a.txt"] = "head\n" } })
+  local path = vim.fs.joinpath(root, "a.txt")
+  local f = assert(io.open(path, "w")); f:write("index\n"); f:close()
+  assert(vim.system({ "git", "add", "--", "a.txt" }, { cwd = root }):wait().code == 0)
+  f = assert(io.open(path, "w")); f:write("disk\n"); f:close()
+  in_cwd(root, function(fm, msgs)
+    fm.setup({ watch = { enabled = false }, sidebar = { enabled = false },
+      session = { enabled = false } })
+    assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
+    H.eq(porcelain(root), "MM a.txt\n", "fixture sanity: both halves present")
+    local before = #msgs
+    assert(fm.unstage(), "a mixed file always has a staged half to drop")
+    H.eq(source.show(root, ":0", "a.txt"), "head\n",
+      "u is index -> HEAD only: the staged half is gone")
+    H.eq(porcelain(root), " M a.txt\n",
+      "porcelain XY: staged column cleared, worktree half intact")
+    local h = assert(io.open(path, "r")); local disk = h:read("*a"); h:close()
+    H.eq(disk, "disk\n", "u never writes the worktree")
+    for i = before + 1, #msgs do
+      assert(not msgs[i].msg:find("nothing staged", 1, true),
+        "a mixed file must not be refused: " .. vim.inspect(msgs))
+    end
+    assert(msgs[#msgs].msg:find("unstaged a.txt", 1, true), vim.inspect(msgs))
+  end)
+  vim.fn.delete(root, "rf")
+end
+
 T["root_ stage takes mixed disk state but refuses an unsaved target buffer"] = function()
   local root = H.git_fixture({ committed = { ["a.txt"] = "head\n" } })
   local path = vim.fs.joinpath(root, "a.txt")
