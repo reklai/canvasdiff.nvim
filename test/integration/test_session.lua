@@ -995,11 +995,15 @@ function()
   vim.notify = orig_notify
   assert(ok, err)
 
-  local saw_fallback = false
+  local fallback_warnings = 0
   for _, w in ipairs(warnings) do
-    if w.msg:find("no longer resolves", 1, true) then saw_fallback = true end
+    if w.msg:find("no longer resolves", 1, true) then
+      fallback_warnings = fallback_warnings + 1
+    end
   end
-  assert(saw_fallback, "the fallback explains itself with a warning")
+  assert(fallback_warnings == 1,
+    "the fallback explains itself with exactly one warning, got "
+    .. fallback_warnings)
   vim.fn.delete(root, "rf")
 end
 

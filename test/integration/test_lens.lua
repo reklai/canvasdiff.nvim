@@ -1119,4 +1119,64 @@ T["lens_ range to range keeps the original return lens"] = function()
   end)
 end
 
+-- A return target whose branch died is a REPORTED error: the press warns,
+-- and the record is cleared so the next press takes the default exit
+-- instead of failing forever.
+T["lens_ a dead return target warns once then exits to the default"] = function()
+  local root = range_return_fixture()
+  with_app(root, {}, function(app, win)
+    assert(app:set_branch("topic"))
+    assert(app:set_range("main..topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the range is showing, got: " .. winbar_of(win))
+    local res = vim.system({ "git", "branch", "-D", "topic" },
+      { cwd = root, text = true }):wait()
+    assert(res.code == 0, "git branch -D topic failed: " .. (res.stderr or ""))
+
+    local warned = false
+    local orig_notify = vim.notify
+    vim.notify = function(_, level)
+      if level == vim.log.levels.WARN then warned = true end
+    end
+    local ok = pcall(function() app:cycle_lens(1) end)  -- <Tab>
+    vim.notify = orig_notify
+    assert(ok, "cycle_lens must not raise on a dead return target")
+    assert(warned, "the failed return pivot explains itself with a warning")
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "the failed pivot leaves the range showing, got: " .. winbar_of(win))
+
+    app:cycle_lens(1)  -- <Tab> again
+    local wb = winbar_of(win)
+    assert(wb:find("HEAD → WORKTREE", 1, true),
+      "after the reported error, <Tab> takes the default exit, got: " .. wb)
+  end)
+end
+
+-- A transient refusal -- set_lens's bare-nil STALE_COMPARE shape, no error
+-- reported -- must NOT forget where <Tab> goes: the next press still returns
+-- to the lens the comparison was entered from.
+T["lens_ a transient set_lens refusal keeps the return lens"] = function()
+  local root = range_return_fixture()
+  with_app(root, {}, function(app, win)
+    assert(app:set_lens(lens.get("staged")))
+    assert(app:set_range("main..topic"))
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "sanity: the range is showing, got: " .. winbar_of(win))
+
+    -- One press lands on a transient refusal: bare nil, no error value,
+    -- exactly what set_lens returns when a newer compare superseded this
+    -- pivot mid-flight.
+    app.set_lens = function() return nil end
+    app:cycle_lens(1)  -- <Tab>, refused
+    app.set_lens = nil  -- back to the class method
+    assert(winbar_of(win):find("READ-ONLY  main → topic", 1, true),
+      "the refused pivot leaves the range showing, got: " .. winbar_of(win))
+
+    app:cycle_lens(1)  -- <Tab> again, this one goes through
+    local wb = winbar_of(win)
+    assert(wb:find("HEAD → INDEX (staged)", 1, true),
+      "the return target survives a transient refusal, got: " .. wb)
+  end)
+end
+
 return T

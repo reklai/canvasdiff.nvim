@@ -1146,12 +1146,21 @@ end
   if not sections and lens_from_session then
     local fallback = lens.from_base(config.options.base)
     if not lens.same(fallback, l) then
-      ui.warn(("saved comparison %s no longer resolves — showing %s (%s)")
-        :format(l.label, fallback.label, collect_err))
-      l = fallback
-      sections, collect_err = source.sections(root, l, config.options.context)
+      -- Re-collect BEFORE announcing the fallback: "showing X" is a promise,
+      -- and it must only be made once X actually collected. When the
+      -- fallback fails too, the abort warning below is the only message.
+      local saved_err = collect_err
+      local fallback_sections
+      fallback_sections, collect_err =
+        source.sections(root, fallback, config.options.context)
       if opts._guard and not opts._guard() then
         return nil, STALE_COMPARE
+      end
+      if fallback_sections then
+        ui.warn(("saved comparison %s no longer resolves — showing %s (%s)")
+          :format(l.label, fallback.label, saved_err))
+        l = fallback
+        sections = fallback_sections
       end
     end
   end
@@ -2504,16 +2513,21 @@ function App:cycle_lens(delta)
   local current = lens.of(surface.state)
   -- Leaving a comparison goes back to the lens you entered it from; the
   -- cycle only ever steps between the three named lenses. A return lens
-  -- that no longer pivots (its branch was deleted meanwhile) is cleared, so
-  -- the next press takes the default exit instead of failing forever.
+  -- that no longer pivots for a REPORTED reason (its branch was deleted
+  -- meanwhile) is cleared, so the next press takes the default exit instead
+  -- of failing forever. A transient refusal -- a stale-compare bounce or a
+  -- git hiccup that set_lens reports with no error -- keeps the target, so
+  -- one bad press does not permanently downgrade <Tab>.
   if lens.is_range(current) then
     local back = surface.state.return_lens
     if back and lens.valid(back) then
-      local ok = self:set_lens(back)
+      local ok, err = self:set_lens(back)
       if ok then
         return ok
       end
-      surface.state.return_lens = nil
+      if err ~= nil then
+        surface.state.return_lens = nil
+      end
       return
     end
   end

@@ -380,7 +380,9 @@ Neovim exit, to a small JSON file under `stdpath("state") ..
 "/canvasdiff/"`, keyed by the repo root. Nothing here is a raw line
 number: the saved position is content-based (which line, near what text), so
 it still lands close to the right spot even if the file changed since you
-last looked. Set `session.enabled = false` to turn this off entirely.
+last looked. If a saved comparison points at a branch that no longer exists,
+opening falls back to the default lens — with a message saying so. Set
+`session.enabled = false` to turn this off entirely.
 
 ## Configuration
 
