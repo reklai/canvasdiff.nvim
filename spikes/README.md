@@ -1,5 +1,21 @@
 # Spikes
 
+## Spike: minimap click routing (mouse over the non-focusable float)
+
+**Command:**
+```bash
+nvim --headless --clean -l spikes/2026-08-01-minimap-click-routing/spike.lua
+```
+
+**Verdict:** GO — the non-focusable float is mouse-transparent: the CANVAS
+buffer's mappings receive press/drag/release, `getmousepos()` reports the
+canvas window (`wincol == window width` over the bar; use `winrow - winbar`
+for the bar row, never `line`), and drags keep firing off the float. Headless
+synthesis works in-process via `nvim_input_mouse` + `getchar(0)` +
+calling the mapping callback, and end-to-end via a child `--embed` nvim over
+RPC (a `-l` process alone never dispatches queued mouse input). Full answers
+in [2026-08-01-minimap-click-routing/README.md](2026-08-01-minimap-click-routing/README.md).
+
 ## Spike: treesitter string-parser highlight extraction
 
 **Command:**
