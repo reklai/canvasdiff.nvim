@@ -228,6 +228,35 @@ local LEGACY_ACTIONS = {
   "collapse", "next_file", "prev_file", "next_hunk", "prev_hunk",
 }
 
+-- Actions that once existed and were removed or renamed, with the replacement
+-- to suggest. An override for one merges cleanly into an unused corner of its
+-- context table and simply never installs, so without a report the user's
+-- binding vanishes without a trace -- the same failure mode as the flat shape
+-- above. Adding the next removal is one line here.
+local REMOVED_ACTIONS = {
+  stage_cycle = 'bind "stage" and/or "unstage" instead',
+}
+
+--- One message per override of a removed action in any keymap context, or nil.
+local function removed_keymaps(keymaps)
+  if type(keymaps) ~= "table" then
+    return nil
+  end
+  local found = {}
+  for context, sub in pairs(keymaps) do
+    if type(sub) == "table" then
+      for action, hint in pairs(REMOVED_ACTIONS) do
+        if sub[action] ~= nil then
+          found[#found + 1] = ("keymaps.%s.%s was removed -- %s")
+            :format(context, action, hint)
+        end
+      end
+    end
+  end
+  table.sort(found)
+  return #found > 0 and found or nil
+end
+
 --- Names from the old flat keymaps shape found at the top level, or nil.
 local function legacy_keymaps(keymaps)
   if type(keymaps) ~= "table" then
@@ -263,6 +292,9 @@ function M.setup(opts)
         .. " sidebar = {...}, file = { back = ... } }"
         .. " -- see :help canvasdiff-mappings"
     )
+  end
+  for _, message in ipairs(removed_keymaps(opts.keymaps) or {}) do
+    report(message)
   end
   M.user_opts = vim.deepcopy(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)

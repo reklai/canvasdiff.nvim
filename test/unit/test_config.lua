@@ -101,6 +101,30 @@ T["config_ the new nested shape is not mistaken for the old one"] = function()
     end)
 end
 
+-- Regression guard for the cycle -> two-verbs move. A `stage_cycle` override
+-- merges cleanly into an unused corner of the context table and simply never
+-- installs, so without a report the user's binding vanishes without a trace.
+T["config_ a removed stage_cycle override is reported, not swallowed"] = function()
+  with_setup({ keymaps = { canvas = { stage_cycle = "gs" } } },
+    function(opts, diagnostics)
+      H.eq(#diagnostics, 1, "exactly one diagnostic")
+      assert(diagnostics[1]:match("keymaps%.canvas%.stage_cycle"),
+        "must name the removed action, got: " .. diagnostics[1])
+      assert(diagnostics[1]:match('"stage"') and diagnostics[1]:match('"unstage"'),
+        "and name both replacement verbs, got: " .. diagnostics[1])
+      H.eq(opts.keymaps.canvas.stage, "s", "the new defaults still install")
+      H.eq(opts.keymaps.canvas.unstage, "u", "the new defaults still install")
+    end)
+  with_setup({ keymaps = { sidebar = { stage_cycle = "gs" } } },
+    function(opts, diagnostics)
+      H.eq(#diagnostics, 1, "the sidebar context is checked too")
+      assert(diagnostics[1]:match("keymaps%.sidebar%.stage_cycle"),
+        "and named as sidebar, got: " .. diagnostics[1])
+      H.eq(opts.keymaps.sidebar.stage, "s")
+      H.eq(opts.keymaps.sidebar.unstage, "u")
+    end)
+end
+
 T["config_ user_opts keeps the raw table for health to diff"] = function()
   with_setup({ keymaps = { canvas = { colapse = "<Tab>" } } }, function()
     H.eq(config.user_opts.keymaps.canvas.colapse, "<Tab>",

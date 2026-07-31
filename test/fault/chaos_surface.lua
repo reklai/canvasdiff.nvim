@@ -496,8 +496,9 @@ ACTIONS.unstage = stage_verb("unstage")
 ACTIONS.sidebar_toggle = function(world)
   -- With no review showing this must warn-and-refuse; with one showing it
   -- retires or claims the Surface's one sidebar lease. Either way, never a
-  -- throw -- and the ownership checks after the action assert the lease
-  -- lifecycle left nothing behind.
+  -- throw. The ownership checks after the action cover only Surface-owned
+  -- augroups -- check() deliberately leaves the sidebar lease's own groups
+  -- alone -- so what this action pins is the refuse-don't-throw contract.
   local ok = pcall(function() world.plugin.sidebar() end)
   record(world, "sidebar_toggle")
   assert(ok, "sidebar_toggle threw instead of refusing")

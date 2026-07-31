@@ -226,7 +226,8 @@ On the canvas~
     r                       Refresh the current diff
     s                       Stage this file's changes
     u                       Unstage this file
-    q                       Close the review
+    q                       Back out: leave a stacked comparison, else
+                            close the review
     <leader>lh              Show keybind cheatsheet
 
 In the sidebar~
