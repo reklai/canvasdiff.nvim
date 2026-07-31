@@ -964,8 +964,10 @@ local function canvas_actions(app, surface, st, cfg)
     close      = owned_action(surface, generation, function() app:close() end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
-    stage_cycle = owned_action(surface, generation,
-      function() app:toggle_stage(nil, surface, generation) end),
+    stage      = owned_action(surface, generation,
+      function() app:stage(nil, surface, generation) end),
+    unstage    = owned_action(surface, generation,
+      function() app:unstage(nil, surface, generation) end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
     cycle_next = owned_action(surface, generation, function(owner, win)
@@ -1450,13 +1452,13 @@ end
         end)
         return returned
       end,
-      on_stage_cycle = function(lease, _, path)
+      on_stage = function(lease, _, path, direction)
         if surface.controllers.sidebar ~= lease then
           return false
         end
         local changed = false
         surface:guard(generation, function()
-          changed = self:toggle_stage(path, surface, generation) or false
+          changed = self:stage_file(direction, path, surface, generation) or false
         end)
         return changed
       end,
@@ -2266,11 +2268,16 @@ end
 
 --- Stage or unstage the file under the canvas cursor.
 ---
+--- `direction` is "stage" or "unstage". The old auto-cycle decided this from
+--- the file's XY state; two explicit verbs mean a keypress never surprises by
+--- picking the other direction on a mixed file. A verb with nothing to do
+--- reports itself as information and returns false without touching Git.
+---
 --- Git is the irreversible boundary: all ownership checks happen before it,
 --- and every failure after it says explicitly that the index already changed.
 --- `path`/`owned_surface`/`generation` are owner-only routing arguments used
 --- by the sidebar callback; the public root calls this with no arguments.
-function App:toggle_stage(path, owned_surface, generation)
+function App:stage_file(direction, path, owned_surface, generation)
   local surface = owned_surface or active_surface(self)
   if not (surface and surface:is_alive()) then
     local err = "no live diff canvas"
@@ -2338,7 +2345,16 @@ function App:toggle_stage(path, owned_surface, generation)
     return nil, err
   end
 
-  local action = file.unstaged and "stage" or "unstage"
+  if direction == "stage" and not file.unstaged then
+    ui.notify("already staged")
+    return false
+  end
+  if direction == "unstage" and not file.staged then
+    ui.notify("nothing staged")
+    return false
+  end
+
+  local action = direction
   if action == "stage" and source.buffer_modified(st.root, file) then
     local err = "cannot stage " .. file.path .. ": its loaded buffer has unsaved changes"
     ui.warn(err)
@@ -2402,6 +2418,16 @@ function App:toggle_stage(path, owned_surface, generation)
   restore_file_positions(st, positions)
   ui.notify((action == "stage" and "staged " or "unstaged ") .. file.path)
   return true
+end
+
+--- Stage the file under the canvas cursor (or `path`).
+function App:stage(path, owned_surface, generation)
+  return self:stage_file("stage", path, owned_surface, generation)
+end
+
+--- Unstage the file under the canvas cursor (or `path`). Never writes disk.
+function App:unstage(path, owned_surface, generation)
+  return self:stage_file("unstage", path, owned_surface, generation)
 end
 
 --- Point the canvas at a different comparison, opening it if it isn't showing.

@@ -34,8 +34,11 @@ return {
   toggle_base = function()
     return app:toggle_base()
   end,
-  toggle_stage = function()
-    return app:toggle_stage()
+  stage = function()
+    return app:stage()
+  end,
+  unstage = function()
+    return app:unstage()
   end,
   --- Return from a jump excursion into the live review's canvas.
   jump_back = function(opts)

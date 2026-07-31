@@ -51,10 +51,10 @@ emphasis on changed spans within a hunk's paired `-`/`+` lines.
 - Press **r** to refresh: re-scan the repo and splice in whatever changed, without
   moving what you were reading. (`watch` already does this on save and focus — `r` is
   for when you want it now.)
-- Press **s** on a file in the canvas or sidebar to move that whole file between
-  unstaged and staged. Any unstaged content is staged; a staged-only file is
-  unstaged without changing its worktree. A mixed file is staged first, so repeated
-  presses form a predictable stage → unstage cycle.
+- Press **s** on a file in the canvas or sidebar to stage every unstaged change in
+  that file; press **u** to unstage it without changing its worktree. Each key does
+  one thing: when there is nothing for it to do it says so — `already staged` or
+  `nothing staged` — and changes nothing.
 - Press `<C-n>` / `<C-p>` to jump straight to the next/previous file's diff,
   wrapping around at either end. Focus stays in the canvas.
 
@@ -405,7 +405,8 @@ require("canvasdiff").setup({
       cycle_next = "<C-n>",  -- scroll to the next file's diff (wraps)
       cycle_prev = "<C-p>",  -- scroll to the previous file's diff (wraps)
       refresh    = "r",      -- re-scan, splice in what changed, keep your place
-      stage_cycle = "s",     -- stage this file, or unstage it when staged-only
+      stage      = "s",      -- stage this file's changes
+      unstage    = "u",      -- unstage this file (never touches the worktree)
       lens_next  = "<Tab>",  -- cycle the lens forward (all / unstaged / staged)
       lens_prev  = "<S-Tab>",-- and back
       close      = "q",      -- close the canvas
@@ -413,7 +414,8 @@ require("canvasdiff").setup({
     },
     sidebar = {
       select = { "<CR>", "za", "c", "<2-LeftMouse>" }, -- scroll here / fold a dir
-      stage_cycle = "s",     -- same file-level stage cycle
+      stage   = "s",         -- same file-level stage
+      unstage = "u",         -- same file-level unstage
       close  = "q",          -- close the sidebar (canvas stays open)
       help   = "<leader>lh", -- show the keybind cheatsheet
     },
@@ -487,14 +489,16 @@ have about a second between taps).
 | `next_hunk` / `prev_hunk` | `]h` / `[h` | tap **]** then **h** / **[** then **h** | Cursor to the next/previous hunk header, clamping. A folded file counts as one stop; takes a count |
 | `cycle_next` / `cycle_prev` | `<C-n>` / `<C-p>` | hold **Ctrl** + **N** / **P** | Scroll to the next/previous file's diff, wrapping. Lands on folded files too; takes a count |
 | `refresh` | `r` | **r** | Refresh the current diff |
-| `stage_cycle` | `s` | **s** | Stage every unstaged change in this file; if it is staged-only, unstage it |
+| `stage` | `s` | **s** | Stage every unstaged change in this file |
+| `unstage` | `u` | **u** | Unstage this file; never touches the worktree |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens forward / back: all ⇄ unstaged ⇄ staged |
 | `close` | `q` | **q** | Close the canvas, restore the previous buffer |
 
 | Sidebar | Default | How you press it | Action |
 | --- | --- | --- | --- |
 | `select` | `<CR>`, `za`, `c`, `<2-LeftMouse>` | **Enter**, **z** then **a**, just **c**, or **double-click** | Scroll the canvas to the file (without unfolding it), or fold the directory — which folds its files on the canvas too |
-| `stage_cycle` | `s` | **s** | Stage or unstage this file with the same cycle as the canvas |
+| `stage` | `s` | **s** | Stage this file's changes, exactly as on the canvas |
+| `unstage` | `u` | **u** | Unstage this file, exactly as on the canvas |
 | `close` | `q` | **q** | Close the sidebar (canvas stays open) |
 
 | File buffer (during a jump) | Default | How you press it | Action |

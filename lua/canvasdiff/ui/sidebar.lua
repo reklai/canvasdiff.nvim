@@ -1014,6 +1014,28 @@ local function create_view(lease, tab, host_win, observed)
       error("sidebar open was superseded while setting window options", 0)
     end
 
+    --- One handler per explicit verb; both route the row under the cursor
+    --- through the host's `on_stage` callback with the direction attached.
+    local function stage_verb(direction)
+      return function()
+        if not view_active(lease, view) then
+          return
+        end
+        local ok_cursor, cursor = pcall(vim.api.nvim_win_get_cursor, view.win)
+        local entry = ok_cursor and view.entries[cursor[1]] or nil
+        if not entry then
+          return
+        end
+        if entry.kind == "dir" then
+          notifications.warn("directory rows cannot be staged or unstaged")
+          return
+        end
+        local callback = lease.callbacks and lease.callbacks.on_stage
+        if callback then
+          callback(lease, lease.state, entry.path, direction)
+        end
+      end
+    end
     local actions = {
       select = function()
         if view_active(lease, view) then
@@ -1030,24 +1052,8 @@ local function create_view(lease, tab, host_win, observed)
           cheatsheet.toggle()
         end
       end,
-      stage_cycle = function()
-        if not view_active(lease, view) then
-          return
-        end
-        local ok_cursor, cursor = pcall(vim.api.nvim_win_get_cursor, view.win)
-        local entry = ok_cursor and view.entries[cursor[1]] or nil
-        if not entry then
-          return
-        end
-        if entry.kind == "dir" then
-          notifications.warn("directory rows cannot be staged or unstaged")
-          return
-        end
-        local callback = lease.callbacks and lease.callbacks.on_stage_cycle
-        if callback then
-          callback(lease, lease.state, entry.path)
-        end
-      end,
+      stage = stage_verb("stage"),
+      unstage = stage_verb("unstage"),
     }
     for _, mapping in ipairs(keys.resolved("sidebar", config.options.keymaps)) do
       local callback = actions[mapping.action]

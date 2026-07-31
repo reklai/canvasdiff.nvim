@@ -38,11 +38,13 @@ K.specs = {
 
   { ctx = "canvas", action = "refresh", group = "Canvas",
     desc = "Refresh the current diff" },
-  { ctx = "canvas", action = "stage_cycle", group = "Canvas",  desc = "Stage or unstage this file" },
+  { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this file's changes" },
+  { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this file" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Close the canvas, restore the previous buffer" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
-  { ctx = "sidebar", action = "stage_cycle", group = "Sidebar", desc = "Stage or unstage this file" },
+  { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage this file's changes" },
+  { ctx = "sidebar", action = "unstage", group = "Sidebar", desc = "Unstage this file" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
 
   { ctx = "canvas",  action = "help", group = "Canvas",  desc = "Show keybind cheatsheet" },

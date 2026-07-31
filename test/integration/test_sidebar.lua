@@ -598,7 +598,7 @@ T["sidebar_integration toggle from inside the sidebar redirects instead of throw
   vim.api.nvim_set_current_dir(orig_cwd)
 end
 
-T["sidebar_integration stage_cycle declines directories and mutates file rows"] = function()
+T["sidebar_integration stage and unstage decline directories and mutate file rows"] = function()
   local orig_cwd = vim.fn.getcwd()
   local root = H.git_fixture({
     committed = { ["src/a.txt"] = "head\n" },
@@ -635,6 +635,12 @@ T["sidebar_integration stage_cycle declines directories and mutates file rows"] 
     local file = assert(require("canvasdiff.source").changed_files(root)[1])
     assert(file.staged and not file.unstaged, vim.inspect(file))
     H.eq(st.lens.id, "staged", "sidebar follows the same App-owned lens policy")
+
+    vim.api.nvim_win_set_cursor(side_win, { 2, 0 }) -- src/a.txt, staged lens
+    vim.api.nvim_feedkeys(vim.keycode("u"), "x", false)
+    local reversed = assert(require("canvasdiff.source").changed_files(root)[1])
+    assert(reversed.unstaged and not reversed.staged, vim.inspect(reversed))
+    H.eq(st.lens.id, "unstaged", "u from the sidebar unstages through the same policy")
   end, debug.traceback)
   vim.notify = real_notify
   pcall(fm.close)
@@ -644,7 +650,7 @@ T["sidebar_integration stage_cycle declines directories and mutates file rows"] 
   assert(ok, err)
 end
 
-T["sidebar_integration stage_cycle routes recreated rename-source row exactly"] = function()
+T["sidebar_integration stage routes recreated rename-source row exactly"] = function()
   local orig_cwd = vim.fn.getcwd()
   local root = H.git_fixture({ committed = { ["old.txt"] = "rename body\n" } })
   assert(vim.system({ "git", "mv", "old.txt", "new.txt" }, { cwd = root }):wait().code == 0)

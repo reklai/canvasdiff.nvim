@@ -182,7 +182,7 @@ T["concurrent_ mutating one review leaves the other untouched"] = function()
   end)
 end
 
-T["concurrent_ stage_cycle and both watchers stay scoped to the focused review"] = function()
+T["concurrent_ stage and both watchers stay scoped to the focused review"] = function()
   with_two_reviews(function(ctx)
     local source = require("canvasdiff.source")
     local before_b = vim.deepcopy(ctx.b.state.sections)
@@ -193,7 +193,7 @@ T["concurrent_ stage_cycle and both watchers stay scoped to the focused review"]
       "the production path has two independent watcher leases")
 
     vim.api.nvim_set_current_win(ctx.a.win)
-    assert(ctx.fm.toggle_stage())
+    assert(ctx.fm.stage())
     local a_file = assert(source.changed_files(ctx.a.root)[1])
     local b_file = assert(source.changed_files(ctx.b.root)[1])
     assert(a_file.staged and not a_file.unstaged, vim.inspect(a_file))

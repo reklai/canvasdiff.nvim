@@ -111,7 +111,11 @@ M.defaults = {
       -- render_all does not -- measured, both ways. A second verb that is strictly
       -- worse than two keys you already press is not an escape hatch, it is surface.
       refresh    = "r",
-      stage_cycle = "s",
+      -- Two explicit verbs, not a cycle: `s` only ever stages and `u` only
+      -- ever unstages, so a keypress on a mixed file never picks a direction
+      -- for you. A verb with nothing to do says so instead of acting.
+      stage      = "s",
+      unstage    = "u",
       -- Tab forward through the lenses, Shift+Tab back. One physical key for the
       -- whole "what am I looking at" axis, and a slip between the two lands on the
       -- other direction of the same action rather than on something unrelated.
@@ -140,7 +144,8 @@ M.defaults = {
       -- No <Tab> here: on the canvas Tab cycles the lens, and the same key must
       -- not fold in one window and change the comparison in the other.
       select = { "<CR>", "za", "c", "<2-LeftMouse>" },
-      stage_cycle = "s",
+      stage   = "s",
+      unstage = "u",
       close  = "q",
       help   = "<leader>lh",
     },

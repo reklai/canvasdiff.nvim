@@ -333,20 +333,28 @@ ACTIONS.write_file = function(world)
   record(world, "write_file", name)
 end
 
+-- Window actions draw and record BEFORE their live-state guard. Window count
+-- is editor state that scheduled teardown can change between two otherwise
+-- identical runs, and a draw (or a record) that happens in one run but not
+-- the other desynchronizes every action picked after it, breaking seed
+-- replay for reasons that have nothing to do with the seed.
+
 ACTIONS.split_window = function(world)
+  local vertical = world.rng.chance(50)
   if #vim.api.nvim_tabpage_list_wins(0) >= 4 then
-    return
+    return record(world, "split_window", "noop")
   end
-  pcall(vim.cmd, world.rng.chance(50) and "split" or "vsplit")
+  pcall(vim.cmd, vertical and "split" or "vsplit")
   record(world, "split_window")
 end
 
 ACTIONS.close_window = function(world)
   local wins = vim.api.nvim_tabpage_list_wins(0)
+  local victim = wins[world.rng.next(#wins) + 1]
   if #wins <= 1 then
-    return
+    return record(world, "close_window", "noop")
   end
-  pcall(vim.api.nvim_win_close, world.rng.pick(wins), true)
+  pcall(vim.api.nvim_win_close, victim, true)
   record(world, "close_window")
 end
 
@@ -420,7 +428,7 @@ end
 ACTIONS.git_commit = function(world)
   -- Ranges need history that actually moves: advance a pooled file and commit
   -- everything, index changes included. `--allow-empty` keeps the action
-  -- total when a stage_cycle already committed the worktree's whole story.
+  -- total when a stage already committed the worktree's whole story.
   world.revision = world.revision + 1
   local name = world.rng.pick({ "a.txt", "b.txt", "c.txt" })
   local file = io.open(vim.fs.joinpath(world.dir, name), "wb")
@@ -461,20 +469,29 @@ ACTIONS.set_branch = function(world)
   assert(ok, "set_branch threw instead of refusing")
 end
 
-ACTIONS.stage_cycle = function(world)
-  -- Drive staging the way a user does: from inside a canvas window with the
-  -- cursor on some row. Without one -- or on a READ-ONLY comparison -- the
-  -- entry point must refuse.
-  local win = canvas_window()
-  if win then
-    vim.api.nvim_set_current_win(win)
-    local rows = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
-    pcall(vim.api.nvim_win_set_cursor, win, { world.rng.next(rows) + 1, 0 })
+-- Drive staging the way a user does: from inside a canvas window with the
+-- cursor on some row. Without one -- or on a READ-ONLY comparison, or with
+-- nothing for the verb to do -- the entry point must refuse, not throw.
+-- The cursor row is drawn whether or not a canvas is showing, for the same
+-- replay-determinism reason as the window actions above.
+local function stage_verb(verb)
+  return function(world)
+    local win = canvas_window()
+    local rows = win
+      and vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win)) or 1
+    local row = world.rng.next(rows) + 1
+    if win then
+      vim.api.nvim_set_current_win(win)
+      pcall(vim.api.nvim_win_set_cursor, win, { row, 0 })
+    end
+    local ok = pcall(function() world.plugin[verb]() end)
+    record(world, verb)
+    assert(ok, verb .. " threw instead of refusing")
   end
-  local ok = pcall(function() world.plugin.toggle_stage() end)
-  record(world, "stage_cycle")
-  assert(ok, "stage_cycle threw instead of refusing")
 end
+
+ACTIONS.stage = stage_verb("stage")
+ACTIONS.unstage = stage_verb("unstage")
 
 ACTIONS.session_reopen = function(world)
   -- A restart in miniature. Closing SAVES the session -- deliberately not

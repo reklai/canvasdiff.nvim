@@ -886,14 +886,20 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   config.setup({})
 end
 
-T["keys_stage_cycle defaults to s on canvas and sidebar and remains configurable"] = function()
-  H.eq(find(keys.resolved("canvas", defaults()), "stage_cycle"), { "s" })
-  H.eq(find(keys.resolved("sidebar", defaults()), "stage_cycle"), { "s" })
+T["keys_stage defaults to s and unstage to u on canvas and sidebar, both configurable"] = function()
+  H.eq(find(keys.resolved("canvas", defaults()), "stage"), { "s" })
+  H.eq(find(keys.resolved("sidebar", defaults()), "stage"), { "s" })
+  H.eq(find(keys.resolved("canvas", defaults()), "unstage"), { "u" })
+  H.eq(find(keys.resolved("sidebar", defaults()), "unstage"), { "u" })
   local km = defaults()
-  km.canvas.stage_cycle = "gs"
-  km.sidebar.stage_cycle = false
-  H.eq(find(keys.resolved("canvas", km), "stage_cycle"), { "gs" })
-  H.eq(find(keys.resolved("sidebar", km), "stage_cycle"), {})
+  km.canvas.stage = "gs"
+  km.sidebar.stage = false
+  km.canvas.unstage = "gu"
+  km.sidebar.unstage = false
+  H.eq(find(keys.resolved("canvas", km), "stage"), { "gs" })
+  H.eq(find(keys.resolved("sidebar", km), "stage"), {})
+  H.eq(find(keys.resolved("canvas", km), "unstage"), { "gu" })
+  H.eq(find(keys.resolved("sidebar", km), "unstage"), {})
 end
 
 -- --- installed maps ----------------------------------------------------

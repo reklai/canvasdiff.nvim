@@ -64,7 +64,8 @@ there:
     ]f  [f          next / previous file
     c               collapse or expand the file under the cursor
     <Tab>           next lens (what you are comparing)
-    s               stage this file, or unstage it when staged-only
+    s               stage this file's changes
+    u               unstage this file
     <CR>            jump to this line in the real file
     CTRL-Space      (in the real file) come back to the canvas
     q               close the review
@@ -125,7 +126,7 @@ Commit ranges compare committed content and are read-only:
 
 An omitted endpoint means HEAD: `main..` is `main..HEAD`, and `...topic` is
 `HEAD...topic`. The winbar breadcrumb shows the refs you asked for, marked
-READ-ONLY. File jumps and stage cycling are declined in a range lens.
+READ-ONLY. File jumps and staging are declined in a range lens.
 Press <Tab> or <S-Tab> to leave a range: the canvas returns to the comparison
 you were looking through when you entered it, or to HEAD vs WORKTREE when the
 canvas opened straight into the range. `q` closes the review and restores the
@@ -207,25 +208,27 @@ On the canvas~
     CTRL-N  /  CTRL-P       Cycle to the next / previous file
     <Tab>  /  <S-Tab>       Next / previous lens
     r                       Refresh the current diff
-    s                       Stage this file / unstage when staged-only
+    s                       Stage this file's changes
+    u                       Unstage this file
     q                       Close the review
     <leader>lh              Show keybind cheatsheet
 
 In the sidebar~
 
     <CR>, za, c, <2-LeftMouse>      Select this entry
-    s                               Stage / unstage this file
+    s                               Stage this file's changes
+    u                               Unstage this file
     q                               Close the review
     <leader>lh                      Show keybind cheatsheet
 
 Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
 cursor, and stealing it would make the tree impossible to browse.
 
-Stage cycling is file-level. Any unstaged content is staged; staged-only
-content is unstaged without changing the worktree, so repeated `s` presses
-move back and forth. Mixed state stages first. Staging is declined when a
-modified loaded buffer refers to the file, so unsaved text is never replaced
-by disk content.
+Staging is file-level and each key is one explicit verb: `s` stages any
+unstaged content in the file; `u` unstages staged content without changing
+the worktree. A verb with nothing to do reports `already staged` or `nothing
+staged` and performs no change. Staging is declined when a modified loaded
+buffer refers to the file, so unsaved text is never replaced by disk content.
 
 In a file you jumped to~
                                                           *canvasdiff-jump-back*
@@ -271,13 +274,15 @@ default. >lua
           lens_next  = "<Tab>",
           lens_prev  = "<S-Tab>",
           refresh    = "r",
-          stage_cycle = "s",
+          stage      = "s",
+          unstage    = "u",
           close      = "q",
           help       = "<leader>lh",
         },
         sidebar = {
           select = { "<CR>", "za", "c", "<2-LeftMouse>" },
-          stage_cycle = "s",
+          stage   = "s",
+          unstage = "u",
           close  = "q",
           help   = "<leader>lh",
         },
@@ -401,8 +406,10 @@ canvasdiff.set_branch({ref})                        *canvasdiff.set_branch()*
 canvasdiff.set_range({range})                        *canvasdiff.set_range()*
         Compare an `A..B` or `A...B` committed range.
 
-canvasdiff.toggle_stage()                      *canvasdiff.toggle_stage()*
-        Stage or unstage the file selected in the canvas/sidebar.
+canvasdiff.stage()                                    *canvasdiff.stage()*
+canvasdiff.unstage()                                *canvasdiff.unstage()*
+        Stage or unstage the file selected in the canvas/sidebar. A verb
+        with nothing to do notifies and returns false without touching Git.
 
 canvasdiff.set_base({base})                           *canvasdiff.set_base()*
 canvasdiff.toggle_base()                           *canvasdiff.toggle_base()*
