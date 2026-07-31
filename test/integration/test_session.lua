@@ -1136,6 +1136,62 @@ T["session_ a :q-killed canvas still remembers its lens"] = function()
   vim.fn.delete(root, "rf")
 end
 
+-- App:open's hostless-review sweep is a teardown path too: `:q | CanvasDiff`
+-- in one tick disposes the review at the sweep, and the queued WinClosed
+-- recheck then no-ops on the disposed surface -- so the sweep itself must
+-- record the memory, or that lens is lost.
+--
+-- The genuine "recheck queued but unfired at sweep time" ordering is not
+-- constructible headlessly: collection shells out through
+-- vim.system():wait(), whose event pump runs the scheduled recheck before
+-- open ever reaches the sweep. Suppressing WinClosed instead produces the
+-- exact state the sweep tests for -- a live review with zero windows -- with
+-- no recheck queued at all, which from the sweep's side is the same review.
+T["session_ the hostless-review sweep in open records the lens too"] =
+function()
+  local root = partly_staged_repo()
+  in_repo(root, { session = { enabled = false } }, function(fm)
+    -- A plain window the review never owns: the reopen below must not start
+    -- from the orphaned sidebar (open bails out from a sidebar window whose
+    -- tab has no canvas view).
+    local plain_win = vim.api.nvim_get_current_win()
+    vim.cmd("split")
+    local st = assert(fm.open())
+    -- Seed the memory with an OLDER close, so the final assertion cannot
+    -- pass by the reopen merely falling through to the configured default.
+    fm.close()
+    st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "all", "sanity: the seeded memory says all")
+    assert(fm.set_lens(model.lens.get("staged")))
+    local surface = assert(st.surface)
+    local canvas_win = vim.api.nvim_get_current_win()
+
+    local saved_ei = vim.o.eventignore
+    vim.o.eventignore = "WinClosed"
+    local ok, close_err = pcall(vim.api.nvim_win_close, canvas_win, false)
+    vim.o.eventignore = saved_ei
+    assert(ok, close_err)
+    H.eq(surface:is_alive(), true, "sanity: no teardown has run yet")
+    H.eq(#surface:host_windows(), 0, "sanity: the review is hostless")
+    vim.api.nvim_set_current_win(plain_win)
+
+    -- This open reaches the sweep with the hostless review still live. The
+    -- memory tier is read BEFORE the sweep runs, so this review still shows
+    -- the seeded lens -- the sweep's recording answers the NEXT open.
+    st = assert(fm.open())
+    H.eq(surface:is_alive(), false, "the sweep retired the hostless review")
+    H.eq(model.lens.of(st).id, "all",
+      "sanity: this open read the memory before the sweep recorded")
+    -- Open-over-open replaces the current review WITHOUT recording (its
+    -- close never ran), so `staged` here can only have come from the sweep.
+    st = assert(fm.open())
+    H.eq(model.lens.of(st).id, "staged",
+      "a review retired by the sweep is remembered like any other close")
+    fm.close()
+  end)
+  vim.fn.delete(root, "rf")
+end
+
 -- The remembered lens is a preference, not a contract -- exactly like a saved
 -- one. A remembered comparison whose branch died between close and reopen
 -- falls back to the configured default with the same warning, instead of

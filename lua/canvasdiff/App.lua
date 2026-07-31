@@ -1185,8 +1185,13 @@ function App:open(opts)
   -- lens instead of failing the open -- same posture as the paged fallback: a
   -- recalled lens that cannot be collected is a reason to fall back, not to
   -- fail the review. An EXPLICIT lens still errors; that is typo feedback.
+  -- Tier 5 -- an older session's `base` string -- counts as remembered too,
+  -- so the flag means exactly "the lens was recalled, not requested". (A
+  -- base only ever translates to a named lens, which always resolves, so
+  -- the fallback below never actually fires for that tier.)
   local lens_remembered = opts.lens == nil and opts.base == nil
-    and (remembered ~= nil or (sess ~= nil and lens.valid(sess.lens)))
+    and (remembered ~= nil
+      or (sess ~= nil and (lens.valid(sess.lens) or sess.base ~= nil)))
     or false
 
   -- Transaction boundary: collection and model construction finish before
@@ -1255,7 +1260,7 @@ end
         return nil, STALE_COMPARE
       end
       if fallback_sections then
-        ui.warn(("saved comparison %s no longer resolves — showing %s (%s)")
+        ui.warn(("remembered comparison %s no longer resolves — showing %s (%s)")
           :format(l.label, fallback.label, saved_err))
         l = fallback
         sections = fallback_sections
@@ -1276,8 +1281,14 @@ end
   -- Retire any review whose last window has already gone. Its WinClosed
   -- recheck is queued but has not run, and leaving a hostless review live
   -- would let it answer for commands issued from windows it does not own.
+  -- This sweep is a teardown path like any other, so it records the last-lens
+  -- memory too: the queued recheck will find the surface disposed and no-op,
+  -- meaning its own recording never runs for a review swept here.
   for _, surface in ipairs(live_surfaces(self)) do
     if #surface:canvas_windows() == 0 and #surface:host_windows() == 0 then
+      if surface.state.root then
+        self.last_lens_by_root[surface.state.root] = lens.of(surface.state)
+      end
       surface:dispose("last_window")
     end
   end
@@ -1673,8 +1684,7 @@ end
             -- would leave an OLDER explicit-close record answering the
             -- next reopen.
             if owner.state.root then
-              self.last_lens_by_root[owner.state.root] =
-                lens.normalize(lens.of(owner.state))
+              self.last_lens_by_root[owner.state.root] = lens.of(owner.state)
             end
             owner:dispose("last_window")
           else
@@ -1789,13 +1799,14 @@ function App:close()
   -- review alive when another tab still owns a view of the same canvas.
   local st = surface.state
   -- Remember the comparison this review is showing, so a reopen returns to
-  -- it (the in-memory tier of App:open's precedence chain). A normalized
-  -- COPY, never the live table: the state graph dies with the Surface, and a
-  -- later pivot in a still-alive review must not mutate the record. Ranges
-  -- are remembered too -- a dead ref degrades at open, same as a saved one.
+  -- it (the in-memory tier of App:open's precedence chain). lens.of returns
+  -- a normalized COPY, never the live table: the state graph dies with the
+  -- Surface, and a later pivot in a still-alive review must not mutate the
+  -- record. Ranges are remembered too -- a dead ref degrades at open, same
+  -- as a saved one.
   local function remember_lens()
     if st.root then
-      self.last_lens_by_root[st.root] = lens.normalize(lens.of(st))
+      self.last_lens_by_root[st.root] = lens.of(st)
     end
   end
   local tab = vim.api.nvim_get_current_tabpage()
