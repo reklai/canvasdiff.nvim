@@ -721,8 +721,10 @@ T["lens_branch control-path pure rename renders as one safe canvas row"] = funct
   }, "raw NUL-delimited rename identity reaches the model intact")
 
   local st = canvas.open(sections, {})
+  -- `git mv` stages the rename, and a branch lens overlays porcelain status,
+  -- so the header carries the staged mark -- the same fact its sidebar row shows.
   H.eq(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false), {
-    "▎ old\\tline\\n.txt → new\\tline\\n.txt  (renamed)",
+    "▎ old\\tline\\n.txt → new\\tline\\n.txt  (renamed) ●",
   }, "literal tabs/newlines cannot split the one-row canvas section")
 
   vim.fn.delete(root, "rf")
@@ -889,6 +891,41 @@ T["lens_xy the stage mark sits before the stale marker"] = function()
     sidebar.build_entries(secs, {}, { ["a.txt"] = true }, { ["a.txt"] = true }))
   H.eq(lines, { "▸ a.txt  +1 −0 ●○" .. render.glyphs.stale },
     "so the trailing ● keeps meaning exactly one thing in both windows")
+end
+
+-- A committed range is READ-ONLY, and stage state describes the WORKTREE -- it must
+-- never appear through one. The mechanism is upstream: plan_files' range branch
+-- never reads porcelain status, so range sections carry no staged/unstaged facts
+-- at all, and every renderer that consumes them -- sidebar row, expanded header,
+-- folded placeholder -- shows nothing, for the same reason.
+T["lens_xy a committed range shows no stage state on headers or sidebar rows"] = function()
+  local root = H.git_fixture({ committed = { ["f.txt"] = "before\n" } })
+  local function sh(c) assert(vim.system(c, { cwd = root }):wait().code == 0) end
+  local function write(b)
+    local f = assert(io.open(vim.fs.joinpath(root, "f.txt"), "w")); f:write(b); f:close()
+  end
+  sh({ "git", "branch", "left" })
+  write("after\n")
+  sh({ "git", "add", "f.txt" })
+  sh({ "git", "commit", "-m", "right side" })
+  sh({ "git", "branch", "right" })
+  -- The SAME path also has stage state in the worktree right now; the range
+  -- comparison must not leak it onto its rows.
+  write("staged again\n")
+  sh({ "git", "add", "f.txt" })
+
+  local sections = assert(source.sections(root, lens.range("left", "right", ".."), 3))
+  H.eq(#sections, 1)
+  H.eq(sections[1].staged, nil, "range sections carry no index fact")
+  H.eq(sections[1].unstaged, nil, "nor a worktree one")
+
+  H.eq(render.section_lines(sections[1])[1], "▎ f.txt  (+1 −1)",
+    "no marks on the expanded header")
+  H.eq(render.placeholder(sections[1]), "▸ f.txt  (1 hunks, +1 −1)",
+    "and none on the folded placeholder")
+  H.eq(sidebar.render_lines(sidebar.build_entries(sections, {})),
+    { "  f.txt  +1 −1" }, "exactly what the sidebar row shows: nothing")
+  vim.fn.delete(root, "rf")
 end
 
 -- --- the pivot is non-destructive ----------------------------------------

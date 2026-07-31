@@ -131,6 +131,33 @@ local function apply_section_hl(buf, start_row, section, collapsed, read_row)
   read_row = read_row or function(row0)
     return vim.api.nvim_buf_get_lines(buf, row0, row0 + 1, false)[1]
   end
+  -- The trailing marker spans of the header/placeholder at `row`: the sidebar's
+  -- stage marks and, on a placeholder, the stale mark. The STAGE facts come from
+  -- the section (the same truth the line builder consumed); STALE is read back out
+  -- of the line that was just written, rather than taken as a parameter -- every
+  -- caller here runs after the splice, so the highlight cannot disagree with the
+  -- text. Reading it back is only unambiguous BECAUSE the stage suffix is known:
+  -- staged and stale draw the same `●`, so "does the line end with the stale
+  -- glyph" alone would misread a staged-only row.
+  local function marker_mark_ids(row, sink)
+    local line = read_row(row) or ""
+    local stage = render.stage_mark(section.staged, section.unstaged)
+    local tail = (stage ~= "" and (" " .. stage) or "") .. glyphs.stale
+    local stale = #line >= #tail and line:sub(-#tail) == tail
+    -- Colour spans, plus a bold layer on stale. The bold is the part that does not
+    -- depend on the colourscheme -- see R.marker_spans for why that matters on the
+    -- sidebar; this keeps the canvas markers consistent with it. Priority above
+    -- the header mark (100), whose fill covers this range too.
+    for _, span in ipairs(render.marker_spans(line, section.staged, section.unstaged, stale)) do
+      sink[#sink + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, span[1], {
+        end_row = row,
+        end_col = span[2],
+        hl_group = span[3],
+        priority = span[3] == "CanvasDiffStaleEmphasis" and 102 or 101,
+      })
+    end
+  end
+
   if collapsed then
     local ids = { vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, 0, {
       end_row = start_row + 1,
@@ -139,24 +166,7 @@ local function apply_section_hl(buf, start_row, section, collapsed, read_row)
       hl_eol = true,
       priority = 100,
     }) }
-    -- Pick the stale marker out of the line that was just written, rather than
-    -- taking it as a parameter: every caller here runs after the splice, so reading
-    -- it back means the highlight cannot disagree with the text. Priority above the
-    -- header mark, whose hl_eol fill covers this range too.
-    local line = read_row(start_row) or ""
-    if #line >= #glyphs.stale and line:sub(-#glyphs.stale) == glyphs.stale then
-      -- Colour, then a bold layer over the same range. The bold is the part that does
-      -- not depend on the colourscheme -- see R.marker_spans for why that matters on
-      -- the sidebar, and this keeps the canvas placeholder's marker consistent with it.
-      for group, prio in pairs({ CanvasDiffStale = 101, CanvasDiffStaleEmphasis = 102 }) do
-        ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, start_row, #line - #glyphs.stale, {
-          end_row = start_row,
-          end_col = #line,
-          hl_group = group,
-          priority = prio,
-        })
-      end
-    end
+    marker_mark_ids(start_row, ids)
     return ids
   end
   local marks = render.section_hl(section)
@@ -183,6 +193,12 @@ local function apply_section_hl(buf, start_row, section, collapsed, read_row)
     line_hl_group = "CanvasDiffFileBar",
     priority = 99,
   })
+
+  -- The expanded header's stage marks, sitting ON the bar. Same spans as the
+  -- sidebar row; never a stale span here, because an expanded section is on
+  -- screen and fold.stale is false by construction for anything you can see
+  -- (resplice clears folded_seen the moment a section comes back).
+  marker_mark_ids(start_row, ids)
 
   -- NO `hl_eol`, and this is the single biggest visual change in the canvas.
   --

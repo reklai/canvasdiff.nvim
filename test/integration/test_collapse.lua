@@ -253,4 +253,68 @@ T["collapse_ replace_section keeps a collapsed section collapsed"] = function()
   H.eq(line, render.placeholder(new_sec, true), "placeholder text reflects the NEW counts")
 end
 
+-- The header markers are real characters sitting ON the tinted CanvasDiffFileBar
+-- row, so their colour must be col-ranged and sit above both the bar (99) and the
+-- header's own hl_eol group (100), or the tint swallows them.
+T["collapse_ stage markers are highlighted on the header bar and the placeholder"] = function()
+  local sec = model.build_section("f.txt", "a\n", "b\n", "M", 3,
+    { staged = "M", unstaged = "M" })
+  local st = canvas.open({ sec }, {})
+  local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
+
+  --- Marker marks on row0, keyed by group, plus whether the row carries the bar.
+  local MARKER_GROUPS = {
+    CanvasDiffStaged = true, CanvasDiffUnstaged = true,
+    CanvasDiffStale = true, CanvasDiffStaleEmphasis = true,
+  }
+  local function row_marks(row0)
+    local out, bar = {}, false
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(st.buf, ns, 0, -1, { details = true })) do
+      if m[2] == row0 then
+        local d = m[4]
+        if d.line_hl_group == "CanvasDiffFileBar" then
+          bar = true
+        end
+        if MARKER_GROUPS[d.hl_group] and d.end_row == row0 then
+          out[d.hl_group] = { col = m[3], end_col = d.end_col, priority = d.priority }
+        end
+      end
+    end
+    return out, bar
+  end
+
+  local line = vim.api.nvim_buf_get_lines(st.buf, 0, 1, false)[1]
+  H.eq(line, "▎ f.txt  (+1 −1) ●○", "sanity: the header carries both marks")
+  local at, bar = row_marks(0)
+  H.eq(bar, true, "the full-width bar tint is still on the header row")
+  assert(at.CanvasDiffStaged and at.CanvasDiffUnstaged, "both marker spans are placed")
+  H.eq(line:sub(at.CanvasDiffStaged.col + 1, at.CanvasDiffStaged.end_col), render.glyphs.staged)
+  H.eq(line:sub(at.CanvasDiffUnstaged.col + 1, at.CanvasDiffUnstaged.end_col), render.glyphs.unstaged)
+  H.eq(at.CanvasDiffUnstaged.end_col, #line, "the marker block ends at end-of-line")
+  assert(at.CanvasDiffStaged.priority > 100 and at.CanvasDiffUnstaged.priority > 100,
+    "marker colour must win over the header group at 100")
+
+  -- Collapse: the placeholder carries the same marks, still highlighted.
+  canvas.set_collapsed(st, 1, true)
+  local prow = vim.api.nvim_buf_get_lines(st.buf, 0, 1, false)[1]
+  H.eq(prow, render.placeholder(sec), "sanity: collapsed to the placeholder")
+  local pat = row_marks(0)
+  assert(pat.CanvasDiffStaged and pat.CanvasDiffUnstaged,
+    "the placeholder's marks are highlighted too")
+  H.eq(pat.CanvasDiffUnstaged.end_col, #prow)
+
+  -- Change it behind the fold: stale joins, LAST, without stealing a stage span.
+  local changed = model.build_section("f.txt", "a\n", "c\n", "M", 3,
+    { staged = "M", unstaged = "M" })
+  canvas.replace_section(st, 1, changed)
+  local srow = vim.api.nvim_buf_get_lines(st.buf, 0, 1, false)[1]
+  H.eq(srow, render.placeholder(changed, true), "sanity: the placeholder went stale")
+  local sat = row_marks(0)
+  assert(sat.CanvasDiffStale and sat.CanvasDiffStaleEmphasis, "stale colour and its bold layer")
+  H.eq(sat.CanvasDiffStale.end_col, #srow, "stale is the LAST span")
+  H.eq(sat.CanvasDiffStaleEmphasis.col, sat.CanvasDiffStale.col)
+  assert(sat.CanvasDiffStaged.col < sat.CanvasDiffStale.col,
+    "the staged ● and the stale ● are different glyph occurrences")
+end
+
 return T

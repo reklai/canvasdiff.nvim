@@ -148,10 +148,10 @@ return {
     H.eq(#s.entries, 1, "a pure rename has only its file header")
     H.eq(s.entries[1].content, new_path, "the model retains the raw destination path")
     H.eq(render.section_lines(s), {
-      "▎ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed)",
+      "▎ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed) ●○",
     }, "controls are escaped at the display boundary without changing identity")
     H.eq(render.placeholder(s),
-      "▸ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed)")
+      "▸ old\\tline\\nslash\\\\name.txt → new\\tline\\nslash\\\\name.txt  (renamed) ●○")
   end,
   ["model: a content-changing rename names both paths and keeps counts"] = function()
     local s = model.build_section(
@@ -286,6 +286,77 @@ return {
     -- so tuning the diff rows meant redefining the groups your ordinary vimdiff uses.
     H.eq(hl[3], { row = 3, group = "CanvasDiffAdd" })
     H.eq(hl[4], nil, "only one content row is highlighted now")
+  end,
+  -- The canvas headers carry the SAME stage marks as the sidebar rows -- same
+  -- stage_mark truth, same glyphs, same order -- so closing the sidebar loses no
+  -- information. A section with no status facts renders nothing, never "clean".
+  ["render: file headers carry the sidebar's stage markers"] = function()
+    local function built(staged, unstaged)
+      return model.build_section("f.txt", "a\n", "b\n", "M", 3,
+        { staged = staged, unstaged = unstaged })
+    end
+    H.eq(render.section_lines(built("M", nil))[1], "▎ f.txt  (+1 −1) ●")
+    H.eq(render.section_lines(built(nil, "M"))[1], "▎ f.txt  (+1 −1) ○")
+    H.eq(render.section_lines(built("M", "M"))[1], "▎ f.txt  (+1 −1) ●○",
+      "staged-then-changed keeps both facts, exactly like the sidebar row")
+    H.eq(render.section_lines(built(nil, nil))[1], "▎ f.txt  (+1 −1)",
+      "no status information renders nothing, never 'clean'")
+  end,
+  ["render: the placeholder keeps stage marks before the stale mark"] = function()
+    local function built(staged, unstaged)
+      return model.build_section("f.txt", "a\n", "b\n", "M", 3,
+        { staged = staged, unstaged = unstaged })
+    end
+    H.eq(render.placeholder(built("M", "M")), "▸ f.txt  (1 hunks, +1 −1) ●○")
+    H.eq(render.placeholder(built("M", "M"), true), "▸ f.txt  (1 hunks, +1 −1) ●○ ●",
+      "stale stays LAST, so the trailing ● keeps meaning exactly one thing")
+    H.eq(render.placeholder(built("M", nil)), "▸ f.txt  (1 hunks, +1 −1) ●")
+    H.eq(render.placeholder(built(nil, nil), true), "▸ f.txt  (1 hunks, +1 −1) ●",
+      "stale alone stays glued to the counts, as before")
+    H.eq(render.placeholder({ path = "a.zip", binary = true, staged = "M" }),
+      "▸ a.zip  (binary) ●", "the binary placeholder carries the marks too")
+  end,
+  -- Byte spans, because STALE and STAGED are the same `●` and only the highlight
+  -- separates them -- the same load-bearing arithmetic test_sidebar pins for rows.
+  ["render: header marker spans land on the right glyphs"] = function()
+    local s = model.build_section("f.txt", "a\n", "b\n", "M", 3,
+      { staged = "M", unstaged = "M" })
+    local line = render.section_lines(s)[1]
+    local spans = render.marker_spans(line, s.staged, s.unstaged, nil)
+    H.eq(#spans, 2, "an expanded header never carries a stale span")
+    local at = {}
+    for _, sp in ipairs(spans) do
+      at[sp[3]] = { col = sp[1], text = line:sub(sp[1] + 1, sp[2]) }
+    end
+    H.eq(at.CanvasDiffStaged.text, render.glyphs.staged)
+    H.eq(at.CanvasDiffUnstaged.text, render.glyphs.unstaged)
+    H.eq(spans[1][2], #line, "the marker block ends at end-of-line")
+
+    local ph = render.placeholder(s, true)
+    local pspans = render.marker_spans(ph, s.staged, s.unstaged, true)
+    H.eq(#pspans, 4, "staged, unstaged, stale colour, stale emphasis")
+    local pat = {}
+    for _, sp in ipairs(pspans) do
+      pat[sp[3]] = { col = sp[1], text = ph:sub(sp[1] + 1, sp[2]) }
+    end
+    H.eq(pat.CanvasDiffStale.text, render.glyphs.stale)
+    H.eq(pat.CanvasDiffStaleEmphasis.col, pat.CanvasDiffStale.col)
+    assert(pat.CanvasDiffStaged.col < pat.CanvasDiffStale.col,
+      "stage marks are appended before stale, so their spans sit to the left")
+    H.eq(pspans[1][2], #ph, "the stale span reaches end-of-line")
+  end,
+  ["render: headers read the live glyph table, so ASCII stays coherent"] = function()
+    local glyphs = render.glyphs
+    local saved = { staged = glyphs.staged, unstaged = glyphs.unstaged }
+    glyphs.staged, glyphs.unstaged = "*", "o"
+    local ok, err = pcall(function()
+      local s = model.build_section("f.txt", "a\n", "b\n", "M", 3,
+        { staged = "M", unstaged = "M" })
+      H.eq(render.section_lines(s)[1], "▎ f.txt  (+1 −1) *o")
+      H.eq(render.placeholder(s), "▸ f.txt  (1 hunks, +1 −1) *o")
+    end)
+    glyphs.staged, glyphs.unstaged = saved.staged, saved.unstaged
+    assert(ok, err)
   end,
   ["model_section carries old_text and new_text"] = function()
     local s = model.build_section("t.lua", "a\n", "b\n", "M")

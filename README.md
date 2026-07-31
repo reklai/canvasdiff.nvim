@@ -81,21 +81,29 @@ The canvas is one long buffer holding every file's diff, so "which file am I in?
 peripheral vision instead of being one more line among diff lines:
 
 ```
-████ src/canvas.lua  (3 hunks, +12 −4) ████████████████
+████ src/canvas.lua  (+12 −4) ●○ ██████████████████████
   local M = {}
  -  return nil
  +  return M
-████ src/sidebar.lua  (1 hunks, +2 −0) █████████████████
+████ src/sidebar.lua  (+2 −0) ██████████████████████████
 ```
 
-Folded files don't get one — a placeholder is already a visually distinct single row
+The trailing `●○` is the file's stage state — the same markers, colours and order as
+its sidebar row (see the table below), so closing the sidebar loses nothing: the
+canvas alone still says whether a file's changes are staged. Folded placeholders
+carry them too, before the stale mark. Committed-range comparisons show no stage
+state anywhere — they describe two commits, not your worktree.
+
+Folded files don't get a bar — a placeholder is already a visually distinct single row
 (it opens with `▸`) and has no body to close off, and barring all of them would turn a
 canvas of 200 auto-collapsed files into a solid block of colour. The group is
 `CanvasDiffFileBar`, defaulting to `Folded` because that's the most visible group which
 always carries a background — measured at +30 luminance against `Normal` under
 tokyonight, where `CursorLine` manages +15 and `ColorColumn` is actually *darker*.
 `CanvasDiffFileHeader` stays foreground-only so the two compose: the filename keeps
-`Title`'s colour on the tinted row.
+`Title`'s colour on the tinted row, and the marker colours sit over both (measured on
+the bar: the smallest marker-vs-bar gap is 138 luminance under tokyonight-moon, far
+clear of needing extra emphasis).
 
 And once you're a screen deep and that header has scrolled off, two things say where
 you are — always the same answer:
@@ -185,8 +193,8 @@ had already folded counts as changed for the same reason: you have never looked 
 it.
 
 This survives quitting, so a file edited while Neovim was closed is marked when you
-come back. Each sidebar row also shows its stage state, straight from git's own XY
-pair:
+come back. Each sidebar row — and each file's canvas header, expanded bar or folded
+placeholder alike — also shows its stage state, straight from git's own XY pair:
 
 | Marker | Colour | Means |
 | --- | --- | --- |

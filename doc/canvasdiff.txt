@@ -99,6 +99,14 @@ scrollbar~
     A density map of where the changes are in the whole review, not just in
     the visible window.
 
+Each file's canvas header -- the tinted bar of an expanded file, or the `▸`
+placeholder of a folded one -- carries the file's stage state after its
+counts: `●` staged (green), `○` unstaged (yellow), both when a file was
+staged and then changed again. These are the same markers the sidebar rows
+show, so the canvas answers "is this staged?" with the sidebar closed. On a
+folded placeholder the stale mark stays last. Committed ranges show no stage
+state anywhere: they describe two commits, not your worktree.
+
 Files are collapsible. Collapsing a file keeps it in the review and in the
 sidebar; it just stops taking up canvas rows. This is the fastest way to work
 through a large change: collapse each file as you finish with it.

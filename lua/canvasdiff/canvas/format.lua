@@ -62,6 +62,19 @@ local HL_GROUP = {
   add = "CanvasDiffAdd",
 }
 
+--- The sidebar's stage-mark block, ready to append to a header or placeholder:
+--- one leading space before the marks, nothing at all when the section carries
+--- no status facts (a range lens's sections never do -- collect's range branch
+--- reads no porcelain -- which is what keeps READ-ONLY comparisons bare here
+--- and on the sidebar rows for the same reason rather than by convention).
+local function stage_suffix(section)
+  local stage = R.stage_mark(section.staged, section.unstaged)
+  if stage == "" then
+    return ""
+  end
+  return " " .. stage
+end
+
 function R.section_line(section, index)
   local e = section.entries[index]
   if not e then
@@ -78,7 +91,9 @@ function R.section_line(section, index)
     else
       counts = ("  (+%d " .. GLYPHS.minus .. "%d)"):format(section.adds, section.dels)
     end
-    return GLYPHS.file .. " " .. R.section_path(section) .. counts
+    -- The SAME stage marks the sidebar row carries, so closing the sidebar
+    -- loses no information about what a file's changes are.
+    return GLYPHS.file .. " " .. R.section_path(section) .. counts .. stage_suffix(section)
   elseif e.kind == "hunk_hdr" then
     return e.content
   elseif e.kind == "binary" then
@@ -150,14 +165,16 @@ function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffUnstaged", { link = "DiagnosticWarn", default = true })
 end
 
---- Byte spans of the trailing marker glyphs on a sidebar row, each with the
---- highlight group it needs, innermost-last order irrelevant to the caller.
+--- Byte spans of the trailing marker glyphs on a sidebar row, a canvas file
+--- header, or a folded placeholder, each with the highlight group it needs,
+--- innermost-last order irrelevant to the caller.
 ---
---- Pure, and deliberately fed the SAME four inputs S.render_lines used to build the
---- row, walking in from the end in the reverse of the order they were appended
+--- Pure, and deliberately fed the SAME four inputs the line builder used, walking
+--- in from the end in the reverse of the order they were appended
 --- (`… stage_mark(staged, unstaged) .. STALE`). That is the only thing keeping the
---- colours on the right characters -- if you change the row layout, change this with
---- it, and test_sidebar's span test will tell you if you didn't.
+--- colours on the right characters -- if you change any of those layouts, change
+--- this with it; test_sidebar's and test_model's span tests will tell you if you
+--- didn't.
 ---
 --- The colours are LOAD-BEARING here, not decoration: STALE and STAGED are the same
 --- character (`●`), so a stale staged file renders `● ●` and the highlight is the
@@ -201,17 +218,23 @@ end
 
 --- Single-line summary shown in place of a collapsed section's body. `stale` marks
 --- it as no longer matching what the user saw when they set it aside (fold.stale).
+---
+--- Marker order is the sidebar row's, by contract: stage marks first, stale LAST,
+--- so a trailing `●` keeps meaning exactly one thing in every window. It also has
+--- to be this order for R.marker_spans to work unchanged -- the spans walk in from
+--- the END of the line in the reverse of append order.
 function R.placeholder(section, stale)
-  local mark = stale and GLYPHS.stale or ""
+  local mark = (stale and GLYPHS.stale or "")
+  local marks = stage_suffix(section) .. mark
   if section.rename_only then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (renamed)" .. mark
+    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (renamed)" .. marks
   end
   if section.binary then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (binary)" .. mark
+    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (binary)" .. marks
   end
   return GLYPHS.folded .. " " .. R.section_path(section)
     .. ("  (%d hunks, +%d " .. GLYPHS.minus .. "%d)"):format(section.nhunks, section.adds, section.dels)
-    .. mark
+    .. marks
 end
 
 --- `virt_lines` chunk spec for an entry's deleted lines, or nil when it has none.
