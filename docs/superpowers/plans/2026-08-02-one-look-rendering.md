@@ -203,7 +203,7 @@ nvim --headless "+lua vim.cmd('colorscheme default')" "+luafile <scratchpad>/mea
 ```
 
 Decision rules (apply to BOTH schemes; a candidate must satisfy every rule under both):
-- `ELEVATION_FACTOR`: the smallest candidate whose `|elevation dL|` exceeds CursorLine's `|dL|` AND stays below the quiet-tint `|dL|`, AND for which every probed token (`@comment`, `Function`, `String`) keeps its luma delta against the elevated bg within 15% of its delta against Normal bg (compute: `|luma(tok) - luma(elevation)|` vs `|luma(tok) - luma(Normal bg)|`).
+- `ELEVATION_FACTOR` (amended 2026-08-02, user ruling — the original "between CursorLine and the quiet tints" interval measured EMPTY): the LARGEST candidate on the grid 0.03-0.10 step 0.01 such that, under EACH measured scheme, the worst probed token's (`@comment`, `Function`, `String`) contrast loss on the elevated bg is ≤ that scheme's OLD quiet-tint worst-token loss (compute the old quiet tint per scheme with the pre-Task-2 formula: DiffAdd/DiffDelete bg blended 0.6 toward Normal; contrast loss = relative change in `|luma(tok) - luma(bg)|`). No CursorLine clause. For tokyonight-moon, measure the STOCK scheme (transparency disabled) — the user's transparent setup has no Normal bg and exercises the fallback constant instead.
 - `GHOST_DIM_FACTOR`: the LARGEST candidate whose ghost-fg `|dL|` against Normal bg is still ≥ `@comment`'s `|dL|` (a ghost must never read dimmer than a comment).
 - Record every number and the chosen factors in this task's commit body.
 

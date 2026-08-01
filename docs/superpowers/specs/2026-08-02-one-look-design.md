@@ -57,10 +57,15 @@ three-mode `highlight.diff` with a single opinionated rendering:
   machinery (`set_diff_default`) so user/scheme overrides always win and
   colorscheme switches recompute cleanly.
 - Deltas and blend factors chosen by the repo's measurement method under
-  the builtin scheme and tokyonight-moon; the elevation delta must land
-  between `CursorLine` (too subtle alone) and yesterday's quiet tints;
-  the ghost dim factor must keep `@comment`-class tokens readable
-  (measured floor, recorded in the commit body).
+  the builtin scheme and tokyonight-moon; the elevation factor is the
+  LARGEST one whose worst syntax-token contrast loss on each measured
+  scheme stays within what that scheme's old quiet tint already cost
+  (amended 2026-08-02, user ruling: measurement showed the original
+  "between CursorLine and the quiet tints" interval is EMPTY — the quiet
+  tints are subtler than CursorLine everywhere — so the accepted-cost
+  rule replaces the false premise); the ghost dim factor must keep
+  `@comment`-class tokens readable (measured floor, recorded in the
+  commit body).
 - Wholly-deleted files: real `-` rows get the neutral elevation + dimmed
   fg + red margin. Yankable/searchable as before.
 - README's "How diff rows are coloured" is rewritten around the three
