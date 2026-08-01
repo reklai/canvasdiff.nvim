@@ -614,17 +614,11 @@ return {
     fm.close()
     remove_fixture(root)
   end,
-  -- Orientation: the sidebar and the canvas must never disagree about which file you
-  -- are in, including while a jump excursion has the canvas out of its window.
-  --
-  -- Three defects this covers, all of which were live:
-  --   1. sidebar.sync bails during an excursion, so the active row stayed on the file
-  --      you left -- a locator pointing confidently at the WRONG file.
-  --   2. Enter in the sidebar during an excursion was a silent no-op: the tree sat
-  --      there, nothing happened, nothing said why.
-  --   3. The winbar named only the lens, so once a file's header scrolled off there
-  --      was nothing in the canvas saying which block you were reading.
-  ["e2e: the sidebar and winbar agree about where you are, jumps included"] = function()
+  -- Orientation: the winbar is the app half of the top band -- the comparison
+  -- label, nothing else -- so it must NOT change while you scroll between
+  -- files. The file half lives on the sticky header row (ui/sticky_header.lua),
+  -- which owns the "which file am I in" swap and its tests.
+  ["e2e: the winbar is the comparison label, stable across every scroll"] = function()
     local function body(tag, marks)
       local o = {}
       for i = 1, 60 do
@@ -655,8 +649,8 @@ return {
       return vim.api.nvim_get_option_value("winbar", { win = cwin })
     end
 
-    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<aaa.txt",
-      "the breadcrumb names the comparison and visible file")
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE",
+      "the winbar is the comparison label alone, painted with the band group")
     assert(not wb():find("CanvasDiff:", 1, true))
     assert(not wb():find("│", 1, true))
 
@@ -671,8 +665,8 @@ return {
       vim.fn.winrestview({ topline = zrow + 20, lnum = zrow + 22 })
     end)
     vim.api.nvim_exec_autocmds("WinScrolled", {})
-    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE · %<zzz.txt",
-      "only the trailing file breadcrumb changes while scrolling")
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE",
+      "scrolling into another file does not change the winbar")
 
     local pct_row
     for i, line in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
@@ -686,10 +680,8 @@ return {
       vim.fn.winrestview({ topline = pct_row + 20, lnum = pct_row + 22 })
     end)
     vim.api.nvim_exec_autocmds("WinScrolled", {})
-    assert(wb():find("%%name.txt", 1, true),
-      "a literal percent is escaped in the stored statusline expression")
-    assert(wb():find(" · %<", 1, true),
-      "the truncation marker remains active formatting")
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE",
+      "a percent-bearing filename under the topline leaks nothing into the winbar")
 
     fm.close()
     -- Left armed, this resolves sections against a dead state on every scroll anywhere.
@@ -770,9 +762,9 @@ return {
       if vim.api.nvim_win_get_buf(w) == cbuf then back = true end
     end
     assert(back, "selecting a file mid-excursion must bring the canvas back, not no-op")
-    assert(wb():match("aaa%.txt"),
-      "and the winbar must name where it landed -- a programmatic scroll fires no "
-      .. "WinScrolled, which is why sidebar.sync signals on_locate. got: " .. wb())
+    H.eq(wb(), "%#CanvasDiffWinbar#HEAD → WORKTREE",
+      "the winbar stays the stable comparison label after the landing -- naming "
+      .. "the file is the sticky header row's job, not the winbar's")
     assert((active() or ""):match("aaa"), "and the active row agrees: " .. tostring(active()))
 
     fm.close()

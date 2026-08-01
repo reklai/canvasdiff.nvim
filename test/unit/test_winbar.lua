@@ -4,21 +4,14 @@ local lens = require("canvasdiff.diff").lens
 
 local T = {}
 
-T["winbar_ text renders label alone when no path is under the top"] = function()
+T["winbar_ text is the comparison label alone, band-tinted"] = function()
   local st = { lens = lens.get("all") }
-  H.eq(winbar.text(st, nil), "%#CanvasDiffWinbar#HEAD → WORKTREE")
+  H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE")
 end
 
-T["winbar_ text appends the truncatable path after a separator"] = function()
-  local st = { lens = lens.get("all") }
-  H.eq(winbar.text(st, "a.txt"),
-    "%#CanvasDiffWinbar#HEAD → WORKTREE · %<a.txt")
-end
-
-T["winbar_ text escapes percent signs in refs and paths"] = function()
+T["winbar_ text escapes percent signs in refs"] = function()
   local st = { lens = lens.range("a%b", "topic", "..") }
-  H.eq(winbar.text(st, "100%.txt"),
-    "%#CanvasDiffWinbarReadOnly#READ-ONLY  a%%b → topic · %<100%%.txt")
+  H.eq(winbar.text(st), "%#CanvasDiffWinbarReadOnly#READ-ONLY  a%%b → topic")
 end
 
 T["winbar_ a range lens tints the whole bar read-only"] = function()

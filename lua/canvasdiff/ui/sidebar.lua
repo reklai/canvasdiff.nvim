@@ -8,6 +8,7 @@ local model = diff
 local lens = diff.lens
 local notifications = require("canvasdiff.ui.notifications")
 local cheatsheet = require("canvasdiff.ui.cheatsheet")
+local winbar = require("canvasdiff.ui.winbar")
 
 local S = {}
 
@@ -243,7 +244,13 @@ local function update_winbar(lease, view)
   if not (view_active(lease, view) and owned_pair(view)) then
     return false
   end
-  local title = sidebar_title(lease.state)
+  -- The band group paints the bar identically whether or not the window has
+  -- focus -- that is the point: the sidebar and canvas winbars read as ONE
+  -- top band instead of flipping WinBar/WinBarNC against each other.
+  -- sidebar_title produces no `%` (a fixed prefix, counts and the minus
+  -- glyph only), so no statusline escaping is needed.
+  winbar.ensure_hl_groups()
+  local title = "%#CanvasDiffWinbar#" .. sidebar_title(lease.state)
   local previous = view.applied_options.winbar
   local actual = vim.api.nvim_get_option_value("winbar", { win = view.win })
   if not view_active(lease, view) then

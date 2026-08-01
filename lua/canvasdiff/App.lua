@@ -751,38 +751,17 @@ end
 --- `""` clears it, which is what App:close wants -- a leftover winbar on a restored
 --- window would claim the file you are editing is a diff canvas.
 ---
---- The text is a statusline expression, so `%` in a branch ref has to be escaped.
+--- The text is the comparison label alone, scroll-invariant: which FILE sits
+--- under the topline is the sticky header row's business (ui/sticky_header.lua,
+--- which owns its own topline resolution), not the winbar's.
 --- scrollbar.text_geometry accounts for the row this consumes; see the note there.
---- The path of the section under the canvas topline, or nil when the canvas is not on
---- screen (a jump excursion, or a closed window) or holds nothing.
----
---- Resolved from the topline rather than the cursor, matching the sidebar's active
---- row exactly, so the two never disagree about which file you are "in".
-local function path_under_top(st, win)
-  if not canvas_showing(st, win) or #st.sections == 0 then
-    return nil
-  end
-  local ok, path = pcall(function()
-    local top0 = vim.api.nvim_win_call(win, function()
-      return vim.fn.line("w0") - 1
-    end)
-    local i = (canvas.locate(st, top0))
-    return i and st.sections[i] and st.sections[i].path or nil
-  end)
-  return ok and path or nil
-end
-
-local function set_winbar(st, text, win, path)
+local function set_winbar(st, text, win)
   win = win or (st and st.win)
   if not (st and win and vim.api.nvim_win_is_valid(win)) then
     return
   end
   if text == nil then
-    -- The STICKY part, and the reason this recomputes on scroll: a file
-    -- header scrolls out of view a screen into its diff, and from then on
-    -- nothing IN the canvas says which block you are reading. Resolving the
-    -- topline path is orchestration; how it is shown belongs to ui.winbar.
-    text = ui.winbar.text(st, path or path_under_top(st, win))
+    text = ui.winbar.text(st)
   end
   ui.winbar.apply(st, win, text)
 end
@@ -1072,13 +1051,17 @@ local function open_sidebar(app, surface, st)
         end
       end)
     end,
-    on_locate = function(lease, changed_state, canvas_win, path)
+    on_locate = function(lease, changed_state, canvas_win)
       if surface.controllers.sidebar ~= lease then
         return
       end
       surface:guard(generation, function(owner)
         owner:capture_view(canvas_win)
-        set_winbar(changed_state, nil, canvas_win, path)
+        -- The signal still carries the landed path, but the winbar no longer
+        -- shows one -- with a scroll-invariant label the old "pin the winbar
+        -- to where the locate landed" special case collapses to a plain
+        -- refresh, and the sticky header row does the naming.
+        set_winbar(changed_state, nil, canvas_win)
       end)
     end,
     on_return = function(lease, _, host_win)
@@ -1549,14 +1532,14 @@ end
     end
   end
 
-  -- Keep the winbar's sticky filename tracking the topline. Its own autocmd rather
-  -- than a call inside sidebar.sync, because the winbar has to work when the sidebar
-  -- is disabled -- it is the only in-canvas answer to "which file am I in" once the
-  -- header has scrolled off.
+  -- The sticky filename now lives on the sticky header row
+  -- (ui/sticky_header.lua), so the winbar text no longer varies with scroll --
+  -- but this hook stays: its capture_view is load-bearing for session state,
+  -- and it refreshes winbars on window changes. set_winbar skips identical
+  -- text, which with a scroll-invariant label is every scroll, so the hook's
+  -- winbar half costs a cache compare.
   --
-  -- Unconditional and grouped with the close hooks so teardown reaps it. set_winbar
-  -- returns early when the resolved text has not changed, which is the common case
-  -- while scrolling inside one file, so the redraw cost is paid only at boundaries.
+  -- Unconditional and grouped with the close hooks so teardown reaps it.
   --
   -- (WinScrolled never fires headlessly -- see the harness notes -- so tests drive
   -- set_winbar or this callback by hand, as they already do for hl and the minimap.)

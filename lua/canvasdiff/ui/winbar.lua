@@ -1,12 +1,11 @@
--- The canvas winbar: breadcrumb text and the window-option bookkeeping that
--- applies and releases it.
+-- The canvas winbar: the app half of the unified top band, and the
+-- window-option bookkeeping that applies and releases it.
 --
--- Presentation only. App resolves WHICH path sits under a window's topline
--- (that is orchestration over live canvas state); this module owns everything
--- about how the answer is shown. Extracted from App.lua so the largest
+-- The band shows the comparison here and nothing else -- the file half lives
+-- on the sticky header row (ui/sticky_header.lua), so the winbar never varies
+-- with scroll. Presentation only: extracted from App.lua so the largest
 -- stateful owner keeps orchestration and the ui domain keeps presentation.
 
-local canvas = require("canvasdiff.canvas")
 local diff = require("canvasdiff.diff")
 
 local lens = diff.lens
@@ -30,23 +29,20 @@ function W.ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffWinbarReadOnly", { link = "Visual", default = true })
 end
 
---- The breadcrumb: comparison on the left, the file under the topline after
---- it. `%<` truncates the path, never the comparison.
-function W.text(st, path)
+--- The app half of the top band: the comparison label, tinted. No path ever
+--- rides here -- the file under the topline is the sticky header row's job
+--- (ui/sticky_header.lua), which keeps this text scroll-invariant.
+function W.text(st)
   local l = lens.of(st)
   local group = lens.is_range(l) and "CanvasDiffWinbarReadOnly" or "CanvasDiffWinbar"
-  local out = "%#" .. group .. "#" .. W.escape(l.label)
-  if not path then
-    return out
-  end
-  return out .. " · %<" .. W.escape(canvas.format.escape_path(path))
+  return "%#" .. group .. "#" .. W.escape(l.label)
 end
 
 --- Cached write. Runs on every WinScrolled, and writing 'winbar' forces a
---- window redraw, so identical text is skipped -- comparing the resolved
---- string also covers scrolling WITHIN one file, where only the path lookup's
---- work was wasted. The cache lives on the canvas state so a rebuilt state
---- starts clean.
+--- window redraw, so identical text is skipped -- with a scroll-invariant
+--- label that is every scroll, so the redraw cost is paid only on lens
+--- changes. The cache lives on the canvas state so a rebuilt state starts
+--- clean.
 function W.apply(st, win, text)
   if not (st and win and vim.api.nvim_win_is_valid(win)) then
     return

@@ -2709,7 +2709,7 @@ function()
       "fold staleness records the range being rendered, not the prior lens")
     local range_winbar = vim.api.nvim_get_option_value("winbar", { win = win })
     assert(range_winbar:find(
-      "%#CanvasDiffWinbarReadOnly#READ-ONLY  main → topic · %<a.txt", 1, true),
+      "%#CanvasDiffWinbarReadOnly#READ-ONLY  main → topic", 1, true),
       "a three-dot comparison names the refs the user asked for, marked READ-ONLY")
   end, debug.traceback)
 
