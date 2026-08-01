@@ -40,8 +40,15 @@ Two things are worth knowing before you start:
 ==============================================================================
 2. REQUIREMENTS                                       *canvasdiff-requirements*
 
-- Neovim 0.10 or newer.
+- Neovim 0.12 or newer. This is the TESTED floor, asserted at plugin load
+  and by |:checkhealth| (`:checkhealth canvasdiff`): the float, winbar and
+  statuscolumn geometry CanvasDiff depends on is measured against 0.12, and
+  those exact facts have differed across Neovim versions.
 - `git` on your `PATH`.
+
+Run `:checkhealth canvasdiff` after installing. Besides the probes above it
+audits your `setup()` table for misspelled or removed options -- those merge
+without complaint and silently do nothing.
 
 Optional, each degrading to a plain canvas rather than an error:
 

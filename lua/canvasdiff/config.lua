@@ -7,6 +7,7 @@ local C = {
   ASCII_GLYPHS = settings.ASCII_GLYPHS,
   defaults = settings.defaults,
   glyphs = settings.glyphs,
+  health = settings.health,
   options = settings.options,
   user_opts = settings.user_opts,
 }

@@ -284,6 +284,44 @@ local function removed_options(opts)
   return #found > 0 and found or nil
 end
 
+--- Walk the user's ORIGINAL setup() table against the defaults, collecting
+--- dotted paths that exist nowhere in the schema. tbl_deep_extend accepts any
+--- key without complaint, so `keymaps.canvas.colapse` merges into an unused
+--- corner and silently does nothing -- this is the audit that finds it after
+--- the fact (:checkhealth), the counterpart of setup()'s removed-option
+--- report.
+---
+--- Removed options are skipped here (they are reported with their replacement
+--- hints, not as typos), `glyphs` is skipped because setup() validates its
+--- slots itself, and list-like values are never entered: a keymap list longer
+--- than the default's is legitimate, not a set of unknown numeric keys.
+local function unknown_paths(user, defaults, prefix, out)
+  for key, value in pairs(user) do
+    local path = prefix and (prefix .. "." .. tostring(key)) or tostring(key)
+    if REMOVED_OPTIONS[path] or (prefix == nil and key == "glyphs") then
+      -- reported elsewhere, with better words
+    elseif defaults[key] == nil then
+      out[#out + 1] = path
+    elseif type(value) == "table" and type(defaults[key]) == "table"
+        and not vim.islist(value) and not vim.islist(defaults[key]) then
+      unknown_paths(value, defaults[key], path, out)
+    end
+  end
+end
+
+--- The configuration audit :checkhealth renders: dotted paths the schema does
+--- not know, and removed options with their replacement hints. Reads the
+--- captured user_opts, so it reflects what the user actually wrote even
+--- though setup() stripped removed keys before merging.
+function M.health()
+  local unknown = {}
+  if type(M.user_opts) == "table" then
+    unknown_paths(M.user_opts, M.defaults, nil, unknown)
+  end
+  table.sort(unknown)
+  return { unknown = unknown, removed = removed_options(M.user_opts) or {} }
+end
+
 --- Names from the old flat keymaps shape found at the top level, or nil.
 local function legacy_keymaps(keymaps)
   if type(keymaps) ~= "table" then

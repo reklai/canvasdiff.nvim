@@ -2,7 +2,22 @@
 
 CanvasDiff proofs for your git diff — read the whole change as one continuous strip, fix it in place.
 
-Every changed file's diff, concatenated into a single scrollable buffer. Jump into any hunk as a real, LSP-attached buffer and jump back to the exact spot. Status: pre-alpha MVP.
+Every changed file's diff, concatenated into a single scrollable buffer. Jump into any hunk as a real, LSP-attached buffer and jump back to the exact spot. Status: pre-alpha.
+
+## Requirements
+
+- **Neovim 0.12+.** This is the *tested* floor, asserted by the plugin and by
+  `:checkhealth canvasdiff`, not a guess: the float, winbar and statuscolumn
+  geometry CanvasDiff depends on is measured against 0.12, and those exact
+  facts have differed across Neovim versions. CI runs the full suite against
+  stable and nightly.
+- **git** on your `$PATH`.
+- Developed on Linux; macOS should work (nothing platform-specific is used);
+  Windows is untested.
+
+Run `:checkhealth canvasdiff` after installing — it also audits your `setup()`
+table for misspelled or removed options, which otherwise merge silently and do
+nothing.
 
 ## Install
 
@@ -10,7 +25,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "your-name/canvasdiff.nvim", -- adjust to wherever this repo lives
+  "reklai/canvasdiff.nvim",
   opts = {}, -- optional; see Configuration below
 }
 ```

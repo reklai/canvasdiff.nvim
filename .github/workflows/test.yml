@@ -1,0 +1,26 @@
+# The whole suite (unit, integration, e2e, fault, performance, architecture)
+# runs headlessly; fixtures configure their own git identity, so the runner
+# needs nothing beyond Neovim and git. `stable` is the tested floor's channel
+# (0.12); `nightly` is the early-warning line — the float/winbar geometry this
+# plugin measures has drifted across Neovim versions before.
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [stable, nightly]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+      - run: nvim --version
+      - run: make test

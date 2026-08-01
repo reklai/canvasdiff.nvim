@@ -20,10 +20,33 @@ T["config_ facade exports exactly the supported domain API"] = function()
     "ASCII_GLYPHS",
     "defaults",
     "glyphs",
+    "health",
     "options",
     "setup",
     "user_opts",
   })
+end
+
+-- tbl_deep_extend accepts any key without complaint, so a typo merges into an
+-- unused corner and silently does nothing. health() is the audit that finds
+-- those afterwards -- the counterpart of setup()'s removed-option report.
+T["config_ health reports unknown and removed keys, skipping glyphs and lists"] = function()
+  config.setup({
+    context = 5,
+    highlight = { diff = "quiet", margin = 50 },
+    keymaps = { canvas = { colapse = "x", jump = { "<CR>", "zz", "extra" } } },
+    glyphs = { file = "|" },
+    watchh = { enabled = true },
+  })
+  local report = config.health()
+  H.eq(report.unknown, { "keymaps.canvas.colapse", "watchh" },
+    "typos surface; known keys, glyph slots and longer keymap lists do not")
+  H.eq(#report.removed, 1)
+  assert(report.removed[1]:match("highlight%.diff"), report.removed[1])
+  config.setup({})
+  local clean = config.health()
+  H.eq(clean.unknown, {})
+  H.eq(clean.removed, {})
 end
 
 T["config_ setup is optional and defaults are live without it"] = function()

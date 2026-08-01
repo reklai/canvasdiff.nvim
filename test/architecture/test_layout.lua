@@ -189,7 +189,10 @@ T.architecture_layout_every_domain_has_a_facade_and_a_real_owner = function()
 
     if has_owner and not has_facade then
       errors[#errors + 1] = ("%s has internals but no %s facade"):format(owner_prefix, facade_path)
-    elseif has_facade and not has_owner then
+    elseif has_owner and rules.single_file[domain] then
+      errors[#errors + 1] = ("%s is declared single-file but grew internals under %s")
+        :format(facade_path, owner_prefix)
+    elseif has_facade and not has_owner and not rules.single_file[domain] then
       errors[#errors + 1] = ("%s is empty taxonomy without a real owner"):format(facade_path)
     end
   end

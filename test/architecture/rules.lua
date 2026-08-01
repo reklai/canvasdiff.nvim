@@ -7,6 +7,10 @@ R.domains = {
   canvas = true,
   config = true,
   diff = true,
+  -- One file, no subdirectory: :checkhealth discovers by the fixed path
+  -- lua/canvasdiff/health.lua, so the module cannot live inside a domain
+  -- directory. It is a renderer over config.health -- hence its single edge.
+  health = true,
   input = true,
   os = true,
   runtime = true,
@@ -14,6 +18,14 @@ R.domains = {
   source = true,
   testing = true,
   ui = true,
+}
+
+-- Domains that are deliberately one file: the facade IS the owner, and no
+-- subdirectory may accrete under them without revisiting this declaration.
+-- health earns the exemption because :checkhealth discovers by the fixed
+-- path lua/canvasdiff/health.lua.
+R.single_file = {
+  health = true,
 }
 
 -- Transitional debt ledger, now empty. Every module reached its owning domain,
@@ -98,6 +110,7 @@ R.allowed_edges = {
   },
   config = {},
   diff = {},
+  health = { config = true },
   os = {},
   source = { config = true, diff = true, os = true },
   canvas = { config = true, diff = true, os = true },
