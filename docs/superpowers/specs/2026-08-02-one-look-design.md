@@ -1,6 +1,9 @@
 # One Look: Neutral Field, Margin Hue, Sticky Header
 
-Approved 2026-08-02. Four decisions taken together, replacing yesterday's
+Approved 2026-08-02. Amended same day: §4 split into the unified top band
+plus a sticky header ROW (was: the winbar as a composed sticky header);
+§2's neutral field reconfirmed against the alternative of keeping the hued
+quiet tints. Five decisions taken together, replacing yesterday's
 three-mode `highlight.diff` with a single opinionated rendering:
 
 1. **Zero modes.** `highlight.diff` is deleted. The canvas always renders
@@ -13,8 +16,11 @@ three-mode `highlight.diff` with a single opinionated rendering:
    gutter bar) and the stat counts.
 3. **Derived header bar colour.** `CanvasDiffFileBar` stops linking
    `Folded` (one scheme's luck) and derives a guaranteed-contrast bar.
-4. **The winbar becomes the sticky file header.** Comparison stays left;
-   the file half is promoted to the full header content with the bar tint.
+4. **Unified top band.** The sidebar and canvas winbars share one
+   focus-stable group; the canvas half is the comparison label alone.
+5. **Sticky file-header row.** The breadcrumb leaves the winbar: a
+   one-row float under it mirrors the in-buffer file header for the
+   section under the topline.
 
 > **Supersedes in part**
 > `2026-08-01-visual-polish-and-lens-tier-design.md` §2 (the three-mode
@@ -74,29 +80,53 @@ three-mode `highlight.diff` with a single opinionated rendering:
   the stage markers' contrast re-measured against the NEW bar bg (Task-1
   work measured against `Folded`).
 
-## 4. Winbar as sticky file header
+## 4. Unified top band
 
-Composed winbar, one row, statusline expression:
+- The band group is the EXISTING `CanvasDiffWinbar` (`default = true`,
+  link `WinBar` — the sidebar's current effective colour), not a new
+  name: users who overrode it keep their override, and the
+  `CanvasDiffWinbar`/`CanvasDiffWinbarReadOnly` pair stays coherent.
+  Both the sidebar winbar and the canvas winbar OPEN their expressions
+  with it, and the statusline fill inherits the last active group, so
+  each bar is painted edge to edge and the paint stops flipping between
+  `WinBar`/`WinBarNC` with focus — that flip is today's visual
+  disconnect between the two bars.
+- The canvas winbar text is the comparison label alone; the breadcrumb
+  path leaves the winbar (§5). Escaping, the identical-text cache, and
+  the option-ownership bookkeeping in `ui/winbar.lua` stay as they are.
+- READ-ONLY still outranks location: a range lens paints the whole
+  CANVAS half `CanvasDiffWinbarReadOnly` while the sidebar half keeps
+  the band group. The band visibly breaking at the seam IS the mode
+  signal.
+- The window-separator column crosses the band at the seam (one cell).
+  Accepted: a literally seamless band across two windows does not exist.
+- Sidebar title text (`Files changed (N)  +A −D`) unchanged; its
+  `update_winbar` gains only the group prefix, and its prior/applied
+  option protocol is untouched.
 
-```
-HEAD → WORKTREE · src/canvas.lua  (3 hunks, +12 −4) ●○
-```
+## 5. Sticky file-header row
 
-- Left: the comparison label, exactly as today (READ-ONLY prefix included).
-- Right of the separator: the CURRENT section's full header content —
-  escaped path, `(N hunks, +a −d)` with the minus glyph, stage markers —
-  the same strings the in-buffer header renders, from the same format
-  functions (no second formatter).
-- Tint: the whole winbar carries the header-bar group by default;
-  a READ-ONLY comparison's tint (`CanvasDiffWinbarReadOnly`) still
-  overrides the whole row — mode outranks location.
-- `%<` truncation still protects the comparison: path truncates first.
-- Updates on the existing scroll-sync path (`path_under_top` already
-  resolves the section; extend what it returns or look the section up by
-  path — implementer's choice, but the winbar must show the section's
-  live stats, not a stale copy).
-- Empty canvas / no section under the top: comparison label alone, tinted.
-- The sidebar winbar (`Files changed (N) +A −D`) is unchanged.
+- One-row float on the canvas window: pinned at the text area's first
+  row (directly under the winbar, via the same `getwininfo().winbar`
+  geometry the minimap uses), col 0, canvas width, non-focusable,
+  `style = "minimal"`, zindex BELOW the minimap's 40 so the minimap owns
+  the shared top-right cell.
+- Content: EXACTLY the in-buffer file header line for the section under
+  the topline — same `section_line` formatter, same `CanvasDiffFileBar`
+  line background (§3's derived bar), same marker spans. No second
+  formatter and no composed variant: the sticky row IS the header row,
+  pinned.
+- Resolution rides the existing scroll-sync path (`path_under_top`),
+  like the winbar today; stats come from the live section, so a
+  reconcile refreshes what the row shows.
+- Hidden when the real header row is itself the topline (no doubling),
+  when the canvas is empty or no section resolves, and during excursions
+  — same lease lifecycle as the minimap: hide on BufWinLeave, re-show on
+  BufWinEnter, reposition on WinResized, teardown on WinClosed.
+- Accepted behaviours, recorded: the float COVERS the top canvas text
+  row rather than pushing content down (anti-reflow — content never
+  moves); clicks on it fall through to the covered row (non-focusable
+  floats are mouse-transparent, spike-verified).
 
 ## Tests
 
@@ -111,15 +141,21 @@ HEAD → WORKTREE · src/canvas.lua  (3 hunks, +12 −4) ●○
 3. Header bar: derived bg differs from `Folded`-linked value and clears
    the row elevation by the measured margin (assert the relationship, not
    raw numbers); marker spans still correct.
-4. Winbar: full composed string for a mid-file topline (comparison +
-   path + stats + marks); updates when crossing a boundary (drive the
-   scroll hook as existing tests do); READ-ONLY tint still wins; empty
-   canvas renders label alone; stats reflect a live reconcile (edit a
-   file, refresh, winbar stats change).
+4. Top band: both winbars open with `CanvasDiffWinbar`; the canvas
+   winbar is the comparison label alone (no path); a focus change leaves
+   both bars painted with the band group; READ-ONLY paints the canvas
+   half only.
+5. Sticky row: appears once the topline passes a header and mirrors the
+   header string + marker spans byte-for-byte; swaps when crossing a
+   boundary (drive the scroll hook as existing tests do); hidden when
+   the header row is the topline and on an empty canvas; stats reflect a
+   live reconcile (edit a file, refresh, the row's counts change); the
+   float dies with the canvas window; zindex sits below the minimap's.
 
 ## Verification
 
 Full suite green per commit; manual smoke: scroll a 20-file canvas and
-watch the pinned header swap at each boundary; a deleted file reads
-dimmed-with-red-margin; `:CanvasDiff main..topic` shows the READ-ONLY
-tint overriding the bar tint.
+watch the sticky row swap at each boundary; the top band reads as one
+bar across sidebar and canvas whichever window has focus; a deleted
+file reads dimmed-with-red-margin; `:CanvasDiff main..topic` shows the
+READ-ONLY tint on the canvas half of the band only.
