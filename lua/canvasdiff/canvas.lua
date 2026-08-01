@@ -18,6 +18,10 @@ return {
     marker_spans = format.marker_spans,
     placeholder = format.placeholder,
     section_hl = format.section_hl,
+    -- One row, not the whole list: the sticky header re-resolves its line on
+    -- every topline change, and a consumer that only wants the file_hdr row
+    -- must not pay for materializing a large section's every entry.
+    section_line = format.section_line,
     section_lines = format.section_lines,
     section_path = format.section_path,
     stage_mark = format.stage_mark,

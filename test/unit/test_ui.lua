@@ -21,7 +21,7 @@ T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
   H.eq(names, { "cheatsheet", "err", "highlight", "notify", "scrollbar", "sidebar",
-    "status_column", "warn", "winbar" })
+    "status_column", "sticky_header", "warn", "winbar" })
 end
 
 T["ui_sidebar legacy sidebar module path is deleted rather than shimmed"] = function()

@@ -72,6 +72,7 @@ return {
       "marker_spans",
       "placeholder",
       "section_hl",
+      "section_line",
       "section_lines",
       "section_path",
       "stage_mark",

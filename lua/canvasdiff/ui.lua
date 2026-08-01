@@ -4,6 +4,7 @@ local notifications = require("canvasdiff.ui.notifications")
 local scrollbar = require("canvasdiff.ui.scrollbar")
 local sidebar = require("canvasdiff.ui.sidebar")
 local status_column = require("canvasdiff.ui.status_column")
+local sticky_header = require("canvasdiff.ui.sticky_header")
 local winbar = require("canvasdiff.ui.winbar")
 
 -- User-facing presentation enters the UI domain through this curated facade.
@@ -18,6 +19,7 @@ return {
   scrollbar = scrollbar,
   sidebar = sidebar,
   status_column = status_column,
+  sticky_header = sticky_header,
   warn = notifications.warn,
   winbar = winbar,
 }
