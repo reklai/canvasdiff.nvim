@@ -712,6 +712,23 @@ git commit -m "feat: sticky header content resolution (pure core)"
 
 ---
 
+### Task 6b: Normalize Paged.locate to the documented 1-based offset (inserted 2026-08-02)
+
+Inserted after Task 6's implementer discovered — and the controller confirmed — that `Paged.locate` returns a 0-based within-section offset while the eager `Canvas.locate` returns 1-based (`row0 - starts[ans] + 1`, Canvas.lua:619) and the facade documents 1-based. Every facade consumer that indexes `section.entries[offset]` is silently wrong on paged canvases today, and Task 7's sticky header would inherit the bug.
+
+**Files:**
+- Modify: `lua/canvasdiff/canvas/paged.lua` (`Paged.locate` line ~715: return `row0 - paged.starts[index] + 1`; `refresh_ghosts` line ~418-423: the internal compensator `entries[offset + 1]` becomes `entries[offset]`)
+- Audit (fix only if a compensation is found): `App.lua:837` (`section_under_cursor` returns both values — check its callers for second-value use), `input/jump.lua:81,104`, `session/codec.lua:46,61`, `ui/status_column.lua:719`, `ui/sticky_header.lua:20` — these all expect 1-based and become CORRECT on paged after the flip; any test pinning the 0-based paged return must be updated.
+- Test: `test/integration/test_paged_canvas.lua` (or the suite-appropriate neighbor)
+
+**Interfaces:**
+- Consumes: existing `Paged.locate(paged, row0) -> index, offset`.
+- Produces: `canvas.locate` returns a 1-based offset on BOTH canvas paths; offset 1 is the header/placeholder row everywhere. Task 7 relies on this.
+
+Steps (TDD): (1) write a failing eager/paged parity test — render the same sections both ways, assert `canvas.locate` answers (index AND offset) agree row by row, including a header row, a body row, a collapsed placeholder, and the first row of a later section; run it to see it fail on the offset; (2) flip `Paged.locate` and the `refresh_ghosts` compensator; (3) sweep the audit list and stale test pins; (4) focused paged + ghost + statuscolumn suites, then full `make test`; (5) single commit explaining the latent bugs this closes.
+
+---
+
 ### Task 7: Sticky header float, lease, and wiring
 
 **Files:**
