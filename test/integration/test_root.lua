@@ -1593,12 +1593,13 @@ T["root_ compare picker orders metadata choices and cancels silently"] = functio
       "main", "master", "zeta",
     }, "the base picker contains local branches only")
     H.eq(names(calls[2].items), {
-      "zeta", "main", "master",
-    }, "the target picker puts the checked-out local branch first")
+      "zeta", "master",
+    }, "the target picker drops the picked base and keeps the checked-out branch first")
     H.eq(calls[1].items[1].ref, "refs/heads/main",
       "picker execution keeps the exact full local ref")
     H.eq(calls[1].opts.prompt, "CanvasDiff compare from branch:")
-    H.eq(calls[2].opts.prompt, "CanvasDiff compare to branch:")
+    H.eq(calls[2].opts.prompt, "CanvasDiff compare: main → ?",
+      "the second prompt carries the choice the first one made")
     H.eq(calls[1].opts.format_item(calls[1].items[1]), "main")
     H.eq(calls[2].opts.format_item(calls[2].items[1]),
       "zeta [checked out]")
@@ -1618,6 +1619,52 @@ T["root_ compare picker orders metadata choices and cancels silently"] = functio
     vim.ui.select = real_select
   end)
   vim.fn.delete(root, "rf")
+end
+
+T["root_ target picker cannot re-pick the base; a lone branch warns instead"] = function()
+  -- A...A is empty by construction, so the mistake must be inexpressible:
+  -- vim.ui.select cannot gray an item out, which makes omission the disable.
+  local root = picker_fixture()
+  in_cwd(root, function(fm, msgs)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts }
+      if #calls == 1 then
+        callback(item_named(items, "zeta"), 1)
+      else
+        callback(nil, nil)
+      end
+    end
+    local ok, err = xpcall(function() fm.compare() end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(#calls, 2)
+    H.eq(names(calls[2].items), { "main", "master" },
+      "the picked base never reappears, even as the checked-out branch")
+    H.eq(calls[2].opts.prompt, "CanvasDiff compare: zeta → ?")
+    H.eq(#msgs, 0)
+  end)
+  vim.fn.delete(root, "rf")
+
+  -- With a single local branch there is nothing left after step one: the
+  -- dead end is reported instead of opening an empty selector.
+  local lone = H.git_fixture({ committed = { ["a.txt"] = "base\n" } })
+  in_cwd(lone, function(fm, msgs)
+    local real_select = vim.ui.select
+    local calls = {}
+    vim.ui.select = function(items, opts, callback)
+      calls[#calls + 1] = { items = items, opts = opts }
+      callback(items[1], 1)
+    end
+    local ok, err = xpcall(function() fm.compare() end, debug.traceback)
+    vim.ui.select = real_select
+    assert(ok, err)
+    H.eq(#calls, 1, "nothing to compare against, so no second prompt opens")
+    assert(#msgs > 0 and msgs[#msgs].msg:lower():find("branch"),
+      "the dead end says why: " .. vim.inspect(msgs))
+  end)
+  vim.fn.delete(lone, "rf")
 end
 
 T["root_ comparison exits restore the originating canvas landing"] = function()
@@ -1713,7 +1760,8 @@ T["root_ detached compare picker still lists strict local branches"] = function(
     local ok, err = xpcall(function() fm.compare() end, debug.traceback)
     vim.ui.select = real_select
     assert(ok, err)
-    H.eq(names(calls[2].items), { "main", "master", "zeta" })
+    H.eq(names(calls[2].items), { "master", "zeta" },
+      "strict locals, minus the picked base, none marked current")
     for _, item in ipairs(calls[2].items) do
       assert(item.ref ~= "HEAD", "detached HEAD is not a branch choice")
       H.eq(item.kind, "local")

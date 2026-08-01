@@ -3196,8 +3196,26 @@ function App:compare()
     if not base or not compare_origin_alive(self, request) then
       return
     end
-    vim.ui.select(comparisons, {
-      prompt = "CanvasDiff compare to branch:",
+    -- The base never reappears in the second list: A...A is empty by
+    -- construction, and vim.ui.select cannot gray an item out, so omission
+    -- is the only way to make the mistake inexpressible.
+    local targets = {}
+    for _, item in ipairs(comparisons) do
+      if item.ref ~= base.ref then
+        targets[#targets + 1] = item
+      end
+    end
+    if #targets == 0 then
+      ui.warn("no other local branch to compare " .. base.name .. " against")
+      return
+    end
+    vim.ui.select(targets, {
+      -- The prompt carries step one's choice: by the second list the first
+      -- pick is off screen, and "to branch:" made the user hold it in their
+      -- head. Same arrow vocabulary as the winbar label the pick becomes;
+      -- the bare name, not format_branch's "[checked out]" decoration --
+      -- that is picker-item metadata, not part of the comparison.
+      prompt = ("CanvasDiff compare: %s → ?"):format(base.name),
       kind = "canvasdiff_branch_compare",
       format_item = format_branch,
     }, function(other)
