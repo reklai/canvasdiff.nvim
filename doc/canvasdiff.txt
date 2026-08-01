@@ -125,9 +125,13 @@ Each file's canvas header -- the tinted bar of an expanded file, or the `▸`
 placeholder of a folded one -- carries the file's stage state after its
 counts: `●` staged (green), `○` unstaged (yellow), both when a file was
 staged and then changed again. These are the same markers the sidebar rows
-show, so the canvas answers "is this staged?" with the sidebar closed. On a
-folded placeholder the stale mark stays last. Committed ranges show no stage
-state anywhere: they describe two commits, not your worktree.
+show, so the canvas answers "is this staged?" with the sidebar closed. A
+file that changed since you folded it away carries one more mark, always
+last: a red, bold `●` (stale). It shows on the folded placeholder, on the
+file's sidebar row, and on a folded directory's row, and it clears when you
+unfold -- then you have seen it. A staged file that went stale reads `● ●`,
+the same glyph told apart by colour and position. Committed ranges show no
+stage state anywhere: they describe two commits, not your worktree.
 
 Files are collapsible. Collapsing a file keeps it in the review and in the
 sidebar; it just stops taking up canvas rows. This is the fastest way to work
@@ -504,6 +508,15 @@ canvasdiff.refresh()                                  *canvasdiff.refresh()*
 
 canvasdiff.compare()                                  *canvasdiff.compare()*
         Pick two branches/revisions and open their read-only comparison.
+
+canvasdiff.checkout()                                *canvasdiff.checkout()*
+        Pick a local branch and switch to it. Refused while any repository
+        buffer has unsaved changes; offers no force, stash, or detached-HEAD
+        operations.
+
+canvasdiff.track()                                      *canvasdiff.track()*
+        Pick a remote-tracking ref, then create and switch to a local branch
+        tracking it. Never fetches.
 
 canvasdiff.set_lens({lens})                          *canvasdiff.set_lens()*
         Set the lens to `"all"`, `"unstaged"` or `"staged"`.

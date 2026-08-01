@@ -51,7 +51,9 @@ where you were reading. Status: pre-alpha.
 
 ## Installation
 
-With [lazy.nvim](https://github.com/folke/lazy.nvim):
+With [lazy.nvim](https://github.com/folke/lazy.nvim) — or a distro built on
+it, like [LazyVim](https://github.com/LazyVim/LazyVim), where this table goes
+in its own file under `lua/plugins/`:
 
 ```lua
 {
@@ -60,9 +62,36 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-Load at startup if you want the global `<leader>lb` (compare) and `<leader>lc`
-(checkout) mappings available immediately — a `cmd = "CanvasDiff"`-only lazy
-spec can't install mappings until the command has loaded the plugin.
+That loads at startup, which is the simplest correct spec: the built-in global
+`<leader>lb` (compare) and `<leader>lc` (checkout) mappings exist immediately.
+
+To **lazy-load** instead, trigger on the command and own the entry points in
+the `keys` spec — pressing any of them loads the plugin and runs the action:
+
+```lua
+{
+  "reklai/canvasdiff.nvim",
+  cmd = "CanvasDiff",
+  keys = {
+    { "<leader><leader>", function() require("canvasdiff").toggle() end,
+      desc = "CanvasDiff: toggle canvas" },
+    { "<leader>lb", function() require("canvasdiff").compare() end,
+      desc = "CanvasDiff: compare branches" },
+    { "<leader>lc", function() require("canvasdiff").checkout() end,
+      desc = "CanvasDiff: checkout branch" },
+  },
+  -- The keys above replace the plugin's own globals, so turn those off --
+  -- otherwise they can't exist until something else loads the plugin anyway.
+  opts = { keymaps = { global = { compare = false, checkout = false } } },
+}
+```
+
+The point of routing `<leader>lb`/`<leader>lc` through `keys` rather than
+relying on the built-ins: a lazy-loaded plugin can't install a global mapping
+before it loads, so the built-ins would be dead until the first `:CanvasDiff`.
+The `keys` spec inverts that — the mapping exists from startup and *causes*
+the load. Everything inside the canvas (Enter, q, Tab, …) needs nothing here;
+those are buffer-local and installed when the canvas opens.
 
 After installing, run `:checkhealth canvasdiff` — it verifies the version
 floor and git, and audits your `setup()` table for misspelled or removed
@@ -117,10 +146,13 @@ state from git's own XY pair:
 | `●` | green (`Added`) | **staged** — the index differs from HEAD |
 | `○` | yellow (`DiagnosticWarn`) | **unstaged** — the worktree differs from the index |
 | `●○` | green + yellow | staged, then changed again |
-| `●` | red (`DiagnosticError`) + bold | **stale** — changed since you folded it |
+| `●` | red (`DiagnosticError`) + bold, always last | **stale** — changed since you folded it |
+| `● ●` | green, then red | staged *and* stale — same glyph, told apart by colour and position |
 
-The stale mark is always last, and clears when you unfold — you've seen it. Why
-the same dot twice, and why bold: [the stale marker](docs/design.md#the-stale-marker).
+The first three markers appear on every file row; stale exists only under a
+fold — a folded file's placeholder, its sidebar row, or a folded directory's
+row — and clears when you unfold, because then you've seen it. Why the same
+dot twice, and why bold: [the stale marker](docs/design.md#the-stale-marker).
 
 ### Lenses
 
@@ -326,19 +358,13 @@ Two things worth knowing before you rely on the defaults:
   `:nnoremap <C-Space> <Cmd>echo "ok"<CR>`.
 
 The reasoning behind all of this — why bare letters, why Tab, why exactly one
-way back — is in [keymap philosophy](docs/design.md#keymap-philosophy). Global
-entry points for toggle/lens are easy to add from your plugin manager:
+way back — is in [keymap philosophy](docs/design.md#keymap-philosophy).
 
-```lua
-keys = {
-  { "<leader><leader>", function() require("canvasdiff").toggle() end,
-    desc = "CanvasDiff: toggle canvas" },
-  { "<leader>ll", function() require("canvasdiff").cycle_lens(1) end,
-    desc = "CanvasDiff: cycle the lens" },
-},
-```
-
-CanvasDiff never replaces an existing global mapping — an occupied key wins and
+Any function on `require("canvasdiff")` makes a global entry point the same
+way the lazy-loading spec in [Installation](#installation) binds toggle,
+compare and checkout — e.g. `cycle_lens(1)` for a from-anywhere lens key
+(`:h canvasdiff-api` lists them all). CanvasDiff never replaces an existing
+global mapping — an occupied key wins and
 is reported as a collision. Every mapping carries a `desc` for `:map`,
 which-key, and pickers.
 
