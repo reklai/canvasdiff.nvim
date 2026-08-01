@@ -708,6 +708,9 @@ T["projection_ z decorator prefix_hl splits the overlay into two chunks"] =
         for index = 1, 40 do
           rows[index] = ("+row-%03d"):format(index)
         end
+        -- An added blank line: the row is the prefix glyph alone. Its margin
+        -- hue must survive, matching the eager canvas.
+        rows[2] = "+"
         local list = PageList.new(rows, { max_rows = 8 })
         projection = isolated_projection.new(list, {
           overscan_rows = 0,
@@ -719,17 +722,24 @@ T["projection_ z decorator prefix_hl splits the overlay into two chunks"] =
                 prefix_len = 1,
               }
             end
-            -- Contained per row: a length that cannot split the text (too
-            -- short, too long, or not an integer) must degrade to the plain
-            -- single-chunk overlay, never throw or truncate.
             if row0 == 1 then
               return {
                 hl_group = "CanvasDiffAdd",
                 prefix_hl = "CanvasDiffPrefixAdd",
-                prefix_len = #rows[2],
+                prefix_len = 1,
               }
             end
+            -- Contained per row: a length that cannot address this row's
+            -- bytes (past the text, or not an integer) must degrade to the
+            -- plain single-chunk overlay, never throw or truncate.
             if row0 == 2 then
+              return {
+                hl_group = "CanvasDiffAdd",
+                prefix_hl = "CanvasDiffPrefixAdd",
+                prefix_len = #rows[3] + 1,
+              }
+            end
+            if row0 == 3 then
               return {
                 hl_group = "CanvasDiffAdd",
                 prefix_hl = "CanvasDiffPrefixAdd",
@@ -757,11 +767,15 @@ T["projection_ z decorator prefix_hl splits the overlay into two chunks"] =
           { "+", "CanvasDiffPrefixAdd" },
           { "row-001", "CanvasDiffAdd" },
         }, "a valid prefix_len splits the drawn overlay at the byte boundary")
-        H.eq(overlays[1], { { rows[2], "CanvasDiffAdd" } },
-          "a prefix_len that swallows the whole row falls back to one chunk")
+        H.eq(overlays[1], {
+          { "+", "CanvasDiffPrefixAdd" },
+          { "", "CanvasDiffAdd" },
+        }, "a prefix-only row keeps the margin hue; its tail chunk is empty")
         H.eq(overlays[2], { { rows[3], "CanvasDiffAdd" } },
+          "a prefix_len past the text falls back to one chunk")
+        H.eq(overlays[3], { { rows[4], "CanvasDiffAdd" } },
           "a fractional prefix_len falls back to one chunk")
-        H.eq(overlays[3], { { rows[4], "Normal" } },
+        H.eq(overlays[4], { { rows[5], "Normal" } },
           "an undecorated row keeps the plain single-chunk overlay")
 
         assert_no_persistent_marks(projection)

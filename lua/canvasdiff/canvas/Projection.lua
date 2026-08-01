@@ -642,17 +642,20 @@ local function on_range_impl(
         if TYPE(RAWGET(style, "line_hl_group")) == "string" then
           line_hl = RAWGET(style, "line_hl_group")
         end
-        -- The prefix answer is honoured only when it can actually split this
-        -- row's bytes into two non-empty chunks. Anything else -- wrong type,
-        -- fractional, zero, past the text -- degrades to the single-chunk
-        -- overlay, per the containment rule above: a bad answer costs its row
-        -- some colour, never a throw or truncated text.
+        -- The prefix answer is honoured only when it addresses bytes this row
+        -- actually has. Anything else -- wrong type, fractional, zero, past
+        -- the text -- degrades to the single-chunk overlay, per the
+        -- containment rule above: a bad answer costs its row some colour,
+        -- never a throw or truncated text. The bound is INCLUSIVE: a
+        -- prefix-only row (an added blank line renders as `+` alone) must
+        -- keep the margin hue exactly as it does on the eager canvas, so its
+        -- tail chunk is simply "".
         local candidate_hl = RAWGET(style, "prefix_hl")
         local candidate_len = RAWGET(style, "prefix_len")
         if TYPE(candidate_hl) == "string"
             and finite_integer(candidate_len)
             and candidate_len >= 1
-            and candidate_len < #rows[index] then
+            and candidate_len <= #rows[index] then
           prefix_hl = candidate_hl
           prefix_len = candidate_len
         end
