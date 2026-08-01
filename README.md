@@ -685,12 +685,15 @@ Two deliberate limits:
   text, so the ghost renders whole and the `+` line carries the intra-line detail —
   the half that says what the code became.
 
-`CanvasDiffGhost` is its own group, and its default is already the dimming: a
-foreground moved 30% from `Normal`'s toward the background, no background of its
-own — because once deletions read as context for the line that replaced them rather
-than something to study on their own, dimmed is what you want. Override the one
-group to tune the ghosts without touching anything else; the factor itself is
-measured in the next section.
+`CanvasDiffGhost` is its own group, and its default is the dimming plus a
+strikethrough: a foreground moved 30% from `Normal`'s toward the background, struck
+through, no background of its own. Dimmed because deletions read as context for the
+line that replaced them rather than something to study on their own; struck because
+the dim floor deliberately parks ghosts at comment brightness, which makes a deleted
+block and a comment block luminance twins — the strike is what tells them apart at a
+glance, before you read a character, and it survives colour blindness where the
+margin's red does not. Override the one group to tune the ghosts without touching
+anything else; the dim factor itself is measured in the next section.
 
 ### How diff rows are coloured
 
@@ -754,7 +757,7 @@ The groups, all `default = true`, so your colourscheme (or an explicit
 | --- | --- | --- |
 | `CanvasDiffAdd` | derived neutral elevation | an added row's background |
 | `CanvasDiffDel` | elevation + dimmed fg | a wholly deleted file's real rows |
-| `CanvasDiffGhost` | dimmed fg, no bg | ghost deletion lines |
+| `CanvasDiffGhost` | dimmed fg + strikethrough, no bg | ghost deletion lines |
 | `CanvasDiffPrefixAdd` / `CanvasDiffPrefixDel` | derived green/red fg | the `+`/`-` prefix cell |
 | `CanvasDiffGutterAdd` / `CanvasDiffGutterDel` | the same green/red | the statuscolumn bar |
 | `CanvasDiffWordAdd` / `CanvasDiffWordDel` | **bold + underline** | the changed span within a line |

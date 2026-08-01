@@ -325,7 +325,17 @@ function R.ensure_diff_hl()
   set_diff_default("CanvasDiffAdd", { bg = elevation, default = true })
   set_diff_default("CanvasDiffDel",
     { bg = elevation, fg = ghost_fg, default = true })
-  set_diff_default("CanvasDiffGhost", { fg = ghost_fg, default = true })
+  -- Struck as well as dimmed. The dim factor's own floor pins ghosts at
+  -- @comment-class luminance, which makes a deleted block and a comment
+  -- block luminance twins -- the margin's red is the only tell, and it sits
+  -- outside the text you are actually reading. Strikethrough is the
+  -- disambiguator that works at scan distance: a struck block has a
+  -- different TEXTURE before a single character is read, it composes over
+  -- the dim under any colourscheme, and it survives red/green colour
+  -- blindness. An attribute, deliberately -- the field's background levels
+  -- stay at three (Normal, elevation, bar).
+  set_diff_default("CanvasDiffGhost",
+    { fg = ghost_fg, strikethrough = true, default = true })
 
   -- The file-header bar, from the SAME base as the field (fallback included,
   -- so a transparent scheme measures both from one origin) -- the bar's whole

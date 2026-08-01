@@ -1417,7 +1417,7 @@ T["hl_rows the field is one neutral elevation shared by add and del"] = function
   assert(del.fg ~= nil, "a deleted file's real rows read dimmed")
 end
 
-T["hl_rows ghosts have no background and a dimmed foreground"] = function()
+T["hl_rows ghosts have no background and a dimmed, struck foreground"] = function()
   reset_diff_groups()
   render.ensure_diff_hl()
   local ghost = vim.api.nvim_get_hl(0, { name = "CanvasDiffGhost", link = false })
@@ -1426,6 +1426,10 @@ T["hl_rows ghosts have no background and a dimmed foreground"] = function()
   assert(ghost.fg and ghost.fg ~= normal.fg, "dimmed, not Normal's own fg")
   assert(luma(ghost.fg) < luma(normal.fg) and luma(ghost.fg) > luma(normal.bg),
     "dimmed means moved toward the background, not past it and not brighter")
+  H.eq(ghost.strikethrough, true,
+    "struck through: the dim floor pins ghosts at comment luminance, so the"
+      .. " strike is what separates a deleted block from a comment block at"
+      .. " a glance")
 end
 
 T["hl_rows margin hue lives on the prefix and gutter groups, identically"] = function()
