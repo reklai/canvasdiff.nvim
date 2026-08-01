@@ -111,7 +111,7 @@ function M.enter(store, state, opts)
   -- instead would silently put you in a buffer whose content is NOT what the
   -- canvas is showing; unstaging moves that content back where it is editable.
   -- A committed range has no editable side at all. Both name the way out
-  -- rather than just refusing, in the breadcrumb's own vocabulary.
+  -- rather than just refusing, in the top band's own vocabulary.
   local l = lens.of(state)
   if not lens.editable(l) then
     if lens.is_range(l) then

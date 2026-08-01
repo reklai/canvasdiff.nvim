@@ -97,26 +97,36 @@ state anywhere — they describe two commits, not your worktree.
 Folded files don't get a bar — a placeholder is already a visually distinct single row
 (it opens with `▸`) and has no body to close off, and barring all of them would turn a
 canvas of 200 auto-collapsed files into a solid block of colour. The group is
-`CanvasDiffFileBar`, defaulting to `Folded` because that's the most visible group which
-always carries a background — measured at +30 luminance against `Normal` under
-tokyonight, where `CursorLine` manages +15 and `ColorColumn` is actually *darker*.
-`CanvasDiffFileHeader` stays foreground-only so the two compose: the filename keeps
-`Title`'s colour on the tinted row, and the marker colours sit over both (measured on
-the bar: the smallest marker-vs-bar gap is 138 luminance under tokyonight-moon, far
-clear of needing extra emphasis).
+`CanvasDiffFileBar`, and its default is derived rather than linked: `Normal`'s
+background moved 16% toward the luminance pole — the same derivation as the
+changed-row elevation, pushed further, so a file boundary reads *above* the field it
+interrupts and never as just another cursor line (the measurements are in "How diff
+rows are coloured" below). `CanvasDiffFileHeader` stays foreground-only so the two
+compose: the filename keeps `Title`'s colour on the tinted row, and the marker
+colours sit over both.
 
-And once you're a screen deep and that header has scrolled off, two things say where
-you are — always the same answer:
+And once you're a screen deep and that header has scrolled off, the top of the
+window still says where you are — always the same answer:
 
-- **The canvas winbar** is a breadcrumb:
-  `HEAD → WORKTREE · src/canvas.lua`. The comparison stays on the left and the
-  file under the topline follows after it as you scroll. A range comparison
-  (`main..topic`) reads `READ-ONLY  main → topic` instead — read-only mode
-  also tints the bar.
-- **The sidebar winbar** is a collection title such as
-  `Files changed (12)  +340 −128` — the count is files (even when directories
-  are folded), the stats are the whole changeset's.
-- **The sidebar's highlighted row** tracks the same file as the canvas.
+**The top band and the pinned header.** The winbar is one continuous band across
+the canvas and the sidebar (`CanvasDiffWinbar`, defaulting to `WinBar`). The
+canvas half names the comparison — `HEAD → WORKTREE` — and never varies with
+scroll, so the band is something you check, not something that flickers. A range
+comparison (`main..topic`) reads `READ-ONLY  main → topic` instead and tints the
+canvas half (`CanvasDiffWinbarReadOnly`). The sidebar half is the collection
+title, `Files changed (12)  +340 −128` — the count is files (even when
+directories are folded), the stats are the whole changeset's.
+
+The file you are in is the **pinned header's** job: a one-row float directly
+under the band showing the current file's own header row — the same bar tint,
+counts and stage marks as the row it mirrors, kept current by the same
+reconcile. It *covers* the first canvas row rather than pushing anything down,
+so showing and hiding it never reflows the canvas or moves your view, and clicks
+fall through to the row beneath it. It hides itself while the real header row is
+at the top of the window — a copy over the original would double it — and on a
+folded placeholder, whose single row already is the header.
+
+**The sidebar's highlighted row** tracks the same file as the canvas.
 
 **Both follow you into a jump.** Open a file with **Enter** and the sidebar highlights
 *that* file, because you're still somewhere in the changeset and the tree's job is to
@@ -249,7 +259,7 @@ require("canvasdiff").setup({
   glyphs = {
     ctx = " ", del = "-", add = "+",   -- diff row prefixes
     file = "▎", folded = "▸", open = "▾", minus = "−",
-    gutter = "▎",                      -- statuscolumn bar (highlight.diff = "gutter")
+    gutter = "▎",                      -- statuscolumn bar beside added/deleted rows
     staged = "●", unstaged = "○", stale = " ●",
     scroll_file = "‒", scroll_bar = "❘",
   },
@@ -291,7 +301,8 @@ are never persisted and never marked — you should not have to think about them
 
 A statuscolumn shows each visible line's number in the file it belongs to
 (not the canvas buffer's own line number) — blank for headers and
-placeholders, `·` for pure deletions.
+placeholders — plus a one-cell green/red bar beside every added and deleted
+row, ghost deletions included.
 
 ## Commands
 
@@ -331,8 +342,7 @@ The canvas always compares two sides, and the **lens** is which pair:
 `<Tab>` cycles through the three; the commands **set** one, so they're safe in a
 mapping — `:CanvasDiff unstaged` always lands unstaged, which a toggle can't
 promise. Any of them will open the canvas if it isn't showing.
-The current comparison is always named on the left side of the canvas
-breadcrumb.
+The current comparison is always named on the canvas half of the top band.
 
 Pivoting is non-destructive: a file that looks identical through two lenses
 isn't re-rendered at all, so your scroll position and cursor stay exactly where
@@ -359,9 +369,9 @@ are therefore read-only:
 - Either omitted endpoint means `HEAD`, so `main..` is `main..HEAD` and
   `...topic` is `HEAD...topic`.
 
-Either way the breadcrumb shows the refs you asked for, marked `READ-ONLY`, and
-the whole winbar is tinted (`CanvasDiffWinbarReadOnly`, default measured the
-same way as `CanvasDiffFileBar`).
+Either way the top band shows the refs you asked for, marked `READ-ONLY`, and
+the canvas half of the band is tinted (`CanvasDiffWinbarReadOnly`, defaulting
+to `Visual` — picked by the same luminance measurement as `CanvasDiffFileBar`).
 
 `<Tab>` or `<Shift-Tab>` leaves a read-only range and returns to the
 comparison you were looking through when you entered it — `HEAD → WORKTREE`
@@ -466,8 +476,6 @@ require("canvasdiff").setup({
     enabled = true,     -- syntax + word-diff highlighting of hunk content
     margin = 100,       -- rows beyond the viewport kept highlighted
     debounce_ms = 30,   -- scroll debounce before re-applying highlights
-    diff = "quiet",     -- row colouring: "quiet" derived tints, "classic" raw
-                        -- DiffAdd/DiffDelete, "gutter" statuscolumn bars only
   },
   watch = {
     enabled = true,     -- auto-refresh the canvas on save/focus/external changes
@@ -677,60 +685,100 @@ Two deliberate limits:
   text, so the ghost renders whole and the `+` line carries the intra-line detail —
   the half that says what the code became.
 
-`CanvasDiffGhost` is its own group (defaulting to `CanvasDiffDel`) so you can dim the ghosts
-without touching anything else, which is usually what you want once deletions read as
-context for the line that replaced them rather than something to study on their own.
+`CanvasDiffGhost` is its own group, and its default is already the dimming: a
+foreground moved 30% from `Normal`'s toward the background, no background of its
+own — because once deletions read as context for the line that replaced them rather
+than something to study on their own, dimmed is what you want. Override the one
+group to tune the ghosts without touching anything else; the factor itself is
+measured in the next section.
 
 ### How diff rows are coloured
 
-Three modes, picked with `highlight.diff`:
+One rendering, three channels — each carrying exactly one fact:
 
-- **`"quiet"`** (the default) — derived low-intensity tints: your scheme's
-  `DiffAdd`/`DiffDelete` background blended **60% toward `Normal`'s**. Colourschemes
-  tune those groups for a two-pane vimdiff, where a whole-window wash is the point;
-  on a canvas much of the screen is tinted, so the raw wash spends the strongest
-  visual channel saying "this line is involved" — the least interesting fact once
-  word-diff marks the tokens. The factor is measured, not felt: at 60%, every probed
-  syntax token (`@comment` as the dim extreme, `Function`/`String` as bright ones)
-  keeps its luminance delta on a tinted row within 15% of its delta on an untinted
-  one, under both the builtin dark scheme and tokyonight-moon — at 50% the worst case
-  degrades by 19%. When a scheme gives a diff group **no background at all** (builtin
-  `DiffDelete` is foreground-only), the tint derives from a fixed green/red pair
-  instead, so quiet never renders an invisible deletion.
-- **`"classic"`** — the raw `DiffAdd`/`DiffDelete` links: exactly what your vimdiff
-  looks like, if that's the loudness you want.
-- **`"gutter"`** — buffer rows lose their tints; ghost-deletion virtual rows keep
-  their faint quiet-derived wash (word-diff never reaches into virtual text, so the
-  wash stays a ghost's clearest "deleted" signal). The statuscolumn carries a
-  coloured bar
-  glyph (`▎`, the `gutter` glyph slot) beside each added or deleted row —
-  `CanvasDiffGutterAdd`/`CanvasDiffGutterDel`, defaulting to `Added`/`Removed` —
-  including on ghost-deletion virtual rows. Needs `statuscolumn.enabled = true`;
-  without it CanvasDiff warns once and behaves as `"quiet"`.
+- **Elevation says "changed".** Every added row's background — and a wholly
+  deleted file's rows — is `Normal`'s background moved **4% toward the luminance
+  pole** (white on a dark scheme, black on a light one). Hueless on purpose:
+  colourschemes tune `DiffAdd`/`DiffDelete` for a two-pane vimdiff, where a
+  whole-window wash is the point; on a canvas most of the screen *is* changed
+  rows, so a hued wash would spend the strongest visual channel on the least
+  interesting fact.
+- **Dimming says "removed".** Ghost deletion lines — and a wholly deleted file's
+  rows, the only real `-` rows left — render with `Normal`'s foreground moved
+  **30% toward its background**.
+- **The margin hue says which direction.** The green/red lives *only* on the
+  one-cell `+`/`-` prefix and the statuscolumn bar: `DiffAdd`/`DiffDelete`'s
+  **foreground**, or a fixed `#2ea043`/`#db4444` when those groups carry none
+  (background-only diff groups are the common case). Never their background —
+  bg-tuned colours read as mud when used as a foreground.
 
-Six overridable groups, all `default = true` so your colourscheme (or an explicit
+Every value is derived from the live colourscheme when the canvas draws, and each
+factor is measured, not felt:
+
+- **4% (the elevation)** is budgeted by what the old derived tints already spent:
+  the worst probed syntax token's (`@comment` as the dim extreme,
+  `Function`/`String` as bright ones) contrast loss on a tinted row was 22.8%
+  under the builtin dark scheme and 14.7% under tokyonight-moon, and 0.04 is the
+  largest of the 0.03–0.10 candidates whose worst loss fits both budgets (6.6%
+  builtin, 12.0% moon — 0.05 already overshoots moon's by a hair). It lands about
+  +9 luma from `Normal` under both schemes.
+- **16% (the file bar, `CanvasDiffFileBar`)** is the smallest of the measured
+  candidates whose bar clears the elevation by at least 10 luma under both
+  schemes (builtin +37.1 against the field's +9.0; moon +34.8 against +8.9)
+  *and* stays at least 8 luma from both `CursorLine`'s and `Visual`'s
+  backgrounds, so a file boundary never reads as just another cursor line — 0.12
+  lands 3.9 from builtin's `CursorLine`, 0.14 lands 4.5 from moon's `Visual`. A
+  15% `Title`-fg tint on the bar was measured and rejected: builtin's `Title` is
+  near-neutral, so tinting just lightens the bar into `Visual`'s band (gap 5.9),
+  and under moon it collapses the stale marker's contrast on the bar from 23.3
+  to 11.6.
+- **30% (the ghost dim)** is the largest candidate whose dimmed foreground keeps
+  at least `@comment`'s luma delta against `Normal`'s background — a deletion
+  must never read dimmer than a comment. The builtin scheme is the binding one
+  (`@comment` at 135.9; the ghost reads 143.1 at 0.30 but 133.1 at 0.35);
+  moon's `@comment` sits at 74.1, where every candidate clears.
+
+A transparent scheme gives `Normal` no background at all, so there is nothing to
+elevate from; a fixed near-Normal pair (`#2c2c2c` dark, `#e4e4e4` light) keeps the
+field visible rather than invisible.
+
+There used to be a `highlight.diff` option choosing between three loudnesses; it
+was removed with the modes themselves, and a leftover `highlight.diff = ...` in a
+config now gets one diagnostic from `setup()` and is otherwise ignored — override
+the groups below instead.
+
+The groups, all `default = true`, so your colourscheme (or an explicit
 `nvim_set_hl` of your own) always wins over the derived defaults:
 
 | Group | Default | Marks |
 | --- | --- | --- |
-| `CanvasDiffAdd` | derived quiet tint (`DiffAdd` in classic) | an added row's background |
-| `CanvasDiffDel` | derived quiet tint (`DiffDelete` in classic) | a removed row's background |
-| `CanvasDiffWordAdd` | **bold + underline** | the changed span within an added line |
-| `CanvasDiffWordDel` | **bold + underline** | the changed span within a removed line |
-| `CanvasDiffGutterAdd` | `Added` | the gutter bar on an added row |
-| `CanvasDiffGutterDel` | `Removed` | the gutter bar on a removed/ghost row |
+| `CanvasDiffAdd` | derived neutral elevation | an added row's background |
+| `CanvasDiffDel` | elevation + dimmed fg | a wholly deleted file's real rows |
+| `CanvasDiffGhost` | dimmed fg, no bg | ghost deletion lines |
+| `CanvasDiffPrefixAdd` / `CanvasDiffPrefixDel` | derived green/red fg | the `+`/`-` prefix cell |
+| `CanvasDiffGutterAdd` / `CanvasDiffGutterDel` | the same green/red | the statuscolumn bar |
+| `CanvasDiffWordAdd` / `CanvasDiffWordDel` | **bold + underline** | the changed span within a line |
+| `CanvasDiffFileBar` | derived bar elevation | the file header row and its pinned copy |
+| `CanvasDiffWinbar` / `CanvasDiffWinbarReadOnly` | `WinBar` / `Visual` | the top band / its read-only tint |
+
+`CanvasDiffDel` carries *both* the elevation and the dimmed foreground because real
+`-` rows exist only for a wholly deleted file — every other deletion renders as a
+ghost — and those rows must read as removed content under a red margin, not as
+live code. The bar half of the margin needs `statuscolumn.enabled = true` (the
+default); the prefix half is in the text and always there.
 
 Two more deliberate choices behind that, both arrived at by measurement:
 
-**Row tints stop at end-of-text.** They used to set `hl_eol`, which fills the rest of
-the *screen line* — so a three-character edit painted colour to the right edge of a
-200-column window, and the coloured area scaled with your window rather than with the
-change. It also muddied code: on a tinted row, `@comment` sat at only 47 luminance
-delta against the fill where every other syntax group had 103–153.
+**The elevation stops at end-of-text.** Row backgrounds used to set `hl_eol`, which
+fills the rest of the *screen line* — so a three-character edit painted colour to
+the right edge of a 200-column window, and the coloured area scaled with your
+window rather than with the change. It also muddied code: on a tinted row,
+`@comment` sat at only 47 luminance delta against the fill where every other
+syntax group had 103–153.
 
 **Word-diff emphasises by attribute, never by a competing background.** This mark sits
-*inside* a row tint, so a background here has to out-contrast one that already claimed
-most of the range — and which wins is pure colourscheme luck. Linked to `DiffText` it
+*inside* the row's elevation, so a background here has to out-contrast one that already
+claimed most of the range — and which wins is pure colourscheme luck. Linked to `DiffText` it
 cleared an added row by just **9** luminance under tokyonight while the row itself
 cleared `Normal` by 27, so the strongest signal was "this line is involved" and the
 weakest was "this is the token that changed" — backwards, since the second is the only
@@ -741,19 +789,20 @@ over whatever is underneath, identically under every colourscheme, and an underl
 states the exact extent where a background only says "somewhere in here".
 
 The `+`/`-` prefixes stay regardless — they're the only **shape**-based channel, so
-they're what survives red/green colour blindness and a monochrome terminal.
+they're what survives red/green colour blindness and a monochrome terminal, which
+is why the margin hue rides *on* them rather than replacing them.
 
-To pick a different loudness wholesale, switch the mode rather than redefining groups:
-
-```lua
-require("canvasdiff").setup({ highlight = { diff = "classic" } })  -- or "gutter"
-```
-
-And to tune a single group, define it yourself — an explicit definition always beats
-the derived default:
+To change the look, define the groups yourself — an explicit definition always
+beats a derived default:
 
 ```lua
-vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "CursorLine" })
+-- point the margin at your scheme's own diff colours:
+vim.api.nvim_set_hl(0, "CanvasDiffPrefixAdd", { link = "Added" })
+vim.api.nvim_set_hl(0, "CanvasDiffPrefixDel", { link = "Removed" })
+
+-- or bring back the raw two-pane vimdiff wash, if that's the loudness you want:
+vim.api.nvim_set_hl(0, "CanvasDiffAdd", { link = "DiffAdd" })
+vim.api.nvim_set_hl(0, "CanvasDiffDel", { link = "DiffDelete" })
 ```
 
 The canvas auto-refreshes on `:write`, on regaining focus, and on file
