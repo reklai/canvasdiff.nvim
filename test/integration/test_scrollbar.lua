@@ -176,6 +176,30 @@ T["scroll_win opens a 1-col non-focusable float on the canvas"] = function()
   H.eq(scrollbar.is_open(lease), false)
 end
 
+T["scroll_win a winbar never pushes the bar off the text area"] = function()
+  -- relative="win" row 0 is already the first text row BELOW the winbar, so
+  -- the bar needs no winbar offset: with one, it sat a row low and its last
+  -- cell landed on the statusline (found via the sticky header's screenshot,
+  -- 2026-08-02 -- the two floats shared the bug). Screen positions, not
+  -- config numbers: the config row is meaningless without knowing the base.
+  local st, lease = open_with_bar()
+  vim.api.nvim_set_option_value("winbar", "BAND", { win = st.win, scope = "local" })
+  vim.cmd.redraw() -- headless: the winbar enters the layout only on redraw
+  scrollbar.update(lease)
+  local w = assert(bar_win(), "float exists")
+  local info = vim.fn.getwininfo(st.win)[1]
+  local fpos = vim.api.nvim_win_get_position(w)
+  local cpos = vim.api.nvim_win_get_position(st.win)
+  H.eq(fpos[1], cpos[1] + info.winbar,
+    "the bar's top cell is the first text row under the winbar")
+  H.eq(vim.api.nvim_win_get_height(w), info.height,
+    "the bar spans exactly the text rows")
+  H.eq(fpos[1] + vim.api.nvim_win_get_height(w) - 1,
+    cpos[1] + info.winbar + info.height - 1,
+    "the bar's last cell is the last text row, never the statusline")
+  scrollbar.close(lease)
+end
+
 T["scroll_win thumb tracks the viewport"] = function()
   local st, lease = open_with_bar()
   local w = bar_win()

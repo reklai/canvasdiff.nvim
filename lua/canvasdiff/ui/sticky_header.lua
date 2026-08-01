@@ -97,30 +97,29 @@ end
 
 local canvas_showing = canvas.win_showing_canvas
 
---- The canvas window's TEXT geometry: how many rows actually hold buffer lines, and
---- how far down the first of them starts.
----
---- Verified empirically (see ui/scrollbar.lua, whose measurement this is):
---- `nvim_win_get_height` INCLUDES the winbar row, while `getwininfo().height`
---- excludes it -- and a float opened `relative = "win", row = 0` lands at the
---- window's origin, i.e. ON TOP of the winbar. This row must sit UNDER the
---- winbar, over the first text row, so `row = info.winbar` is the whole point.
---- When no winbar exists that offset is 0 and the float pins under whatever
---- chrome remains -- still correct, no special case.
+--- How many canvas rows actually hold buffer text: `getwininfo().height`
+--- excludes the winbar row where `nvim_win_get_height` counts it (measured).
+--- Used only as the "is there anywhere to pin" gate -- the float's ROW needs
+--- no winbar arithmetic at all; see float_config.
 local function text_geometry(win)
   local info = vim.fn.getwininfo(win)[1]
   if not info then
-    return { height = 0, row = 0 }
+    return { height = 0 }
   end
-  return { height = info.height, row = info.winbar or 0 }
+  return { height = info.height }
 end
 
 local function float_config(state)
-  local geo = text_geometry(state.win)
   return {
     relative = "win",
     win = state.win,
-    row = geo.row,
+    -- Row 0 IS the first text row: a `relative = "win"` float's grid starts
+    -- BELOW the winbar (measured on 0.12 -- nvim_win_get_position of a row-0
+    -- float is the host's screen row plus its winbar rows). An earlier note,
+    -- inherited from the minimap, claimed row 0 landed ON the winbar and
+    -- added `getwininfo().winbar` here; that pinned this row one text row too
+    -- low the moment a winbar existed, which in the real app is always.
+    row = 0,
     col = 0,
     width = math.max(vim.api.nvim_win_get_width(state.win), 1),
     height = 1,

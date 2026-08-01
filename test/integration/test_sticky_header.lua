@@ -77,6 +77,13 @@ end
 
 T["sticky_win appears once the header scrolls off, mirroring it exactly"] = function()
   local st, lease = open_pinned()
+  -- The real app always gives the canvas a winbar, and the winbar is exactly
+  -- where the placement bug lived: relative="win" row 0 is ALREADY the first
+  -- text row below the winbar, so any winbar-derived row offset lands the
+  -- float one row too low (user screenshot, 2026-08-02). Pin the SCREEN
+  -- position, not the config number.
+  vim.api.nvim_set_option_value("winbar", "BAND", { win = st.win, scope = "local" })
+  vim.cmd.redraw() -- headless: the winbar enters the layout only on redraw
   scroll_to(st, lease, 2) -- two rows into section 1
   H.eq(sticky.is_open(lease), true)
   H.eq(shown_line(lease), render.section_line(st.sections[1], 1),
@@ -89,8 +96,11 @@ T["sticky_win appears once the header scrolls off, mirroring it exactly"] = func
   H.eq(cfg.relative, "win")
   assert(cfg.zindex < 40, "the minimap owns the shared top-right cell")
   H.eq(cfg.focusable, false)
-  H.eq(cfg.row, vim.fn.getwininfo(st.win)[1].winbar,
-    "the float sits under the winbar, on the first TEXT row")
+  local fpos = vim.api.nvim_win_get_position(lease.win)
+  local cpos = vim.api.nvim_win_get_position(st.win)
+  H.eq(fpos[1], cpos[1] + vim.fn.getwininfo(st.win)[1].winbar,
+    "the float's SCREEN row is the first text row under the winbar")
+  H.eq(fpos[2], cpos[2], "flush with the canvas's left edge")
   H.eq(vim.api.nvim_get_current_win(), st.win, "focus stays in canvas")
   sticky.close(lease)
 end

@@ -191,21 +191,19 @@ end
 
 local canvas_showing = canvas.win_showing_canvas
 
---- The canvas window's TEXT geometry: how many rows actually hold buffer lines, and
---- how far down the first of them starts.
----
---- Verified empirically: `nvim_win_get_height` INCLUDES the winbar row, while
---- `getwininfo().height` excludes it -- and a float opened `relative = "win", row = 0`
---- lands at the window's origin, i.e. on top of the winbar. So a full-height
---- right-edge float sized from nvim_win_get_height is one row too tall AND one row
---- too high the moment a winbar exists, which it now does (App sets one to show the
---- current lens). Both numbers have to come from getwininfo.
+--- How many canvas rows actually hold buffer text. Measured:
+--- `nvim_win_get_height` INCLUDES the winbar row while `getwininfo().height`
+--- excludes it, so the bar's height must come from getwininfo -- sized from
+--- win_get_height it is one row too tall and its last cell lands on the
+--- statusline. Nothing here needs a winbar ROW offset any more: the float
+--- grid and `getmousepos().winrow` both start at the first text row (see
+--- float_config and bar_row_under_pointer).
 local function text_geometry(win)
   local info = vim.fn.getwininfo(win)[1]
   if not info then
-    return { height = 0, row = 0 }
+    return { height = 0 }
   end
-  return { height = info.height, row = info.winbar or 0 }
+  return { height = info.height }
 end
 
 local function float_config(state)
@@ -213,7 +211,14 @@ local function float_config(state)
   return {
     relative = "win",
     win = state.win,
-    row = geo.row,
+    -- Row 0 IS the first text row: a `relative = "win"` float's grid starts
+    -- BELOW the winbar (measured on 0.12 via nvim_win_get_position). This
+    -- comment's ancestor claimed the opposite and offset the row by
+    -- `getwininfo().winbar`, which sat the whole bar one row low with its
+    -- last cell over the statusline whenever a winbar existed -- exposed by
+    -- the sticky header's screenshot, 2026-08-02; the two floats shared the
+    -- inherited offset.
+    row = 0,
     col = vim.api.nvim_win_get_width(state.win) - 1,
     width = 1,
     height = geo.height,
@@ -243,9 +248,13 @@ end
 --- Per spike Q2 the float NEVER appears in getmousepos(): `winid` is the
 --- canvas window beneath, so the hit-test is column math on the canvas --
 --- `wincol == width` means the bar column (the float covers the canvas's last
---- column), and `winrow` counts the winbar, which is subtracted off. Never
---- `pos.line`: deletion ghosts are virtual lines, so buffer lines and screen
---- rows diverge under the pointer.
+--- column). `winrow` is used RAW: winrow 1 is the first TEXT row (measured on
+--- 0.12 -- the winbar is not counted), the same row the bar's top cell now
+--- covers, so bar row and winrow coincide with no arithmetic. The spike's
+--- "winrow counts the winbar, subtract it" note was wrong the same way the
+--- float's own placement was: the two errors cancelled in this hit-test while
+--- the bar visibly sat a row low. Never `pos.line`: deletion ghosts are
+--- virtual lines, so buffer lines and screen rows diverge under the pointer.
 local function bar_row_under_pointer(lease)
   if not owned_window(lease) then
     return nil
@@ -260,7 +269,7 @@ local function bar_row_under_pointer(lease)
     return nil
   end
   local geo = text_geometry(state.win)
-  local row = pos.winrow - geo.row
+  local row = pos.winrow
   if row < 1 or row > geo.height then
     return nil
   end
