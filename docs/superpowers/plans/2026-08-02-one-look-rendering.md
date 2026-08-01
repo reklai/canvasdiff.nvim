@@ -457,8 +457,7 @@ git commit -m "feat: margin hue on prefix cells and ghost prefixes, both canvase
 - [ ] **Step 1: Extend the measurement**
 
 Re-run the Step-1 script from Task 2 (it already prints elevation candidates at 0.12-0.24 and CursorLine/Folded/Visual deltas). Decision rules, both schemes:
-- `BAR_FACTOR`: the smallest candidate where `|bar dL| ≥ |elevation dL| + 10` (the bar must clear the FIELD, not just Normal).
-- Title-tint decision: if the chosen bar's luma lands within 8 of CursorLine's or Visual's bg luma under either scheme (it would read as "just another cursor line"), blend the bar 15% toward `Title`'s fg and re-check; record the decision either way.
+- `BAR_FACTOR` (amended 2026-08-02, controller ruling under the spec's "decide by measurement" delegation): the smallest candidate satisfying BOTH clauses under both schemes — `|bar dL| ≥ |elevation dL| + 10` (clears the FIELD, not just Normal) AND luma gap ≥ 8 from CursorLine's and Visual's bg (not "just another cursor line"). The Title-tint step is DROPPED: measurement showed builtin's near-neutral Title fg cannot cure a collision and the tint collapses tokyonight's staged-vs-stale marker gap (23.3 → 11.6). Record the full table.
 - Stage markers: record `|luma(marker fg) - luma(bar bg)|` for `CanvasDiffStaged` (`Added` fg), `CanvasDiffUnstaged` (`DiagnosticWarn` fg), `CanvasDiffStale` (`DiagnosticError` fg). No code change expected — the pair that matters is staged-vs-stale LUMA SEPARATION (was 138 vs `Folded`); flag in the commit body if the new bar collapses any gap below what `Folded` gave.
 
 - [ ] **Step 2: Write the failing tests**
