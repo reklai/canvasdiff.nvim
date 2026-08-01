@@ -418,7 +418,7 @@ end
 
 `paged.lua` `style_for`: for entries where `render.prefix_hl(entry)` answers, set `style.prefix_hl, style.prefix_len` from its two return values.
 
-`Projection.lua` (lines 636-656): read `prefix_hl` (string) and `prefix_len` (number, `1 <= prefix_len < #row-text`, else ignore — decorator answers are contained per row, matching the file's defensive style, and an out-of-range length falls back to the single chunk). When valid:
+`Projection.lua` (lines 636-656): read `prefix_hl` (string) and `prefix_len` (number, `1 <= prefix_len <= #row-text`, else ignore — decorator answers are contained per row, matching the file's defensive style, and an out-of-range length falls back to the single chunk). (Amended 2026-08-02: originally strict `<`, which dropped the hue on prefix-only rows — added blank lines are routine, and the spec's margin-hue rule has no blank-line exception; `nvim_buf_set_extmark` accepts an empty-string second chunk, verified.) When valid:
 
 ```lua
 virt_text = {
