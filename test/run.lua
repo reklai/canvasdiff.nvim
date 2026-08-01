@@ -82,6 +82,9 @@ local total, failed = 0, 0
 for _, file in ipairs(files) do
   local chunk = assert(loadfile(file))
   local cases = chunk()
+  -- A discovered test_*.lua that registers nothing is a gutted file, not an
+  -- empty suite -- fail loudly instead of letting the run shrink under a typo.
+  assert(next(cases) ~= nil, file .. " registered no tests")
   local names = vim.tbl_keys(cases)
   table.sort(names)
   for _, name in ipairs(names) do
@@ -98,4 +101,10 @@ for _, file in ipairs(files) do
   end
 end
 print(("%d/%d passed"):format(total - failed, total))
+-- "0/0 passed" is how a typo'd FILTER or an empty discovery looks; a run that
+-- verified nothing must never report green.
+if total == 0 then
+  print("no tests matched -- check the name-pattern and suite arguments")
+  os.exit(1)
+end
 os.exit(failed == 0 and 0 or 1)
