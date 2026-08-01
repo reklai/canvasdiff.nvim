@@ -117,7 +117,7 @@ T["paged_ locates the section and offset for any logical row"] = function()
       local start0 = paged.starts[index]
       local located, offset = Paged.locate(paged, start0)
       H.eq(located, index, ("row %d belongs to section %d"):format(start0, index))
-      H.eq(offset, 0, "a section starts at its own offset zero")
+      H.eq(offset, 1, "a section starts at offset 1, its header row")
     end
     -- The last row of the canvas belongs to the last section.
     local last = paged.list:row_count() - 1
@@ -464,7 +464,7 @@ T["paged_ the canvas API dispatches to the store when the state is paged"] =
       local start2 = canvas.section_rows(paged.state, 2)
       local index, offset = canvas.locate(paged.state, start2)
       H.eq(index, 2, "locate through the facade found the wrong section")
-      H.eq(offset, 0)
+      H.eq(offset, 1, "the facade answers the documented 1-based offset")
       H.eq(canvas.locate(paged.state, 0), 1)
 
       -- And folding through the facade splices the store.
@@ -484,6 +484,51 @@ T["paged_ the canvas API dispatches to the store when the state is paged"] =
     Paged.dispose(paged)
     assert(ok, failure)
   end
+
+T["paged_ locate answers exactly as the eager canvas, row by row"] = function()
+  -- The facade documents ONE locate contract: a section index and a 1-based
+  -- offset into that section's entries, offset 1 being the header (or
+  -- collapsed placeholder) row. Consumers index `entries[offset]` directly --
+  -- statuscolumn numbers, jump targets, session anchors -- so a paged canvas
+  -- answering anything else silently shifts all of them by one row.
+  local sections = three_sections()
+  local eager_state = canvas.open(sections, {})
+  canvas.set_collapsed(eager_state, 2, true)
+
+  local paged, err = Paged.render(three_sections(), {
+    collapsed = function(path) return path == "b/two.txt" end,
+  })
+  assert(paged, err)
+  local ok, failure = xpcall(function()
+    local total = canvas.logical(eager_state).row_count()
+    H.eq(Paged.logical(paged).row_count(), total,
+      "sanity: identical layouts to compare row by row")
+
+    for row0 = 0, total - 1 do
+      local eager_i, eager_off = canvas.locate(eager_state, row0)
+      local paged_i, paged_off = canvas.locate(paged.state, row0)
+      H.eq(paged_i, eager_i,
+        ("row %d: paged locate found a different section"):format(row0))
+      H.eq(paged_off, eager_off,
+        ("row %d: paged locate answered a different offset"):format(row0))
+    end
+
+    -- The rows an off-by-one bites, named.
+    local s1 = (canvas.section_rows(paged.state, 1))
+    H.eq({ canvas.locate(paged.state, s1) }, { 1, 1 },
+      "a section's header row is offset 1")
+    H.eq({ canvas.locate(paged.state, s1 + 3) }, { 1, 4 },
+      "a body row's offset indexes entries directly")
+    local s2 = (canvas.section_rows(paged.state, 2))
+    H.eq({ canvas.locate(paged.state, s2) }, { 2, 1 },
+      "a collapsed placeholder is its section's offset 1")
+    local s3 = (canvas.section_rows(paged.state, 3))
+    H.eq({ canvas.locate(paged.state, s3) }, { 3, 1 },
+      "the first row of a later section restarts at offset 1")
+  end, debug.traceback)
+  Paged.dispose(paged)
+  assert(ok, failure)
+end
 
 T["paged_ replacing a section splices only its rows"] = function()
   local sections = three_sections()

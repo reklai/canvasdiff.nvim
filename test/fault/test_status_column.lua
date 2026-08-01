@@ -1653,6 +1653,56 @@ T["statuscol_ text maps rows to new-file numbers"] = function()
   statuscol.detach(lease)
 end
 
+T["statuscol_ maps rows to new-file numbers on a paged canvas"] = function()
+  detach_tracked()
+  -- The render path resolves rows through canvas.locate and indexes
+  -- `entries[offset]` directly. The paged store must answer the same 1-based
+  -- offset the eager canvas does: a 0-based answer makes every row render its
+  -- NEIGHBOUR's cell -- blank below a hunk header, the wrong number elsewhere.
+  local Paged = require("canvasdiff.canvas.paged")
+  local paged, err = Paged.render(three_sections())
+  assert(paged, err)
+  local original = vim.api.nvim_get_current_buf()
+  local ok, failure = xpcall(function()
+    vim.api.nvim_set_current_buf(paged.buffer)
+    local win = vim.api.nvim_get_current_win()
+    local lease = statuscol.attach(paged.state, {
+      windows = function() return { win } end,
+    })
+    vim.g.statusline_winid = win
+
+    local start0 = (canvas.section_rows(paged.state, 1))
+    H.eq(statuscol.render(lease, win, start0 + 1), "      ",
+      "the file header row keeps blank number cells")
+
+    -- A numbered ctx row directly below a hunk header: the row where a
+    -- 0-based offset answers the header's blank cell instead of the number.
+    local entries = paged.sections[1].entries
+    local target_off
+    for off = 2, #entries do
+      if entries[off - 1].kind == "hunk_hdr" and entries[off].kind == "ctx"
+          and entries[off].new_lnum then
+        target_off = off
+        break
+      end
+    end
+    assert(target_off, "sanity: a numbered ctx row directly below a hunk header")
+    -- 1-based offset `off` sits at buffer row0 = start0 + off - 1, lnum = start0 + off.
+    H.eq(statuscol.render(lease, win, start0 + target_off),
+      (" %4d "):format(entries[target_off].new_lnum),
+      "a paged row answers its OWN new-file number, not its neighbour's")
+
+    vim.g.statusline_winid = nil
+    statuscol.detach(lease)
+  end, debug.traceback)
+  if vim.api.nvim_buf_is_valid(original) then
+    pcall(vim.api.nvim_set_current_buf, original)
+  end
+  Paged.dispose(paged)
+  detach_tracked()
+  assert(ok, failure)
+end
+
 T["statuscol_ the bar column renders on add, del and ghost rows by default"] = function()
   detach_tracked()
   require("canvasdiff.config").setup({})

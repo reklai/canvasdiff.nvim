@@ -419,7 +419,7 @@ function Paged.refresh_ghosts(paged, window, opts)
     -- Collapsed sections render one placeholder row and have no entry to
     -- carry a deletion, so they are skipped rather than mis-indexed.
     if index and not paged.collapsed[index] then
-      local entry = paged.sections[index].entries[offset + 1]
+      local entry = paged.sections[index].entries[offset]
       local above = entry and render.ghost_lines(entry, "ghosts")
       if above then
         vim.api.nvim_buf_set_extmark(buffer, GHOST_NS, row0, 0, {
@@ -712,12 +712,18 @@ end
 --- The display stack asks this instead of reading buffer text: it is what
 --- `section_rows`, the sidebar's row mapping and hunk/file motions actually
 --- need from a canvas.
+---
+--- The offset is 1-BASED, exactly as the eager `Canvas.locate` answers it:
+--- offset 1 is the header (or collapsed placeholder) row, and consumers index
+--- `section.entries[offset]` directly. The two paths dispatch behind one
+--- facade, so they must answer identically -- a 0-based answer here silently
+--- shifts every consumer's row by one on paged canvases only.
 function Paged.locate(paged, row0)
   local index = section_at(paged.starts, row0)
   if not index then
     return nil
   end
-  return index, row0 - paged.starts[index]
+  return index, row0 - paged.starts[index] + 1
 end
 
 --- Release the projection and forget the store.
