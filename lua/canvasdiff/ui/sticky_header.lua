@@ -1,7 +1,14 @@
 -- The sticky file-header row: a one-row float pinned under the winbar that
--- mirrors the in-buffer header of the section under the topline. This half
--- is pure: given a state and a 0-based topline, what (if anything) should
--- the row show. The float half arrives with open/update/close below.
+-- mirrors the in-buffer header of the section under the topline. SH.content
+-- is the pure half: given a state and a 0-based topline, what (if anything)
+-- should the row show. The float half below (open/update/close) renders that
+-- answer.
+--
+-- The lease machinery here is DELIBERATELY the scrollbar's, ported rather
+-- than shared: sidebar, status column and scrollbar each own their lease
+-- pattern by repo convention, because the update logic in the middle
+-- diverges completely and a shared abstraction would couple four owners
+-- through their least interesting part.
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
 local fold = require("canvasdiff.diff").fold
@@ -36,6 +43,429 @@ function SH.content(st, top0)
     -- the expanded in-buffer header carries none).
     spans = render.marker_spans(line, section.staged, section.unstaged, false),
   }
+end
+
+local NS = vim.api.nvim_create_namespace("canvasdiff.sticky")
+local next_lease_id = 0
+
+-- Lookup-only authentication. Weak keys cannot keep a lease alive and, unlike
+-- trusting a handful of public table fields, cannot be copied onto a forged
+-- shell. All live resources remain reachable only from their owning lease.
+local LEASE_AUTH = setmetatable({}, { __mode = "k" })
+
+local function exact(lease)
+  return type(lease) == "table"
+    and LEASE_AUTH[lease] == true
+    and not lease.disposed
+    and (lease.phase == "attaching" or lease.phase == "active")
+end
+
+--- Add the Surface generation fence to exact lease authentication. The
+--- callback is allowed to tear the lease down reentrantly, so exactness is
+--- checked again after it returns.
+local function active(lease)
+  if not exact(lease) then
+    return false
+  end
+  local alive = lease.callbacks and lease.callbacks.alive
+  if not alive then
+    return true
+  end
+  local ok, result = pcall(alive, lease)
+  return ok and result and exact(lease) or false
+end
+
+local function valid_win(win)
+  return win ~= nil and vim.api.nvim_win_is_valid(win)
+end
+
+local function valid_buf(buf)
+  return buf ~= nil and vim.api.nvim_buf_is_valid(buf)
+end
+
+local function owned_window(lease)
+  if not (active(lease) and valid_win(lease.win) and valid_buf(lease.buf)) then
+    return false
+  end
+  local ok, buf = pcall(vim.api.nvim_win_get_buf, lease.win)
+  return ok and buf == lease.buf and active(lease)
+end
+
+function SH.is_open(lease)
+  return owned_window(lease)
+end
+
+local canvas_showing = canvas.win_showing_canvas
+
+--- The canvas window's TEXT geometry: how many rows actually hold buffer lines, and
+--- how far down the first of them starts.
+---
+--- Verified empirically (see ui/scrollbar.lua, whose measurement this is):
+--- `nvim_win_get_height` INCLUDES the winbar row, while `getwininfo().height`
+--- excludes it -- and a float opened `relative = "win", row = 0` lands at the
+--- window's origin, i.e. ON TOP of the winbar. This row must sit UNDER the
+--- winbar, over the first text row, so `row = info.winbar` is the whole point.
+--- When no winbar exists that offset is 0 and the float pins under whatever
+--- chrome remains -- still correct, no special case.
+local function text_geometry(win)
+  local info = vim.fn.getwininfo(win)[1]
+  if not info then
+    return { height = 0, row = 0 }
+  end
+  return { height = info.height, row = info.winbar or 0 }
+end
+
+local function float_config(state)
+  local geo = text_geometry(state.win)
+  return {
+    relative = "win",
+    win = state.win,
+    row = geo.row,
+    col = 0,
+    width = math.max(vim.api.nvim_win_get_width(state.win), 1),
+    height = 1,
+    focusable = false,
+    style = "minimal",
+    -- Below the minimap's 40: where the two floats share the top-right
+    -- cell, the minimap wins. Clicks fall through to the covered canvas
+    -- row either way (non-focusable floats are mouse-transparent).
+    zindex = 30,
+  }
+end
+
+local function hide(lease)
+  if not exact(lease) then
+    return false
+  end
+  local win = lease.win
+  local buf = lease.buf
+  -- Unlink before the external close. WinClosed callbacks and test doubles may
+  -- reenter teardown, and neither path may observe this window as still owned.
+  lease.win = nil
+  if valid_win(win) then
+    local ok, showing = pcall(vim.api.nvim_win_get_buf, win)
+    if ok and showing == buf then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  return exact(lease)
+end
+
+--- Redraw (and re-show/reposition if needed) the pinned row for the live
+--- canvas. Content nil, canvas hidden or window squashed => hide/no-op; the
+--- lease survives hiding so BufWinEnter (or the next scroll) can re-show it.
+---
+--- The float OVERLAYS the top text row -- it never pushes content down, so
+--- opening and hiding it cannot reflow the canvas or move the view.
+function SH.update(lease, state)
+  if not active(lease) then
+    return false
+  end
+  if state ~= nil then
+    lease.state = state
+  end
+  state = lease.state
+  if type(state) ~= "table" then
+    return false
+  end
+  if not canvas_showing(state) then
+    hide(lease)
+    return false
+  end
+
+  -- A squashed window (winminheight=0) reports height 0; there is no text
+  -- row left to pin over. Hide and let WinResized/BufWinEnter re-show later.
+  if text_geometry(state.win).height < 1 then
+    hide(lease)
+    return false
+  end
+
+  local top0 = vim.api.nvim_win_call(state.win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  if not active(lease) then
+    return false
+  end
+  local content = SH.content(state, top0)
+  if not active(lease) then
+    return false
+  end
+  if content == nil then
+    hide(lease)
+    return false
+  end
+
+  if not valid_buf(lease.buf) then
+    local buf = vim.api.nvim_create_buf(false, true)
+    if not active(lease) then
+      if valid_buf(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+      return false
+    end
+    lease.buf = buf
+    vim.api.nvim_buf_set_name(buf, ("canvasdiff://sticky/%d"):format(lease.id))
+    vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+    vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+    vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
+    if not active(lease) then
+      return false
+    end
+  end
+  if not owned_window(lease) then
+    local win = vim.api.nvim_open_win(lease.buf, false, float_config(state))
+    if not active(lease) then
+      if valid_win(win) then
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+      return false
+    end
+    lease.win = win
+  else
+    vim.api.nvim_win_set_config(lease.win, float_config(state))
+    if not active(lease) then
+      return false
+    end
+  end
+
+  vim.api.nvim_buf_set_lines(lease.buf, 0, -1, false, { content.line })
+  if not active(lease) then
+    return false
+  end
+  vim.api.nvim_buf_clear_namespace(lease.buf, NS, 0, -1)
+  if not active(lease) then
+    return false
+  end
+
+  -- The same three layers the in-buffer header carries (canvas/Canvas.lua's
+  -- section rendering), so the pinned copy is indistinguishable from the row
+  -- it mirrors: the full-width bar tint below, the Title-linked foreground
+  -- over the text, the stage marks on top. All groups are authored by the
+  -- canvas that must already be showing for this row to exist.
+  vim.api.nvim_buf_set_extmark(lease.buf, NS, 0, 0, {
+    line_hl_group = "CanvasDiffFileBar",
+    priority = 99,
+  })
+  if not active(lease) then
+    return false
+  end
+  vim.api.nvim_buf_set_extmark(lease.buf, NS, 0, 0, {
+    end_col = #content.line,
+    hl_group = "CanvasDiffFileHeader",
+    priority = 100,
+  })
+  for _, span in ipairs(content.spans) do
+    if not active(lease) then
+      return false
+    end
+    -- Never a CanvasDiffStaleEmphasis span here (SH.content passes
+    -- stale = false by construction), so the flat 101 matches the
+    -- in-buffer header's non-stale priority exactly.
+    vim.api.nvim_buf_set_extmark(lease.buf, NS, 0, span[1], {
+      end_col = span[2],
+      hl_group = span[3],
+      priority = 101,
+    })
+  end
+  return active(lease)
+end
+
+--- Terminal, exact, idempotent teardown for one sticky-header lease.
+--- Invalidate before the first external operation: closing a window or
+--- deleting a group may synchronously run callbacks, and those callbacks
+--- must see a dead lease.
+function SH.close(lease)
+  if not exact(lease) then
+    return false
+  end
+  LEASE_AUTH[lease] = nil
+  lease.phase = "closing"
+  lease.disposed = true
+  lease.schedule_ticket = lease.schedule_ticket + 1
+
+  local group_id = lease.group_id
+  local autocmd_ids = lease.autocmd_ids
+  local win = lease.win
+  local buf = lease.buf
+  local release = lease.callbacks and lease.callbacks.release
+  local claimed = lease.claimed
+
+  lease.group_id = nil
+  lease.autocmd_ids = {}
+  lease.win = nil
+  lease.buf = nil
+  lease.state = nil
+  lease.opts = nil
+  lease.callbacks = {}
+  lease.phase = "disposed"
+
+  local group_deleted = group_id and pcall(vim.api.nvim_del_augroup_by_id, group_id)
+  if not group_deleted then
+    for _, id in ipairs(autocmd_ids or {}) do
+      pcall(vim.api.nvim_del_autocmd, id)
+    end
+  end
+  if valid_win(win) then
+    local ok, showing = pcall(vim.api.nvim_win_get_buf, win)
+    if ok and showing == buf then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  if valid_buf(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+
+  if release and claimed then
+    local ok, err = pcall(release, lease)
+    if not ok then
+      error(err, 0)
+    end
+  end
+  return true
+end
+
+local function defer_update(lease)
+  if not active(lease) then
+    return
+  end
+  lease.schedule_ticket = lease.schedule_ticket + 1
+  local ticket = lease.schedule_ticket
+  vim.schedule(function()
+    if active(lease) and ticket == lease.schedule_ticket then
+      SH.update(lease)
+    end
+  end)
+end
+
+local function create_autocmd(lease, events, spec)
+  spec.group = lease.group_id
+  local id = vim.api.nvim_create_autocmd(events, spec)
+  if not active(lease) then
+    pcall(vim.api.nvim_del_autocmd, id)
+    error("sticky header open was superseded while creating autocmds", 0)
+  end
+  lease.autocmd_ids[#lease.autocmd_ids + 1] = id
+end
+
+local function install_autocmds(lease)
+  local state = lease.state
+  create_autocmd(lease, { "WinScrolled", "WinResized" }, {
+    callback = function(ev)
+      if not active(lease) then
+        return
+      end
+      local w = tonumber(ev.match)
+      if ev.event == "WinResized" or w == lease.state.win then
+        SH.update(lease)
+      end
+    end,
+  })
+  create_autocmd(lease, "BufWinEnter", {
+    buffer = state.buf,
+    callback = function()
+      if active(lease) then
+        SH.update(lease)
+      end
+    end,
+  })
+  create_autocmd(lease, "BufWinLeave", {
+    buffer = state.buf,
+    callback = function()
+      -- The canvas buffer just left a window (jump excursion's :edit, or
+      -- any buffer switch); if it no longer shows in state.win, hide the
+      -- float instead of letting it sit over the real file. At this point
+      -- in the event the window still transiently reports the OLD buffer
+      -- (the canvas), so canvas_showing would wrongly read "still
+      -- showing" if checked synchronously; defer to let the switch land.
+      defer_update(lease)
+    end,
+  })
+  create_autocmd(lease, "WinClosed", {
+    callback = function(ev)
+      local closed = tonumber(ev.match)
+      if not (active(lease) and lease.state.win == closed) then
+        return
+      end
+      lease.schedule_ticket = lease.schedule_ticket + 1
+      local ticket = lease.schedule_ticket
+      vim.schedule(function()
+        if active(lease)
+            and ticket == lease.schedule_ticket
+            and lease.state.win == closed then
+          SH.close(lease)
+        end
+      end)
+    end,
+  })
+end
+
+--- Open one independent Surface-owned sticky-header lease. `claim`, `alive`,
+--- and `release` callbacks let the owner publish and fence the exact identity
+--- before any resource is created.
+function SH.open(state, opts, callbacks)
+  opts = opts or {}
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    return
+  end
+  next_lease_id = next_lease_id + 1
+  local lease = {
+    id = next_lease_id,
+    phase = "attaching",
+    disposed = false,
+    claimed = false,
+    state = state,
+    opts = opts,
+    callbacks = callbacks or {},
+    group_name = "canvasdiff.sticky." .. next_lease_id,
+    group_id = nil,
+    autocmd_ids = {},
+    schedule_ticket = 0,
+    buf = nil,
+    win = nil,
+  }
+  LEASE_AUTH[lease] = true
+
+  local claim = lease.callbacks.claim
+  if claim then
+    -- A throwing claim may already have published the lease. Mark it claimed
+    -- before entering owner code so exact close can safely ask release to
+    -- unlink only this identity.
+    lease.claimed = true
+    local ok, claimed = pcall(claim, lease)
+    if not ok then
+      pcall(SH.close, lease)
+      error(claimed, 0)
+    end
+    if not claimed then
+      lease.claimed = false
+      SH.close(lease)
+      return nil
+    end
+  else
+    lease.claimed = true
+  end
+
+  local ok, err = pcall(function()
+    if not active(lease) then
+      error("sticky header owner is no longer alive", 0)
+    end
+    lease.group_id = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
+    if not active(lease) then
+      pcall(vim.api.nvim_del_augroup_by_id, lease.group_id)
+      error("sticky header open was superseded while creating its group", 0)
+    end
+    install_autocmds(lease)
+    SH.update(lease)
+    if not active(lease) then
+      error("sticky header open was superseded during initial draw", 0)
+    end
+    lease.phase = "active"
+  end)
+  if not ok then
+    pcall(SH.close, lease)
+    error(err, 0)
+  end
+  return lease
 end
 
 return SH

@@ -6,6 +6,7 @@ local jump = input.jump
 local ui = require("canvasdiff.ui")
 local hl = ui.highlight
 local scrollbar = ui.scrollbar
+local sticky_header = ui.sticky_header
 local sidebar = ui.sidebar
 local statuscol = ui.status_column
 local runtime = require("canvasdiff.runtime")
@@ -425,6 +426,13 @@ function Surface:dispose(reason)
     self.controllers.scrollbar = nil
     if lease then
       scrollbar.close(lease)
+    end
+  end)
+  attempt("sticky.close", function()
+    local lease = self.controllers.sticky
+    self.controllers.sticky = nil
+    if lease then
+      sticky_header.close(lease)
     end
   end)
   attempt("statuscol.detach", function()

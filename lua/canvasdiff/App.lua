@@ -12,6 +12,7 @@ local session = require("canvasdiff.session")
 local ui = require("canvasdiff.ui")
 local hl = ui.highlight
 local scrollbar = ui.scrollbar
+local sticky = ui.sticky_header
 local sidebar = ui.sidebar
 local statuscol = ui.status_column
 local keys = input.keys
@@ -778,6 +779,13 @@ local function refresh_winbars(surface)
   for _, win in ipairs(surface:canvas_snapshot().canvas) do
     set_winbar(st, nil, win)
   end
+  -- The top band's file half rides along: every non-scroll path that makes
+  -- the winbars re-read state (reconciles, pivots, restores) can also have
+  -- changed what the pinned header row should say.
+  local pin = surface.controllers.sticky
+  if pin then
+    sticky.update(pin)
+  end
 end
 
 local function canvas_window_in_tab(surface, tab, preferred)
@@ -817,6 +825,12 @@ local function sync_after_collapse(surface, st)
   local scroll = surface and surface.controllers.scrollbar
   if scroll then
     scrollbar.update(scroll, st)
+  end
+  -- A collapse reshapes the rows under the topline, so the section the
+  -- pinned header names may have changed without any scroll event.
+  local pin = surface and surface.controllers.sticky
+  if pin then
+    sticky.update(pin, st)
   end
 end
 
@@ -1530,6 +1544,35 @@ end
       assert(surface.controllers.scrollbar == scroll_lease,
         "scrollbar claim must publish its returned exact lease")
     end
+  end
+
+  -- The sticky file-header row is UNCONDITIONAL -- no config option. The top
+  -- band and its file half are part of the one look, like the winbar: a
+  -- canvas without it silently loses the answer to "which file am I in".
+  local sticky_lease = sticky.open(st, {}, {
+    claim = function(lease)
+      if not surface:guard(generation)
+          or surface.controllers.sticky ~= nil then
+        return false
+      end
+      surface.controllers.sticky = lease
+      return true
+    end,
+    alive = function(lease)
+      return surface:guard(generation)
+        and surface.controllers.sticky == lease
+    end,
+    release = function(lease)
+      if surface.controllers.sticky ~= lease then
+        return false
+      end
+      surface.controllers.sticky = nil
+      return true
+    end,
+  })
+  if sticky_lease then
+    assert(surface.controllers.sticky == sticky_lease,
+      "sticky claim must publish its returned exact lease")
   end
 
   -- The sticky filename now lives on the sticky header row
