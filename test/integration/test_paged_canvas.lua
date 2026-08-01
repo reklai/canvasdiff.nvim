@@ -169,9 +169,16 @@ T["paged_ colours the rows the eager canvas colours"] = function()
   local ok, failure = xpcall(function()
     local render = require("canvasdiff.canvas.format")
     for index, sec in ipairs(sections) do
-      local expected = {}
+      -- section_hl marks come in two shapes: whole-row field marks, and
+      -- `end_col` prefix spans carrying the margin hue. The paged canvas
+      -- answers the former as hl_group and the latter as prefix_hl/prefix_len.
+      local expected, expected_prefix = {}, {}
       for _, mark in ipairs(render.section_hl(sec)) do
-        expected[mark.row] = mark.group
+        if mark.end_col then
+          expected_prefix[mark.row] = { hl = mark.group, len = mark.end_col }
+        else
+          expected[mark.row] = mark.group
+        end
       end
       -- The header row carries the full-width bar as well as its own group.
       local header = assert(Paged.style_at(paged, paged.starts[index]))
@@ -186,6 +193,13 @@ T["paged_ colours the rows the eager canvas colours"] = function()
           H.eq(style and style.hl_group, group, (
             "section %d row %d should be %s"
           ):format(index, row, group))
+          local prefix = expected_prefix[row]
+          H.eq(style and style.prefix_hl, prefix and prefix.hl, (
+            "section %d row %d prefix hue disagrees with the eager spans"
+          ):format(index, row))
+          H.eq(style and style.prefix_len, prefix and prefix.len, (
+            "section %d row %d prefix length disagrees with the eager spans"
+          ):format(index, row))
         end
       end
     end

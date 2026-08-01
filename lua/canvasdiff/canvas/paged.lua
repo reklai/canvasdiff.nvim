@@ -72,6 +72,14 @@ local function style_for(section, offset0, collapsed)
     return nil
   end
   local style = { hl_group = group }
+  -- The margin hue on the prefix cell, resolved by the same function the
+  -- eager canvas's spans go through, so the two canvases cannot disagree on
+  -- which cell is the margin or which group colours it.
+  local prefix_group, prefix_len = render.prefix_hl(entry)
+  if prefix_group then
+    style.prefix_hl = prefix_group
+    style.prefix_len = prefix_len
+  end
   if offset0 == 0 and not collapsed then
     style.line_hl_group = FILE_BAR_GROUP
   end

@@ -276,16 +276,66 @@ return {
     -- No "-b" row: it renders as a virtual line above "+B" instead.
     H.eq(lines[4], "+B")
     H.eq(lines[5], nil, "the deletion consumed no buffer row")
-    H.eq(render.ghost_lines(s.entries[4]), { { { "-b", "CanvasDiffGhost" } } },
-      "and comes back as a virt_lines chunk spec")
+    -- ghost_lines: prefix and content are separate chunks so the margin hue
+    -- reaches ghosts too.
+    H.eq(render.ghost_lines(s.entries[4]),
+      { { { "-", "CanvasDiffPrefixDel" }, { "b", "CanvasDiffGhost" } } },
+      "and comes back as a two-chunk virt_lines spec")
+    -- section_hl: each add/del row yields its field mark AND a prefix span
+    -- (an `end_col` mark covering only the prefix glyph's bytes).
     local hl = render.section_hl(s)
-    H.eq(hl[1], { row = 0, group = "CanvasDiffFileHeader" })
-    H.eq(hl[2], { row = 1, group = "CanvasDiffHunkHeader" })
+    local row_marks, prefix_marks = {}, {}
+    for _, m in ipairs(hl) do
+      if m.end_col then prefix_marks[#prefix_marks + 1] = m
+      else row_marks[#row_marks + 1] = m end
+    end
+    H.eq(row_marks[1], { row = 0, group = "CanvasDiffFileHeader" })
+    H.eq(row_marks[2], { row = 1, group = "CanvasDiffHunkHeader" })
     -- CanvasDiff* aliases, not DiffDelete/DiffAdd directly. Every other visual element
     -- already went through an overridable group; these were the last two that did not,
     -- so tuning the diff rows meant redefining the groups your ordinary vimdiff uses.
-    H.eq(hl[3], { row = 3, group = "CanvasDiffAdd" })
-    H.eq(hl[4], nil, "only one content row is highlighted now")
+    H.eq(row_marks[3], { row = 3, group = "CanvasDiffAdd" })
+    H.eq(row_marks[4], nil, "only one content row is highlighted now")
+    H.eq(#prefix_marks, 1, "one prefix span, for the one add row")
+    H.eq(prefix_marks[1].group, "CanvasDiffPrefixAdd")
+    H.eq(prefix_marks[1].end_col, #"+")
+    H.eq(prefix_marks[1].row, row_marks[3].row,
+      "the prefix span sits on its own row's field mark")
+  end,
+  -- Real `-` rows exist only for a wholly-deleted file; their prefix carries
+  -- the red margin hue the same way ghosts do.
+  ["render: del rows carry a red prefix span"] = function()
+    local s = model.build_section("gone.txt", "bye1\nbye2\n", "", "D")
+    local prefix_marks = {}
+    for _, m in ipairs(render.section_hl(s)) do
+      if m.end_col then prefix_marks[#prefix_marks + 1] = m end
+    end
+    H.eq(#prefix_marks, 2, "one span per real del row")
+    for _, m in ipairs(prefix_marks) do
+      H.eq(m.group, "CanvasDiffPrefixDel")
+      H.eq(m.end_col, #"-")
+    end
+  end,
+  -- Glyphs are user-overridable and may be multi-byte; the spans must be the
+  -- glyph's byte length at call time, never a hardcoded 1.
+  ["render: prefix spans and ghost chunks track the live glyphs"] = function()
+    local glyphs = render.glyphs
+    local saved = { add = glyphs.add, del = glyphs.del }
+    glyphs.add, glyphs.del = "✚", "✖"
+    local ok, err = pcall(function()
+      local s = model.build_section("f.txt", "a\nb\n", "a\nB\n", "M")
+      H.eq(render.section_lines(s)[4], "✚B")
+      local prefix
+      for _, m in ipairs(render.section_hl(s)) do
+        if m.end_col then prefix = m end
+      end
+      H.eq(prefix.group, "CanvasDiffPrefixAdd")
+      H.eq(prefix.end_col, #"✚")
+      H.eq(render.ghost_lines(s.entries[4]),
+        { { { "✖", "CanvasDiffPrefixDel" }, { "b", "CanvasDiffGhost" } } })
+    end)
+    glyphs.add, glyphs.del = saved.add, saved.del
+    assert(ok, err)
   end,
   -- The canvas headers carry the SAME stage marks as the sidebar rows -- same
   -- stage_mark truth, same glyphs, same order -- so closing the sidebar loses no

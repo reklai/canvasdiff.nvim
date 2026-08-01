@@ -628,6 +628,8 @@ local function on_range_impl(
     local row0 = start0 + index - 1
     local text_hl = "Normal"
     local line_hl = nil
+    local prefix_hl = nil
+    local prefix_len = nil
     if decorate then
       local called, style = PCALL(decorate, row0, rows[index])
       if not called then
@@ -640,14 +642,37 @@ local function on_range_impl(
         if TYPE(RAWGET(style, "line_hl_group")) == "string" then
           line_hl = RAWGET(style, "line_hl_group")
         end
+        -- The prefix answer is honoured only when it can actually split this
+        -- row's bytes into two non-empty chunks. Anything else -- wrong type,
+        -- fractional, zero, past the text -- degrades to the single-chunk
+        -- overlay, per the containment rule above: a bad answer costs its row
+        -- some colour, never a throw or truncated text.
+        local candidate_hl = RAWGET(style, "prefix_hl")
+        local candidate_len = RAWGET(style, "prefix_len")
+        if TYPE(candidate_hl) == "string"
+            and finite_integer(candidate_len)
+            and candidate_len >= 1
+            and candidate_len < #rows[index] then
+          prefix_hl = candidate_hl
+          prefix_len = candidate_len
+        end
       elseif style ~= nil then
         record_error(state, "projection decorator must answer a table or nil")
       end
     end
+    local virt_text
+    if prefix_hl then
+      virt_text = {
+        { STRING_SUB(rows[index], 1, prefix_len), prefix_hl },
+        { STRING_SUB(rows[index], prefix_len + 1), text_hl },
+      }
+    else
+      virt_text = { { rows[index], text_hl } }
+    end
     SET_EXTMARK(buffer, NAMESPACE, row0, 0, {
       ephemeral = true,
       priority = 200,
-      virt_text = { { rows[index], text_hl } },
+      virt_text = virt_text,
       virt_text_pos = "overlay",
       hl_mode = "combine",
       -- A full-width tint, so a diff row's colour reaches past the end of its

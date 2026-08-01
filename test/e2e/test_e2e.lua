@@ -898,18 +898,21 @@ return {
       "the replaced line must not be a buffer row any more")
     assert(text:find("+THREE", 1, true), "its replacement is a real row")
 
-    -- It is rendered, as a virt_lines ghost above the row that replaced it.
+    -- It is rendered, as a virt_lines ghost above the row that replaced it:
+    -- a red prefix chunk, then the dimmed content chunk.
     local ghosts = {}
     for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
       if m[4] and m[4].virt_lines then
         for _, vl in ipairs(m[4].virt_lines) do
-          ghosts[#ghosts + 1] = { row = m[2] + 1, text = vl[1][1], hl = vl[1][2] }
+          ghosts[#ghosts + 1] = { row = m[2] + 1, chunks = vl }
         end
       end
     end
     H.eq(#ghosts, 1, "exactly one ghost, for the one replaced line")
-    H.eq(ghosts[1].text, "-three", "carrying the old content, still prefixed")
-    H.eq(ghosts[1].hl, "CanvasDiffGhost", "in its own group, so it can be dimmed alone")
+    H.eq(ghosts[1].chunks, {
+      { "-", "CanvasDiffPrefixDel" },
+      { "three", "CanvasDiffGhost" },
+    }, "still prefixed, with the margin hue on the prefix and the content dimmed alone")
 
     -- A file with no new side keeps deletions as REAL rows: a result view of it would
     -- be empty, and its whole content would become unyankable virtual text.

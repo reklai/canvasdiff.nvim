@@ -463,7 +463,9 @@ local function install_adapters()
 
   -- Projection captures this API function at module load. Keep a narrowly
   -- scoped observation seam so paged redraws can be checked against bytes
-  -- generated independently by the benchmark.
+  -- generated independently by the benchmark. The overlay may arrive as more
+  -- than one chunk (the prefix cell carries its own highlight), so the
+  -- captured bytes are the concatenation, not the first chunk.
   local set_extmark_wrapper = function(buffer, namespace, row, column, opts)
     if projection_capture.active
         and projection_capture.buffer == buffer
@@ -472,7 +474,12 @@ local function install_adapters()
         and opts.ephemeral == true
         and type(opts.virt_text) == "table"
         and type(opts.virt_text[1]) == "table" then
-      projection_capture.actual = opts.virt_text[1][1]
+      local chunks = {}
+      for index, chunk in ipairs(opts.virt_text) do
+        chunks[index] = type(chunk) == "table"
+          and type(chunk[1]) == "string" and chunk[1] or ""
+      end
+      projection_capture.actual = table.concat(chunks)
     end
     return original_set_extmark(buffer, namespace, row, column, opts)
   end

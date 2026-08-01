@@ -683,6 +683,106 @@ T["projection_ wipe and explicit disposal release every resource"] =
     end)
   end
 
+-- Like the zz case below, this replaces the extmark primitive and reloads the
+-- module so the wrapper is the one the provider captured -- the only way to
+-- observe an EPHEMERAL mark's options, which nvim_buf_get_extmarks never
+-- reports. Sorted after every ordinary case for the same reason zz is last:
+-- the isolated provider must not affect them; the cleanup path reinstalls a
+-- fresh canonical provider.
+T["projection_ z decorator prefix_hl splits the overlay into two chunks"] =
+  function()
+    local module_name = "canvasdiff.canvas.Projection"
+    local original_set_extmark = API.nvim_buf_set_extmark
+    local seen = {}
+    API.nvim_buf_set_extmark = function(...)
+      local arguments = { ... }
+      seen[#seen + 1] = { row0 = arguments[3], options = arguments[5] }
+      return original_set_extmark(...)
+    end
+    package.loaded[module_name] = nil
+    local isolated_projection = require(module_name)
+    local projection
+    local ok, failure = xpcall(function()
+      with_clean_tab(function()
+        local rows = {}
+        for index = 1, 40 do
+          rows[index] = ("+row-%03d"):format(index)
+        end
+        local list = PageList.new(rows, { max_rows = 8 })
+        projection = isolated_projection.new(list, {
+          overscan_rows = 0,
+          decorate = function(row0)
+            if row0 == 0 then
+              return {
+                hl_group = "CanvasDiffAdd",
+                prefix_hl = "CanvasDiffPrefixAdd",
+                prefix_len = 1,
+              }
+            end
+            -- Contained per row: a length that cannot split the text (too
+            -- short, too long, or not an integer) must degrade to the plain
+            -- single-chunk overlay, never throw or truncate.
+            if row0 == 1 then
+              return {
+                hl_group = "CanvasDiffAdd",
+                prefix_hl = "CanvasDiffPrefixAdd",
+                prefix_len = #rows[2],
+              }
+            end
+            if row0 == 2 then
+              return {
+                hl_group = "CanvasDiffAdd",
+                prefix_hl = "CanvasDiffPrefixAdd",
+                prefix_len = 1.5,
+              }
+            end
+            return nil
+          end,
+        })
+        local buffer = assert(projection:buffer())
+        API.nvim_set_current_buf(buffer)
+        local window = API.nvim_get_current_win()
+        configure_window(window)
+        put_at_top(window, 1)
+        seen = {}
+        assert(projection:redraw())
+
+        local overlays = {}
+        for _, mark in ipairs(seen) do
+          if mark.options.ephemeral and mark.options.virt_text then
+            overlays[mark.row0] = mark.options.virt_text
+          end
+        end
+        H.eq(overlays[0], {
+          { "+", "CanvasDiffPrefixAdd" },
+          { "row-001", "CanvasDiffAdd" },
+        }, "a valid prefix_len splits the drawn overlay at the byte boundary")
+        H.eq(overlays[1], { { rows[2], "CanvasDiffAdd" } },
+          "a prefix_len that swallows the whole row falls back to one chunk")
+        H.eq(overlays[2], { { rows[3], "CanvasDiffAdd" } },
+          "a fractional prefix_len falls back to one chunk")
+        H.eq(overlays[3], { { rows[4], "Normal" } },
+          "an undecorated row keeps the plain single-chunk overlay")
+
+        assert_no_persistent_marks(projection)
+        H.eq(projection:validate(), true)
+      end)
+    end, debug.traceback)
+
+    if projection then
+      pcall(isolated_projection.dispose, projection)
+    end
+    API.nvim_buf_set_extmark = original_set_extmark
+    package.loaded[module_name] = nil
+    local restored_projection = require(module_name)
+    local sentinel = restored_projection.new(PageList.new({}))
+    assert(sentinel:dispose())
+
+    if not ok then
+      error(failure, 0)
+    end
+  end
+
 -- This case deliberately replaces the provider's captured extmark primitive.
 -- It is sorted last so the isolated provider cannot affect earlier cases. A
 -- fresh canonical Projection provider is installed in the cleanup path.

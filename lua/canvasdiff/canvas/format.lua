@@ -406,14 +406,16 @@ end
 --- with no row after them at all -- a delete-only hunk, or end of file).
 ---
 --- Shape is what nvim_buf_set_extmark wants: a list of lines, each a list of
---- `{ text, hl }` chunks. One chunk per line here, so a deleted line renders whole.
+--- `{ text, hl }` chunks. Two chunks per line: the prefix, then the content whole.
 --- Intra-line word-diff on the ghost side is deliberately NOT attempted: extmarks
 --- cannot reach into virtual text, so it would mean splitting each ghost into
 --- unchanged/changed/unchanged chunks at render time. The ADD side keeps its
 --- word-diff marks, which is the half that says what the code became.
 ---
 --- Keeps the `-` prefix so a ghost still reads as a deletion at a glance, and so the
---- column of content lines up with the ` `/`+` rows around it.
+--- column of content lines up with the ` `/`+` rows around it. The prefix is its own
+--- chunk because it carries the margin hue -- the red that says "removed" lives on
+--- the one-glyph margin, here exactly as on real del rows.
 function R.ghost_lines(entry, which)
   local ghosts = entry and entry[which or "ghosts"]
   if not ghosts or #ghosts == 0 then
@@ -421,17 +423,43 @@ function R.ghost_lines(entry, which)
   end
   local lines = {}
   for i, g in ipairs(ghosts) do
-    lines[i] = { { PREFIX.del .. (g.content or ""), "CanvasDiffGhost" } }
+    lines[i] = {
+      { PREFIX.del, "CanvasDiffPrefixDel" },
+      { g.content or "", "CanvasDiffGhost" },
+    }
   end
   return lines
 end
 
+local PREFIX_GROUP = { add = "CanvasDiffPrefixAdd", del = "CanvasDiffPrefixDel" }
+
+--- The margin-hue group and byte length of an entry's prefix cell, or nil
+--- for kinds whose prefix carries no hue (context, headers, binary).
+---
+--- The byte length is `#PREFIX[kind]` at call time, never a constant: glyphs
+--- are user-overridable and may be multi-byte, and a span cut at the wrong
+--- byte puts the hue on the wrong cells.
+function R.prefix_hl(entry)
+  local group = entry and PREFIX_GROUP[entry.kind] or nil
+  if not group then
+    return nil
+  end
+  return group, #PREFIX[entry.kind]
+end
+
+--- Marks come in two shapes: `{ row, group }` colours the whole row, and
+--- `{ row, group, end_col }` colours only bytes `[0, end_col)` -- the prefix
+--- cell, where the green/red margin hue lives.
 function R.section_hl(section)
   local marks = {}
   for i, e in ipairs(section.entries) do
     local group = row_group(e.kind)
     if group then
       marks[#marks + 1] = { row = i - 1, group = group }
+    end
+    local prefix_group, prefix_len = R.prefix_hl(e)
+    if prefix_group then
+      marks[#marks + 1] = { row = i - 1, group = prefix_group, end_col = prefix_len }
     end
   end
   return marks

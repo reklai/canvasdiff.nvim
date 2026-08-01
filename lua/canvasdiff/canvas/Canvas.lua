@@ -213,12 +213,24 @@ local function apply_section_hl(buf, start_row, section, collapsed, read_row)
   -- than the code around them.
   for _, m in ipairs(marks) do
     local row = start_row + m.row
-    ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
-      end_row = row + 1,
-      end_col = 0,
-      hl_group = m.group,
-      priority = 100,
-    })
+    if m.end_col then
+      -- A prefix span: the margin hue on the one-glyph prefix cell. Priority
+      -- above the field's 100, or the row mark's background wins the cell and
+      -- the hue never shows.
+      ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
+        end_row = row,
+        end_col = m.end_col,
+        hl_group = m.group,
+        priority = 110,
+      })
+    else
+      ids[#ids + 1] = vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, {
+        end_row = row + 1,
+        end_col = 0,
+        hl_group = m.group,
+        priority = 100,
+      })
+    end
   end
 
   -- Deleted lines, drawn as virtual lines rather than buffer rows. They cost zero
