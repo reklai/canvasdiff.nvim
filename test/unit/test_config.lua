@@ -19,7 +19,6 @@ T["config_ facade exports exactly the supported domain API"] = function()
   H.eq(names, {
     "ASCII_GLYPHS",
     "defaults",
-    "diff_mode",
     "glyphs",
     "options",
     "setup",
@@ -205,61 +204,29 @@ T["config_ the ascii preset separates staged from stale in the TEXT"] = function
     "ascii staged/stale must differ as characters, not just by highlight")
 end
 
--- --- highlight.diff ---------------------------------------------------------
+-- --- highlight.diff (removed) -----------------------------------------------
 --
--- Three ways to colour diff rows: derived quiet tints (the default), the raw
--- DiffAdd/DiffDelete links ("classic"), or a statuscolumn bar ("gutter").
+-- There is one rendering now; the three-mode option is gone. A stale override
+-- would merge cleanly into an unused corner of the options table and silently
+-- do nothing, so its presence must be reported -- the same failure mode the
+-- removed-keymaps guard exists for.
 
-T["config_ highlight.diff defaults to quiet"] = function()
-  H.eq(config.defaults.highlight.diff, "quiet")
-  H.eq(config.options.highlight.diff, "quiet")
+T["config_ highlight.diff no longer exists as an option"] = function()
+  H.eq(config.defaults.highlight.diff, nil)
+  local options = config.setup({})
+  H.eq(options.highlight.diff, nil)
 end
 
-T["config_ highlight.diff rejects an unknown mode and falls back to quiet"] = function()
-  with_setup({ highlight = { diff = "loud" } }, function(options, diagnostics)
-    H.eq(#diagnostics, 1, "exactly one diagnostic: " .. vim.inspect(diagnostics))
-    assert(diagnostics[1]:match("highlight%.diff") and diagnostics[1]:match("loud"),
-      "must name the option and the bad value, got: " .. diagnostics[1])
-    for _, valid in ipairs({ "quiet", "classic", "gutter" }) do
-      assert(diagnostics[1]:match(valid),
-        "must offer " .. valid .. ", got: " .. diagnostics[1])
-    end
-    H.eq(options.highlight.diff, "quiet",
-      "the bad value must not survive into live config")
-  end)
-end
-
-T["config_ diff_mode downgrades gutter to quiet without the statuscolumn, warning once"] = function()
-  local warnings = {}
-  local real_notify = vim.notify
-  vim.notify = function(msg, level)
-    if level == vim.log.levels.WARN then warnings[#warnings + 1] = msg end
-  end
-  local ok, err = pcall(function()
-    config.setup({ highlight = { diff = "gutter" }, statuscolumn = { enabled = false } })
-    H.eq(config.diff_mode(), "quiet")
-    H.eq(config.diff_mode(), "quiet")
-    H.eq(#warnings, 1, "exactly one warning across repeated resolutions: "
-      .. vim.inspect(warnings))
-    assert(warnings[1]:match("gutter") and warnings[1]:match("statuscolumn"),
-      "the warning names the conflict, got: " .. warnings[1])
-    config.setup({ highlight = { diff = "gutter" } })
-    H.eq(config.diff_mode(), "gutter",
-      "with the statuscolumn enabled, gutter resolves as asked")
-    H.eq(config.diff_mode(), "gutter")
-    H.eq(#warnings, 1, "a valid combination adds no warning")
-  end)
-  vim.notify = real_notify
+T["config_ setting highlight.diff reports the removed option with its replacement"] = function()
+  local options, diagnostics = config.setup({ highlight = { diff = "quiet" } })
+  H.eq(#diagnostics, 1)
+  assert(diagnostics[1]:match("highlight%.diff was removed"),
+    "diagnostic must name the removed option, got: " .. diagnostics[1])
+  assert(diagnostics[1]:match("override the CanvasDiff highlight groups"),
+    "diagnostic must point at the replacement, got: " .. diagnostics[1])
+  -- The stale key must not leak into the merged options either.
+  H.eq(options.highlight.diff, nil)
   config.setup({})
-  assert(ok, err)
-end
-
-T["config_ diff_mode reflects the configured mode"] = function()
-  for _, mode in ipairs({ "quiet", "classic", "gutter" }) do
-    with_setup({ highlight = { diff = mode } }, function()
-      H.eq(config.diff_mode(), mode)
-    end)
-  end
 end
 
 T["config_ the gutter glyph ships in both glyph sets"] = function()

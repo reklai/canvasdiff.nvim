@@ -45,10 +45,9 @@ local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { link = "Folded", default = true })
   -- The diff row tints -- CanvasDiffAdd/CanvasDiffDel plus the gutter-bar pair --
   -- defined in render next to blend() because their default VALUES are computed
-  -- there per highlight.diff mode ("quiet" derives them from the live scheme;
-  -- "classic" restores the raw DiffAdd/DiffDelete links). Aliases so they are
-  -- tunable without redefining the groups your ordinary vimdiff uses -- see the
-  -- notes on render.HL_GROUP and render.ensure_diff_hl.
+  -- there, derived from the live scheme. Aliases so they are tunable without
+  -- redefining the groups your ordinary vimdiff uses -- see the notes on
+  -- render.HL_GROUP and render.ensure_diff_hl.
   render.ensure_diff_hl()
   -- Deleted lines, which are virtual rather than buffer rows. Its own group rather
   -- than reusing CanvasDiffDel so you can dim the ghosts without touching anything else --

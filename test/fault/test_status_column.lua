@@ -1630,33 +1630,32 @@ T["statuscol_ text maps rows to new-file numbers"] = function()
   -- evaluating the `%!` statuscolumn expression; simulate that eval context.
   vim.g.statusline_winid = st.win
 
-  -- file_hdr row (section start) -> 5 spaces.
+  -- file_hdr row (section start) -> the padded bar cell, then 5 blank number cells.
   local a_start = (canvas.section_rows(st, 1))
-  H.eq(statuscol.render(lease, st.win, a_start + 1), "     ")
+  H.eq(statuscol.render(lease, st.win, a_start + 1), "      ")
 
-  -- Find a ctx/add row and check it maps to its new_lnum.
-  local _, offset = canvas.locate(st, a_start + 2) -- hunk_hdr is offset 2; entries after that
+  -- Find a ctx row (no bar, so the cell is padding) and check it maps to its
+  -- new_lnum.
   local entry
   local row0 = a_start + 2
   while true do
     local i, off = canvas.locate(st, row0)
     entry = st.sections[i].entries[off]
-    if entry.kind ~= "hunk_hdr" and entry.kind ~= "file_hdr" then
+    if entry.kind == "ctx" then
       break
     end
     row0 = row0 + 1
   end
   H.eq(entry.new_lnum ~= nil, true, "found a row with a new_lnum")
-  H.eq(statuscol.render(lease, st.win, row0 + 1), ("%4d "):format(entry.new_lnum))
+  H.eq(statuscol.render(lease, st.win, row0 + 1), (" %4d "):format(entry.new_lnum))
 
   vim.g.statusline_winid = nil
   statuscol.detach(lease)
 end
 
-T["statuscol_ gutter mode carries a coloured bar on add and del rows"] = function()
+T["statuscol_ the bar column renders on add, del and ghost rows by default"] = function()
   detach_tracked()
-  local config = require("canvasdiff.config")
-  config.setup({ highlight = { diff = "gutter" } })
+  require("canvasdiff.config").setup({})
   local ok, err = xpcall(function()
     local st = canvas.open({
       model.build_section("a.txt", "one\ntwo\n", "one\ntwo\nthree\n", "M"),
@@ -1709,7 +1708,6 @@ T["statuscol_ gutter mode carries a coloured bar on add and del rows"] = functio
     vim.g.statusline_winid = nil
     statuscol.detach(lease)
   end, debug.traceback)
-  config.setup({})
   detach_tracked()
   assert(ok, err)
 end
@@ -1728,7 +1726,7 @@ T["statuscol_ renders for the drawn window even while focus is elsewhere"] = fun
   while true do
     local i, off = canvas.locate(st, row0)
     entry = st.sections[i].entries[off]
-    if entry.kind ~= "hunk_hdr" and entry.kind ~= "file_hdr" then
+    if entry.kind == "ctx" then
       break
     end
     row0 = row0 + 1
@@ -1754,7 +1752,7 @@ T["statuscol_ renders for the drawn window even while focus is elsewhere"] = fun
   local text = statuscol.render(lease, st.win, row0 + 1)
   vim.g.statusline_winid = nil
 
-  H.eq(text, ("%4d "):format(entry.new_lnum),
+  H.eq(text, (" %4d "):format(entry.new_lnum),
     "statuscolumn for the canvas window's own row renders even while focus is in another window")
 
   vim.api.nvim_win_close(other_win, true)

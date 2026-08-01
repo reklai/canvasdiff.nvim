@@ -6,7 +6,6 @@ local settings = require("canvasdiff.config.settings")
 local C = {
   ASCII_GLYPHS = settings.ASCII_GLYPHS,
   defaults = settings.defaults,
-  diff_mode = settings.diff_mode,
   glyphs = settings.glyphs,
   options = settings.options,
   user_opts = settings.user_opts,

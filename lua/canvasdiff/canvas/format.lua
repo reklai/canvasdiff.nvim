@@ -62,17 +62,11 @@ local HL_GROUP = {
   add = "CanvasDiffAdd",
 }
 
---- The row group for one entry kind under the EFFECTIVE highlight.diff mode.
----
---- Gating here, at the single lookup both the eager canvas and the paged
---- projection resolve through, is what makes "gutter" mean the same thing in
---- both: no add/del row tint anywhere, with the statuscolumn carrying the
---- per-row bar instead. Headers and binary rows keep their groups -- gutter
---- only trades away the tints the bar replaces.
+--- The row group for one entry kind, the single lookup both the eager canvas
+--- and the paged projection resolve through. The statuscolumn bar and the row
+--- tint are two channels of ONE rendering, not alternatives, so nothing here
+--- trades a group away for the bar.
 local function row_group(kind)
-  if (kind == "add" or kind == "del") and config.diff_mode() == "gutter" then
-    return nil
-  end
   return HL_GROUP[kind]
 end
 
@@ -262,9 +256,9 @@ local function set_diff_default(group, spec)
     if vim.deep_equal(current, authorship_shape(spec)) then
       return
     end
-    -- Ours, and stale (the mode or the derived colour changed). `force` is
-    -- how a default-flagged definition replaces an existing one; it is safe
-    -- here ONLY because the current value just proved to be our own.
+    -- Ours, and stale (the derived colour changed). `force` is how a
+    -- default-flagged definition replaces an existing one; it is safe here
+    -- ONLY because the current value just proved to be our own.
     spec = vim.tbl_extend("force", spec, { force = true })
   end
   vim.api.nvim_set_hl(0, group, spec)
@@ -272,43 +266,33 @@ local function set_diff_default(group, spec)
     vim.api.nvim_get_hl(0, { name = group, link = true }))
 end
 
---- Define the diff-row groups for the EFFECTIVE highlight.diff mode.
----
---- "classic" is the raw links; "quiet" (and "gutter", whose ghost deletions
---- still resolve through CanvasDiffDel) derives low-intensity tints: the
---- scheme's DiffAdd/DiffDelete background blended QUIET_FACTOR toward
---- Normal's. Colourschemes tune those groups for a two-pane vimdiff where a
+--- Define the diff-row groups: derived low-intensity tints, the scheme's
+--- DiffAdd/DiffDelete background blended QUIET_FACTOR toward Normal's (the
+--- quiet derivation, until the palette rework replaces its values).
+--- Colourschemes tune those groups for a two-pane vimdiff where a
 --- whole-window wash is the point; on a canvas most of the screen is tinted,
 --- so the raw wash spends the strongest visual channel on the least
 --- interesting fact. All definitions are defaults: an explicit user or
 --- colourscheme definition of any CanvasDiff* group always wins.
 function R.ensure_diff_hl()
-  local mode = config.diff_mode()
-  if mode == "classic" then
-    set_diff_default("CanvasDiffAdd", { link = "DiffAdd", default = true })
-    set_diff_default("CanvasDiffDel", { link = "DiffDelete", default = true })
-  else
-    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-    for kind, group in pairs({ add = "CanvasDiffAdd", del = "CanvasDiffDel" }) do
-      local source = vim.api.nvim_get_hl(0, {
-        name = kind == "add" and "DiffAdd" or "DiffDelete",
-        link = false,
-      })
-      local tint =
-        R.blend(source.bg or QUIET_FALLBACK_BG[kind], normal.bg, QUIET_FACTOR)
-      -- As a number, matching the nvim_get_hl readback shape, so the
-      -- "already exactly this" comparison in set_diff_default can hold.
-      local spec = { bg = tonumber(tint:sub(2), 16), default = true }
-      -- gui colours cannot be blended into cterm indices; carry the source's
-      -- cterm background through unchanged so a 256-colour terminal keeps
-      -- classic-loud tints rather than invisible ones.
-      spec.ctermbg = source.ctermbg
-      set_diff_default(group, spec)
-    end
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  for kind, group in pairs({ add = "CanvasDiffAdd", del = "CanvasDiffDel" }) do
+    local source = vim.api.nvim_get_hl(0, {
+      name = kind == "add" and "DiffAdd" or "DiffDelete",
+      link = false,
+    })
+    local tint =
+      R.blend(source.bg or QUIET_FALLBACK_BG[kind], normal.bg, QUIET_FACTOR)
+    -- As a number, matching the nvim_get_hl readback shape, so the
+    -- "already exactly this" comparison in set_diff_default can hold.
+    local spec = { bg = tonumber(tint:sub(2), 16), default = true }
+    -- gui colours cannot be blended into cterm indices; carry the source's
+    -- cterm background through unchanged so a 256-colour terminal keeps
+    -- loud tints rather than invisible ones.
+    spec.ctermbg = source.ctermbg
+    set_diff_default(group, spec)
   end
-  -- The bar the statuscolumn draws per add/del row in gutter mode. Defined in
-  -- every mode (they are two names in a table either way) so a mode switch
-  -- between opens never races their existence. Added/Removed rather than
+  -- The bar the statuscolumn draws per add/del row. Added/Removed rather than
   -- DiffAdd/DiffDelete: the bar is one glyph of FOREGROUND, and Added/Removed
   -- are the standard foreground-carrying statements of the same two facts.
   set_diff_default("CanvasDiffGutterAdd", { link = "Added", default = true })

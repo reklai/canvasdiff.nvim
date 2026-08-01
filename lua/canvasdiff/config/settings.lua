@@ -17,7 +17,7 @@ local DEFAULT_GLYPHS = {
   folded = "▸",
   open = "▾",
   minus = "−",
-  -- the statuscolumn bar drawn on add/del rows under highlight.diff = "gutter"
+  -- the statuscolumn bar drawn beside add/del rows
   gutter = "▎",
   -- sidebar markers
   staged = "●",
@@ -179,12 +179,6 @@ M.defaults = {
     enabled = true,
     margin = 100,
     debounce_ms = 30,
-    -- How diff rows are coloured: "quiet" (derived low-intensity tints, the
-    -- scheme's DiffAdd/DiffDelete blended toward Normal), "classic" (the raw
-    -- DiffAdd/DiffDelete links, as colourschemes tune them for two-pane
-    -- vimdiff), or "gutter" (no row tints; the statuscolumn carries a
-    -- coloured bar per add/del row instead -- needs statuscolumn.enabled).
-    diff = "quiet",
   },
   watch = {
     enabled = true,
@@ -228,41 +222,6 @@ M.options = vim.deepcopy(M.defaults)
 -- symptom is a keymap that never appears.
 M.user_opts = {}
 
-local DIFF_MODES = { quiet = true, classic = true, gutter = true }
-
--- One warning per configuration for the gutter-without-statuscolumn
--- downgrade. diff_mode() is consulted per rendered row, so warning from every
--- resolution would flood; setup() resets the latch because a new configuration
--- deserves a fresh report.
-local warned_gutter_downgrade = false
-
---- The EFFECTIVE diff-row colouring mode, which is the configured one except
---- for a single degradation: "gutter" needs the statuscolumn to carry its bar,
---- so with `statuscolumn.enabled = false` it warns once and behaves as
---- "quiet" rather than silently rendering add/del rows with no marking at all.
-function M.diff_mode()
-  local mode = M.options.highlight.diff
-  if not DIFF_MODES[mode] then
-    -- setup() already reported and reset an invalid value; this guards direct
-    -- mutation of M.options only.
-    return "quiet"
-  end
-  if mode == "gutter" and not M.options.statuscolumn.enabled then
-    if not warned_gutter_downgrade then
-      warned_gutter_downgrade = true
-      -- vim.notify directly: config sits below the ui domain and must not
-      -- require upward into it. Same prefix ui.notifications stamps.
-      vim.notify(
-        'CanvasDiff: highlight.diff = "gutter" needs statuscolumn.enabled'
-          .. ' = true; colouring diff rows as "quiet" instead',
-        vim.log.levels.WARN
-      )
-    end
-    return "quiet"
-  end
-  return mode
-end
-
 -- Action names from the pre-1.0 flat keymaps table. Their presence as a
 -- top-level string is an unambiguous legacy marker: in the current shape every
 -- top-level value is a sub-table.
@@ -294,6 +253,31 @@ local function removed_keymaps(keymaps)
             :format(context, action, hint)
         end
       end
+    end
+  end
+  table.sort(found)
+  return #found > 0 and found or nil
+end
+
+-- Options that once existed and were removed, path -> replacement hint. Same
+-- failure mode as REMOVED_ACTIONS: the override merges into an unused corner
+-- of the options table and silently does nothing.
+local REMOVED_OPTIONS = {
+  ["highlight.diff"] = "the canvas now has one rendering; override the"
+    .. ' CanvasDiff highlight groups instead -- see README "How diff rows'
+    .. ' are coloured"',
+}
+
+--- One message per removed option present in `opts`, or nil.
+local function removed_options(opts)
+  local found = {}
+  for path, hint in pairs(REMOVED_OPTIONS) do
+    local node = opts
+    for key in path:gmatch("[^.]+") do
+      node = type(node) == "table" and node[key] or nil
+    end
+    if node ~= nil then
+      found[#found + 1] = ("%s was removed -- %s"):format(path, hint)
     end
   end
   table.sort(found)
@@ -339,18 +323,19 @@ function M.setup(opts)
   for _, message in ipairs(removed_keymaps(opts.keymaps) or {}) do
     report(message)
   end
-  M.user_opts = vim.deepcopy(opts)
-  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
-  warned_gutter_downgrade = false
-
-  -- Reported AND reset rather than merely reported: an unknown mode left live
-  -- would make every consumer of highlight.diff re-validate it, and the
-  -- symptom of forgetting would be rows silently rendered with no colouring.
-  if not DIFF_MODES[M.options.highlight.diff] then
-    report(('highlight.diff must be "quiet", "classic" or "gutter", got %s')
-      :format(vim.inspect(M.options.highlight.diff)))
-    M.options.highlight.diff = M.defaults.highlight.diff
+  for _, message in ipairs(removed_options(opts) or {}) do
+    report(message)
   end
+  -- user_opts is captured BEFORE the strip below, so :checkhealth still sees
+  -- what the user actually wrote.
+  M.user_opts = vim.deepcopy(opts)
+  -- Strip the removed key so it never lands in M.options; deepcopy first
+  -- because `opts` belongs to the caller.
+  if type(opts.highlight) == "table" then
+    opts.highlight = vim.deepcopy(opts.highlight)
+    opts.highlight.diff = nil
+  end
+  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
 
   -- Glyphs are live configuration state rather than part of M.options: formatting
   -- reads this exact table through the canvas facade. Reset first, or two setup()

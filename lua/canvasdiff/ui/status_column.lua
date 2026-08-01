@@ -4,8 +4,8 @@ local fold = require("canvasdiff.diff").fold
 
 local M = {}
 
--- The bar the gutter mode draws per changed row, foreground-coloured so it
--- reads without claiming a background. Defined by the canvas's group setup
+-- The bar drawn per changed row, foreground-coloured so it reads without
+-- claiming a background. Defined by the canvas's group setup
 -- (render.ensure_diff_hl), which runs before any statuscolumn can draw.
 local GUTTER_HL = {
   add = "CanvasDiffGutterAdd",
@@ -703,18 +703,17 @@ end
 ---
 --- `virtnum` is Neovim's v:virtnum for the drawn screen row: nonzero means a
 --- virtual line, and the only virtual lines the canvas draws are ghost
---- deletions. It matters only under highlight.diff = "gutter", where those
---- rows carry the deletion bar; every other mode renders exactly as before.
+--- deletions -- their bar cell carries the deletion bar rather than anything
+--- of the anchor row's.
 function M.render(lease, win, lnum, virtnum)
   if not active(lease) or not showing(lease.state, win) then
     return ""
   end
 
-  -- Under "gutter" every row gains a one-cell bar column: the coloured glyph
-  -- on add/del rows, padding elsewhere so the line numbers stay aligned.
-  local gutter = config.diff_mode() == "gutter"
-  local glyph = gutter and config.glyphs.gutter or ""
-  local pad = gutter and (" "):rep(vim.fn.strdisplaywidth(glyph)) or ""
+  -- Every row carries a one-cell bar column: the coloured glyph on add/del
+  -- rows, padding elsewhere so the line numbers stay aligned.
+  local glyph = config.glyphs.gutter
+  local pad = (" "):rep(vim.fn.strdisplaywidth(glyph))
 
   local state = lease.state
   local index, offset = canvas.locate(state, lnum - 1)
@@ -729,23 +728,17 @@ function M.render(lease, win, lnum, virtnum)
   if not entry or entry.kind == "file_hdr" or entry.kind == "hunk_hdr" then
     return pad .. "     "
   end
-  if gutter then
-    -- A ghost deletion's virtual row reads as a deletion, whatever kind its
-    -- anchor row is -- and never repeats the anchor's line number below.
-    local ghost = virtnum ~= nil and virtnum ~= 0
-    local group = GUTTER_HL[ghost and "del" or entry.kind]
-    if group then
-      pad = "%#" .. group .. "#" .. glyph .. "%*"
-    end
-    if entry.new_lnum and not ghost then
-      return pad .. ("%4d "):format(entry.new_lnum)
-    end
-    return pad .. "     "
+  -- A ghost deletion's virtual row reads as a deletion, whatever kind its
+  -- anchor row is -- and never repeats the anchor's line number below.
+  local ghost = virtnum ~= nil and virtnum ~= 0
+  local group = GUTTER_HL[ghost and "del" or entry.kind]
+  if group then
+    pad = "%#" .. group .. "#" .. glyph .. "%*"
   end
-  if entry.new_lnum then
-    return ("%4d "):format(entry.new_lnum)
+  if entry.new_lnum and not ghost then
+    return pad .. ("%4d "):format(entry.new_lnum)
   end
-  return "     "
+  return pad .. "     "
 end
 
 --- Fail-closed statuscolumn expression entrypoint.
