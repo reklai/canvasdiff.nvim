@@ -1382,6 +1382,7 @@ local DIFF_GROUPS = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
   "CanvasDiffGutterAdd", "CanvasDiffGutterDel",
+  "CanvasDiffFileBar",
 }
 
 local function reset_diff_groups()
@@ -1442,6 +1443,25 @@ T["hl_rows margin hue lives on the prefix and gutter groups, identically"] = fun
   end
   local ga = vim.api.nvim_get_hl(0, { name = "CanvasDiffGutterAdd", link = true })
   H.eq(ga.link, nil, "no longer a link to Added")
+end
+
+T["hl_bar the header bar is derived, not Folded's luck"] = function()
+  reset_diff_groups()
+  render.ensure_diff_hl()
+  local bar = vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = true })
+  H.eq(bar.link, nil, "no longer linked to Folded")
+  assert(bar.bg, "the bar is a background statement")
+end
+
+T["hl_bar the bar clears the row elevation, which clears Normal"] = function()
+  reset_diff_groups()
+  render.ensure_diff_hl()
+  local normal = luma(vim.api.nvim_get_hl(0, { name = "Normal", link = false }).bg or 0)
+  local field = luma(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false }).bg)
+  local bar = luma(vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = false }).bg)
+  assert(math.abs(field - normal) > 0, "sanity: the field is elevated")
+  assert(math.abs(bar - normal) > math.abs(field - normal),
+    "the bar must clear the field, not just Normal")
 end
 
 T["hl_rows a user's pre-defined group survives the derivation"] = function()

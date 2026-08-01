@@ -207,6 +207,21 @@ end
 -- 14.74% against 14.67%).
 local ELEVATION_FACTOR = 0.04
 
+-- How far the file-header bar's background moves from Normal's toward the
+-- same pole -- one derivation, pushed further, so a file boundary reads
+-- ABOVE the field it interrupts. 0.16 by measurement (same schemes as
+-- ELEVATION_FACTOR): the smallest of the 0.12/0.14/0.16/0.20/0.24
+-- candidates that, under both schemes, clears the elevation's |dL| by >= 10
+-- (builtin bar dL +37.1 vs elevation +9.0; moon +34.8 vs +8.9) AND keeps
+-- its luma >= 8 from both CursorLine's and Visual's bg, so the bar never
+-- reads as just another cursor line (builtin gaps 13.1/22.7; moon 19.6/8.5
+-- -- the thin one). 0.12 lands 3.9 from builtin's CursorLine, 0.14 lands
+-- 4.5 from moon's Visual. A 15% Title-fg tint as a collision cure was
+-- measured and REJECTED: builtin's Title fg is near-neutral, so tinting
+-- just lightens the bar into Visual's band (gap 5.9), and under moon it
+-- collapses the stale marker's contrast on the bar from 23.3 to 11.6.
+local BAR_FACTOR = 0.16
+
 -- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
 -- 0.30 by measurement: the LARGEST candidate whose ghost fg keeps a luma
 -- delta against Normal bg at or above @comment's -- a ghost must never read
@@ -311,6 +326,13 @@ function R.ensure_diff_hl()
   set_diff_default("CanvasDiffDel",
     { bg = elevation, fg = ghost_fg, default = true })
   set_diff_default("CanvasDiffGhost", { fg = ghost_fg, default = true })
+
+  -- The file-header bar, from the SAME base as the field (fallback included,
+  -- so a transparent scheme measures both from one origin) -- the bar's whole
+  -- meaning is "further from Normal than the elevation", which only holds
+  -- when the two share a starting point.
+  local bar = tonumber(R.blend(normal_bg, pole, BAR_FACTOR):sub(2), 16)
+  set_diff_default("CanvasDiffFileBar", { bg = bar, default = true })
 
   for kind, groups in pairs({
     add = { "CanvasDiffPrefixAdd", "CanvasDiffGutterAdd" },

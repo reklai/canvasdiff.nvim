@@ -33,19 +33,12 @@ local ANCHOR_OPTS = { right_gravity = false, invalidate = false, undo_restore = 
 
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffFileHeader", { link = "Title", default = true })
-  -- The background of the file-boundary bar. `Folded` because it is the most visible
-  -- of the groups that always carry a background: measured under tokyonight-moon it is
-  -- +30 luminance against Normal, where CursorLine manages +15 and ColorColumn is
-  -- actually DARKER (-7) -- too subtle for something whose entire job is to be noticed
-  -- in peripheral vision as you scroll past. `Visual` is comparable (+26) but is
-  -- already the sidebar's active-row colour, and one colour should mean one thing.
-  --
-  -- Background only matters here: the filename's own colour comes from
-  -- CanvasDiffFileHeader above, at a higher priority.
-  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { link = "Folded", default = true })
   -- The derived diff palette -- the field (CanvasDiffAdd/CanvasDiffDel), the
-  -- ghost foreground, and the margin's prefix/gutter pairs -- defined in
-  -- render next to blend() because their default VALUES are computed there,
+  -- ghost foreground, the margin's prefix/gutter pairs, and the file-boundary
+  -- bar (CanvasDiffFileBar, once a `Folded` link and now authored in
+  -- render.ensure_diff_hl with the other derived values, so its contrast is
+  -- measured rather than one scheme's luck) -- defined in render next to
+  -- blend() because their default VALUES are computed there,
   -- derived from the live scheme. Aliases so they are tunable without
   -- redefining the groups your ordinary vimdiff uses -- see the notes on
   -- render.HL_GROUP and render.ensure_diff_hl.
