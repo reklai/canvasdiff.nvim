@@ -196,30 +196,40 @@ function R.blend(bg_a, bg_b, factor)
   return ("#%02x%02x%02x"):format(channel(65536), channel(256), channel(1))
 end
 
--- How far a quiet tint moves from the scheme's diff background toward
--- Normal's. 0.6 by measurement (Rec.709 luma, builtin dark scheme and
--- tokyonight-moon): at 0.6 every probed syntax token -- @comment as the dim
--- extreme, Function and String as bright ones -- keeps its luminance delta on
--- a tinted row within 15% of its delta on an untinted one (worst case
--- @comment on a tokyonight-moon added row: 74.1 untinted vs 63.2 tinted,
--- -14.7%). At 0.5 that same case degrades by 19.1%, so 0.6 is the least
--- blending that meets the budget.
-local QUIET_FACTOR = 0.6
+-- How far the field's background moves from Normal's toward the luminance
+-- pole (white on a dark scheme, black on a light one). 0.04 by measurement
+-- (Rec.709 luma, builtin dark scheme and stock tokyonight-moon): the budget
+-- is what the OLD quiet tints already spent -- each scheme's worst probed
+-- syntax-token (@comment, Function, String) contrast loss on a quiet-tinted
+-- row, 22.8% builtin (its del tint) and 14.7% tokyonight-moon -- and 0.04 is
+-- the largest of the 0.03..0.10 candidates whose worst loss fits both
+-- budgets (6.6% builtin, 12.0% moon; 0.05 overshoots moon's by a hair,
+-- 14.74% against 14.67%).
+local ELEVATION_FACTOR = 0.04
 
--- What quiet derives from when the scheme's own group carries no background.
--- Not hypothetical: builtin DiffDelete is foreground-only (discovered in the
--- winbar work), and blending nothing toward Normal would return Normal's own
--- background -- an INVISIBLE deletion tint. A fixed green/red pair blended
--- 60% toward Normal lands close to what schemes that do tint their diff rows
--- pick anyway.
-local QUIET_FALLBACK_BG = { add = 0x2ea043, del = 0xdb4444 }
+-- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
+-- 0.30 by measurement: the LARGEST candidate whose ghost fg keeps a luma
+-- delta against Normal bg at or above @comment's -- a ghost must never read
+-- dimmer than a comment. The builtin scheme is the binding one (@comment
+-- |dL| 135.9; the ghost reads 143.1 at 0.30 but 133.1 at 0.35);
+-- tokyonight-moon's @comment sits at 74.1, where every candidate clears.
+local GHOST_DIM_FACTOR = 0.30
+
+-- When a transparent scheme gives Normal no background there is nothing to
+-- elevate from; a fixed near-Normal pair keeps the field visible.
+local ELEVATION_FALLBACK_BG = { dark = 0x2c2c2c, light = 0xe4e4e4 }
+
+-- The margin's green/red when the scheme's DiffAdd/DiffDelete carry no
+-- foreground (bg-only diff groups are the common case). Never derived from
+-- their bg: those are bg-tuned colours and read as mud when used as fg.
+local HUE_FALLBACK_FG = { add = 0x2ea043, del = 0xdb4444 }
 
 -- What this module itself last defined each diff group as, keyed by group
--- name, stored as the nvim_get_hl readback. The quiet tints are COMPUTED
+-- name, stored as the nvim_get_hl readback. The palette is COMPUTED
 -- values, and `default = true` means "only if the group is not already
--- defined" -- so without this record a mode switch (or a re-derive against a
--- changed scheme) would be a silent no-op: the second default call cannot
--- replace the first. Comparing the group's current definition against this
+-- defined" -- so without this record a re-derive against a changed scheme
+-- would be a silent no-op: the second default call cannot replace the
+-- first. Comparing the group's current definition against this
 -- record is what lets ensure_diff_hl force-replace exactly the definitions it
 -- authored while never touching a user's or a colourscheme's.
 local applied_diff_hl = {}
@@ -266,37 +276,56 @@ local function set_diff_default(group, spec)
     vim.api.nvim_get_hl(0, { name = group, link = true }))
 end
 
---- Define the diff-row groups: derived low-intensity tints, the scheme's
---- DiffAdd/DiffDelete background blended QUIET_FACTOR toward Normal's (the
---- quiet derivation, until the palette rework replaces its values).
---- Colourschemes tune those groups for a two-pane vimdiff where a
---- whole-window wash is the point; on a canvas most of the screen is tinted,
---- so the raw wash spends the strongest visual channel on the least
---- interesting fact. All definitions are defaults: an explicit user or
---- colourscheme definition of any CanvasDiff* group always wins.
+--- Define the diff palette: one derived value per visual channel.
+---
+--- The elevation -- a hueless background, Normal's moved ELEVATION_FACTOR
+--- toward the luminance pole -- says "changed"; a dimmed foreground says
+--- "removed"; the green/red hue says which direction, and lives ONLY on the
+--- margin (the prefix and gutter groups). Colourschemes tune
+--- DiffAdd/DiffDelete for a two-pane vimdiff where a whole-window wash is
+--- the point; on a canvas most of the screen is changed rows, so a hued wash
+--- spends the strongest visual channel on the least interesting fact.
+---
+--- CanvasDiffDel carries BOTH the elevation bg and the ghost's dimmed fg:
+--- real `-` rows exist only for a wholly-deleted file -- every other
+--- deletion renders as a ghost -- and those rows must read as removed
+--- content under a red margin, not as live code. All definitions are
+--- defaults: an explicit user or colourscheme definition of any CanvasDiff*
+--- group always wins.
 function R.ensure_diff_hl()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-  for kind, group in pairs({ add = "CanvasDiffAdd", del = "CanvasDiffDel" }) do
+  local dark = vim.o.background == "dark"
+  local pole = dark and 0xffffff or 0x000000
+  local anti_pole = dark and 0x000000 or 0xffffff
+  local normal_bg = normal.bg
+    or ELEVATION_FALLBACK_BG[dark and "dark" or "light"]
+  -- As numbers, matching the nvim_get_hl readback shape, so the "already
+  -- exactly this" comparison in set_diff_default can hold.
+  local elevation = tonumber(
+    R.blend(normal_bg, pole, ELEVATION_FACTOR):sub(2), 16)
+  local ghost_fg = tonumber(
+    R.blend(normal.fg or pole, normal.bg or anti_pole, GHOST_DIM_FACTOR)
+      :sub(2), 16)
+
+  set_diff_default("CanvasDiffAdd", { bg = elevation, default = true })
+  set_diff_default("CanvasDiffDel",
+    { bg = elevation, fg = ghost_fg, default = true })
+  set_diff_default("CanvasDiffGhost", { fg = ghost_fg, default = true })
+
+  for kind, groups in pairs({
+    add = { "CanvasDiffPrefixAdd", "CanvasDiffGutterAdd" },
+    del = { "CanvasDiffPrefixDel", "CanvasDiffGutterDel" },
+  }) do
     local source = vim.api.nvim_get_hl(0, {
       name = kind == "add" and "DiffAdd" or "DiffDelete",
       link = false,
     })
-    local tint =
-      R.blend(source.bg or QUIET_FALLBACK_BG[kind], normal.bg, QUIET_FACTOR)
-    -- As a number, matching the nvim_get_hl readback shape, so the
-    -- "already exactly this" comparison in set_diff_default can hold.
-    local spec = { bg = tonumber(tint:sub(2), 16), default = true }
-    -- gui colours cannot be blended into cterm indices; carry the source's
-    -- cterm background through unchanged so a 256-colour terminal keeps
-    -- loud tints rather than invisible ones.
-    spec.ctermbg = source.ctermbg
-    set_diff_default(group, spec)
+    local hue = source.fg or HUE_FALLBACK_FG[kind]
+    for _, group in ipairs(groups) do
+      set_diff_default(group,
+        { fg = hue, ctermfg = source.ctermfg, default = true })
+    end
   end
-  -- The bar the statuscolumn draws per add/del row. Added/Removed rather than
-  -- DiffAdd/DiffDelete: the bar is one glyph of FOREGROUND, and Added/Removed
-  -- are the standard foreground-carrying statements of the same two facts.
-  set_diff_default("CanvasDiffGutterAdd", { link = "Added", default = true })
-  set_diff_default("CanvasDiffGutterDel", { link = "Removed", default = true })
 end
 
 --- Byte spans of the trailing marker glyphs on a sidebar row, a canvas file

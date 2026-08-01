@@ -1323,8 +1323,8 @@ T["hl_rows the row tints go through overridable CanvasDiff aliases"] = function(
     assert(next(direct) ~= nil, g .. " must be defined, or the diff rows render unstyled")
   end
   -- `default = true` throughout, so a colourscheme that defines these wins.
-  -- The shipped default is a computed quiet tint (a bg, no link); an override
-  -- may be anything with a background.
+  -- The shipped default is the computed elevation (a bg, no link); an
+  -- override may be anything with a background.
   local linked = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
   assert(linked.link == "DiffAdd" or linked.bg,
     "CanvasDiffAdd should carry a quiet tint or an override, got: "
@@ -1356,22 +1356,38 @@ end
 
 -- --- the diff-row group values -----------------------------------------------
 --
--- The row tints are DERIVED: the scheme's DiffAdd/DiffDelete background
--- blended toward Normal's, because colourschemes tune those groups for a
--- two-pane vimdiff where a whole-window wash is the point.
+-- The field is DERIVED from the live scheme, and it is one statement per
+-- channel: a single hueless elevation says "changed", a dimmed foreground
+-- says "removed", and the green/red lives only on the margin (prefix and
+-- gutter). These tests pin the relationships between the groups, never the
+-- measured colour values -- those depend on the runner's scheme.
 
 local config = require("canvasdiff.config")
 local render = require("canvasdiff.canvas.format")
 
-local function count_row_tints(buf)
-  local tinted = 0
-  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })) do
-    local d = m[4]
-    if d and (d.hl_group == "CanvasDiffAdd" or d.hl_group == "CanvasDiffDel") then
-      tinted = tinted + 1
-    end
+-- Rec.709 luma, the same measure the factors were chosen by.
+local function luma(rgb)
+  if not rgb then return nil end
+  local r = math.floor(rgb / 65536) % 256
+  local g = math.floor(rgb / 256) % 256
+  local b = rgb % 256
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+end
+
+-- Every group ensure_diff_hl authors. The module's authorship record is a
+-- singleton, so a group an earlier test left defined would satisfy
+-- set_diff_default and mask a broken derive; each derivation test clears
+-- them all first.
+local DIFF_GROUPS = {
+  "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
+  "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
+  "CanvasDiffGutterAdd", "CanvasDiffGutterDel",
+}
+
+local function reset_diff_groups()
+  for _, g in ipairs(DIFF_GROUPS) do
+    vim.api.nvim_set_hl(0, g, {})
   end
-  return tinted
 end
 
 T["hl_rows blend interpolates channelwise and tolerates a missing endpoint"] = function()
@@ -1386,27 +1402,55 @@ T["hl_rows blend interpolates channelwise and tolerates a missing endpoint"] = f
   H.eq(render.blend(nil, nil, 0.6), nil)
 end
 
-T["hl_rows quiet default derives tints distinct from both DiffAdd and Normal"] = function()
-  config.setup({})
-  local st = canvas.open({
-    model.build_section("quiet.lua", OLD, NEW, "M"),
-  }, {})
-  assert(count_row_tints(st.buf) > 0, "sanity: quiet still tints the rows")
-
+T["hl_rows the field is one neutral elevation shared by add and del"] = function()
+  reset_diff_groups()
+  render.ensure_diff_hl()
   local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
-  local raw = vim.api.nvim_get_hl(0, { name = "DiffAdd", link = false })
-  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-  assert(add.bg, "quiet CanvasDiffAdd must carry a computed background")
-  assert(add.bg ~= raw.bg, "the quiet tint must sit below the raw DiffAdd wash")
-  assert(add.bg ~= normal.bg, "and still read against Normal")
-
-  -- Builtin DiffDelete carries NO background at all; without the fixed
-  -- fallback pair, quiet would blend nothing toward Normal and deletions
-  -- would render invisible.
   local del = vim.api.nvim_get_hl(0, { name = "CanvasDiffDel", link = false })
-  assert(del.bg,
-    "quiet CanvasDiffDel needs a background even when the scheme's DiffDelete has none")
-  assert(del.bg ~= normal.bg, "and it must be visible against Normal")
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  H.eq(add.bg, del.bg, "one elevation, not two hues")
+  assert(add.bg ~= normal.bg, "the elevation must differ from Normal")
+  local diff_add = vim.api.nvim_get_hl(0, { name = "DiffAdd", link = false })
+  assert(add.bg ~= diff_add.bg, "the elevation is not the scheme's diff wash")
+  assert(add.fg == nil, "add rows keep full-contrast syntax")
+  assert(del.fg ~= nil, "a deleted file's real rows read dimmed")
+end
+
+T["hl_rows ghosts have no background and a dimmed foreground"] = function()
+  reset_diff_groups()
+  render.ensure_diff_hl()
+  local ghost = vim.api.nvim_get_hl(0, { name = "CanvasDiffGhost", link = false })
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  H.eq(ghost.bg, nil)
+  assert(ghost.fg and ghost.fg ~= normal.fg, "dimmed, not Normal's own fg")
+  assert(luma(ghost.fg) < luma(normal.fg) and luma(ghost.fg) > luma(normal.bg),
+    "dimmed means moved toward the background, not past it and not brighter")
+end
+
+T["hl_rows margin hue lives on the prefix and gutter groups, identically"] = function()
+  reset_diff_groups()
+  render.ensure_diff_hl()
+  for _, pair in ipairs({
+    { "CanvasDiffPrefixAdd", "CanvasDiffGutterAdd" },
+    { "CanvasDiffPrefixDel", "CanvasDiffGutterDel" },
+  }) do
+    local prefix = vim.api.nvim_get_hl(0, { name = pair[1], link = false })
+    local gutter = vim.api.nvim_get_hl(0, { name = pair[2], link = false })
+    assert(prefix.fg, pair[1] .. " must carry a foreground")
+    H.eq(prefix.fg, gutter.fg, "prefix and bar are the same statement")
+    H.eq(prefix.bg, nil)
+  end
+  local ga = vim.api.nvim_get_hl(0, { name = "CanvasDiffGutterAdd", link = true })
+  H.eq(ga.link, nil, "no longer a link to Added")
+end
+
+T["hl_rows a user's pre-defined group survives the derivation"] = function()
+  reset_diff_groups()
+  vim.api.nvim_set_hl(0, "CanvasDiffAdd", { bg = 0x123456 })
+  render.ensure_diff_hl()
+  local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
+  H.eq(add.bg, 0x123456, "an explicit override always wins")
+  reset_diff_groups()
 end
 
 T["hl_rows a user definition of CanvasDiffAdd survives every ensure"] = function()

@@ -43,17 +43,13 @@ local function ensure_hl_groups()
   -- Background only matters here: the filename's own colour comes from
   -- CanvasDiffFileHeader above, at a higher priority.
   vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { link = "Folded", default = true })
-  -- The diff row tints -- CanvasDiffAdd/CanvasDiffDel plus the gutter-bar pair --
-  -- defined in render next to blend() because their default VALUES are computed
-  -- there, derived from the live scheme. Aliases so they are tunable without
+  -- The derived diff palette -- the field (CanvasDiffAdd/CanvasDiffDel), the
+  -- ghost foreground, and the margin's prefix/gutter pairs -- defined in
+  -- render next to blend() because their default VALUES are computed there,
+  -- derived from the live scheme. Aliases so they are tunable without
   -- redefining the groups your ordinary vimdiff uses -- see the notes on
   -- render.HL_GROUP and render.ensure_diff_hl.
   render.ensure_diff_hl()
-  -- Deleted lines, which are virtual rather than buffer rows. Its own group rather
-  -- than reusing CanvasDiffDel so you can dim the ghosts without touching anything else --
-  -- the usual want, since the point of ghosting a deletion is that it is context for
-  -- the line that replaced it rather than a thing to read on its own.
-  vim.api.nvim_set_hl(0, "CanvasDiffGhost", { link = "CanvasDiffDel", default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffHunkHeader", { link = "Comment", default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffBinary", { link = "Comment", default = true })
   -- CanvasDiffStale and the sidebar's stage markers live in render, next to the glyphs.
