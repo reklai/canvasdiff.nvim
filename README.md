@@ -9,13 +9,34 @@ unsaved edits intact; edit it, then jump back to the same place in the review.
 CanvasDiff is **pre-alpha**. Its behavior is tested, but the public surface may
 still change before the first stable release.
 
-![CanvasDiff: whole Git changeset in one buffer](media/hero.png)
+![Live update: canvas reflects a just-saved edit](media/hero.png)
 
-### Demo
+### Screenshots
 
-One still for the product shape. The GIF below plays inline — no download.
+**1. Live edit — before / after**  
+Edit the real file, save, and the canvas refreshes in place.
 
-![CanvasDiff walkthrough](media/walkthrough.gif)
+![Live edit before and after](media/01-live-edit.png)
+
+**2. Comparison mode**  
+Read-only revision ranges without checking out branches.
+
+![Comparison mode](media/02-compare.png)
+
+**3. Sidebar fold & jump**  
+Fold directories/files, then Enter to land the canvas on a row.
+
+![Sidebar fold and jump](media/03-sidebar.png)
+
+**4. Lens states**  
+All · unstaged · staged — same review, different filters.
+
+![Lens states](media/04-lenses.png)
+
+**5. Key menus**  
+Help cheatsheet, compare picker, and checkout.
+
+![Key menus](media/05-keys.png)
 
 ## Features
 
