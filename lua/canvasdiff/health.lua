@@ -28,7 +28,10 @@ function M.check()
     health.error("git is not executable; canvasdiff cannot collect a diff")
   end
 
-  local report = require("canvasdiff.config").health()
+  local config = require("canvasdiff.config")
+  local report = config.health()
+  local appearance_diagnostics =
+    require("canvasdiff.appearance").audit(config.user_opts.highlights)
   for _, message in ipairs(report.removed) do
     health.warn(message)
   end
@@ -36,7 +39,11 @@ function M.check()
     health.warn(("unknown option `%s` -- a typo? It merges without complaint"
       .. " and does nothing"):format(path))
   end
-  if #report.removed == 0 and #report.unknown == 0 then
+  for _, message in ipairs(appearance_diagnostics) do
+    health.warn(message)
+  end
+  if #report.removed == 0 and #report.unknown == 0
+      and #appearance_diagnostics == 0 then
     health.ok("configuration has no unknown or removed options")
   end
 end

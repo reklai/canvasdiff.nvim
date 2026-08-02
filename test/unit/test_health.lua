@@ -9,6 +9,10 @@ T["health_ checkhealth surfaces the floor, git, and swallowed config typos"] = f
   config.setup({
     keymaps = { canvas = { colapse = "x" } },
     highlight = { diff = "gutter" },
+    highlights = {
+      CanvasDiffFyleBar = { bg = "#000000" },
+      CanvasDiffGhost = "Comment",
+    },
   })
   vim.cmd("checkhealth canvasdiff")
   local lines = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
@@ -21,6 +25,10 @@ T["health_ checkhealth surfaces the floor, git, and swallowed config typos"] = f
   assert(lines:find("colapse"), "the swallowed typo is surfaced:\n" .. lines)
   assert(lines:find("highlight%.diff"),
     "the removed option is surfaced:\n" .. lines)
+  assert(lines:find("CanvasDiffFyleBar", 1, true),
+    "the unknown highlight is surfaced:\n" .. lines)
+  assert(lines:find("must be a table or false", 1, true),
+    "the malformed highlight is surfaced:\n" .. lines)
 end
 
 return T

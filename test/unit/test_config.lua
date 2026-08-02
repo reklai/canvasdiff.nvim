@@ -55,6 +55,22 @@ T["config_ setup is optional and defaults are live without it"] = function()
   H.eq(config.options.keymaps.canvas.close, "q")
   H.eq(config.options.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
   H.eq(config.options.keymaps.file.back, "<C-Space>")
+  H.eq(config.options.highlights, {})
+end
+
+T["config_ highlights preserve native specs and raw health input"] = function()
+  local raw = {
+    CanvasDiffFileBar = { bg = "#112233", bold = true },
+    CanvasDiffFyleBar = { bg = "#abcdef" },
+  }
+  with_setup({ highlights = raw }, function(options)
+    H.eq(options.highlights, raw)
+    H.eq(config.user_opts.highlights, raw)
+    assert(not rawequal(config.user_opts.highlights, raw),
+      "health owns a copy of the original user table")
+    H.eq(config.health().unknown, {},
+      "appearance owns the extension schema below top-level highlights")
+  end)
 end
 
 -- The whole nested+list design rests on this: tbl_deep_extend REPLACES

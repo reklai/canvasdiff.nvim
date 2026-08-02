@@ -1,6 +1,7 @@
 local canvas = require("canvasdiff.canvas")
 local source = require("canvasdiff.source")
 local config = require("canvasdiff.config")
+local appearance = require("canvasdiff.appearance")
 local runtime = require("canvasdiff.runtime")
 local input = require("canvasdiff.input")
 local command = input.command
@@ -51,6 +52,7 @@ local GLOBAL_ACTIONS = {
 
 function App.new(opts)
   opts = opts or {}
+  appearance.setup(config.options.highlights)
   local effects = opts.global_keymap_effects or {
     get = native_get_keymap,
     set = function(mode, lhs, callback, map_opts)
@@ -676,6 +678,7 @@ end
 --- when setup() is never called.
 function App:setup(opts)
   local options, diagnostics = config.setup(opts)
+  vim.list_extend(diagnostics, appearance.setup(options.highlights))
   for _, message in ipairs(diagnostics or {}) do
     ui.err(message)
   end

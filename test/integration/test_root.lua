@@ -1,8 +1,62 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local source = require("canvasdiff.source")
+local appearance = require("canvasdiff.appearance")
 
 local T = {}
+
+local function with_appearance(overrides, fn)
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    local diagnostics = appearance.setup(overrides)
+    fn(diagnostics)
+  end, debug.traceback)
+  appearance.setup({})
+  assert(ok, err)
+end
+
+T["appearance colorscheme restores explicit overrides after defaults"] = function()
+  with_appearance({ CanvasDiffFileBar = { bg = "#112233", bold = true } },
+    function(diagnostics)
+      H.eq(diagnostics, {})
+      vim.cmd("colorscheme default")
+      local value = vim.api.nvim_get_hl(0,
+        { name = "CanvasDiffFileBar", link = false })
+      H.eq(value.bg, 0x112233)
+      H.eq(value.bold, true)
+    end)
+end
+
+T["appearance repeated setup owns exactly one colorscheme callback"] = function()
+  with_appearance({}, function()
+    appearance.setup({ CanvasDiffGhost = { italic = true } })
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    appearance.setup({})
+    local autocmds = vim.api.nvim_get_autocmds({
+      group = "canvasdiff.appearance",
+      event = "ColorScheme",
+    })
+    H.eq(#autocmds, 1)
+    H.eq(autocmds[1].desc,
+      "Reapply CanvasDiff defaults and explicit overrides")
+  end)
+end
+
+T["appearance app creation initializes configured highlights without setup"] = function()
+  local config = require("canvasdiff.config")
+  config.setup({ highlights = { CanvasDiffFileBar = { bg = "#112233" } } })
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
+
+  local ok, err = xpcall(function()
+    require("canvasdiff.App").new()
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end, debug.traceback)
+
+  config.setup({})
+  appearance.setup({})
+  assert(ok, err)
+end
 
 --- Run `fn` in a throwaway tab with `cwd` as the working directory, capturing
 --- notifications. Restores cwd, closes the tab, and drops the cached root
@@ -3216,6 +3270,35 @@ T["root_ setup presents config diagnostics as errors"] = function()
     "the UI owns the plugin prefix: " .. messages[1].message)
   assert(messages[1].message:find("glyphs must be", 1, true),
     "the validation message reaches the user: " .. messages[1].message)
+end
+
+T["root_ setup presents highlight diagnostics and applies valid siblings"] = function()
+  local fm = require("canvasdiff")
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    fm.setup({
+      highlights = {
+        CanvasDiffFileBar = { bg = "#112233" },
+        CanvasDiffGhost = "Comment",
+      },
+    })
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end, debug.traceback)
+  local reset_ok, reset_err = pcall(fm.setup, {})
+
+  vim.notify = real_notify
+  assert(ok, err)
+  assert(reset_ok, reset_err)
+  H.eq(#messages, 1, "one invalid sibling produces one diagnostic")
+  H.eq(messages[1].level, vim.log.levels.ERROR)
+  assert(messages[1].message:find("must be a table or false", 1, true),
+    messages[1].message)
 end
 
 T["root_ Surface never issues unqualified controller teardown"] = function()

@@ -1,8 +1,9 @@
 local settings = require("canvasdiff.config.settings")
 
 -- The config domain's exact public surface. Mutable state is owned by settings;
--- setup refreshes facade references for tables whose identity changes, while the
--- glyph table is deliberately stable and mutated in place.
+-- setup refreshes facade references for tables whose identity changes, including
+-- the native highlight map consumed by appearance, while the glyph table is
+-- deliberately stable and mutated in place.
 local C = {
   ASCII_GLYPHS = settings.ASCII_GLYPHS,
   defaults = settings.defaults,

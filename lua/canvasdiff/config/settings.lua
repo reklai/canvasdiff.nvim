@@ -195,6 +195,7 @@ M.defaults = {
   },
   context = 3,
   base = "HEAD",
+  highlights = {}, -- exact CanvasDiff group -> native highlight spec; false resets
   sidebar = {
     enabled = true,
     width = 32,
@@ -322,7 +323,8 @@ end
 local function unknown_paths(user, defaults, prefix, out)
   for key, value in pairs(user) do
     local path = prefix and (prefix .. "." .. tostring(key)) or tostring(key)
-    if REMOVED_OPTIONS[path] or (prefix == nil and key == "glyphs") then
+    if REMOVED_OPTIONS[path]
+        or (prefix == nil and (key == "glyphs" or key == "highlights")) then
       -- reported elsewhere, with better words
     elseif defaults[key] == nil then
       out[#out + 1] = path

@@ -3,6 +3,16 @@ local appearance = require("canvasdiff.appearance")
 
 local T = {}
 
+local function with_appearance(overrides, fn)
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    local diagnostics = appearance.setup(overrides)
+    fn(diagnostics)
+  end, debug.traceback)
+  appearance.setup({})
+  assert(ok, err)
+end
+
 local GROUPS = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
@@ -28,25 +38,29 @@ T["appearance registry is the exact public highlight surface"] = function()
 end
 
 T["appearance ensure defines every registered group"] = function()
-  for _, name in ipairs(GROUPS) do
-    vim.api.nvim_set_hl(0, name, {})
-  end
-  appearance.ensure()
-  for _, name in ipairs(GROUPS) do
-    local value = vim.api.nvim_get_hl(0, { name = name, link = true })
-    assert(next(value) ~= nil, name .. " was not defined")
-  end
+  with_appearance({}, function()
+    for _, name in ipairs(GROUPS) do
+      vim.api.nvim_set_hl(0, name, {})
+    end
+    appearance.ensure()
+    for _, name in ipairs(GROUPS) do
+      local value = vim.api.nvim_get_hl(0, { name = name, link = true })
+      assert(next(value) ~= nil, name .. " was not defined")
+    end
+  end)
 end
 
 T["appearance ensure reauthors a cleared registered group"] = function()
-  appearance.ensure()
-  vim.api.nvim_set_hl(0, "CanvasDiffWinbar", {})
-  appearance.ensure()
-  local value = vim.api.nvim_get_hl(0, {
-    name = "CanvasDiffWinbar",
-    link = true,
-  })
-  H.eq(value.link, "WinBar")
+  with_appearance({}, function()
+    appearance.ensure()
+    vim.api.nvim_set_hl(0, "CanvasDiffWinbar", {})
+    appearance.ensure()
+    local value = vim.api.nvim_get_hl(0, {
+      name = "CanvasDiffWinbar",
+      link = true,
+    })
+    H.eq(value.link, "WinBar")
+  end)
 end
 
 T["appearance ensure preserves an identical explicit takeover during rederive"] = function()
@@ -90,6 +104,112 @@ T["appearance ensure preserves an identical explicit takeover during rederive"] 
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
   vim.api.nvim_set_hl(0, "CanvasDiffDel", {})
   appearance.ensure()
+  assert(ok, err)
+end
+
+T["appearance accepts native highlight fields"] = function()
+  with_appearance({
+    CanvasDiffFileBar = { fg = "#112233", bg = "#445566", bold = true },
+  }, function(diagnostics)
+    H.eq(diagnostics, {})
+    local value = vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false })
+    H.eq(value.fg, 0x112233)
+    H.eq(value.bg, 0x445566)
+    H.eq(value.bold, true)
+  end)
+end
+
+T["appearance diagnoses unknown malformed and manager fields"] = function()
+  local diagnostics = appearance.audit({
+    CanvasDiffFyleBar = { bg = "#000000" },
+    CanvasDiffGhost = "Comment",
+    CanvasDiffFileBar = { default = true },
+    CanvasDiffAdd = { force = true },
+  })
+  local text = table.concat(diagnostics, "\n")
+  assert(text:find("CanvasDiffFyleBar", 1, true))
+  assert(text:find("must be a table or false", 1, true))
+  assert(text:find("default", 1, true))
+  assert(text:find("force", 1, true))
+  H.eq(appearance.audit("Comment"), {
+    "highlights must be a table, got string",
+  })
+end
+
+T["appearance audit diagnoses invalid native fields without global mutation"] = function()
+  with_appearance({ CanvasDiffFileBar = { bg = "#123456" } }, function()
+    local before = vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = true })
+    local diagnostics = appearance.audit({
+      CanvasDiffFileBar = { bg = "definitely-not-a-colour" },
+    })
+    assert(table.concat(diagnostics, "\n"):find("is invalid", 1, true),
+      vim.inspect(diagnostics))
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = true }), before)
+  end)
+end
+
+T["appearance setup applies valid siblings while diagnosing invalid ones"] = function()
+  with_appearance({
+    CanvasDiffFileBar = { bg = "#112233" },
+    CanvasDiffGhost = "Comment",
+    CanvasDiffFyleBar = { bg = "#abcdef" },
+  }, function(diagnostics)
+    H.eq(#diagnostics, 2)
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end)
+end
+
+T["appearance replacement releases only its own old override"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+    appearance.setup({})
+    assert(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg ~= 0x112233)
+
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { bg = "#abcdef" })
+    appearance.setup({})
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0xabcdef)
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
+  appearance.setup({})
+  assert(ok, err)
+end
+
+T["appearance false releases an owned override to the current default"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+    local diagnostics = appearance.setup({ CanvasDiffFileBar = false })
+    H.eq(diagnostics, {})
+    assert(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg ~= 0x112233)
+  end, debug.traceback)
+  appearance.setup({})
+  assert(ok, err)
+end
+
+T["appearance explicitly supplied override replaces a foreign definition"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { bg = "#abcdef" })
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end, debug.traceback)
+  appearance.setup({})
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
+  appearance.setup({})
   assert(ok, err)
 end
 
