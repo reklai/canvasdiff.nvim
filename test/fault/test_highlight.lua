@@ -1394,6 +1394,64 @@ T["hl_rows the field is one neutral elevation shared by add and del"] = function
   assert(del.fg ~= nil, "a deleted file's real rows read dimmed")
 end
 
+-- The file bar borrows the scheme's Directory hue so it can be DIMMER than a
+-- purely lighter bar could be: CursorLine and Visual are neutral in the schemes
+-- that box the luma factor in, so chroma separates the bar from them on an axis
+-- luma was standing in for. These pin both halves -- that the tint is taken when
+-- there is a hue to take, and that it is refused when there is not.
+local function bar_bg()
+  return vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = false }).bg
+end
+
+T["hl_rows the file bar spends chroma so it can spend less light"] = function()
+  local real = vim.api.nvim_get_hl(0, { name = "Directory", link = false })
+  vim.api.nvim_set_hl(0, "Directory", { fg = 0x8cf8f7 })  -- chroma 108
+  local ok, err = xpcall(function()
+    reset_diff_groups()
+    render.ensure_diff_hl()
+    local bar = bar_bg()
+    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    local neutral = tonumber(render.blend(normal.bg, 0xffffff, 0.16):sub(2), 16)
+
+    assert(render.chroma(bar) >= 10,
+      ("the bar must carry real hue, not a lightening (chroma %d)")
+        :format(render.chroma(bar)))
+    assert(luma(bar) < luma(neutral),
+      "and it must be DIMMER than the neutral bar -- the chroma is what buys that")
+
+    -- The elevation rule still binds: a file boundary reads above the field.
+    local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
+    assert(luma(bar) - luma(add.bg) >= 10,
+      ("the bar must clear a changed row by >= 10 (got %.1f)")
+        :format(luma(bar) - luma(add.bg)))
+
+    -- The failure the earlier Title tint died on: markers sit ON the bar.
+    local stale = vim.api.nvim_get_hl(0, { name = "DiagnosticError", link = false })
+    if stale.fg then
+      assert(math.abs(luma(stale.fg) - luma(bar))
+          >= math.abs(luma(stale.fg) - luma(neutral)),
+        "a dimmer bar must not cost the stale marker contrast -- it should gain")
+    end
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "Directory", real)
+  assert(ok, err)
+end
+
+T["hl_rows a grey Directory is refused as a tint"] = function()
+  local real = vim.api.nvim_get_hl(0, { name = "Directory", link = false })
+  vim.api.nvim_set_hl(0, "Directory", { fg = 0x9b9ea4 })  -- chroma 9, a grey
+  local ok, err = xpcall(function()
+    reset_diff_groups()
+    render.ensure_diff_hl()
+    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    H.eq(bar_bg(), tonumber(render.blend(normal.bg, 0xffffff, 0.16):sub(2), 16),
+      "blending toward a grey is the lightening the Title tint turned out to"
+        .. " be, so the neutral bar is the honest answer")
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "Directory", real)
+  assert(ok, err)
+end
+
 T["hl_rows the crumb states no colour, so it reads as text on the bar"] = function()
   vim.api.nvim_set_hl(0, "CanvasDiffCrumb", {})
   render.ensure_hunk_hl()

@@ -494,7 +494,7 @@ colourscheme by measured factors rather than linked — the measurements are in
 | `CanvasDiffGhost` | dimmed fg | ghost deletion lines |
 | `CanvasDiffPrefixAdd` / `CanvasDiffPrefixDel` | derived green/red fg | the `+`/`-` prefix cell |
 | `CanvasDiffGutterAdd` / `CanvasDiffGutterDel` | the same green/red | the statuscolumn bar |
-| `CanvasDiffFileBar` | derived bar elevation | the file header row and its pinned copy |
+| `CanvasDiffFileBar` | derived: tinted toward `Directory` | the file header row and its pinned copy |
 | `CanvasDiffFileHeader` | `Title` | the filename on the bar |
 | `CanvasDiffHunkHeader` | `Comment` | `@@ … @@` hunk header rows |
 | `CanvasDiffBinary` | `Comment` | binary-file notices |

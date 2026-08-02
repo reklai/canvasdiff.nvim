@@ -540,8 +540,8 @@ explicit `nvim_set_hl()` of your own always wins over the derived defaults:
     CanvasDiffPrefixDel      prefix cell
     CanvasDiffGutterAdd      the same green/red; the statuscolumn bar
     CanvasDiffGutterDel
-    CanvasDiffFileBar        derived bar elevation; the file header row and
-                             its pinned copy
+    CanvasDiffFileBar        derived, tinted toward Directory; the file
+                             header row and its pinned copy
     CanvasDiffWinbar         WinBar link; the top band
     CanvasDiffWinbarReadOnly Visual link; the band's read-only tint
     CanvasDiffSidebarHunk    Comment link; a sidebar hunk row, whole

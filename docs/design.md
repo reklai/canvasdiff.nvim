@@ -46,6 +46,21 @@ factor is measured, not felt:
   near-neutral, so tinting just lightens the bar into `Visual`'s band (gap 5.9),
   and under moon it collapses the stale marker's contrast on the bar from 23.3
   to 11.6.
+- **10% toward `Directory` (the tinted bar)** is what that 16% becomes when the
+  scheme has a hue worth borrowing, and it exists because 16% is *bright*: it
+  had to climb past `CursorLine` on the only axis it had. But `CursorLine` and
+  `Visual` are the neutral ones — builtin chroma 7 and 9 — so a bar carrying
+  chroma separates from them on an axis the luma rule was standing in for. That
+  buys back the dim region: builtin lands luma **42.5** against `CursorLine`'s
+  45.9, which pure lightness could never have used, still 11.6 above the
+  elevation. `Directory` rather than `Title` because it is what the sidebar
+  already spends on a directory row — the scheme's own "this is filesystem
+  structure", which is what a file boundary is — and because it is the one that
+  measures as colour: builtin `Directory` reads chroma 108 where `Title` reads
+  10. It also fixes the Title attempt's other failure instead of repeating it: a
+  dimmer bar *raises* the stale marker's contrast on it, 145.8 → 162.4. Below
+  chroma 60 the scheme has no hue to lend and the neutral 16% bar is used
+  unchanged, so a grey `Directory` cannot reintroduce the lightening.
 - **20% (the ghost dim)** sits deliberately below its own ceiling. The ceiling
   is `@comment`: a deletion must never read dimmer than a comment, which under
   the builtin scheme (the binding one, `@comment` at 135.9) rules out 0.35 at
@@ -113,9 +128,11 @@ don't get a bar — a placeholder is already a visually distinct single row
 (it opens with `▸`) and has no body to close off, and barring all of them would turn a
 canvas of 200 auto-collapsed files into a solid block of colour. The group is
 `CanvasDiffFileBar`, and its default is derived rather than linked: `Normal`'s
-background moved 16% toward the luminance pole — the same derivation as the
-changed-row elevation, pushed further, so a file boundary reads *above* the field it
-interrupts and never as just another cursor line (measurements above).
+background moved 10% toward the scheme's `Directory` colour, so a file boundary reads
+*above* the field it interrupts and never as just another cursor line — carried by hue
+rather than by brightness, which is what lets it stay dim. A scheme whose `Directory`
+is grey has no hue to lend, and falls back to 16% toward the luminance pole, the same
+derivation as the changed-row elevation pushed further (measurements above).
 `CanvasDiffFileHeader` stays foreground-only so the two compose: the filename keeps
 `Title`'s colour on the tinted row, and the marker colours sit over both.
 

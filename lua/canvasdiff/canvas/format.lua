@@ -254,6 +254,22 @@ end
 --- background at all -- in which case the OTHER endpoint comes back unchanged
 --- rather than inventing black or erroring. Returns "#rrggbb", or nil when
 --- both endpoints are missing.
+--- How far a 24-bit colour sits from grey: max channel minus min, 0..255.
+---
+--- The question a tint has to answer before it is worth taking. A near-neutral
+--- source blends as lightening, not colour -- which is the whole reason the
+--- earlier Title tint failed measurement, and the reason BAR_TINT_MIN_CHROMA
+--- asks this rather than assuming a scheme is colourful.
+function R.chroma(colour)
+  if not colour then
+    return 0
+  end
+  local r = math.floor(colour / 65536) % 256
+  local g = math.floor(colour / 256) % 256
+  local b = colour % 256
+  return math.max(r, g, b) - math.min(r, g, b)
+end
+
 function R.blend(bg_a, bg_b, factor)
   if bg_a == nil and bg_b == nil then
     return nil
@@ -293,7 +309,33 @@ local ELEVATION_FACTOR = 0.04
 -- measured and REJECTED: builtin's Title fg is near-neutral, so tinting
 -- just lightens the bar into Visual's band (gap 5.9), and under moon it
 -- collapses the stale marker's contrast on the bar from 23.3 to 11.6.
+--
+-- Kept as the fallback for a scheme with no hue to borrow -- see
+-- BAR_TINT_FACTOR, which spends chroma instead of luma when one is available.
 local BAR_FACTOR = 0.16
+
+-- The bar again, tinted rather than merely lightened, for a scheme whose
+-- Directory carries real hue.
+--
+-- Why this works where the Title tint did not: CursorLine and Visual are
+-- NEUTRAL in the schemes that box the luma factor in (builtin chroma 7 and 9),
+-- so a bar that carries chroma separates from them on an axis the luma rule was
+-- standing in for. That buys back the dim region 0.16 had to climb past --
+-- builtin lands luma 42.5 against CursorLine's 45.9, which pure lightness could
+-- never have used, and 11.6 above the elevation, still clearing the >= 10 rule.
+--
+-- Directory rather than Title because it is the one the SIDEBAR already spends
+-- on a directory row: the scheme's own answer to "this is filesystem
+-- structure", which is what a file boundary is. Measured, it also fixes the
+-- Title attempt's other failure instead of repeating it -- a dimmer bar RAISES
+-- the stale marker's contrast on it, 145.8 to 162.4.
+local BAR_TINT_FACTOR = 0.10
+
+-- Below this, Directory is grey and blending toward it is the lightening the
+-- Title tint turned out to be, so the neutral bar above is the honest answer.
+-- Builtin Directory reads 108; the bar keeps roughly a sixth of that, and 10 is
+-- what it takes to out-chroma a neutral CursorLine.
+local BAR_TINT_MIN_CHROMA = 60
 
 -- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
 --
@@ -421,6 +463,10 @@ function R.ensure_diff_hl()
   -- meaning is "further from Normal than the elevation", which only holds
   -- when the two share a starting point.
   local bar = tonumber(R.blend(normal_bg, pole, BAR_FACTOR):sub(2), 16)
+  local directory = vim.api.nvim_get_hl(0, { name = "Directory", link = false })
+  if directory.fg and R.chroma(directory.fg) >= BAR_TINT_MIN_CHROMA then
+    bar = tonumber(R.blend(normal_bg, directory.fg, BAR_TINT_FACTOR):sub(2), 16)
+  end
   set_diff_default("CanvasDiffFileBar", { bg = bar, default = true })
 
   for kind, groups in pairs({
