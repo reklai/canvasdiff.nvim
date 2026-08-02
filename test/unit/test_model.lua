@@ -267,6 +267,74 @@ return {
     })
     H.eq({ ss[1].path, ss[2].path }, { "a.txt", "z.txt" })
   end,
+  ["model: sections publish per-hunk metadata"] = function()
+    local old = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n"
+    local new = "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nnine\nten\nELEVEN\n"
+    local s = model.build_section("a.lua", old, new, "M", 3)
+    H.eq(#s.hunks, s.nhunks, "one metadata row per hunk")
+    H.eq(s.hunks[1], {
+      header = "@@ -1,6 +1,6 @@",
+      new_lo = 3, new_hi = 3,
+      adds = 1, dels = 1,
+      label = "THREE",
+      pure_del = false,
+    })
+    -- Counts belong to ONE hunk each: bookkeeping shared across groups would
+    -- report adds = 2 and dels = 1 for this trailing append.
+    H.eq(s.hunks[2], {
+      header = "@@ -8,3 +8,4 @@",
+      new_lo = 11, new_hi = 11,
+      adds = 1, dels = 0,
+      label = "ELEVEN",
+      pure_del = false,
+    })
+    local headers, rows = {}, {}
+    for _, h in ipairs(s.hunks) do headers[#headers + 1] = h.header end
+    for _, e in ipairs(s.entries) do
+      if e.kind == "hunk_hdr" then rows[#rows + 1] = e.content end
+    end
+    H.eq(headers, rows, "hunk `gi` metadata and the `gi`th header row agree, in order")
+  end,
+  ["model: a pure-deletion hunk labels its removed line"] = function()
+    local old = "one\ntwo\nGONE\nthree\nfour\nfive\nsix\nseven\n"
+    local new = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"
+    local s = model.build_section("a.lua", old, new, "M", 1)
+    H.eq(#s.hunks, s.nhunks)
+    -- The removed line is a ghost, not a row, so the label has to be captured
+    -- before the deletion leaves the entry stream.
+    H.eq(s.hunks[1], {
+      header = "@@ -2,3 +2,2 @@",
+      new_lo = nil, new_hi = nil,
+      adds = 0, dels = 1,
+      label = "GONE",
+      pure_del = true,
+    })
+  end,
+  ["model: a merged hunk spans every line it writes"] = function()
+    local letters = {}
+    for i = 1, 20 do letters[i] = string.char(96 + i) end
+    local old_lines, new_lines = {}, {}
+    for i = 1, 20 do old_lines[i] = letters[i]; new_lines[i] = letters[i] end
+    new_lines[5] = "E"
+    new_lines[12] = "L"
+    local s = model.build_section("f.txt",
+      table.concat(old_lines, "\n") .. "\n", table.concat(new_lines, "\n") .. "\n", "M")
+    H.eq(s.nhunks, 1)
+    H.eq(#s.hunks, 1)
+    H.eq({ s.hunks[1].new_lo, s.hunks[1].new_hi }, { 5, 12 },
+      "two changes merged into one hunk span from the first written line to the last")
+    H.eq({ s.hunks[1].adds, s.hunks[1].dels }, { 2, 2 })
+    H.eq(s.hunks[1].label, "E", "the label is the FIRST changed line, not the last")
+  end,
+  ["model: sections without a diff still publish a hunk list"] = function()
+    local bin = model.build_section("a.zip", "a\0b\n", "c\0d\n", "M")
+    H.eq(bin.binary, true)
+    H.eq(bin.hunks, {}, "consumers iterate section.hunks without a nil check")
+    local ren = model.build_section("after.txt", "same\n", "same\n", "R", 3,
+      { old_path = "before.txt" })
+    H.eq(ren.rename_only, true)
+    H.eq(ren.hunks, {})
+  end,
   ["render: line text and highlights"] = function()
     local s = model.build_section("f.txt", "a\nb\n", "a\nB\n", "M")
     local lines = render.section_lines(s)
