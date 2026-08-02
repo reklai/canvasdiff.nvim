@@ -886,10 +886,12 @@ T["lens_xy the sidebar row says which kind of change it is"] = function()
 end
 
 T["lens_xy the stage mark sits before the stale marker"] = function()
-  local secs = { { path = "a.txt", adds = 1, dels = 0, staged = "M", unstaged = "M" } }
+  local secs = {
+    { path = "a.txt", adds = 1, dels = 0, nhunks = 1, staged = "M", unstaged = "M" },
+  }
   local lines = sidebar.render_lines(
     sidebar.build_entries(secs, {}, { ["a.txt"] = true }, { ["a.txt"] = true }))
-  H.eq(lines, { "▸ a.txt  +1 −0 ●○" .. render.glyphs.stale },
+  H.eq(lines, { "▸ a.txt  (1 hunks, +1 −0) ●○" .. render.glyphs.stale },
     "so the trailing ● keeps meaning exactly one thing in both windows")
 end
 
@@ -924,7 +926,8 @@ T["lens_xy a committed range shows no stage state on headers or sidebar rows"] =
   H.eq(render.placeholder(sections[1]), "▸ f.txt  (1 hunks, +1 −1)",
     "and none on the folded placeholder")
   H.eq(sidebar.render_lines(sidebar.build_entries(sections, {})),
-    { "  f.txt  +1 −1" }, "exactly what the sidebar row shows: nothing")
+    { "  f.txt  +1 −1", "    @@ 1  after  +1 −1" },
+    "exactly what the sidebar row shows -- and its hunk row, which never marks stage at all")
   vim.fn.delete(root, "rf")
 end
 

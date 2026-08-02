@@ -12,17 +12,67 @@ local winbar = require("canvasdiff.ui.winbar")
 
 local S = {}
 
+--- Width of the sidebar window when its owner names none. Hunk rows are cut to
+--- it, so render_lines needs the same number S.open would have used.
+local DEFAULT_WIDTH = 32
+
+--- "(2 files, +3 −5)" / "(6 hunks, +12 −4)" -- what a fold hides, in the
+--- vocabulary the canvas placeholder already uses for the same fact, so a
+--- folded file reads as the same row in either window.
+local function summary_of(count, noun, adds, dels)
+  return ("(%d %s, +%d " .. render.glyphs.minus .. "%d)")
+    :format(count, noun, adds, dels)
+end
+
+--- One tree row for one hunk, `gi` indexing `section.hunks`.
+---
+--- `label` is carried beside `name` because rendering has to know which BYTES
+--- of the row came out of the file: they are what a narrow window cuts, and
+--- what a pure deletion strikes through. `name` ends with it, by construction.
+---
+--- The line number is new_lo, which a pure deletion has not got -- it writes no
+--- new-side line, so there is nothing to number. Which SIDE the label was taken
+--- from is a different question, and `pure_del` is what answers it.
+local function hunk_entry(path, depth, gi, hunk)
+  -- Indentation is noise in a thirty-column tree: the row names the hunk, it
+  -- does not reproduce the line.
+  local label = ((hunk.label or ""):gsub("^%s+", ""))
+  local marker = hunk.new_lo and ("@@ %d  "):format(hunk.new_lo) or "@@ "
+  return {
+    kind = "hunk",
+    path = path,
+    hunk = gi,
+    depth = depth,
+    label = label,
+    name = marker .. label,
+    counts = ("+%d " .. render.glyphs.minus .. "%d")
+      :format(hunk.adds or 0, hunk.dels or 0),
+    pure_del = hunk.pure_del or false,
+  }
+end
+
 --- Flatten alphabetical sections into display-ordered dir/file entries.
 --- `folded` is a set of dir paths ("lua/mod/" -- cumulative, trailing
 --- slash); a folded dir is shown itself but none of its descendants are.
 --- Sections are sorted by path, so each dir is emitted exactly once,
 --- immediately before its first descendant.
 ---
---- `aside` is an optional set of file paths the user folded themselves, used only
---- to flag their rows. `stale` is an optional set of paths that have changed since
---- they were folded; a DIR row carries it when anything beneath it has, which is
---- the only way the signal is visible for a folded directory -- a folded dir emits
---- no rows for its children at all. All plain tables, so this stays pure.
+--- `aside` is an optional set of file paths the user folded themselves. It flags
+--- their rows AND decides their depth: an unfolded file lists a row per hunk, a
+--- folded one is a single row carrying `(N hunks, +a −d)` instead, exactly as it
+--- is a single placeholder on the canvas. A folded DIR summarizes the files it
+--- hides the same way.
+---
+--- That the predicate is `aside` -- the USER's folds -- and not "renders as one
+--- row" is the whole point. The virtualizer collapses far-from-viewport sections
+--- on its own; if those suppressed hunk rows the tree would reflow under the
+--- cursor on every scroll. It changes when you fold something, and at no other
+--- time.
+---
+--- `stale` is an optional set of paths that have changed since they were folded;
+--- a DIR row carries it when anything beneath it has, which is the only way the
+--- signal is visible for a folded directory -- a folded dir emits no rows for its
+--- children at all. All plain tables, so this stays pure.
 function S.build_entries(sections, folded, aside, stale)
   folded = folded or {}
   aside = aside or {}
@@ -38,6 +88,30 @@ function S.build_entries(sections, folded, aside, stale)
         break
       end
       stale_dirs[string.sub(path, 1, slash)] = true
+      from = slash + 1
+    end
+  end
+
+  -- What each directory WOULD hide, accumulated for every prefix and read only
+  -- by the folded ones. A fold summarizes what you cannot see, so this has to
+  -- count everything under the prefix rather than anything the walk emits.
+  local dir_totals = {}
+  for _, section in ipairs(sections) do
+    local from = 1
+    while true do
+      local slash = string.find(section.path, "/", from, true)
+      if not slash then
+        break
+      end
+      local dir = string.sub(section.path, 1, slash)
+      local total = dir_totals[dir]
+      if not total then
+        total = { files = 0, adds = 0, dels = 0 }
+        dir_totals[dir] = total
+      end
+      total.files = total.files + 1
+      total.adds = total.adds + (section.adds or 0)
+      total.dels = total.dels + (section.dels or 0)
       from = slash + 1
     end
   end
@@ -61,6 +135,7 @@ function S.build_entries(sections, folded, aside, stale)
       prefix = prefix .. parts[d] .. "/"
       if not hidden then
         if d > shared then
+          local total = dir_totals[prefix]
           entries[#entries + 1] = {
             kind = "dir",
             path = prefix,
@@ -68,6 +143,9 @@ function S.build_entries(sections, folded, aside, stale)
             depth = d - 1,
             folded = folded[prefix] or false,
             stale = (folded[prefix] and stale_dirs[prefix]) or false,
+            summary = folded[prefix]
+              and summary_of(total.files, "files", total.adds, total.dels)
+              or nil,
           }
         end
         if folded[prefix] then
@@ -77,6 +155,7 @@ function S.build_entries(sections, folded, aside, stale)
     end
 
     if not hidden then
+      local put_away = aside[section.path] or false
       entries[#entries + 1] = {
         kind = "file",
         path = section.path,
@@ -85,11 +164,22 @@ function S.build_entries(sections, folded, aside, stale)
         section_i = i,
         adds = section.adds,
         dels = section.dels,
-        aside = aside[section.path] or false,
+        aside = put_away,
         stale = stale[section.path] or false,
         staged = section.staged,
         unstaged = section.unstaged,
+        summary = put_away
+          and summary_of(
+            section.nhunks or 0, "hunks", section.adds or 0, section.dels or 0)
+          or nil,
       }
+      if not put_away then
+        -- Binary and rename-only sections publish no hunks, so they contribute
+        -- no rows here and stay the single row they have always been.
+        for gi, hunk in ipairs(section.hunks or {}) do
+          entries[#entries + 1] = hunk_entry(section.path, #parts + 1, gi, hunk)
+        end
+      end
     end
     prev_dirs = parts
   end
@@ -97,9 +187,38 @@ function S.build_entries(sections, folded, aside, stale)
   return entries
 end
 
---- Render entries to display lines (pure).
-function S.render_lines(entries)
-  local lines = {}
+--- The widest prefix of `text` that fits `cells` display columns, cut on a
+--- character boundary: a hunk label is a line of source, and splitting a
+--- multibyte character mid-sequence would put invalid bytes in the buffer.
+local function fit(text, cells)
+  if cells <= 0 then
+    return ""
+  end
+  -- Every character is at least one cell wide, so `cells` characters is already
+  -- an upper bound on what can fit -- the walk below is bounded by the sidebar's
+  -- width rather than by the length of the line being cut.
+  local n = math.min(vim.fn.strchars(text), cells)
+  while n > 0 do
+    local cut = vim.fn.strcharpart(text, 0, n)
+    if vim.fn.strdisplaywidth(cut) <= cells then
+      return cut
+    end
+    n = n - 1
+  end
+  return ""
+end
+
+--- Render entries to display lines (pure). Returns the lines, and the highlight
+--- spans a row needs beyond its marker glyphs, keyed by row: `{ start_col,
+--- end_col, group }` byte ranges, outermost first, so a later span layers over
+--- an earlier one.
+---
+--- `width` is the sidebar's column count. Only hunk rows are cut to it: a path
+--- is identity and mangling one would name a file that does not exist, but a
+--- hunk's label is a line of source that would otherwise run off any tree.
+function S.render_lines(entries, width)
+  width = width or DEFAULT_WIDTH
+  local lines, spans = {}, {}
   for i, e in ipairs(entries) do
     local indent = ("  "):rep(e.depth)
     local mark = e.stale and render.glyphs.stale or ""
@@ -107,7 +226,28 @@ function S.render_lines(entries)
       lines[i] = indent
         .. (e.folded and (render.glyphs.folded .. " ") or (render.glyphs.open .. " "))
         .. render.escape_path(e.name)
+        .. (e.summary and ("  " .. e.summary) or "")
         .. mark
+    elseif e.kind == "hunk" then
+      -- Two columns past its own depth: a file row spends its first two on the
+      -- fold marker, so matching depth alone would put the `@@` directly under
+      -- the file NAME rather than one step inside it.
+      local lead = indent .. "  " .. e.name:sub(1, #e.name - #e.label)
+      local tail = "  " .. e.counts
+      local label = render.escape_path(e.label)
+      if #lead + #label + #tail > width then
+        -- Bytes are an upper bound on cells, so the arithmetic only has to be
+        -- exact for a row that really is too long.
+        label = fit(label, width - vim.fn.strdisplaywidth(lead .. tail))
+      end
+      local line = lead .. label .. tail
+      lines[i] = line
+      spans[i] = { { 0, #line, "CanvasDiffSidebarHunk" } }
+      if e.pure_del then
+        -- Struck iff the label is old-side text: the same fact, on the same
+        -- channel, as the canvas's ghost deletions.
+        spans[i][2] = { #lead, #lead + #label, "CanvasDiffSidebarHunkDel" }
+      end
     else
       local stage = render.stage_mark(e.staged, e.unstaged)
       if stage ~= "" then
@@ -116,12 +256,15 @@ function S.render_lines(entries)
       lines[i] = indent
         .. (e.aside and (render.glyphs.folded .. " ") or "  ")
         .. render.escape_path(e.name)
-        .. ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
+        .. (
+          e.summary and ("  " .. e.summary)
+          or ("  +%d " .. render.glyphs.minus .. "%d"):format(e.adds, e.dels)
+        )
         .. stage
         .. mark
     end
   end
-  return lines
+  return lines, spans
 end
 
 local NS = vim.api.nvim_create_namespace("canvasdiff.sidebar")
@@ -165,6 +308,18 @@ local function ensure_hl_groups()
   })
   vim.api.nvim_set_hl(0, "CanvasDiffSidebarActive", {
     link = "Visual",
+    default = true,
+  })
+  -- A hunk row sits one step below its file, on the same de-emphasis channel the
+  -- canvas's own `@@` rows use -- no new hue enters the tree for it.
+  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunk", {
+    link = "Comment",
+    default = true,
+  })
+  -- A label taken from the old side is struck through, which is what
+  -- CanvasDiffGhost already means everywhere else in the plugin.
+  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunkDel", {
+    link = "CanvasDiffGhost",
     default = true,
   })
   render.ensure_marker_hl()
@@ -601,7 +756,7 @@ local function refresh_view(lease, view, observed)
   local aside = fold.user_folded_set(state.sections, state)
   local stale = fold.stale_set(state.sections, state, model.fingerprint, lens.of(state).id)
   local entries = S.build_entries(state.sections, state.folded, aside, stale)
-  local lines = S.render_lines(entries)
+  local lines, row_spans = S.render_lines(entries, lease.width)
   if #lines == 0 then
     lines = { "" }
   end
@@ -658,8 +813,23 @@ local function refresh_view(lease, view, observed)
           new_ids[id] = true
         end
       end
+      for si, span in ipairs(row_spans[row] or {}) do
+        local id = place_mark(lease, view, row - 1, span[1], {
+          end_row = row - 1,
+          end_col = span[2],
+          hl_group = span[3],
+          -- Row spans arrive outermost-first, so each layers over the last.
+          priority = 95 + si - 1,
+        })
+        if id then
+          new_ids[id] = true
+        end
+      end
       local line = lines[row] or ""
-      local is_file = entry.kind ~= "dir"
+      -- Stage and stale markers are a FILE's facts. A hunk row carries neither
+      -- -- the lens is what answers "what is staged?", and the file row above it
+      -- already says so for the whole file.
+      local is_file = entry.kind == "file"
       local spans = render.marker_spans(
         line,
         is_file and entry.staged or nil,
@@ -1401,7 +1571,7 @@ function S.open(state, opts, callbacks)
     state = state,
     opts = opts,
     callbacks = callbacks or {},
-    width = opts.width or 32,
+    width = opts.width or DEFAULT_WIDTH,
     group_name = "canvasdiff.sidebar." .. next_lease_id,
     autocmd_ids = {},
     views_by_tab = {},

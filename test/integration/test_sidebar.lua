@@ -89,6 +89,135 @@ T["sidebar_entries a stale file is flagged, and so is the folded dir above it"] 
     "omitting the set means nothing is stale")
 end
 
+-- Hunk metadata as the model publishes it (test_model pins that shape);
+-- build_entries reads section.hunks straight through, so hand-built rows are
+-- the whole input a tree needs.
+local function hunky()
+  return {
+    { path = "src/a.lua", adds = 3, dels = 1, nhunks = 2, hunks = {
+        { new_lo = 3, adds = 2, dels = 1, label = "THREE", pure_del = false },
+        { new_lo = 9, adds = 1, dels = 0, label = "NINE", pure_del = false } } },
+    { path = "src/b.lua", adds = 0, dels = 4, nhunks = 1, hunks = {
+        { new_lo = nil, adds = 0, dels = 4, label = "GONE", pure_del = true } } },
+  }
+end
+
+T["sidebar_entries an unfolded file lists its hunks, a folded one summarizes them"] = function()
+  local minus = render.glyphs.minus
+  local entries = sidebar.build_entries(hunky(), {}, { ["src/b.lua"] = true }, {})
+  local shape = {}
+  for i, e in ipairs(entries) do
+    shape[i] = { e.kind, e.name }
+  end
+  H.eq(shape, {
+    { "dir", "src/" },
+    { "file", "a.lua" },
+    { "hunk", "@@ 3  THREE" },
+    { "hunk", "@@ 9  NINE" },
+    { "file", "b.lua" },
+  }, "the folded file is one row here exactly as it is one row on the canvas")
+
+  H.eq(entries[3].counts, "+2 " .. minus .. "1")
+  H.eq(entries[3].path, "src/a.lua", "a hunk row names the file it belongs to")
+  H.eq(entries[3].hunk, 1, "and its index into section.hunks")
+  H.eq(entries[4].hunk, 2)
+  H.eq(entries[3].depth, entries[2].depth + 1, "one level under its file")
+  H.eq(entries[2].summary, nil, "an unfolded file summarizes nothing -- its hunks are right there")
+  H.eq(entries[5].summary, "(1 hunks, +0 " .. minus .. "4)",
+    "the folded one carries the count of what it hides")
+end
+
+-- A pure deletion writes no new-side line, so it has no line number to show and
+-- its label is old-side text. Both facts have to survive into the row.
+T["sidebar_entries a pure-deletion hunk row is labelled from the old side"] = function()
+  local entries = sidebar.build_entries(hunky(), {}, {}, {})
+  H.eq(entries[6].kind, "hunk")
+  H.eq(entries[6].pure_del, true)
+  H.eq(entries[6].name, "@@ GONE", "no new-side line, so no line number")
+  H.eq(entries[6].label, "GONE", "the removed line, kept apart so rendering can strike it")
+  H.eq(entries[3].pure_del, false, "an ordinary hunk is not marked")
+end
+
+T["sidebar_entries a folded dir summarizes the files it hides"] = function()
+  local minus = render.glyphs.minus
+  local secs = hunky()
+  secs[#secs + 1] = { path = "top.md", adds = 7, dels = 7, nhunks = 1, hunks = {
+    { new_lo = 1, adds = 7, dels = 7, label = "TOP", pure_del = false } } }
+
+  local entries = sidebar.build_entries(secs, { ["src/"] = true }, {}, {})
+  H.eq(entries[1].kind, "dir")
+  H.eq(entries[1].summary, "(2 files, +3 " .. minus .. "5)",
+    "the aggregate is what the fold HIDES, not what is left on screen")
+  H.eq(entries[2].path, "top.md", "sanity: src/'s files really are hidden")
+  H.eq(entries[2].summary, nil)
+  H.eq(entries[3].kind, "hunk", "a file outside the fold keeps its hunk rows")
+  H.eq(#entries, 3)
+
+  H.eq(sidebar.build_entries(secs, {}, {}, {})[1].summary, nil,
+    "an open dir hides nothing, so it has nothing to summarize")
+end
+
+T["sidebar_render hunk rows sit one step under their file"] = function()
+  local minus = render.glyphs.minus
+  local lines = sidebar.render_lines(sidebar.build_entries(hunky(), {}, {}, {}))
+  H.eq(lines, {
+    "▾ src/",
+    "    a.lua  +3 " .. minus .. "1",
+    "      @@ 3  THREE  +2 " .. minus .. "1",
+    "      @@ 9  NINE  +1 " .. minus .. "0",
+    "    b.lua  +0 " .. minus .. "4",
+    "      @@ GONE  +0 " .. minus .. "4",
+  }, "the `@@` sits inside the file name, not under it")
+end
+
+T["sidebar_render a pure-deletion hunk row is struck through the ghost group"] = function()
+  local entries = sidebar.build_entries(hunky(), {}, {}, {})
+  local lines, spans = sidebar.render_lines(entries)
+  H.eq(spans[1], nil, "dir rows keep the groups they already had")
+  H.eq(spans[2], nil, "and so do file rows")
+
+  H.eq(spans[3], { { 0, #lines[3], "CanvasDiffSidebarHunk" } },
+    "an ordinary hunk row is dimmed whole and struck nowhere")
+
+  local del = spans[6]
+  H.eq(#del, 2, "the row's own dimming, and the strike over its label")
+  H.eq(del[1], { 0, #lines[6], "CanvasDiffSidebarHunk" })
+  H.eq(del[2][3], "CanvasDiffSidebarHunkDel")
+  H.eq(lines[6]:sub(del[2][1] + 1, del[2][2]), "GONE",
+    "the strike covers the old-side text and nothing else -- not the @@, not the counts")
+end
+
+-- A label is a line of source: it arrives indented, it can be longer than the
+-- window, and it can carry bytes that would tab-align or split the row.
+T["sidebar_render a hunk label is trimmed, escaped and cut to the sidebar width"] = function()
+  local minus = render.glyphs.minus
+  local secs = { { path = "a.lua", adds = 1, dels = 0, nhunks = 1, hunks = {
+    { new_lo = 7, adds = 1, dels = 0, label = "\t\treturn compute(alpha, beta)",
+      pure_del = false } } } }
+  local lines, spans = sidebar.render_lines(sidebar.build_entries(secs, {}, {}, {}), 30)
+  H.eq(lines[1], "  a.lua  +1 " .. minus .. "0", "file rows are never cut -- a path is identity")
+  H.eq(lines[2], "    @@ 7  return comput  +1 " .. minus .. "0",
+    "leading indentation is dropped, and the counts survive the cut")
+  H.eq(vim.fn.strdisplaywidth(lines[2]), 30, "the row fills the sidebar and no more")
+  H.eq(spans[2][1], { 0, #lines[2], "CanvasDiffSidebarHunk" },
+    "the span follows the row it was cut to")
+
+  local wide = sidebar.render_lines(sidebar.build_entries(secs, {}, {}, {}), 300)
+  H.eq(wide[2], "    @@ 7  return compute(alpha, beta)  +1 " .. minus .. "0",
+    "given room, the whole label shows")
+end
+
+T["sidebar_render a folded file reads as its canvas placeholder does"] = function()
+  local s = model.build_section(
+    "src/a.lua", "one\ntwo\nthree\n", "one\nTWO\nthree\n", "M")
+  local summary = render.placeholder(s):match("%b()")
+  assert(summary, "sanity: the canvas placeholder carries a parenthesized summary")
+  local lines = sidebar.render_lines(
+    sidebar.build_entries({ s }, {}, { ["src/a.lua"] = true }, {}))
+  H.eq(lines[2], "  " .. render.glyphs.folded .. " a.lua  " .. summary,
+    "one row, one summary, the same text in both windows")
+end
+
 T["sidebar_render marks a stale file and a stale folded dir"] = function()
   local secs = { sec("src/a.lua", 1, 2), sec("root.md", 0, 5) }
   H.eq(sidebar.render_lines(sidebar.build_entries(secs, {}, {}, { ["src/a.lua"] = true })), {
@@ -99,18 +228,20 @@ T["sidebar_render marks a stale file and a stale folded dir"] = function()
 
   H.eq(sidebar.render_lines(sidebar.build_entries(
     secs, { ["src/"] = true }, {}, { ["src/a.lua"] = true })), {
-    "▸ src/ ●",
+    "▸ src/  (1 files, +1 −2) ●",
     "  root.md  +0 −5",
-  }, "a folded dir reports that something under it moved on")
+  }, "a folded dir reports what it hides -- and that something under it moved on")
 end
 
 T["sidebar_render marks user-folded files with the placeholder glyph"] = function()
+  local away = sec("root.md", 0, 5)
+  away.nhunks = 3
   local lines = sidebar.render_lines(sidebar.build_entries(
-    { sec("lua/a.lua", 1, 2), sec("root.md", 0, 5) }, {}, { ["root.md"] = true }))
+    { sec("lua/a.lua", 1, 2), away }, {}, { ["root.md"] = true }))
   H.eq(lines, {
     "▾ lua/",
     "    a.lua  +1 −2",
-    "▸ root.md  +0 −5",
+    "▸ root.md  (3 hunks, +0 −5)",
   }, "the same ▸ that marks a folded dir and a collapsed section in the canvas")
 end
 
@@ -133,9 +264,11 @@ end
 T["sidebar_render marker spans colour the right ● in a staged-and-stale row"] = function()
   local s = sec("a.txt", 2, 2)
   s.staged = "M" -- staged only: worktree matches the index, so no `○`
+  s.nhunks = 2
   local entries = sidebar.build_entries({ s }, {}, { ["a.txt"] = true }, { ["a.txt"] = true })
   local line = sidebar.render_lines(entries)[1]
-  H.eq(line, "▸ a.txt  +2 −2 ● ●", "sanity: two identical glyphs, staged then stale")
+  H.eq(line, "▸ a.txt  (2 hunks, +2 −2) ● ●",
+    "sanity: two identical glyphs, staged then stale, after the fold's own summary")
 
   local spans = render.marker_spans(line, s.staged, s.unstaged, true)
   -- 3, not 2: the stale marker gets a colour span AND a bold span over the same range,
@@ -204,7 +337,8 @@ T["sidebar_render a stale dir row gets exactly one span, over its marker"] = fun
   local entries = sidebar.build_entries(
     { s }, { ["src/"] = true }, {}, { ["src/a.txt"] = true })
   local line = sidebar.render_lines(entries)[1]
-  H.eq(line, "▸ src/ ●", "the dir reports that something under it moved on")
+  H.eq(line, "▸ src/  (1 files, +2 −2) ●",
+    "the dir reports what it hides, and that something under it moved on")
   local spans = render.marker_spans(line, nil, nil, true)
   H.eq(#spans, 2, "the colour span and its bold layer")
   for _, sp in ipairs(spans) do
@@ -221,7 +355,7 @@ T["sidebar_render formats dirs, files, indent, and counts"] = function()
   local lines = sidebar.render_lines(entries)
   H.eq(lines, {
     "▾ lua/",
-    "  ▸ mod/",
+    "  ▸ mod/  (1 files, +12 −3)",
     "  root.md  +0 −5",
   })
 end
@@ -273,8 +407,8 @@ T["sidebar_win opens fixed non-focused split; canvas keeps winfixbuf off"] = fun
   H.eq(vim.api.nvim_get_option_value("winbar", { win = side_win }),
     "%#CanvasDiffWinbar#Files changed (3)  +18 −18")
   local side_buf = vim.api.nvim_win_get_buf(side_win)
-  H.eq(#vim.api.nvim_buf_get_lines(side_buf, 0, -1, false), 6,
-    "the title is a winbar, not a selectable tree row")
+  H.eq(#vim.api.nvim_buf_get_lines(side_buf, 0, -1, false), 24,
+    "three dirs, three files, six hunks each -- and the title is none of them")
   sidebar.close(lease)
   H.eq(sidebar.is_open(lease), false)
 end
@@ -322,7 +456,9 @@ T["sidebar_win sync tracks the section under the canvas topline"] = function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
   sidebar.sync(lease)
-  -- entries: a/(0) one.txt(1) b/(2) two.txt(3) c/(4) three.txt(5) -> rows 0..5
+  -- Each file lists its six hunks, so rows 0..23 read:
+  -- a/(0) one.txt(1) its hunks(2..7) b/(8) two.txt(9) its hunks(10..15)
+  -- c/(16) three.txt(17) its hunks(18..23)
   H.eq(active_row(sbuf), 1, "first file active at top")
 
   local b_start = (canvas.section_rows(st, 2))
@@ -330,7 +466,7 @@ T["sidebar_win sync tracks the section under the canvas topline"] = function()
     vim.fn.winrestview({ topline = b_start + 2, lnum = b_start + 2 })
   end)
   sidebar.sync(lease)
-  H.eq(active_row(sbuf), 3, "second file active after scroll")
+  H.eq(active_row(sbuf), 9, "second file active after scroll")
   sidebar.close(lease)
 end
 
@@ -338,7 +474,7 @@ T["sidebar_win select on a file scrolls the canvas, never refocuses"] = function
   local st, lease = open_with_sidebar()
   local sbuf = sidebar_buf(lease)
   local side_win = sidebar_win(lease)
-  vim.api.nvim_win_set_cursor(side_win, { 6, 0 }) -- c/three.txt row (1-based 6)
+  vim.api.nvim_win_set_cursor(side_win, { 18, 0 }) -- c/three.txt row (1-based 18)
   local focused_before = vim.api.nvim_get_current_win()
   sidebar.select(lease)
   local c_start = (canvas.section_rows(st, 3))
@@ -359,8 +495,8 @@ T["sidebar_win select on a dir folds it and active falls back to the dir"] = fun
   H.eq(sidebar_winbar(lease), "%#CanvasDiffWinbar#Files changed (3)  +18 −18",
     "folding tree rows does not change the file count")
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
-  H.eq(lines[1], "▸ a/", "dir folded")
-  H.eq(#lines, 5, "a/one.txt hidden")
+  H.eq(lines[1], "▸ a/  (1 files, +6 −6)", "dir folded, and it says what it took away")
+  H.eq(#lines, 17, "a/one.txt and its six hunk rows hidden")
   -- canvas still at top (section 1 = a/one.txt, now folded away): active
   -- falls back to the deepest visible ancestor dir
   vim.api.nvim_win_call(st.win, function()
@@ -406,7 +542,8 @@ T["sidebar_win reopen rebinds callbacks to the new state"] = function()
   H.eq(sidebar.is_open(lease1), false, "replacement retires the preceding exact lease")
   local sbuf = sidebar_buf(lease2)
   local side_win = sidebar_win(lease2)
-  vim.api.nvim_win_set_cursor(side_win, { 4, 0 }) -- y/other.txt row
+  -- rows: 1 "x/", 2 new.txt, 3-8 its hunks, 9 "y/", 10 other.txt
+  vim.api.nvim_win_set_cursor(side_win, { 10, 0 }) -- y/other.txt row
   vim.api.nvim_set_current_win(side_win)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
 
@@ -446,7 +583,7 @@ T["sidebar_cycle moves canvas by sections and wraps"] = function()
   sidebar.sync(lease)
   local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
   H.eq(top, (canvas.section_rows(st, 2)) + 1, "moved to section 2")
-  H.eq(active_row(sbuf), 3, "sidebar followed")
+  H.eq(active_row(sbuf), 9, "sidebar followed")
 
   motions.cycle(st, st.win, 1)
   sidebar.sync(lease)
@@ -485,7 +622,8 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   local lease = assert(sidebar.open(st, { width = 30 }))
   local sbuf = sidebar_buf(lease)
   H.eq(sidebar_winbar(lease), "%#CanvasDiffWinbar#Files changed (1)  +1 −1")
-  H.eq(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false), 2, "dir + one file")
+  H.eq(#vim.api.nvim_buf_get_lines(sbuf, 0, -1, false), 3,
+    "dir + one file + the one hunk it changed")
 
   local abs = vim.fs.joinpath(root, "m", "b.txt")
   local f = assert(io.open(abs, "w")); f:write("new\n"); f:close()
@@ -501,8 +639,8 @@ T["sidebar_integration reconcile refreshes the tree"] = function()
   local lines = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
   H.eq(sidebar_winbar(lease), "%#CanvasDiffWinbar#Files changed (2)  +2 −1",
     "the title follows the refreshed section count and diffstat")
-  H.eq(#lines, 3, "new file appears in the sidebar after reconcile")
-  assert(lines[3]:find("b.txt", 1, true), "b.txt rendered: " .. lines[3])
+  H.eq(#lines, 5, "new file appears in the sidebar after reconcile, hunk row and all")
+  assert(lines[4]:find("b.txt", 1, true), "b.txt rendered: " .. lines[4])
   sidebar.close(lease)
 end
 
@@ -924,8 +1062,10 @@ end
 -- --- folds drive the canvas ---------------------------------------------
 --
 -- Two files under one directory, so folding it affects more than one section.
--- Rows: 1 "a/", 2 one.txt, 3 two.txt, 4 "b/", 5 three.txt.
-local A_DIR_ROW, B_THREE_ROW = 1, 5
+-- Every file lists its six hunks, so the rows are:
+--   1 "a/", 2 one.txt, 3-8 its hunks, 9 two.txt, 10-15 its hunks,
+--   16 "b/", 17 three.txt, 18-23 its hunks.
+local A_DIR_ROW, B_THREE_ROW = 1, 17
 
 local function open_ab()
   local st = canvas.open({
@@ -1004,8 +1144,8 @@ T["sidebar_fold folds survive closing and reopening the sidebar"] = function()
 
   lease = assert(sidebar.open(st, { width = 30 }))
   local lines = vim.api.nvim_buf_get_lines(sidebar_buf(lease), 0, -1, false)
-  H.eq(lines[1], "▸ a/", "the tree reopens folded")
-  H.eq(#lines, 3, "a/'s two files are still hidden")
+  H.eq(lines[1], "▸ a/  (2 files, +12 −12)", "the tree reopens folded")
+  H.eq(#lines, 9, "a/'s two files, and their hunk rows, are still hidden")
   H.eq(span(st, 1), 1, "and the canvas still shows them folded")
   done(st, lease)
 end
@@ -1088,6 +1228,77 @@ T["sidebar_fold the tree marks what you folded, but not virt's own work"] = func
 
   virt.detach(lease)
   done(st, side_lease)
+end
+
+--- How many `@@` rows the live tree is showing.
+local function tree_hunks(lease)
+  local n = 0
+  for _, line in ipairs(vim.api.nvim_buf_get_lines(sidebar_buf(lease), 0, -1, false)) do
+    if line:find("@@", 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- The governing rule: the tree mirrors the canvas, and only the USER moves it.
+-- Auto-collapses happen while you scroll -- if they took hunk rows away, every
+-- scroll would reflow the tree under the cursor.
+T["sidebar_fold hunk rows follow your folds, never virt's own collapses"] = function()
+  local st, side_lease = open_ab()
+  H.eq(tree_hunks(side_lease), 18, "sanity: three files, six hunks each")
+
+  canvas.set_collapsed(st, 3, true)
+  sidebar.refresh(side_lease)
+  H.eq(tree_hunks(side_lease), 12, "a file you fold takes its hunk rows with it")
+
+  canvas.set_collapsed(st, 3, false)
+  local lease = virt.attach(st, { enabled = false })
+  virt.apply(lease, { enabled = true, max_files = 1, max_lines = 1000000, margin = 0, max_expanded = 1 })
+  assert(next(H.auto_set(st)), "sanity: virt auto-collapsed something")
+  sidebar.refresh(side_lease)
+  H.eq(tree_hunks(side_lease), 18,
+    "virt's collapses are its own bookkeeping: the tree must not ripple under them")
+
+  virt.detach(lease)
+  done(st, side_lease)
+end
+
+T["sidebar_fold a folded dir hides its hunk rows and counts what it hid"] = function()
+  local st, lease = open_ab()
+  select_row(lease, A_DIR_ROW)
+  local lines = vim.api.nvim_buf_get_lines(sidebar_buf(lease), 0, -1, false)
+  H.eq(lines[1], "▸ a/  (2 files, +12 " .. render.glyphs.minus .. "12)",
+    "the fold reports the two files and the churn it put away")
+  H.eq(tree_hunks(lease), 6, "only b/three.txt's hunks are left")
+  done(st, lease)
+end
+
+T["sidebar_fold hunk rows carry the dim group, and a deletion the ghost"] = function()
+  local st = canvas.open({
+    model.build_section("a.lua", "one\ntwo\nthree\n", "one\nTWO\nthree\n", "M"),
+    model.build_section("b.lua", "keep\nGONE\nkeep2\n", "keep\nkeep2\n", "M"),
+  }, {})
+  local lease = assert(sidebar.open(st, { width = 30 }))
+  H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffSidebarHunk" }).link, "Comment",
+    "one step dimmer than the file rows, on the canvas's own de-emphasis channel")
+  H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffSidebarHunkDel" }).link, "CanvasDiffGhost",
+    "and a removed line is struck exactly as the canvas strikes its ghosts")
+
+  local groups = {}
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(
+    sidebar_buf(lease), SIDE_NS, 0, -1, { details = true })) do
+    local group = m[4] and m[4].hl_group
+    if group and group:find("SidebarHunk", 1, true) then
+      groups[#groups + 1] = { m[2], group }
+    end
+  end
+  H.eq(groups, {
+    { 1, "CanvasDiffSidebarHunk" },
+    { 3, "CanvasDiffSidebarHunk" },
+    { 3, "CanvasDiffSidebarHunkDel" },
+  }, "row 1 is a.lua's hunk; row 3 is b.lua's, struck because it only removes")
+  done(st, lease)
 end
 
 T["sidebar_fold cycle stops on folded sections too, and still wraps"] = function()
@@ -1216,7 +1427,8 @@ T["sidebar_cycle Ctrl+N walks hunk stops and the sidebar follows"] = function()
     press("<C-n>")
     H.eq(canvas_top0(st), b_hunks[1],
       "the walk crosses the file boundary onto the next file's first hunk, not its header")
-    H.eq(active_row(sidebar_buf(lease)), 3, "and the sidebar followed to b/two.txt")
+    -- rows: 0 "a/", 1 one.txt, 2-7 its hunks, 8 "b/", 9 two.txt
+    H.eq(active_row(sidebar_buf(lease)), 9, "and the sidebar followed to b/two.txt")
 
     press("2<C-p>")
     H.eq(canvas_top0(st), a_hunks[#a_hunks - 1], "a typed count still applies to the press")
