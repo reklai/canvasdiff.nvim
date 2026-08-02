@@ -24,9 +24,9 @@ Read-only revision ranges without checking out branches.
 ![Comparison mode](media/02-compare.png)
 
 **3. Sidebar fold & jump**  
-Fold directories/files, then Enter to land the canvas on a row.
+Left: `src/` folded to one summary. Right: Enter on a row jumps the canvas.
 
-![Sidebar fold and jump](media/03-sidebar.png)
+![Sidebar fold and jump](media/03-sidebar-fold-jump.png)
 
 **4. Lens states**  
 All · unstaged · staged — same review, different filters.
