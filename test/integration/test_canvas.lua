@@ -38,6 +38,7 @@ return {
     H.eq(names, {
       "compression",
       "compression_capability",
+      "context",
       "dispose",
       "format",
       "insert_section",

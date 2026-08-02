@@ -5,11 +5,16 @@ local Paged = require("canvasdiff.canvas.paged")
 local Projection = require("canvasdiff.canvas.Projection")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
+local context = require("canvasdiff.canvas.context")
 local format = require("canvasdiff.canvas.format")
 
 -- The canvas domain's exact public surface. Concrete storage and projection
 -- owners live below this facade; callers outside the domain never import them.
 return {
+  -- What a verb standing on a row is standing on -- the hunk or the file.
+  context = {
+    resolve = context.resolve,
+  },
   format = {
     ensure_marker_hl = format.ensure_marker_hl,
     escape_path = format.escape_path,
