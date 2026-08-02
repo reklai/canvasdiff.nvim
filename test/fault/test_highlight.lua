@@ -1403,13 +1403,13 @@ T["hl_rows ghosts have no background and a dimmed, struck foreground"] = functio
   assert(ghost.fg and ghost.fg ~= normal.fg, "dimmed, not Normal's own fg")
   assert(luma(ghost.fg) < luma(normal.fg) and luma(ghost.fg) > luma(normal.bg),
     "dimmed means moved toward the background, not past it and not brighter")
-  H.eq(ghost.strikethrough, true,
-    "struck through: shape is the half of 'removed' that survives colour"
-      .. " blindness and a monochrome terminal, where luminance says nothing")
+  H.eq(ghost.strikethrough, nil,
+    "not struck: the dim carries 'removed' on its own now, and the `-` prefix"
+      .. " is the shape channel that outlives colour")
 
   -- The dim's ceiling is @comment -- a deletion must never read dimmer than
-  -- one -- but sitting ON that ceiling is what made the strike load-bearing
-  -- rather than corroborating, over text it also had to leave legible. The
+  -- one -- and with the strike gone this clearance is the whole distinction
+  -- between a deleted block and a comment block. The
   -- factor is chosen to clear it with room, so the two channels split the
   -- work; drift back toward the ceiling and this fails before the docs that
   -- quote the clearance go quietly false.

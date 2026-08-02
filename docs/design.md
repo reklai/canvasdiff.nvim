@@ -51,11 +51,11 @@ factor is measured, not felt:
   the builtin scheme (the binding one, `@comment` at 135.9) rules out 0.35 at
   133.1. The first version took that ceiling — 0.30 reads 143.1, clearing
   `@comment` by **7.3** — and that turned out to be the mistake. Two channels
-  are supposed to say "removed" here, dim and strike, and parking the dim at
-  comment brightness made them one: the strike carried the whole distinction,
-  over text it also had to leave legible. 0.20 reads 163.2, **27.4** clear of
-  `@comment` and 41 below `Normal`'s own 204.2, so each channel does part of
-  the work and the deleted line stays readable. Moon's `@comment` sits at 74.1,
+  said "removed" here, dim and strike, and parking the dim at comment brightness
+  made them one: the strike carried the whole distinction, over text it also had
+  to leave legible. 0.20 reads 163.2, **27.4** clear of `@comment` and 41 below
+  `Normal`'s own 204.2 — enough for the dim to carry it alone, which is what let
+  the strike go entirely. Moon's `@comment` sits at 74.1,
   where every candidate clears.
 
 A transparent scheme gives `Normal` no background at all, so there is nothing to
@@ -184,13 +184,15 @@ Two deliberate limits:
   is what hollowed out intra-line marking until it was worth removing — see "There is
   no intra-line emphasis" above.
 
-`CanvasDiffGhost`'s default is the dimming plus a strikethrough: dimmed because
-deletions read as context for the line that replaced them rather than something to
-study on their own; struck because shape is the half of "removed" that survives colour
-blindness and a monochrome terminal, where the dim and the margin's red both say
-nothing. The two corroborate rather than one carrying the fact alone — which is why
-the dim is set below its own ceiling rather than on it (see the ghost-dim measurement
-above).
+`CanvasDiffGhost`'s default is the dimming alone: deletions read as context for the
+line that replaced them rather than something to study on their own. A strikethrough
+rode along for a while, for a reason that stopped being true — the dim sat on its
+`@comment` ceiling, so a deleted block and a comment block were luminance twins and
+the strike was the only thing separating them at scan distance. Once the dim moved off
+that ceiling (27 luminance clear of `@comment` rather than 7) it could carry "removed"
+on its own, and the strike was left drawing a line through text it also had to leave
+readable. The shape channel it was doubling as is already covered: the `-` prefix is
+one glyph of pure shape, and unlike a strike it costs the text nothing.
 
 ## The stale marker
 

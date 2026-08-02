@@ -117,7 +117,7 @@ options, which would otherwise merge silently and do nothing.
 
 Each file gets a full-width tinted header bar — `▎ path (+adds −dels)` plus its
 stage markers — followed by unified-diff-style hunks (3 context lines by
-default). Deleted lines render as dimmed, struck-through **ghost** lines above
+default). Deleted lines render as dimmed **ghost** lines above
 the row that replaced them, so every real row maps 1:1 to a line of the file:
 Enter always opens exactly the line under your cursor, and the statuscolumn
 shows each row's line number *in its file*. A wholly deleted file keeps its
@@ -138,7 +138,7 @@ review, and under each unfolded file, one row per **hunk** —
 `@@ 88  render(state)  +3 −1`: the new-side line the hunk starts at, the first
 line it writes, and its own counts. Press Enter on a hunk row to scroll the
 canvas to that hunk; press **s**/**u** on it to stage or unstage just that
-hunk. A hunk taken from a deleted line is struck through, exactly as it is on
+hunk. A hunk taken from a deleted line is dimmed, exactly as it is on
 the canvas.
 
 The tree mirrors the canvas's folds and nothing else. Fold a file (**c** on the
@@ -491,7 +491,7 @@ colourscheme by measured factors rather than linked — the measurements are in
 | --- | --- | --- |
 | `CanvasDiffAdd` | derived neutral elevation | an added row's background |
 | `CanvasDiffDel` | elevation + dimmed fg | a wholly deleted file's real rows |
-| `CanvasDiffGhost` | dimmed fg + strikethrough | ghost deletion lines |
+| `CanvasDiffGhost` | dimmed fg | ghost deletion lines |
 | `CanvasDiffPrefixAdd` / `CanvasDiffPrefixDel` | derived green/red fg | the `+`/`-` prefix cell |
 | `CanvasDiffGutterAdd` / `CanvasDiffGutterDel` | the same green/red | the statuscolumn bar |
 | `CanvasDiffFileBar` | derived bar elevation | the file header row and its pinned copy |
@@ -503,7 +503,7 @@ colourscheme by measured factors rather than linked — the measurements are in
 | `CanvasDiffStale` / `CanvasDiffStaleEmphasis` | `DiagnosticError` / bold | the stale mark |
 | `CanvasDiffSidebarDir` / `CanvasDiffSidebarActive` | `Directory` / `Visual` | sidebar directories / active row |
 | `CanvasDiffSidebarHunk` | `Comment` | a sidebar hunk row, whole |
-| `CanvasDiffHunkDel` | `CanvasDiffGhost` | a hunk label taken from a deleted line — struck, in the sidebar row *and* in the pinned header's crumb |
+| `CanvasDiffHunkDel` | `CanvasDiffGhost` | a hunk label taken from a deleted line, in the sidebar row *and* in the pinned header's crumb |
 | `CanvasDiffScrollFile` / `CanvasDiffScrollAdd` / `CanvasDiffScrollDel` / `CanvasDiffScrollChanged` / `CanvasDiffScrollThumb` | `Title` / `DiffAdd` / `DiffDelete` / `DiffChange` / `PmenuThumb` | the minimap |
 
 ```lua

@@ -100,7 +100,7 @@ sidebar~
     directories and files, and under each unfolded file one row per HUNK --
     `@@ 88  render(state)  +3 −1`, the new-side line it starts at, the first
     line it writes, and its own counts. A hunk whose label came from a
-    deleted line is struck through, as it is on the canvas. Selecting a row
+    deleted line is dimmed, as it is on the canvas. Selecting a row
     moves the canvas to that file or that hunk; `s` and `u` on it stage or
     unstage whichever the row names.
 
@@ -517,9 +517,9 @@ live colourscheme when the canvas draws:
   rows, the only real `-` rows left -- use `Normal`'s foreground moved 20%
   toward its background, a factor measured to clear comment brightness with
   room to spare rather than to sit on it, so a deleted line stays readable.
-  Ghosts are additionally struck through: dim and strike each carry part of
-  "removed", and the strike is the half that survives colour blindness and a
-  monochrome terminal, where luminance alone says nothing.
+  The dim carries "removed" on its own: the `-` prefix beside it is already
+  one glyph of pure shape, which is what survives colour blindness and a
+  monochrome terminal where luminance says nothing.
 - The margin hue says WHICH DIRECTION: green/red only on the one-cell
   `+`/`-` prefix and the statuscolumn bar (the `gutter` glyph, default `▎`),
   from `DiffAdd`/`DiffDelete`'s foreground, or a fixed green/red pair when
@@ -534,8 +534,8 @@ explicit `nvim_set_hl()` of your own always wins over the derived defaults:
                              background
     CanvasDiffDel            elevation plus dimmed foreground; a wholly
                              deleted file's real rows
-    CanvasDiffGhost          dimmed, struck-through foreground, no
-                             background; ghost deletion lines
+    CanvasDiffGhost          dimmed foreground, no background; ghost
+                             deletion lines
     CanvasDiffPrefixAdd      derived green/red foreground; the `+`/`-`
     CanvasDiffPrefixDel      prefix cell
     CanvasDiffGutterAdd      the same green/red; the statuscolumn bar
@@ -546,8 +546,8 @@ explicit `nvim_set_hl()` of your own always wins over the derived defaults:
     CanvasDiffWinbarReadOnly Visual link; the band's read-only tint
     CanvasDiffSidebarHunk    Comment link; a sidebar hunk row, whole
     CanvasDiffHunkDel        CanvasDiffGhost link; a hunk label taken from a
-                             deleted line -- struck, in the sidebar row and
-                             in the pinned header's crumb alike
+                             deleted line, in the sidebar row and in the
+                             pinned header's crumb alike
 
 The old `highlight.diff` option (`"quiet"`/`"classic"`/`"gutter"`) no longer
 exists -- there is nothing to pick between. A leftover `highlight.diff = ...`
