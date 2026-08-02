@@ -58,6 +58,18 @@ appearance defines those names but has **no outgoing cross-domain edge**.
 That direction keeps a renderer from becoming the owner of palette state and
 keeps appearance from reaching back into a consumer to form a cycle.
 
+The executable policy permits exactly these direct incoming edges:
+
+| Scope | Direct consumers |
+| --- | --- |
+| Production | `app`, `health`, `canvas`, `ui` |
+| Harnesses | `benchmark`, `testing` |
+
+`app` supplies setup options, `health` audits them, and the `canvas` and `ui`
+renderers repair groups at their render boundaries. `benchmark` and `testing`
+exercise that same public facade; their harness access grants no additional
+production edge.
+
 The setup and reload path is deliberately singular:
 
 ```text

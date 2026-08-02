@@ -1,7 +1,8 @@
 -- A mutable logical row sequence over authenticated Pages. Readers address
--- stable zero-based rows while splice and compaction publish a new generation;
--- pins fence those replacements for the duration of a caller's read. The
--- resident LRU and reservations enforce the configured page and byte bounds.
+-- stable zero-based rows; splices publish a new logical generation. Compaction
+-- leaves that generation unchanged and is fenced by exact Page identity and
+-- representation revision. Pin leases preserve exact read lifetimes while the
+-- resident LRU and reservations enforce configured page and byte bounds.
 local Page = require("canvasdiff.canvas.Page")
 
 local PageList = {}
