@@ -82,6 +82,23 @@ T.architecture_dependencies_are_static_resolved_and_unambiguous = function()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
 end
 
+T.architecture_dependencies_appearance_owns_highlight_definitions = function()
+  local violations = {}
+  for _, file in ipairs(graph.source_files(graph.root)) do
+    if file.rel:match("^lua/canvasdiff/")
+        and not file.rel:match("^lua/canvasdiff/appearance/") then
+      local handle = assert(io.open(file.abs, "rb"))
+      local source = handle:read("*a")
+      handle:close()
+      if source:find("nvim_set_hl", 1, true) then
+        violations[#violations + 1] = file.rel
+      end
+    end
+  end
+  assert_no_errors(violations,
+    "highlight definitions must enter through canvasdiff.appearance")
+end
+
 T.architecture_dependencies_cross_domains_only_through_allowed_facades = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")

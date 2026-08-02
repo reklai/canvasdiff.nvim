@@ -1,5 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
+local appearance = require("canvasdiff.appearance")
 local config = require("canvasdiff.config")
 local keys = require("canvasdiff.input").keys
 local diff = require("canvasdiff.diff")
@@ -305,27 +306,6 @@ function S.title_text(state)
   return "%#" .. group .. "#" .. winbar.escape(sidebar_title(state))
 end
 
-local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "CanvasDiffSidebarDir", {
-    link = "Directory",
-    default = true,
-  })
-  vim.api.nvim_set_hl(0, "CanvasDiffSidebarActive", {
-    link = "Visual",
-    default = true,
-  })
-  -- A hunk row sits one step below its file, on the same de-emphasis channel the
-  -- canvas's own `@@` rows use -- no new hue enters the tree for it.
-  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunk", {
-    link = "Comment",
-    default = true,
-  })
-  -- The struck label for a pure deletion, defined in render because the pinned
-  -- header's crumb draws the same group -- see the note there.
-  render.ensure_hunk_hl()
-  render.ensure_marker_hl()
-end
-
 local function valid_win(win)
   return win ~= nil and vim.api.nvim_win_is_valid(win)
 end
@@ -403,7 +383,7 @@ local function update_winbar(lease, view)
   -- The band group paints the bar identically whether or not the window has
   -- focus -- that is the point: the sidebar and canvas winbars read as ONE
   -- top band instead of flipping WinBar/WinBarNC against each other.
-  winbar.ensure_hl_groups()
+  appearance.ensure()
   local title = S.title_text(lease.state)
   local previous = view.applied_options.winbar
   local actual = vim.api.nvim_get_option_value("winbar", { win = view.win })
@@ -1643,7 +1623,7 @@ function S.open(state, opts, callbacks)
     if not active(lease) then
       error("sidebar owner is no longer alive", 0)
     end
-    ensure_hl_groups()
+    appearance.ensure()
     if not active(lease) then
       error("sidebar open was superseded while defining highlights", 0)
     end

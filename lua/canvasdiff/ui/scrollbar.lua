@@ -1,5 +1,6 @@
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
+local appearance = require("canvasdiff.appearance")
 local fold = require("canvasdiff.diff").fold
 
 local S = {}
@@ -159,14 +160,6 @@ local function active(lease)
   end
   local ok, result = pcall(alive, lease)
   return ok and result and exact(lease) or false
-end
-
-local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "CanvasDiffScrollFile", { link = "Title", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffScrollAdd", { link = "DiffAdd", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffScrollDel", { link = "DiffDelete", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffScrollChanged", { link = "DiffChange", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffScrollThumb", { link = "PmenuThumb", default = true })
 end
 
 local function valid_win(win)
@@ -722,7 +715,7 @@ function S.open(state, opts, callbacks)
     if not active(lease) then
       error("scrollbar owner is no longer alive", 0)
     end
-    ensure_hl_groups()
+    appearance.ensure()
     if not active(lease) then
       error("scrollbar open was superseded while defining highlights", 0)
     end

@@ -1,4 +1,5 @@
 local H = require("helpers")
+local appearance = require("canvasdiff.appearance")
 local model = require("canvasdiff.diff")
 local hl = require("canvasdiff.ui").highlight
 local canvas = require("canvasdiff.canvas")
@@ -1340,7 +1341,6 @@ end
 -- measured colour values -- those depend on the runner's scheme.
 
 local config = require("canvasdiff.config")
-local render = require("canvasdiff.canvas.format")
 
 -- Rec.709 luma, the same measure the factors were chosen by.
 local function luma(rgb)
@@ -1351,9 +1351,29 @@ local function luma(rgb)
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 end
 
--- Every group ensure_diff_hl authors. The module's authorship record is a
+local function chroma(colour)
+  if not colour then return 0 end
+  local r = math.floor(colour / 65536) % 256
+  local g = math.floor(colour / 256) % 256
+  local b = colour % 256
+  return math.max(r, g, b) - math.min(r, g, b)
+end
+
+local function blend(a, b, factor)
+  if a == nil and b == nil then return nil end
+  if a == nil or b == nil then return ("#%06x"):format(a or b) end
+  local function channel(shift)
+    local av = math.floor(a / shift) % 256
+    local bv = math.floor(b / shift) % 256
+    return math.floor(av + (bv - av) * factor + 0.5)
+  end
+  return ("#%02x%02x%02x"):format(
+    channel(65536), channel(256), channel(1))
+end
+
+-- Every derived group appearance.ensure authors. The manager's authorship record is a
 -- singleton, so a group an earlier test left defined would satisfy
--- set_diff_default and mask a broken derive; each derivation test clears
+-- set_default and mask a broken derive; each derivation test clears
 -- them all first.
 local DIFF_GROUPS = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
@@ -1368,21 +1388,9 @@ local function reset_diff_groups()
   end
 end
 
-T["hl_rows blend interpolates channelwise and tolerates a missing endpoint"] = function()
-  H.eq(render.blend(0x000000, 0xffffff, 0), "#000000")
-  H.eq(render.blend(0x000000, 0xffffff, 1), "#ffffff")
-  H.eq(render.blend(0x004080, 0x808080, 0.5), "#406080")
-  -- A missing endpoint yields the other unchanged: a scheme without a Normal
-  -- background (transparent terminals) keeps the raw tint rather than crashing
-  -- or inventing black.
-  H.eq(render.blend(nil, 0x123456, 0.6), "#123456")
-  H.eq(render.blend(0x123456, nil, 0.6), "#123456")
-  H.eq(render.blend(nil, nil, 0.6), nil)
-end
-
 T["hl_rows the field is one neutral elevation shared by add and del"] = function()
   reset_diff_groups()
-  render.ensure_diff_hl()
+  appearance.ensure()
   local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
   local del = vim.api.nvim_get_hl(0, { name = "CanvasDiffDel", link = false })
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
@@ -1408,14 +1416,14 @@ T["hl_rows the file bar spends chroma so it can spend less light"] = function()
   vim.api.nvim_set_hl(0, "Directory", { fg = 0x8cf8f7 })  -- chroma 108
   local ok, err = xpcall(function()
     reset_diff_groups()
-    render.ensure_diff_hl()
+    appearance.ensure()
     local bar = bar_bg()
     local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-    local neutral = tonumber(render.blend(normal.bg, 0xffffff, 0.16):sub(2), 16)
+    local neutral = tonumber(blend(normal.bg, 0xffffff, 0.16):sub(2), 16)
 
-    assert(render.chroma(bar) >= 10,
+    assert(chroma(bar) >= 10,
       ("the bar must carry real hue, not a lightening (chroma %d)")
-        :format(render.chroma(bar)))
+        :format(chroma(bar)))
     assert(luma(bar) < luma(neutral),
       "and it must be DIMMER than the neutral bar -- the chroma is what buys that")
 
@@ -1442,9 +1450,9 @@ T["hl_rows a grey Directory is refused as a tint"] = function()
   vim.api.nvim_set_hl(0, "Directory", { fg = 0x9b9ea4 })  -- chroma 9, a grey
   local ok, err = xpcall(function()
     reset_diff_groups()
-    render.ensure_diff_hl()
+    appearance.ensure()
     local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-    H.eq(bar_bg(), tonumber(render.blend(normal.bg, 0xffffff, 0.16):sub(2), 16),
+    H.eq(bar_bg(), tonumber(blend(normal.bg, 0xffffff, 0.16):sub(2), 16),
       "blending toward a grey is the lightening the Title tint turned out to"
         .. " be, so the neutral bar is the honest answer")
   end, debug.traceback)
@@ -1454,7 +1462,7 @@ end
 
 T["hl_rows the crumb states no colour, so it reads as text on the bar"] = function()
   vim.api.nvim_set_hl(0, "CanvasDiffCrumb", {})
-  render.ensure_hunk_hl()
+  appearance.ensure()
   local crumb = vim.api.nvim_get_hl(0, { name = "CanvasDiffCrumb", link = false })
   -- Emptiness is the whole contract and the easiest thing to lose: a fg here
   -- would freeze one scheme's colour into a group nothing recomputes, and a bg
@@ -1467,7 +1475,7 @@ end
 
 T["hl_rows ghosts have no background and a dimmed, struck foreground"] = function()
   reset_diff_groups()
-  render.ensure_diff_hl()
+  appearance.ensure()
   local ghost = vim.api.nvim_get_hl(0, { name = "CanvasDiffGhost", link = false })
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
   H.eq(ghost.bg, nil)
@@ -1496,7 +1504,7 @@ end
 
 T["hl_rows margin hue lives on the prefix and gutter groups, identically"] = function()
   reset_diff_groups()
-  render.ensure_diff_hl()
+  appearance.ensure()
   for _, pair in ipairs({
     { "CanvasDiffPrefixAdd", "CanvasDiffGutterAdd" },
     { "CanvasDiffPrefixDel", "CanvasDiffGutterDel" },
@@ -1513,7 +1521,7 @@ end
 
 T["hl_bar the header bar is derived, not Folded's luck"] = function()
   reset_diff_groups()
-  render.ensure_diff_hl()
+  appearance.ensure()
   local bar = vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = true })
   H.eq(bar.link, nil, "no longer linked to Folded")
   assert(bar.bg, "the bar is a background statement")
@@ -1521,7 +1529,7 @@ end
 
 T["hl_bar the bar clears the row elevation, which clears Normal"] = function()
   reset_diff_groups()
-  render.ensure_diff_hl()
+  appearance.ensure()
   local normal = luma(vim.api.nvim_get_hl(0, { name = "Normal", link = false }).bg or 0)
   local field = luma(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false }).bg)
   local bar = luma(vim.api.nvim_get_hl(0, { name = "CanvasDiffFileBar", link = false }).bg)
@@ -1533,7 +1541,7 @@ end
 T["hl_rows a user's pre-defined group survives the derivation"] = function()
   reset_diff_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", { bg = 0x123456 })
-  render.ensure_diff_hl()
+  appearance.ensure()
   local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
   H.eq(add.bg, 0x123456, "an explicit override always wins")
   reset_diff_groups()

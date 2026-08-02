@@ -66,8 +66,6 @@ return {
     local format_names = vim.tbl_keys(canvas.format)
     table.sort(format_names)
     H.eq(format_names, {
-      "ensure_hunk_hl",
-      "ensure_marker_hl",
       "escape_path",
       "fit",
       "ghost_lines",

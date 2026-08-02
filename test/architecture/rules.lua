@@ -3,6 +3,7 @@ local R = {}
 R.package = "canvasdiff"
 
 R.domains = {
+  appearance = true,
   benchmark = true,
   canvas = true,
   config = true,
@@ -86,6 +87,7 @@ R.allowed_edges = {
   plugin = { root = true },
   root = { app = true },
   app = {
+    appearance = true,
     surface = true,
     canvas = true,
     config = true,
@@ -110,10 +112,11 @@ R.allowed_edges = {
   },
   config = {},
   diff = {},
-  health = { config = true },
+  health = { appearance = true, config = true },
   os = {},
   source = { config = true, diff = true, os = true },
-  canvas = { config = true, diff = true, os = true },
+  appearance = {},
+  canvas = { appearance = true, config = true, diff = true, os = true },
   input = {
     canvas = true,
     config = true,
@@ -122,6 +125,7 @@ R.allowed_edges = {
     source = true,
   },
   ui = {
+    appearance = true,
     canvas = true,
     config = true,
     diff = true,
@@ -137,6 +141,7 @@ R.allowed_edges = {
   },
   session = { canvas = true, config = true, diff = true, os = true },
   benchmark = {
+    appearance = true,
     canvas = true,
     config = true,
     diff = true,
@@ -149,6 +154,7 @@ R.allowed_edges = {
     ui = true,
   },
   testing = {
+    appearance = true,
     canvas = true,
     config = true,
     diff = true,

@@ -7,6 +7,7 @@
 -- patterns these tests follow).
 
 local H = require("helpers")
+local appearance = require("canvasdiff.appearance")
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
 local model = require("canvasdiff.diff")
@@ -243,9 +244,9 @@ T["sticky_win open defines the groups its crumb draws with"] = function()
   -- The sidebar's own call is covered on its side; this is the half that a
   -- canvas running with `sidebar.enabled = false` depends on, and no test
   -- exercises that configuration.
-  local real = canvas.format.ensure_hunk_hl
+  local real = appearance.ensure
   local calls = 0
-  canvas.format.ensure_hunk_hl = function(...)
+  appearance.ensure = function(...)
     calls = calls + 1
     return real(...)
   end
@@ -259,7 +260,7 @@ T["sticky_win open defines the groups its crumb draws with"] = function()
     sticky.close(lease)
   end, debug.traceback)
 
-  canvas.format.ensure_hunk_hl = real
+  appearance.ensure = real
   assert(ok, err)
 end
 

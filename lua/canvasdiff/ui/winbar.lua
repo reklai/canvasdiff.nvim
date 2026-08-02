@@ -7,6 +7,7 @@
 -- stateful owner keeps orchestration and the ui domain keeps presentation.
 
 local diff = require("canvasdiff.diff")
+local appearance = require("canvasdiff.appearance")
 
 local lens = diff.lens
 
@@ -25,8 +26,7 @@ end
 --- scheme and tokyonight-moon (numbers in the introducing commit), the same
 --- method as CanvasDiffFileBar.
 function W.ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "CanvasDiffWinbar", { link = "WinBar", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffWinbarReadOnly", { link = "Visual", default = true })
+  appearance.ensure()
 end
 
 --- The app half of the top band: the comparison label, tinted. No path ever

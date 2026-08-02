@@ -22,8 +22,6 @@ return {
     -- The struck-label group and the hunk-naming format, exported because a
     -- hunk is named in two windows: the sidebar's tree rows and the pinned
     -- header's crumb. `fit` is the cut those two labels share.
-    ensure_hunk_hl = format.ensure_hunk_hl,
-    ensure_marker_hl = format.ensure_marker_hl,
     escape_path = format.escape_path,
     fit = format.fit,
     ghost_lines = format.ghost_lines,

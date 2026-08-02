@@ -1,4 +1,5 @@
 local canvas = require("canvasdiff.canvas")
+local appearance = require("canvasdiff.appearance")
 local config = require("canvasdiff.config")
 local fold = require("canvasdiff.diff").fold
 local winbar = require("canvasdiff.ui.winbar")
@@ -6,8 +7,8 @@ local winbar = require("canvasdiff.ui.winbar")
 local M = {}
 
 -- The bar drawn per changed row, foreground-coloured so it reads without
--- claiming a background. Defined by the canvas's group setup
--- (render.ensure_diff_hl), which runs before any statuscolumn can draw.
+-- claiming a background. The appearance owner defines it before this
+-- statuscolumn can draw.
 local GUTTER_HL = {
   add = "CanvasDiffGutterAdd",
   del = "CanvasDiffGutterDel",
@@ -924,6 +925,7 @@ function M.attach(state, callbacks)
     if not active(lease) then
       error("status-column owner is no longer alive", 0)
     end
+    appearance.ensure()
     lease.aug = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
     if not exact(lease) then
       pcall(vim.api.nvim_del_augroup_by_name, lease.group_name)

@@ -1,5 +1,6 @@
 local paged = require("canvasdiff.canvas.paged")
 local render = require("canvasdiff.canvas.format")
+local appearance = require("canvasdiff.appearance")
 local glyphs = require("canvasdiff.config").glyphs
 local diff = require("canvasdiff.diff")
 local viewport = diff.anchor
@@ -30,24 +31,6 @@ local HL_NS = vim.api.nvim_create_namespace("canvasdiff.canvas.hl")
 -- explicitly deleted and recreated at the correct row after every splice via
 -- replace_boundary_extmark below.
 local ANCHOR_OPTS = { right_gravity = false, invalidate = false, undo_restore = false }
-
-local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "CanvasDiffFileHeader", { link = "Title", default = true })
-  -- The derived diff palette -- the field (CanvasDiffAdd/CanvasDiffDel), the
-  -- ghost foreground, the margin's prefix/gutter pairs, and the file-boundary
-  -- bar (CanvasDiffFileBar, once a `Folded` link and now authored in
-  -- render.ensure_diff_hl with the other derived values, so its contrast is
-  -- measured rather than one scheme's luck) -- defined in render next to
-  -- blend() because their default VALUES are computed there,
-  -- derived from the live scheme. Aliases so they are tunable without
-  -- redefining the groups your ordinary vimdiff uses -- see the notes on
-  -- render.HL_GROUP and render.ensure_diff_hl.
-  render.ensure_diff_hl()
-  vim.api.nvim_set_hl(0, "CanvasDiffHunkHeader", { link = "Comment", default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffBinary", { link = "Comment", default = true })
-  -- CanvasDiffStale and the sidebar's stage markers live in render, next to the glyphs.
-  render.ensure_marker_hl()
-end
 
 local function set_modifiable(buf, val)
   vim.api.nvim_set_option_value("modifiable", val, { buf = buf })
@@ -467,7 +450,7 @@ end
 --- window, and renders `sections`.
 function M.open(sections, opts)
   opts = opts or {}
-  ensure_hl_groups()
+  appearance.ensure()
   local buf = create_buf()
   local win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, buf)
@@ -511,7 +494,7 @@ end
 --- has nothing to anchor: its starts array is authoritative.
 function M.open_paged(sections, opts)
   opts = opts or {}
-  ensure_hl_groups()
+  appearance.ensure()
 
   local state = {
     buf = nil,

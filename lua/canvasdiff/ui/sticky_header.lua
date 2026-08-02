@@ -11,6 +11,7 @@
 -- through their least interesting part.
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
+local appearance = require("canvasdiff.appearance")
 local fold = require("canvasdiff.diff").fold
 
 local SH = {}
@@ -538,7 +539,7 @@ function SH.open(state, opts, callbacks)
     -- already be showing for the row to exist. The struck crumb label is the
     -- exception: its group belongs to the hunk vocabulary the sidebar shares,
     -- and the sidebar may never have opened at all.
-    render.ensure_hunk_hl()
+    appearance.ensure()
     lease.group_id = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
     if not active(lease) then
       pcall(vim.api.nvim_del_augroup_by_id, lease.group_id)
