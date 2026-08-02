@@ -719,7 +719,15 @@ end
 
 local sync_view
 
-local function set_active(lease, view, section_i, path)
+--- Highlight the row for section `section_i` at `path` -- its hunk `hunk_gi`'s
+--- row when one is asked for and the tree is showing it, otherwise the file's
+--- own row, otherwise the deepest folded ancestor directory.
+---
+--- The fallback is the LAST-match rule doing its work rather than a branch:
+--- entries run outermost-first (dirs, then the file, then its hunks), so the
+--- deepest row that matches wins and a hunk row that is not there -- a folded
+--- file, whose file row is all it has -- simply leaves the file row standing.
+local function set_active(lease, view, section_i, path, hunk_gi)
   if not view_active(lease, view) then
     return false
   end
@@ -728,6 +736,12 @@ local function set_active(lease, view, section_i, path)
     if
       (entry.kind == "file" and entry.section_i == section_i)
       or (entry.kind == "dir" and path:sub(1, #entry.path) == entry.path)
+      or (
+        hunk_gi ~= nil
+        and entry.kind == "hunk"
+        and entry.hunk == hunk_gi
+        and entry.path == path
+      )
     then
       best = row - 1
     end
@@ -916,9 +930,12 @@ sync_view = function(lease, view, observed, preferred_canvas)
   if type(top0) ~= "number" then
     return false
   end
-  local section_i = canvas.locate(state, top0)
-  local section = section_i and state.sections[section_i]
-  if not section or not set_active(lease, view, section_i, section.path) then
+  -- The viewport top answers at the same depth a cursor there would: the hunk
+  -- it is inside, the file on a header or a folded placeholder. One resolver,
+  -- so the tree can never disagree with what `s` would stage.
+  local ctx = canvas.context.resolve(state, top0)
+  local section = ctx and state.sections[ctx.section]
+  if not section or not set_active(lease, view, ctx.section, section.path, ctx.hunk) then
     return false
   end
 
@@ -1199,6 +1216,14 @@ local function create_view(lease, tab, host_win, observed)
 
     --- One handler per explicit verb; both route the row under the cursor
     --- through the host's `on_stage` callback with the direction attached.
+    ---
+    --- A hunk row says WHICH hunk and nothing more. Every question about how
+    --- staging happens -- the read-only lens, the aliasing buffer, the
+    --- press-time XY re-read, and the refusal on a file whose displayed
+    --- coordinates are not the ones the verb would splice -- belongs to the
+    --- host's own hunk verb, which the canvas keys reach through as well. A
+    --- span computed here would be a second staging path, and the guard that
+    --- makes `u` safe on a staged-and-modified file lives on the other one.
     local function stage_verb(direction)
       return function()
         if not view_active(lease, view) then
@@ -1215,7 +1240,7 @@ local function create_view(lease, tab, host_win, observed)
         end
         local callback = lease.callbacks and lease.callbacks.on_stage
         if callback then
-          callback(lease, lease.state, entry.path, direction)
+          callback(lease, lease.state, entry.path, direction, entry.hunk)
         end
       end
     end
@@ -1514,7 +1539,14 @@ function S.select(lease, side_win)
   if not (win and valid_win(win) and vim.api.nvim_win_get_buf(win) == state.buf) then
     return false
   end
+  -- A hunk row names a hunk, so it travels to that hunk's own header rather
+  -- than to the top of the file it lives in. Navigation at either depth, and
+  -- navigation never changes a fold: a folded file has no hunk rows to press,
+  -- and this reads the row it does have instead of unfolding to reach one.
   local start0 = canvas.section_rows(state, section_i)
+  if entry.kind == "hunk" then
+    start0 = canvas.context.hunk_row(state, section_i, entry.hunk) or start0
+  end
   vim.api.nvim_win_call(win, function()
     vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
   end)

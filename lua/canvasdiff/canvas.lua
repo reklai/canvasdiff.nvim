@@ -11,9 +11,12 @@ local format = require("canvasdiff.canvas.format")
 -- The canvas domain's exact public surface. Concrete storage and projection
 -- owners live below this facade; callers outside the domain never import them.
 return {
-  -- What a verb standing on a row is standing on -- the hunk or the file.
+  -- What a verb standing on a row is standing on -- the hunk or the file --
+  -- and the same question backwards, for a caller that names a hunk and needs
+  -- the row it lives on.
   context = {
     resolve = context.resolve,
+    hunk_row = context.hunk_row,
   },
   format = {
     ensure_marker_hl = format.ensure_marker_hl,

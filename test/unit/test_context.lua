@@ -111,6 +111,31 @@ T["context_resolve names the section the row is in, not the first one"] = functi
   H.eq(context.resolve(st, row(st, 2, FILE_HDR)), { scope = "file", section = 2 })
 end
 
+T["context_hunk_row is resolve read backwards"] = function()
+  local st = open_canvas()
+  H.eq(context.hunk_row(st, 1, 1), row(st, 1, HUNK1_HDR))
+  H.eq(context.hunk_row(st, 2, 2), row(st, 2, HUNK2_HDR),
+    "and it names the section asked for, not the first one")
+  H.eq(context.resolve(st, context.hunk_row(st, 2, 2)),
+    { scope = "hunk", section = 2, hunk = 2 }, "the round trip closes")
+  H.eq(context.hunk_row(st, 1, 3), nil, "a hunk the section has not got")
+  H.eq(context.hunk_row(st, 9, 1), nil, "a section that is not there")
+  H.eq(context.hunk_row(st, 3, 1), nil, "a binary section publishes no hunks at all")
+end
+
+T["context_hunk_row answers a folded section with the one row it owns"] = function()
+  local st = open_canvas()
+  st.folded = { ["two/"] = true }
+  canvas.resync_visibility(st)
+
+  -- Its entries are all still there and map to nothing: offsets into them
+  -- would point past the placeholder, into the following file's body.
+  H.eq(context.hunk_row(st, 2, 2), (canvas.section_rows(st, 2)),
+    "the placeholder is where a verb naming any of its hunks can land")
+  H.eq(context.hunk_row(st, 1, 2), row(st, 1, HUNK2_HDR),
+    "an unfolded neighbour still answers with its own header row")
+end
+
 T["context_resolve is nil when there is no section under the row"] = function()
   local st = canvas.open({}, {})
   H.eq(context.resolve(st, 0), nil)

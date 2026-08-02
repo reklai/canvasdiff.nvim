@@ -39,4 +39,29 @@ function C.resolve(state, row0)
   return { scope = "hunk", section = index, hunk = entry.hunk_idx }
 end
 
+--- The 0-based canvas row of hunk `gi`'s header in section `section_i` --
+--- `resolve` read backwards, for a caller that names a hunk without a cursor
+--- to point at it. nil when that section or that hunk is not there.
+---
+--- A folded section answers with its own start row, and that is arithmetic
+--- rather than policy: it renders as ONE row however many entries it still
+--- carries, so `start0 + offset` would land inside the FOLLOWING file. The same
+--- reason motions.hunk_stops treats a folded file as exactly one stop.
+function C.hunk_row(state, section_i, gi)
+  local section = state.sections[section_i]
+  if not section then
+    return nil
+  end
+  local start0 = (Canvas.section_rows(state, section_i))
+  if fold.hidden(state, section.path) then
+    return start0
+  end
+  for offset, entry in ipairs(section.entries or {}) do
+    if entry.kind == "hunk_hdr" and entry.hunk_idx == gi then
+      return start0 + offset - 1
+    end
+  end
+  return nil
+end
+
 return C

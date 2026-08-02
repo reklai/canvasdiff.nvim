@@ -2,8 +2,10 @@ local H = require("helpers")
 local sidebar = require("canvasdiff.ui").sidebar
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
+local lens = require("canvasdiff.diff").lens
 local render = require("canvasdiff.canvas").format
 local runtime = require("canvasdiff.runtime")
+local source = require("canvasdiff.source")
 local virt = runtime.virtualizer
 local motions = require("canvasdiff.input").motions
 
@@ -505,10 +507,19 @@ T["sidebar_win sync tracks the section under the canvas topline"] = function()
 
   local b_start = (canvas.section_rows(st, 2))
   vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = b_start + 2, lnum = b_start + 2 })
+    vim.fn.winrestview({ topline = b_start + 1, lnum = b_start + 1 })
   end)
   sidebar.sync(lease)
   H.eq(active_row(sbuf), 9, "second file active after scroll")
+
+  -- One row further down is that file's first hunk header, and the answer
+  -- gets more precise rather than different: the same file, named at the
+  -- depth the canvas is actually showing.
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = b_start + 2, lnum = b_start + 2 })
+  end)
+  sidebar.sync(lease)
+  H.eq(active_row(sbuf), 10, "and its first hunk once the viewport is inside one")
   sidebar.close(lease)
 end
 
@@ -1469,8 +1480,10 @@ T["sidebar_cycle Ctrl+N walks hunk stops and the sidebar follows"] = function()
     press("<C-n>")
     H.eq(canvas_top0(st), b_hunks[1],
       "the walk crosses the file boundary onto the next file's first hunk, not its header")
-    -- rows: 0 "a/", 1 one.txt, 2-7 its hunks, 8 "b/", 9 two.txt
-    H.eq(active_row(sidebar_buf(lease)), 9, "and the sidebar followed to b/two.txt")
+    -- rows: 0 "a/", 1 one.txt, 2-7 its hunks, 8 "b/", 9 two.txt, 10- its hunks
+    H.eq(active_row(sidebar_buf(lease)), 10,
+      "and the sidebar followed to b/two.txt -- onto the hunk it landed on, "
+        .. "which is a row further down than the file")
 
     press("2<C-p>")
     H.eq(canvas_top0(st), a_hunks[#a_hunks - 1], "a typed count still applies to the press")
@@ -1495,6 +1508,292 @@ T["sidebar_cycle a bound cycle_file_next still scrolls whole files"] = function(
       "the restored action scrolls to the next FILE, exactly as Ctrl+N used to")
     press("<C-y>")
     H.eq(canvas_top0(st), (canvas.section_rows(st, 1)), "and wraps, as it always did")
+  end)
+end
+
+-- --- the tree's hunk rows are live ---------------------------------------
+--
+-- A hunk row names a hunk, so the three verbs that can reach one -- select, s
+-- and u -- have to answer at that depth, and the highlight has to follow the
+-- canvas there.
+
+--- 1-based sidebar row for `path`: its file row when `gi` is nil, its hunk
+--- `gi`'s row otherwise. Read off a tree with nothing folded, which is what
+--- every caller below opens.
+local function tree_row(st, path, gi)
+  for row, entry in ipairs(sidebar.build_entries(st.sections, st.folded)) do
+    if
+      entry.path == path
+      and ((gi == nil and entry.kind == "file") or (gi ~= nil and entry.hunk == gi))
+    then
+      return row
+    end
+  end
+  error(("the tree has no row for %s hunk %s"):format(path, tostring(gi)))
+end
+
+T["sidebar_hunk select on a hunk row scrolls the canvas to that hunk"] = function()
+  local st, lease = open_with_sidebar()
+  local side_win = sidebar_win(lease)
+  local rows = hunk_rows(st, 2)
+  assert(#rows >= 3, "sanity: the fixture's files carry several hunks each")
+  local folds_before = { span(st, 1), span(st, 2), span(st, 3) }
+
+  vim.api.nvim_set_current_win(side_win)
+  vim.api.nvim_win_set_cursor(side_win, { tree_row(st, "b/two.txt", 3), 0 })
+  press("<CR>")
+  vim.api.nvim_set_current_win(st.win)
+
+  H.eq(canvas_top0(st), rows[3],
+    "the viewport top is that hunk's own header row, not the file's first row")
+  H.eq({ span(st, 1), span(st, 2), span(st, 3) }, folds_before,
+    "selecting is navigation at either depth, so no fold moved")
+  H.eq(st.collapsed, {}, "and nothing was collapsed or expanded")
+  done(st, lease)
+end
+
+-- The one case where a hunk row can be pressed for a file the canvas is
+-- showing as a single row: the virtualizer's collapses are its own bookkeeping,
+-- so they never take hunk rows out of the tree. The press must land on the row
+-- the file actually has instead of expanding it to reach the one it names --
+-- selecting is navigation, and navigation never changes a fold.
+T["sidebar_hunk select on an auto-collapsed file lands without expanding it"] = function()
+  local st, lease = open_with_sidebar()
+  canvas.set_collapsed(st, 2, true, "auto")
+  H.eq(span(st, 2), 1, "sanity: the canvas renders it as one placeholder row")
+
+  vim.api.nvim_win_set_cursor(sidebar_win(lease), { tree_row(st, "b/two.txt", 3), 0 })
+  sidebar.select(lease)
+
+  H.eq(span(st, 2), 1, "the placeholder was not expanded to reach the hunk")
+  H.eq(st.collapsed, { ["b/two.txt"] = "auto" }, "and the collapse is untouched")
+  H.eq(canvas_top0(st), (canvas.section_rows(st, 2)),
+    "the one row the file has is where the press lands")
+  done(st, lease)
+end
+
+T["sidebar_hunk tracking follows the canvas into a hunk, and out on a header"] = function()
+  local st, lease = open_with_sidebar()
+  local sbuf = sidebar_buf(lease)
+  local rows = hunk_rows(st, 2)
+  --- WinScrolled never fires in this headless environment, so the sync its
+  --- autocmd would run is driven directly, as every tracking test here does.
+  local function look_at(row0)
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = row0 + 1, lnum = row0 + 1 })
+    end)
+    sidebar.sync(lease)
+  end
+
+  look_at(rows[2])
+  H.eq(active_row(sbuf), tree_row(st, "b/two.txt", 2) - 1,
+    "the hunk under the viewport is highlighted, not the file containing it")
+  look_at(rows[2] + 1)
+  H.eq(active_row(sbuf), tree_row(st, "b/two.txt", 2) - 1,
+    "a row inside that hunk's body answers with the same hunk")
+  look_at(rows[3])
+  H.eq(active_row(sbuf), tree_row(st, "b/two.txt", 3) - 1,
+    "and the highlight moves hunk by hunk, not file by file")
+  look_at((canvas.section_rows(st, 2)))
+  H.eq(active_row(sbuf), tree_row(st, "b/two.txt") - 1,
+    "a file header is where hunks live, not one of them: the file row again")
+  done(st, lease)
+end
+
+T["sidebar_hunk tracking falls back to the file row on a folded file"] = function()
+  local st, lease = open_with_sidebar()
+  local sbuf = sidebar_buf(lease)
+  canvas.set_collapsed(st, 2, true)
+  sidebar.refresh(lease)
+  local start0 = (canvas.section_rows(st, 2))
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+  end)
+  sidebar.sync(lease)
+
+  -- rows: 1 a/, 2 one.txt, 3-8 its hunks, 9 b/, 10 two.txt -- a folded file
+  -- lists no hunk rows, in the tree exactly as on the canvas.
+  H.eq(active_row(sbuf), 9, "the placeholder tracks the one row the file has left")
+  done(st, lease)
+end
+
+T["sidebar_hunk a jump excursion still marks the file row"] = function()
+  local st, lease = open_with_sidebar()
+  local sbuf = sidebar_buf(lease)
+  local rows = hunk_rows(st, 2)
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = rows[3] + 1, lnum = rows[3] + 1 })
+  end)
+  sidebar.sync(lease)
+  H.eq(active_row(sbuf), tree_row(st, "b/two.txt", 3) - 1,
+    "sanity: the canvas is tracked at hunk depth")
+
+  -- What jump.enter's on_path does once you open a file out of the canvas.
+  -- An excursion names a FILE, and hunk tracking is canvas-scoped.
+  H.eq(sidebar.mark_path(lease, "a/one.txt", st.win), true)
+  H.eq(active_row(sbuf), tree_row(st, "a/one.txt") - 1,
+    "the jumped file's row is what an excursion marks")
+  done(st, lease)
+end
+
+-- Changed at lines 2 and 10 with context 3: two displayed hunks, far enough
+-- apart that not even their context windows touch.
+local TWELVE = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n"
+local TWELVE_EDITED = TWELVE:gsub("two", "TWO"):gsub("ten", "TEN")
+
+local function write_file(root, rel, content)
+  local f = assert(io.open(vim.fs.joinpath(root, rel), "w"))
+  f:write(content)
+  f:close()
+end
+
+--- A review of `root` opened through the App with its own sidebar, focused on
+--- the sidebar window -- every sidebar verb reads the row under ITS cursor --
+--- with notifications captured. `body(st, lease, side_win, msgs)`.
+local function in_repo_sidebar(root, open_opts, body)
+  local orig_cwd = vim.fn.getcwd()
+  local real_notify = vim.notify
+  local msgs = {}
+  vim.notify = function(message, level)
+    msgs[#msgs + 1] = { message = message, level = level }
+  end
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup({ watch = { enabled = false }, session = { enabled = false } })
+  local ok, err = xpcall(function()
+    local st = assert(fm.open(open_opts))
+    local lease = assert(st.surface.controllers.sidebar, "the review opened its sidebar")
+    local side_win = assert(sidebar_win(lease))
+    vim.api.nvim_set_current_win(side_win)
+    body(st, lease, side_win, msgs)
+  end, debug.traceback)
+  vim.notify = real_notify
+  pcall(fm.close)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+local function notified(msgs, copy)
+  for _, message in ipairs(msgs) do
+    if message.message:find(copy, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+T["sidebar_hunk s on a hunk row stages exactly that hunk"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = TWELVE },
+    worktree = { ["a.txt"] = TWELVE_EDITED },
+  })
+  in_repo_sidebar(root, { lens = lens.get("unstaged") }, function(st, _, side_win)
+    -- rows: 1 a.txt, 2 its first hunk, 3 its second
+    vim.api.nvim_win_set_cursor(side_win, { tree_row(st, "a.txt", 1), 0 })
+    press("s")
+
+    H.eq(source.show(root, ":0", "a.txt"), (TWELVE:gsub("two", "TWO")),
+      "the index carries the hunk the row named, and nothing else")
+    local file = assert(source.changed_files(root)[1])
+    assert(file.staged and file.unstaged,
+      "the hunk below it is still unstaged: " .. vim.inspect(file))
+  end)
+end
+
+-- The tree and the model can only disagree by racing (entries are rebuilt with
+-- the sections), so the callback the sidebar's keymap calls is what a test can
+-- hold still -- and it is exactly the seam this pins: a hunk ordinal the model
+-- no longer carries must fall back to the FILE THE ROW NAMED, never to whatever
+-- the canvas cursor happens to be parked in.
+T["sidebar_hunk a row whose hunk is gone falls back to that row's own file"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = TWELVE, ["b.txt"] = TWELVE },
+    worktree = { ["a.txt"] = TWELVE_EDITED, ["b.txt"] = TWELVE_EDITED },
+  })
+  in_repo_sidebar(root, { lens = lens.get("unstaged") }, function(st, lease)
+    local b_start = (canvas.section_rows(st, 2))
+    vim.api.nvim_win_set_cursor(st.win, { b_start + 3, 0 })
+    H.eq((canvas.context.resolve(st, b_start + 2)).section, 2,
+      "sanity: the canvas cursor is inside a hunk of the OTHER file")
+
+    H.eq(lease.callbacks.on_stage(lease, st, "a.txt", "stage", 99), true)
+
+    local by = {}
+    for _, file in ipairs(source.changed_files(root)) do
+      by[file.path] = file
+    end
+    assert(by["a.txt"] and by["a.txt"].staged and not by["a.txt"].unstaged,
+      "the row's own file was staged whole: " .. vim.inspect(by["a.txt"]))
+    assert(by["b.txt"] and not by["b.txt"].staged,
+      "the file under the canvas cursor is untouched: " .. vim.inspect(by["b.txt"]))
+  end)
+end
+
+-- The Critical this feature must not reopen through a second door. A displayed
+-- hunk's span is in the DISPLAYED lens's b-side coordinates; on a file that is
+-- both staged and modified those name different lines than the HEAD->index pair
+-- `u` acts on, and stage.pick_all is a bare line-number overlap that would
+-- happily take the wrong hunk. A sidebar row is an ordinal into that same
+-- displayed section, so it inherits the hazard exactly -- and must inherit the
+-- refusal, which only routing through App's own hunk verb can guarantee.
+T["sidebar_hunk u on a hunk row declines on a mixed file outside the staged lens"] = function()
+  local numbered = {}
+  for i = 1, 40 do
+    numbered[i] = "line " .. i
+  end
+  local base = table.concat(numbered, "\n") .. "\n"
+  local staged = base
+    :gsub("line 20\n", "line 20 CHANGED\n")
+    :gsub("line 30\n", "line 30 CHANGED\n")
+  local inserted = {}
+  for i = 1, 10 do
+    inserted[i] = "new " .. i
+  end
+  -- Ten unstaged lines inserted ABOVE the staged edits, so the staged hunks
+  -- display ten rows lower than the index holds them: a raw overlap against the
+  -- HEAD->index pair would unstage the neighbouring hunk instead.
+  local mixed = table.concat(inserted, "\n") .. "\n" .. staged
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = base },
+    worktree = { ["a.txt"] = staged },
+  })
+  assert(vim.system({ "git", "add", "-A" }, { cwd = root }):wait().code == 0)
+  write_file(root, "a.txt", mixed)
+
+  in_repo_sidebar(root, { lens = lens.get("all") }, function(st, _, side_win, msgs)
+    vim.api.nvim_win_set_cursor(side_win, { tree_row(st, "a.txt", 2), 0 })
+    press("u")
+
+    H.eq(source.show(root, ":0", "a.txt"), staged,
+      "the declined press leaves the index blob byte-identical")
+    assert(notified(msgs,
+      "this file is staged and modified — unstage its hunks from the staged lens"),
+      vim.inspect(msgs))
+  end)
+end
+
+T["sidebar_hunk s on a hunk row declines in the staged lens on a mixed file"] = function()
+  local half = TWELVE:gsub("two", "TWO")
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = TWELVE },
+    worktree = { ["a.txt"] = half },
+  })
+  assert(vim.system({ "git", "add", "-A" }, { cwd = root }):wait().code == 0)
+  write_file(root, "a.txt", TWELVE_EDITED)
+
+  in_repo_sidebar(root, { lens = lens.get("staged") }, function(st, _, side_win, msgs)
+    vim.api.nvim_win_set_cursor(side_win, { tree_row(st, "a.txt", 1), 0 })
+    press("s")
+
+    H.eq(source.show(root, ":0", "a.txt"), half,
+      "the declined press leaves the index blob byte-identical")
+    assert(notified(msgs,
+      "this file is staged and modified — stage its hunks from the unstaged lens"),
+      vim.inspect(msgs))
   end)
 end
 

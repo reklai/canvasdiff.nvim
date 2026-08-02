@@ -1103,13 +1103,22 @@ local function open_sidebar(app, surface, st)
       end)
       return returned
     end,
-    on_stage = function(lease, _, path, direction)
+    -- `hunk` is the pressed row's own ordinal, present only on a hunk row. It
+    -- selects the granularity and nothing else: both verbs below own every
+    -- check and every refusal, so the tree cannot stage by a route the canvas
+    -- keys do not also take.
+    on_stage = function(lease, _, path, direction, hunk)
       if surface.controllers.sidebar ~= lease then
         return false
       end
       local changed = false
       surface:guard(generation, function()
-        changed = app:stage_file(direction, path, surface, generation) or false
+        if hunk then
+          changed = app:stage_hunk(direction, surface, generation, nil,
+            { path = path, hunk = hunk }) or false
+        else
+          changed = app:stage_file(direction, path, surface, generation) or false
+        end
       end)
       return changed
     end,
@@ -2652,7 +2661,8 @@ function App:stage_file(direction, path, owned_surface, generation)
     (action == "stage" and "staged " or "unstaged ") .. file.path)
 end
 
---- Stage or unstage ONE hunk -- the one under the cursor in `win`.
+--- Stage or unstage ONE hunk -- the one under the cursor in `win`, or the one
+--- `target` ({ path, hunk }) names when a row rather than a cursor points at it.
 ---
 --- The mapping rule is fixed whatever lens is showing: stage applies the
 --- index→worktree pair, unstage the HEAD→index pair. The cursor's hunk
@@ -2665,8 +2675,11 @@ end
 ---
 --- Anything that is not a hunk row -- a file header, a folded placeholder, a
 --- binary notice -- falls through to the file verb, so the cursor alone
---- decides granularity and `s` is always safe to press.
-function App:stage_hunk(direction, owned_surface, generation, win)
+--- decides granularity and `s` is always safe to press. A named `target` falls
+--- through to the file verb FOR THAT PATH: the sidebar row that named a hunk
+--- the model no longer has still meant that file, and staging whatever the
+--- canvas cursor happens to sit on would be a different file entirely.
+function App:stage_hunk(direction, owned_surface, generation, win, target)
   assert(direction == "stage" or direction == "unstage",
     "stage_hunk: direction must be 'stage' or 'unstage', got " .. tostring(direction))
   local surface = owned_surface or active_surface(self)
@@ -2676,12 +2689,21 @@ function App:stage_hunk(direction, owned_surface, generation, win)
     return nil, err
   end
   local st = surface.state
-  win = win or vim.api.nvim_get_current_win()
-  local ctx = canvas_showing(st, win)
-    and canvas.context.resolve(st, vim.api.nvim_win_get_cursor(win)[1] - 1)
-    or nil
+  local ctx
+  if target then
+    -- The row's `hunk` is an ordinal into the DISPLAYED section, exactly as
+    -- the resolver's is: same coordinate space, same hazards, same guard.
+    local section_i = (section_by_exact_path(st, target.path))
+    ctx = section_i and { scope = "hunk", section = section_i, hunk = target.hunk } or nil
+  else
+    win = win or vim.api.nvim_get_current_win()
+    ctx = canvas_showing(st, win)
+      and canvas.context.resolve(st, vim.api.nvim_win_get_cursor(win)[1] - 1)
+      or nil
+  end
+  local named = target and target.path or nil
   if not (ctx and ctx.scope == "hunk") then
-    return self:stage_file(direction, nil, owned_surface, generation)
+    return self:stage_file(direction, named, owned_surface, generation)
   end
   local section = st.sections[ctx.section]
   -- A rename's index identity is two paths; writing one blob would stage
@@ -2694,7 +2716,7 @@ function App:stage_hunk(direction, owned_surface, generation, win)
   if not span then
     -- Not even a seam row survives (the whole new side is gone): this hunk
     -- is indistinguishable from the file, so the file verb is the honest one.
-    return self:stage_file(direction, nil, owned_surface, generation)
+    return self:stage_file(direction, named, owned_surface, generation)
   end
 
   local tx, tx_err = begin_stage(self, owned_surface, generation)
