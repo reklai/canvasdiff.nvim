@@ -142,13 +142,6 @@ M.defaults = {
       -- neither key does anything here today.
       stage_file   = "S",
       unstage_file = "U",
-      -- Deleted lines are virtual text: the cursor cannot enter one, so plain
-      -- `y` reaches every row on the canvas EXCEPT the removed ones. This is
-      -- the handle for those, and it deliberately does not take `y` itself --
-      -- that key still yanks canvas rows the ordinary way, which is why the
-      -- plugin leaves it alone. `g` starts no other canvas mapping, so the
-      -- sequence costs nothing but the tap.
-      yank_deleted = "gy",
       -- Tab forward through the lenses, Shift+Tab back. One physical key for the
       -- whole "what am I looking at" axis, and a slip between the two lands on the
       -- other direction of the same action rather than on something unrelated.

@@ -17,9 +17,6 @@ return {
   context = {
     resolve = context.resolve,
     hunk_row = context.hunk_row,
-    -- Deleted lines are virtual text, so the only way to reach them is to ask
-    -- the row they hang on.
-    ghosts = context.ghosts,
   },
   format = {
     -- The struck-label group and the hunk-naming format, exported because a

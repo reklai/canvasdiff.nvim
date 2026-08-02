@@ -321,7 +321,6 @@ require("canvasdiff").setup({
       unstage    = "u",      -- unstage this hunk (never touches the worktree)
       stage_file   = "S",    -- stage this whole file, from anywhere in it
       unstage_file = "U",    -- unstage this whole file, from anywhere in it
-      yank_deleted = "gy",   -- copy the deleted lines drawn on this row
       lens_next  = "<Tab>",  -- cycle the lens forward (all / unstaged / staged)
       lens_prev  = "<S-Tab>",-- and back
       sidebar    = "o",      -- toggle the file-tree sidebar
@@ -415,7 +414,6 @@ are tapped one after the other (with about a second between taps).
 | `stage` | `s` | **s** | Stage the hunk under the cursor; the whole file when on its header bar or its folded placeholder |
 | `unstage` | `u` | **u** | The same, unstaging; never touches the worktree |
 | `stage_file` / `unstage_file` | `S` / `U` | hold **Shift** + **s** / **u** | Stage/unstage the whole file from anywhere inside it |
-| `yank_deleted` | `gy` | tap **g** then **y** | Copy the deleted lines drawn on this row. They are virtual text, so `y` cannot reach them; honours a register prefix |
 | `lens_next` / `lens_prev` | `<Tab>` / `<S-Tab>` | **Tab** / hold **Shift** + **Tab** | Cycle the lens: all ⇄ unstaged ⇄ staged |
 | `sidebar` | `o` | **o** | Toggle the file-tree sidebar (works even with `sidebar.enabled = false`) |
 | `close` | `q` | **q** | Back out: leave a stacked comparison, else close the canvas and restore the previous buffer |

@@ -75,7 +75,6 @@ there:
     s               stage the hunk under the cursor
     u               unstage the hunk under the cursor
     S  /  U         stage / unstage this whole file
-    gy              copy the deleted lines shown on this row
     <CR>            jump to this line in the real file
     CTRL-Space      (in the real file) come back to the canvas
     q               close the review
@@ -301,7 +300,6 @@ On the canvas~
     u                       Unstage this hunk -- or this file on its header
     S                       Stage this file's changes (from anywhere in it)
     U                       Unstage this file (from anywhere in it)
-    gy                      Copy the deleted lines shown on this row
     q                       Back out: leave a stacked comparison, else
                             close the review
     <leader>lh              Show keybind cheatsheet
@@ -444,7 +442,6 @@ default. >lua
           unstage    = "u",
           stage_file   = "S",
           unstage_file = "U",
-          yank_deleted = "gy",
           close      = "q",
           help       = "<leader>lh",
         },

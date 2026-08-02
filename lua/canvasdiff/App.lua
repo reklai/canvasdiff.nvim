@@ -966,20 +966,6 @@ local function canvas_actions(app, surface, st, cfg)
     end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
-    -- Deleted lines are virtual text, so `y` cannot reach them and neither can
-    -- the cursor. Yanking them means asking the real row they hang on. Honours
-    -- v:register, so `" agy` lands them in `a` like any other yank.
-    yank_deleted = owned_action(surface, generation, function(_, win)
-      local row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
-      local lines = canvas.context.ghosts(st, row0)
-      if #lines == 0 then
-        ui.notify("no deleted lines on this row")
-        return
-      end
-      vim.fn.setreg(vim.v.register, lines, "l")
-      ui.notify(("yanked %d deleted line%s"):format(
-        #lines, #lines == 1 and "" or "s"))
-    end),
     -- The unshifted verbs resolve their scope from the cursor at press time
     -- (hunk row -> that hunk, anything else -> the file); the capitals are
     -- the from-anywhere file verbs.
