@@ -1,3 +1,6 @@
+-- One plugin instance's process-level orchestrator. App selects Surfaces and
+-- sequences domain facades; it does not own repository parsing, rendered rows,
+-- or controller resources. Those lifetimes stay behind their domain facades.
 local canvas = require("canvasdiff.canvas")
 local source = require("canvasdiff.source")
 local config = require("canvasdiff.config")

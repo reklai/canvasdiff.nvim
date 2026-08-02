@@ -1,3 +1,8 @@
+-- A PageList projected through one scratch skeleton buffer. Callers observe
+-- logical rows while a decoration provider materializes only visible ranges;
+-- generation changes resynchronize the skeleton, and disposal invalidates all
+-- leases before detaching or deleting it. Overscan and skeleton chunk sizes
+-- are bounded so viewport work cannot grow with the whole review.
 local PageList = require("canvasdiff.canvas.PageList")
 
 local Projection = {}

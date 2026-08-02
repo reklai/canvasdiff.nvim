@@ -12,6 +12,7 @@ module named after it — and everything else in that domain is internal.
 
 | Domain | Facade | Owns |
 | --- | --- | --- |
+| `appearance` | `canvasdiff.appearance` | Highlight names, derived defaults, explicit overrides, colorscheme recovery |
 | `canvas` | `canvasdiff.canvas` | Buffer rendering, page storage, projection, scheduling |
 | `config` | `canvasdiff.config` | Defaults, user options, glyphs |
 | `diff` | `canvasdiff.diff` | The model: sections, hunks, anchors, folds, lenses, word diff |
@@ -48,6 +49,32 @@ Above the domains sit three named layers:
 6. **Peer controllers do not know about each other.** Watch, the virtualizer,
    the highlighter, the sidebar, the scrollbar and the status column all report
    through their owning `Surface`; none of them imports another.
+
+### Appearance direction and reload
+
+Appearance is a leaf domain. Rendering owners in `canvas` and `ui` choose
+stable `CanvasDiff*` group names and call the `canvasdiff.appearance` facade;
+appearance defines those names but has **no outgoing cross-domain edge**.
+That direction keeps a renderer from becoming the owner of palette state and
+keeps appearance from reaching back into a consumer to form a cycle.
+
+The setup and reload path is deliberately singular:
+
+```text
+renderers choose group names -> canvasdiff.appearance defines them
+App passes setup options      -> appearance manager applies them
+ColorScheme                   -> one appearance callback
+                              -> derived defaults -> explicit overrides
+```
+
+`App.new` passes `config.options.highlights`, and `App:setup` passes the merged
+`options.highlights`, through the facade to the manager. The manager clears and
+recreates one `ColorScheme` augroup callback, so repeated setup does not
+accumulate reload handlers. On a colorscheme change that callback derives
+defaults from the new palette first, then reapplies the accepted explicit user
+overrides. Authorship snapshots let CanvasDiff replace its own stale defaults
+while leaving a default definition taken over by a user or colorscheme
+untouched; configured explicit overrides intentionally retain precedence.
 
 ## Ownership: leases
 

@@ -1,3 +1,7 @@
+-- A mutable logical row sequence over authenticated Pages. Readers address
+-- stable zero-based rows while splice and compaction publish a new generation;
+-- pins fence those replacements for the duration of a caller's read. The
+-- resident LRU and reservations enforce the configured page and byte bounds.
 local Page = require("canvasdiff.canvas.Page")
 
 local PageList = {}

@@ -1,3 +1,7 @@
+-- Surface-scoped Tree-sitter highlighting owner. Each authenticated lease owns
+-- its extmarks, callbacks, and whole-file parse cache; path invalidation and
+-- the Surface generation fence reject stale work. The cache is capped so
+-- syntax state stays bounded independently for concurrent reviews.
 local M = {}
 
 local canvas = require("canvasdiff.canvas")

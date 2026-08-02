@@ -1,3 +1,7 @@
+-- Canonical registry and default definitions for every CanvasDiff highlight.
+-- Renderers choose these stable names; this owner derives their current
+-- colorscheme values but never writes highlight state. Measured factors below
+-- are the bounds that keep those derived channels distinguishable.
 local G = {}
 
 local ORDER = {

@@ -1,3 +1,7 @@
+-- Process-wide highlight authorship and reload owner. Setup validates explicit
+-- overrides and installs one ColorScheme callback; ensure applies derived
+-- defaults first and explicit overrides second. Default-authorship snapshots
+-- permit re-derivation while preserving definitions this manager does not own.
 local groups = require("canvasdiff.appearance.groups")
 
 local M = {}

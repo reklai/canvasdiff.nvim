@@ -1,3 +1,7 @@
+-- Lifetime owner for one live review. A Surface retains its canvas state,
+-- windows, excursions, autocommands, and authenticated controller leases,
+-- then fences queued work before exactly-once teardown. Collection and
+-- rendering remain owned by the domain facades it coordinates.
 local canvas = require("canvasdiff.canvas")
 local config = require("canvasdiff.config")
 local session = require("canvasdiff.session")

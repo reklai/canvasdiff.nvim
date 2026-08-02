@@ -1,3 +1,7 @@
+-- Idle-time compaction owner for one PageList. `touch` starts a generation-
+-- fenced cycle and disposal retires its timer; faults remain observable through
+-- stats without transferring lifetime to callers. Each slice inspects and
+-- compacts only fixed budgets so background work stays bounded.
 local PageList = require("canvasdiff.canvas.PageList")
 local system = require("canvasdiff.os")
 

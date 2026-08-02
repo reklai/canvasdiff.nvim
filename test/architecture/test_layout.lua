@@ -17,6 +17,30 @@ local function assert_no_errors(errors)
   assert(#errors == 0, "architecture layout violations:\n- " .. table.concat(errors, "\n- "))
 end
 
+local function read(relative)
+  local file = assert(io.open(vim.fs.joinpath(graph.root, relative), "rb"))
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
+T.architecture_layout_documents_contributor_entry_path = function()
+  local architecture = read("docs/architecture.md")
+  assert(architecture:find("canvasdiff.appearance", 1, true))
+  assert(architecture:find("colorscheme", 1, true))
+  assert(architecture:find("no outgoing cross-domain edge", 1, true))
+
+  local contributing = read("CONTRIBUTING.md")
+  for _, command in ipairs({
+    "make unit",
+    "make architecture",
+    "make verify",
+    "make bench-chaos",
+  }) do
+    assert(contributing:find(command, 1, true), "missing " .. command)
+  end
+end
+
 T.architecture_layout_uses_only_the_singular_test_root = function()
   local test_stat = vim.uv.fs_stat(vim.fs.joinpath(graph.root, "test"))
   assert(test_stat and test_stat.type == "directory", "test/ must exist")

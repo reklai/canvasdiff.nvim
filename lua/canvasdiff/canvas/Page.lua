@@ -1,3 +1,8 @@
+-- One checked page of logical rows, represented as raw offsets and payload or
+-- as a cold encoded body. Callers read through authenticated snapshots;
+-- compaction and restore publish through private capabilities so stale views
+-- cannot become current. Ordinary pages stay within row and byte limits, with
+-- one oversized row isolated in its own page.
 local Page = {}
 Page.__index = Page
 
