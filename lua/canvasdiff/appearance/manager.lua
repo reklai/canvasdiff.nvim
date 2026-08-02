@@ -16,27 +16,29 @@ local function shape(definition)
 end
 
 local function readback(name)
-  return shape(vim.api.nvim_get_hl(0, { name = name, link = true }))
+  return vim.api.nvim_get_hl(0, { name = name, link = true })
 end
 
 -- Define one group as a default, replacing only our own prior authorship.
 local function set_default(name, value)
   local current = readback(name)
+  local current_shape = shape(current)
   local spec = vim.tbl_extend("force", vim.deepcopy(value), { default = true })
-  if next(current) == nil and authored[name] ~= nil then
+  if next(current_shape) == nil and authored[name] ~= nil then
     spec.force = true
   end
-  if next(current) ~= nil then
-    if not vim.deep_equal(current, authored[name]) then
+  if next(current_shape) ~= nil then
+    if current.default ~= true
+        or not vim.deep_equal(current_shape, authored[name]) then
       return -- colorscheme or direct user definition owns it
     end
-    if vim.deep_equal(current, shape(spec)) then
+    if vim.deep_equal(current_shape, shape(spec)) then
       return
     end
     spec.force = true
   end
   vim.api.nvim_set_hl(0, name, spec)
-  authored[name] = readback(name)
+  authored[name] = shape(readback(name))
 end
 
 function M.ensure()
