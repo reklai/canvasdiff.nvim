@@ -1,6 +1,6 @@
 # canvasdiff.nvim
 
-Your whole Git changeset as one buffer you can work inside.
+Your whole **Git Diff** (changeset) as one buffer you can work inside.
 
 CanvasDiff renders every changed file into one scrollable canvas. Press Enter
 on any line to open the real file with your LSP, Tree-sitter, autocmds, and
@@ -13,27 +13,27 @@ still change before the first stable release.
 
 ### Screenshots
 
-**1. Live edit — before / after**  
+**1. Live edit — before / after**
 Edit the real file, save, and the canvas refreshes in place.
 
 ![Live edit before and after](media/01-live-edit.png)
 
-**2. Comparison mode**  
+**2. Comparison mode**
 Read-only revision ranges without checking out branches.
 
 ![Comparison mode](media/02-compare.png)
 
-**3. Sidebar fold & jump**  
+**3. Sidebar fold & jump**
 Left: `src/` folded to one summary. Right: Enter on a row jumps the canvas.
 
 ![Sidebar fold and jump](media/03-sidebar-fold-jump.png)
 
-**4. Lens states**  
+**4. Lens states**
 All · unstaged · staged — same review, different filters.
 
 ![Lens states](media/04-lenses.png)
 
-**5. Key menus**  
+**5. Key menus**
 Help cheatsheet, compare picker, and checkout.
 
 ![Key menus](media/05-keys.png)
