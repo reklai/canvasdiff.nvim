@@ -26,8 +26,12 @@ K.specs = {
   { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (lands on folded ones too)" },
   { ctx = "canvas", action = "next_hunk",  group = "Navigate", desc = "Next hunk (a folded file counts as one)" },
   { ctx = "canvas", action = "prev_hunk",  group = "Navigate", desc = "Previous hunk (a folded file counts as one)" },
-  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next file (wraps)" },
-  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous file (wraps)" },
+  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next hunk (wraps; a folded file is one stop)" },
+  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous hunk (wraps; a folded file is one stop)" },
+  -- The file axis the two above used to walk. Shipped unbound, so restoring
+  -- the previous behaviour is one config line on whatever key you prefer.
+  { ctx = "canvas", action = "cycle_file_next", group = "Navigate", desc = "Scroll to the next file (wraps)" },
+  { ctx = "canvas", action = "cycle_file_prev", group = "Navigate", desc = "Scroll to the previous file (wraps)" },
 
   { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (never changes its fold)" },
   { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas at the same spot" },

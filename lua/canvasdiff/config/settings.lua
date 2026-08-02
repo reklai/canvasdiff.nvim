@@ -103,6 +103,11 @@ M.defaults = {
       prev_hunk  = "[h",
       cycle_next = "<C-n>",
       cycle_prev = "<C-p>",
+      -- The file-at-a-time scrolling the two keys above used to do. Unbound:
+      -- `{}` means disabled, so no map installs until a user asks for one --
+      -- `cycle_file_next = "<C-n>"` puts the old behaviour back on the old key.
+      cycle_file_next = {},
+      cycle_file_prev = {},
       -- Re-collects and splices in what changed, so the same TEXT stays under your
       -- cursor. Inert to take: `ra` is replace-char, which nomodifiable makes E21.
       --

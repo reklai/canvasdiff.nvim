@@ -1135,8 +1135,113 @@ T["sidebar_fold cycle honors a count"] = function()
     vim.fn.winrestview({ topline = 1, lnum = 1 })
   end)
   motions.cycle(st, st.win, 1, 2)
-  H.eq((canvas.locate(st, canvas_top0(st))), 3, "2<C-n> moves two sections")
+  H.eq((canvas.locate(st, canvas_top0(st))), 3,
+    "a count of 2 on the file cycle moves two sections")
   done(st)
+end
+
+--- A two-file review opened through the App, so a test presses the INSTALLED
+--- keymap rather than calling the motion behind it. `opts` is merged over the
+--- quiet defaults (no file watcher, no session file).
+local function with_review(opts, body)
+  local function changed(tag)
+    local lines = vim.split(bigtext(60, tag), "\n", { plain = true })
+    for i = 10, 60, 10 do
+      lines[i] = lines[i] .. " changed"
+    end
+    return table.concat(lines, "\n")
+  end
+  local root = H.git_fixture({
+    committed = { ["a/one.txt"] = bigtext(60, "a"), ["b/two.txt"] = bigtext(60, "b") },
+    worktree = { ["a/one.txt"] = changed("a"), ["b/two.txt"] = changed("b") },
+  })
+  local orig_cwd = vim.fn.getcwd()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local quiet = { watch = { enabled = false }, session = { enabled = false } }
+  fm.setup(vim.tbl_deep_extend("force", vim.deepcopy(quiet), opts or {}))
+  local ok, err = xpcall(function()
+    local st = assert(fm.open())
+    vim.api.nvim_win_call(st.win, function()
+      vim.fn.winrestview({ topline = 1, lnum = 1 })
+    end)
+    vim.api.nvim_set_current_win(st.win)
+    body(st, assert(st.surface.controllers.sidebar))
+  end, debug.traceback)
+  pcall(fm.close)
+  fm.setup(quiet) -- drop any keymap override before the next test
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(orig_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+--- 0-based canvas rows of section `i`'s hunk headers.
+local function hunk_rows(st, i)
+  local start0 = (canvas.section_rows(st, i))
+  local out = {}
+  for idx, entry in ipairs(st.sections[i].entries) do
+    if entry.kind == "hunk_hdr" then
+      out[#out + 1] = start0 + idx - 1
+    end
+  end
+  return out
+end
+
+local function press(lhs)
+  vim.api.nvim_feedkeys(vim.keycode(lhs), "x", false)
+end
+
+-- Ctrl+N's stops are hunks now. From the top of the review it lands on the
+-- first file's first HUNK instead of scrolling the whole file away, and it
+-- crosses into the next file at that file's first hunk, never at its header.
+T["sidebar_cycle Ctrl+N walks hunk stops and the sidebar follows"] = function()
+  with_review(nil, function(st, lease)
+    local a_hunks, b_hunks = hunk_rows(st, 1), hunk_rows(st, 2)
+    assert(#a_hunks >= 3 and #b_hunks >= 1, "sanity: both files have several hunks")
+    local file_two = (canvas.section_rows(st, 2))
+    assert(a_hunks[1] < file_two, "sanity: the first file's hunks precede the second file")
+
+    press("<C-n>")
+    H.eq(canvas_top0(st), a_hunks[1],
+      "the first press lands on a hunk of the file we are already in, not on the next file")
+
+    for _ = 2, #a_hunks do
+      press("<C-n>")
+    end
+    H.eq(canvas_top0(st), a_hunks[#a_hunks], "one press per hunk, all the way down the file")
+
+    press("<C-n>")
+    H.eq(canvas_top0(st), b_hunks[1],
+      "the walk crosses the file boundary onto the next file's first hunk, not its header")
+    H.eq(active_row(sidebar_buf(lease)), 3, "and the sidebar followed to b/two.txt")
+
+    press("2<C-p>")
+    H.eq(canvas_top0(st), a_hunks[#a_hunks - 1], "a typed count still applies to the press")
+  end)
+end
+
+-- The file axis Ctrl+N used to walk is one config line away, and that line has
+-- to install a working map: an action with no handler in App silently maps
+-- nothing at all, which would look exactly like the option not existing.
+T["sidebar_cycle a bound cycle_file_next still scrolls whole files"] = function()
+  with_review({ keymaps = { canvas = { cycle_file_next = "<C-y>" } } }, function(st)
+    local mapped = false
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(st.buf, "n")) do
+      if H.norm_lhs(m.lhs) == H.norm_lhs("<C-y>") then
+        mapped = true
+      end
+    end
+    assert(mapped, "binding the action must install a canvas map")
+
+    press("<C-y>")
+    H.eq(canvas_top0(st), (canvas.section_rows(st, 2)),
+      "the restored action scrolls to the next FILE, exactly as Ctrl+N used to")
+    press("<C-y>")
+    H.eq(canvas_top0(st), (canvas.section_rows(st, 1)), "and wraps, as it always did")
+  end)
 end
 
 -- The file branch has guarded against a dead canvas since it landed; the dir

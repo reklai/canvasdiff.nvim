@@ -35,6 +35,32 @@ local function three_sections()
   }
 end
 
+local function canvas_top0(st)
+  return vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
+end
+
+-- The canvas buffer is a singleton whose window remembers its view across
+-- tests, so anything asserting on a topline has to pin one first.
+local function set_top(st, row0)
+  vim.api.nvim_win_call(st.win, function()
+    vim.fn.winrestview({ topline = row0 + 1, lnum = row0 + 1 })
+  end)
+end
+
+-- 0-based canvas rows of section `i`'s hunk headers. Only valid for an
+-- UNFOLDED section: a folded one renders as a single row while still carrying
+-- every entry, so this arithmetic would point into the following files.
+local function hunk_hdr_rows(st, i)
+  local start0 = (canvas.section_rows(st, i))
+  local out = {}
+  for idx, entry in ipairs(st.sections[i].entries) do
+    if entry.kind == "hunk_hdr" then
+      out[#out + 1] = start0 + idx - 1
+    end
+  end
+  return out
+end
+
 -- 0-based row of the LAST hunk header across all sections, and the
 -- 0-based exclusive end row of the section it belongs to.
 local function last_hunk_row_and_section_end(st)
@@ -278,4 +304,142 @@ T["motions_ 2]h skips one hunk header ahead"] = function()
 
   assert(two_step[1] > one_step[1], "2]h must land further than a single ]h step")
 end
+
+-- --- the hunk stop list, shared by ]h and Ctrl+N ------------------------
+
+-- A file header is where hunks live, not a destination -- so it is never a
+-- stop. A FOLDED file is exactly one: its placeholder row, the only row it
+-- actually owns.
+T["motions_ hunk_stops make a folded file exactly one stop"] = function()
+  local st = canvas.open(three_sections(), {})
+  canvas.set_collapsed(st, 2, true)
+
+  local b_start, b_end = canvas.section_rows(st, 2)
+  H.eq(b_end - b_start, 1, "sanity: section 2 is a one-row placeholder")
+
+  local expected = {}
+  for _, row in ipairs(hunk_hdr_rows(st, 1)) do expected[#expected + 1] = row end
+  expected[#expected + 1] = b_start
+  for _, row in ipairs(hunk_hdr_rows(st, 3)) do expected[#expected + 1] = row end
+  assert(#expected > 3, "sanity: the fixture has several hunks per file")
+
+  H.eq(motions.hunk_stops(st), expected,
+    "every hunk header in reading order, the folded file's placeholder, nothing else")
+end
+
+-- One home for the arithmetic: ]h does not compute its own list, it walks
+-- this one. Extracting the loop that changed what ]h stops on would be an
+-- extraction that changed behaviour.
+T["motions_ ]h walks exactly the hunk_stops list"] = function()
+  local st = canvas.open(three_sections(), {})
+  local stops = motions.hunk_stops(st)
+  assert(#stops > 3, "sanity: several stops to walk")
+
+  vim.api.nvim_win_set_cursor(st.win, { 1, 0 })
+  local visited = {}
+  for _ = 1, #stops + 2 do
+    motions.goto_hunk(st, 1, 1)
+    local row = vim.api.nvim_win_get_cursor(st.win)[1] - 1
+    if visited[#visited] == row then
+      break
+    end
+    visited[#visited + 1] = row
+  end
+  H.eq(visited, stops, "]h visits the stop list in order and then clamps at its end")
+end
+
+-- --- Ctrl+N / Ctrl+P: the wrapping walk --------------------------------
+
+T["motions_ cycle_hunk scrolls stop by stop and wraps at both ends"] = function()
+  local st = canvas.open(three_sections(), {})
+  local stops = motions.hunk_stops(st)
+  set_top(st, 0)
+
+  local visited = {}
+  for _ = 1, #stops do
+    local landed = motions.cycle_hunk(st, st.win, 1)
+    visited[#visited + 1] = landed
+    H.eq(canvas_top0(st), landed, "the landed stop becomes the topline")
+  end
+  H.eq(visited, stops,
+    "one press per stop walks the whole list in order, crossing file boundaries")
+
+  H.eq(motions.cycle_hunk(st, st.win, 1), stops[1],
+    "past the last stop it wraps to the first rather than clamping")
+  H.eq(motions.cycle_hunk(st, st.win, -1), stops[#stops],
+    "and backwards off the front it wraps to the last")
+end
+
+-- Clamping is what makes "I have seen every hunk" detectable, so ]h keeps its
+-- finish line while Ctrl+N is the free-scrolling walk over the same stops.
+T["motions_ ]h clamps at the last stop where cycle_hunk wraps"] = function()
+  local st = canvas.open(three_sections(), {})
+  local stops = motions.hunk_stops(st)
+  local last = stops[#stops]
+
+  vim.api.nvim_win_set_cursor(st.win, { last + 1, 0 })
+  motions.goto_hunk(st, 1, 1)
+  H.eq(vim.api.nvim_win_get_cursor(st.win)[1] - 1, last, "]h stays put at the end")
+
+  set_top(st, last)
+  H.eq(motions.cycle_hunk(st, st.win, 1), stops[1], "Ctrl+N wraps instead")
+end
+
+-- The rows above the first file's first hunk header belong to no stop, which
+-- is the one position the section cycle never has to think about -- locate()
+-- puts every row in some section. Backwards from there must reach the LAST
+-- stop, not the one before it.
+T["motions_ cycle_hunk above the first stop still wraps onto the last"] = function()
+  local st = canvas.open(three_sections(), {})
+  local stops = motions.hunk_stops(st)
+  assert(stops[1] > 0, "sanity: the file header row is above every stop")
+
+  set_top(st, 0)
+  H.eq(motions.cycle_hunk(st, st.win, -1), stops[#stops],
+    "Ctrl+P at the very top of the review reaches the last hunk")
+  set_top(st, 0)
+  H.eq(motions.cycle_hunk(st, st.win, 1), stops[1], "and Ctrl+N reaches the first")
+end
+
+T["motions_ cycle_hunk lands on a folded file's placeholder"] = function()
+  local st = canvas.open(three_sections(), {})
+  canvas.set_collapsed(st, 2, true)
+  local b_start = (canvas.section_rows(st, 2))
+  local a_rows = hunk_hdr_rows(st, 1)
+  local last_a = a_rows[#a_rows]
+
+  set_top(st, last_a)
+  H.eq(motions.cycle_hunk(st, st.win, 1), b_start,
+    "the folded file is one stop -- its placeholder, not zero stops and not its hidden hunks")
+  H.eq(canvas_top0(st), b_start, "and the view really scrolled there")
+  H.eq(motions.cycle_hunk(st, st.win, -1), last_a, "and one press back out of it")
+end
+
+T["motions_ cycle_hunk honors a count"] = function()
+  local st = canvas.open(three_sections(), {})
+  local stops = motions.hunk_stops(st)
+  assert(#stops >= 5, "sanity: enough stops to count over")
+
+  set_top(st, stops[1])
+  H.eq(motions.cycle_hunk(st, st.win, 1, 3), stops[4], "3<C-n> moves three stops")
+  H.eq(motions.cycle_hunk(st, st.win, -1, 2), stops[2], "and 2<C-p> two back")
+
+  set_top(st, stops[1])
+  H.eq(motions.cycle_hunk(st, st.win, 1, 0), stops[2],
+    "count 0 clamps to 1 here too -- there is no zero-count motion")
+end
+
+T["motions_ cycle_hunk declines a window that is not showing the canvas"] = function()
+  local st = canvas.open(three_sections(), {})
+  set_top(st, 0)
+  local before = canvas_top0(st)
+
+  vim.cmd("split")
+  local other = vim.api.nvim_get_current_win()
+  vim.cmd("enew")
+  H.eq(motions.cycle_hunk(st, other, 1), nil, "a foreign window is not a canvas to scroll")
+  H.close_windows(other)
+  H.eq(canvas_top0(st), before, "and the canvas was left where it was")
+end
+
 return T

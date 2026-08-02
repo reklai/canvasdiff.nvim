@@ -980,10 +980,18 @@ local function canvas_actions(app, surface, st, cfg)
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
     sidebar    = owned_action(surface, generation, function() app:toggle_sidebar() end),
+    -- Ctrl+N / Ctrl+P walk HUNKS; the file axis they used to walk is the pair
+    -- below, unbound until a user asks for it.
     cycle_next = owned_action(surface, generation, function(owner, win)
-      if motions.cycle(st, win, 1) then after_motion(owner, win) end
+      if motions.cycle_hunk(st, win, 1) then after_motion(owner, win) end
     end),
     cycle_prev = owned_action(surface, generation, function(owner, win)
+      if motions.cycle_hunk(st, win, -1) then after_motion(owner, win) end
+    end),
+    cycle_file_next = owned_action(surface, generation, function(owner, win)
+      if motions.cycle(st, win, 1) then after_motion(owner, win) end
+    end),
+    cycle_file_prev = owned_action(surface, generation, function(owner, win)
       if motions.cycle(st, win, -1) then after_motion(owner, win) end
     end),
     next_file  = owned_action(surface, generation, function(owner, win)
