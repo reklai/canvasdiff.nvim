@@ -1,0 +1,344 @@
+{
+  "duration": 48.04288796500623,
+  "fps": 8,
+  "segments": [
+    {
+      "start": 8.866001735441387e-06,
+      "end": 2.600076706003165,
+      "step": "open",
+      "subtitle": "CanvasDiff puts your whole Git changeset\nin one scrollable buffer.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": "01-hero-canvas"
+    },
+    {
+      "start": 2.6313289000027,
+      "end": 3.931358984002145,
+      "step": "next_hunk",
+      "subtitle": "Jump hunks with ]h  /  [h\nReview without hopping between files.",
+      "zoom": [
+        0.58,
+        0.38,
+        1.75
+      ],
+      "zoom_key": "diff",
+      "still": null
+    },
+    {
+      "start": 3.931378951005172,
+      "end": 5.2314948290004395,
+      "step": "next_hunk",
+      "subtitle": "Each + / \u2212 row is real source code\nwith Tree-sitter highlighting.",
+      "zoom": [
+        0.58,
+        0.38,
+        1.75
+      ],
+      "zoom_key": "diff",
+      "still": "02-syntax-and-diff-rows"
+    },
+    {
+      "start": 5.260426373002701,
+      "end": 6.5605208550041425,
+      "step": "next_hunk",
+      "subtitle": "Ghost deletions stay on the canvas\n(dim + strikethrough) beside additions.",
+      "zoom": [
+        0.56,
+        0.32,
+        1.9
+      ],
+      "zoom_key": "ghosts",
+      "still": "03-ghost-deletions"
+    },
+    {
+      "start": 6.591685195002356,
+      "end": 7.791761113003304,
+      "step": "prev_hunk",
+      "subtitle": "The left sidebar lists every changed file\nand its hunks.",
+      "zoom": [
+        0.16,
+        0.42,
+        1.65
+      ],
+      "zoom_key": "sidebar",
+      "still": "04-file-hunk-sidebar"
+    },
+    {
+      "start": 7.820478576999449,
+      "end": 9.220586433002609,
+      "step": "next_file",
+      "subtitle": "Jump files with ]f  /  [f\nStage marks: \u25cf staged  \u25cb unstaged  \u25cf\u25cb both.",
+      "zoom": [
+        0.2,
+        0.22,
+        2.0
+      ],
+      "zoom_key": "marks",
+      "still": "05-stage-marks"
+    },
+    {
+      "start": 9.25929424300557,
+      "end": 10.659358823002549,
+      "step": "next_file",
+      "subtitle": "Deleted files appear too \u2014\nfull content as pure-deletion ghosts.",
+      "zoom": [
+        0.16,
+        0.42,
+        1.65
+      ],
+      "zoom_key": "sidebar",
+      "still": "06-deleted-file"
+    },
+    {
+      "start": 10.695126844002516,
+      "end": 11.695218938002654,
+      "step": "top",
+      "subtitle": "za folds a file into a one-line summary.\nGreat for skimming a large review.",
+      "zoom": [
+        0.55,
+        0.2,
+        1.7
+      ],
+      "zoom_key": "fold",
+      "still": null
+    },
+    {
+      "start": 11.695243954003672,
+      "end": 13.695354698000301,
+      "step": "fold",
+      "subtitle": "Folded files stay out of the way\nuntil you open them again.",
+      "zoom": [
+        0.55,
+        0.2,
+        1.7
+      ],
+      "zoom_key": "fold",
+      "still": "07-file-folds"
+    },
+    {
+      "start": 13.731805707000603,
+      "end": 15.331897460004257,
+      "step": "fold",
+      "subtitle": "za again unfolds.\nFolds persist for this review session.",
+      "zoom": [
+        0.55,
+        0.2,
+        1.7
+      ],
+      "zoom_key": "fold",
+      "still": null
+    },
+    {
+      "start": 15.331923748999543,
+      "end": 17.33199603700632,
+      "step": "scroll_body",
+      "subtitle": "Scroll deeper: the sticky header pins\nthe file + current hunk under the winbar.",
+      "zoom": [
+        0.58,
+        0.12,
+        1.95
+      ],
+      "zoom_key": "sticky",
+      "still": "08-sticky-header"
+    },
+    {
+      "start": 17.36500901600084,
+      "end": 18.465072915001656,
+      "step": "top",
+      "subtitle": "Lenses filter what you review.\nTab cycles: all \u2192 unstaged \u2192 staged.",
+      "zoom": [
+        0.58,
+        0.07,
+        2.1
+      ],
+      "zoom_key": "winbar",
+      "still": null
+    },
+    {
+      "start": 18.465096168001764,
+      "end": 21.065182458005438,
+      "step": "unstaged",
+      "subtitle": "Unstaged lens: INDEX \u2192 WORKTREE\nOnly changes not yet staged.",
+      "zoom": [
+        0.58,
+        0.07,
+        2.1
+      ],
+      "zoom_key": "winbar",
+      "still": "09-lens-unstaged"
+    },
+    {
+      "start": 21.095700530000613,
+      "end": 23.695815466002387,
+      "step": "staged",
+      "subtitle": "Staged lens: HEAD \u2192 INDEX\nWhat will go into the next commit.",
+      "zoom": [
+        0.58,
+        0.07,
+        2.1
+      ],
+      "zoom_key": "winbar",
+      "still": "10-lens-staged"
+    },
+    {
+      "start": 23.72717371100589,
+      "end": 25.72726852800406,
+      "step": "all",
+      "subtitle": "All lens: HEAD \u2192 WORKTREE\nThe full picture of your worktree.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": "11-lens-all"
+    },
+    {
+      "start": 25.76173217000178,
+      "end": 26.461819107003976,
+      "step": "top",
+      "subtitle": "Press Enter on any line to open\nthe real file at that exact spot.",
+      "zoom": [
+        0.62,
+        0.48,
+        1.4
+      ],
+      "zoom_key": "canvas",
+      "still": null
+    },
+    {
+      "start": 26.461842831005924,
+      "end": 28.961932083002466,
+      "step": "jump",
+      "subtitle": "You land in a normal buffer \u2014\nLSP, Tree-sitter, unsaved edits intact.",
+      "zoom": [
+        0.55,
+        0.45,
+        1.25
+      ],
+      "zoom_key": "jump",
+      "still": "12-jump-to-file"
+    },
+    {
+      "start": 28.996751651000523,
+      "end": 30.99684544900083,
+      "step": "back",
+      "subtitle": "Ctrl+Space jumps back to the canvas\nat the same review position.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    },
+    {
+      "start": 30.99687060600263,
+      "end": 34.19694196199998,
+      "step": "help",
+      "subtitle": "Need a reminder?  <leader>lh\nopens the keybind cheatsheet.",
+      "zoom": [
+        0.5,
+        0.48,
+        1.3
+      ],
+      "zoom_key": "help",
+      "still": "13-cheatsheet"
+    },
+    {
+      "start": 34.23000469500403,
+      "end": 35.43007706700155,
+      "step": "help_close",
+      "subtitle": "Close the cheatsheet with q.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    },
+    {
+      "start": 35.430094760005886,
+      "end": 38.630169693002244,
+      "step": "range",
+      "subtitle": "Compare any two revisions (READ-ONLY).\n:CanvasDiff HEAD~1...HEAD or <leader>lb.",
+      "zoom": [
+        0.58,
+        0.08,
+        2.0
+      ],
+      "zoom_key": "range",
+      "still": "14-range-readonly"
+    },
+    {
+      "start": 38.65969186400616,
+      "end": 40.85977939700388,
+      "step": "range_back",
+      "subtitle": "Leave a stacked comparison to return\nto your live worktree review.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    },
+    {
+      "start": 40.859803723004006,
+      "end": 42.25986767500581,
+      "step": "all",
+      "subtitle": "Stage with s / S \u00b7 unstage with u / U\nRefresh with r \u00b7 close with q.",
+      "zoom": [
+        0.96,
+        0.5,
+        2.4
+      ],
+      "zoom_key": "minimap",
+      "still": "15-minimap"
+    },
+    {
+      "start": 42.292536312001175,
+      "end": 43.2926070310059,
+      "step": "top",
+      "subtitle": null,
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    },
+    {
+      "start": 43.29262709800241,
+      "end": 44.6926959360062,
+      "step": "next_hunk",
+      "subtitle": "One canvas. Real files. Live Git.\nRun :CanvasDiff to start.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    },
+    {
+      "start": 44.69271060400206,
+      "end": 47.692781689002004,
+      "step": null,
+      "subtitle": "canvasdiff.nvim \u2014 pre-alpha\nYour whole changeset, one buffer.",
+      "zoom": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "zoom_key": "full",
+      "still": null
+    }
+  ]
+}

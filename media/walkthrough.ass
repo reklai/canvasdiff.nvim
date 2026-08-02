@@ -1,0 +1,39 @@
+[Script Info]
+Title: CanvasDiff walkthrough
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Onboard,MesloLGS NF,32,&H00FFFFFF,&H000000FF,&H00101010,&HB0000000,-1,0,0,0,100,100,0,0,3,0,0,2,90,90,72,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:02.60,Onboard,,0,0,0,,CanvasDiff puts your whole Git changeset\\Nin one scrollable buffer.
+Dialogue: 0,0:00:02.63,0:00:03.93,Onboard,,0,0,0,,Jump hunks with ]h  /  [h\\NReview without hopping between files.
+Dialogue: 0,0:00:03.93,0:00:05.23,Onboard,,0,0,0,,Each + / − row is real source code\\Nwith Tree-sitter highlighting.
+Dialogue: 0,0:00:05.26,0:00:06.56,Onboard,,0,0,0,,Ghost deletions stay on the canvas\\N(dim + strikethrough) beside additions.
+Dialogue: 0,0:00:06.59,0:00:07.79,Onboard,,0,0,0,,The left sidebar lists every changed file\\Nand its hunks.
+Dialogue: 0,0:00:07.82,0:00:09.22,Onboard,,0,0,0,,Jump files with ]f  /  [f\\NStage marks: ● staged  ○ unstaged  ●○ both.
+Dialogue: 0,0:00:09.26,0:00:10.66,Onboard,,0,0,0,,Deleted files appear too —\\Nfull content as pure-deletion ghosts.
+Dialogue: 0,0:00:10.70,0:00:11.70,Onboard,,0,0,0,,za folds a file into a one-line summary.\\NGreat for skimming a large review.
+Dialogue: 0,0:00:11.70,0:00:13.70,Onboard,,0,0,0,,Folded files stay out of the way\\Nuntil you open them again.
+Dialogue: 0,0:00:13.73,0:00:15.33,Onboard,,0,0,0,,za again unfolds.\\NFolds persist for this review session.
+Dialogue: 0,0:00:15.33,0:00:17.33,Onboard,,0,0,0,,Scroll deeper: the sticky header pins\\Nthe file + current hunk under the winbar.
+Dialogue: 0,0:00:17.37,0:00:18.47,Onboard,,0,0,0,,Lenses filter what you review.\\NTab cycles: all → unstaged → staged.
+Dialogue: 0,0:00:18.47,0:00:21.07,Onboard,,0,0,0,,Unstaged lens: INDEX → WORKTREE\\NOnly changes not yet staged.
+Dialogue: 0,0:00:21.10,0:00:23.70,Onboard,,0,0,0,,Staged lens: HEAD → INDEX\\NWhat will go into the next commit.
+Dialogue: 0,0:00:23.73,0:00:25.73,Onboard,,0,0,0,,All lens: HEAD → WORKTREE\\NThe full picture of your worktree.
+Dialogue: 0,0:00:25.76,0:00:26.46,Onboard,,0,0,0,,Press Enter on any line to open\\Nthe real file at that exact spot.
+Dialogue: 0,0:00:26.46,0:00:28.96,Onboard,,0,0,0,,You land in a normal buffer —\\NLSP, Tree-sitter, unsaved edits intact.
+Dialogue: 0,0:00:29.00,0:00:31.00,Onboard,,0,0,0,,Ctrl+Space jumps back to the canvas\\Nat the same review position.
+Dialogue: 0,0:00:31.00,0:00:34.20,Onboard,,0,0,0,,Need a reminder?  <leader>lh\\Nopens the keybind cheatsheet.
+Dialogue: 0,0:00:34.23,0:00:35.43,Onboard,,0,0,0,,Close the cheatsheet with q.
+Dialogue: 0,0:00:35.43,0:00:38.63,Onboard,,0,0,0,,Compare any two revisions (READ-ONLY).\\N:CanvasDiff HEAD~1...HEAD or <leader>lb.
+Dialogue: 0,0:00:38.66,0:00:40.86,Onboard,,0,0,0,,Leave a stacked comparison to return\\Nto your live worktree review.
+Dialogue: 0,0:00:40.86,0:00:42.26,Onboard,,0,0,0,,Stage with s / S · unstage with u / U\\NRefresh with r · close with q.
+Dialogue: 0,0:00:43.29,0:00:44.69,Onboard,,0,0,0,,One canvas. Real files. Live Git.\\NRun :CanvasDiff to start.
+Dialogue: 0,0:00:44.69,0:00:47.69,Onboard,,0,0,0,,canvasdiff.nvim — pre-alpha\\NYour whole changeset, one buffer.

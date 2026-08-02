@@ -9,15 +9,31 @@ unsaved edits intact; edit it, then jump back to the same place in the review.
 CanvasDiff is **pre-alpha**. Its behavior is tested, but the public surface may
 still change before the first stable release.
 
-```text
- HEAD → WORKTREE                      │ Files changed (12)  +340 −128
-████ src/canvas.lua  (+12 −4) ●○ █████│ ▾ src/
-   40    local M = {}                 │     canvas.lua  +12 −4 ●○
-       - return nil                   │       @@ 41  return M  +1 −1
-   41  + return M                     │     sidebar.lua  +2 −0 ○
-████ src/sidebar.lua  (+2 −0) ○ ██████│ ▸ test/  (1 files, +9 −1)
-▸ test/helpers.lua  (3 hunks, +9 −1)  │
-```
+![CanvasDiff canvas with sidebar, stage marks, and ghost deletions](media/hero.png)
+
+### Walkthrough
+
+A ~40s onboarding walkthrough (zooms into each UI region as it is explained):
+
+https://github.com/reklai/canvasdiff.nvim/raw/main/media/walkthrough.mp4
+
+If the player does not embed, open [`media/walkthrough.mp4`](media/walkthrough.mp4)
+directly. Soft subtitles also live beside it as
+[`walkthrough.srt`](media/walkthrough.srt) /
+[`walkthrough.ass`](media/walkthrough.ass).
+
+### Feature screenshots
+
+| | |
+|:--|:--|
+| ![One canvas for every changed file](media/01-hero-canvas.png) **One canvas** for every changed file | ![Syntax-highlighted diff rows](media/02-syntax-and-diff-rows.png) **Tree-sitter** on real source rows |
+| ![Ghost deletions](media/03-ghost-deletions.png) **Ghost deletions** (dim + strike) | ![File and hunk sidebar](media/04-file-hunk-sidebar.png) **File + hunk sidebar** |
+| ![Stage marks](media/05-stage-marks.png) **Stage marks** ● staged · ○ unstaged · ●○ both | ![Deleted file](media/06-deleted-file.png) **Deleted files** as pure-deletion ghosts |
+| ![File folds](media/07-file-folds.png) **Folds** for skimming large reviews | ![Sticky header](media/08-sticky-header.png) **Sticky header** pins file + hunk |
+| ![Unstaged lens](media/09-lens-unstaged.png) **Unstaged** lens | ![Staged lens](media/10-lens-staged.png) **Staged** lens |
+| ![All lens](media/11-lens-all.png) **All** lens (HEAD → WORKTREE) | ![Jump to file](media/12-jump-to-file.png) **Enter** opens the real file |
+| ![Cheatsheet](media/13-cheatsheet.png) **Cheatsheet** (`<leader>lh`) | ![Read-only range](media/14-range-readonly.png) **READ-ONLY** revision ranges |
+| ![Minimap](media/15-minimap.png) **Minimap** scrollbar | |
 
 ## Features
 
