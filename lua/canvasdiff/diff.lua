@@ -50,7 +50,9 @@ return {
   stage = {
     pair_hunks = stage.pair_hunks,
     pick = stage.pick,
+    pick_all = stage.pick_all,
     splice = stage.splice,
+    splice_many = stage.splice_many,
   },
   staged_then_changed = model.staged_then_changed,
   word_marks = word_diff.section_marks,

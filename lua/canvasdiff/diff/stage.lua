@@ -31,23 +31,44 @@ local function window(hunk)
   return start_b, start_b + 1
 end
 
---- The first hunk whose b-side window overlaps `span` ({lo, hi}, b-side line
---- numbers); nil when none. `span` is a hull -- it may run wider than the
---- hunk it names -- so this is an overlap test, not containment.
-function S.pick(hunks, span)
+--- Every hunk whose b-side window overlaps `span` ({lo, hi}, b-side line
+--- numbers), in the order the pair reported them; empty when none.
+---
+--- `span` is a HULL -- first through last line one displayed hunk writes --
+--- and context merging can seat SEVERAL pair hunks inside one of them, so
+--- this is an overlap test, not containment, and it answers with all of them.
+--- Staging the first alone would stage half of what the user pointed at.
+function S.pick_all(hunks, span)
+  -- A hunk that only deletes writes no new-side line, so its hull publishes
+  -- neither bound and the caller must substitute the seam around the cut. A
+  -- nil arriving here is that substitution missing: a bug worth a traceback,
+  -- because answering "nothing overlaps" would make staging quietly do nothing.
+  assert(span and span.lo and span.hi,
+    "stage: a span needs lo and hi; a pure-deletion hunk publishes neither, "
+    .. "so the caller substitutes the seam around its cut")
+
+  local found = {}
   for _, hunk in ipairs(hunks) do
     local lo, hi = window(hunk)
     if span.lo <= hi and span.hi >= lo then
-      return hunk
+      found[#found + 1] = hunk
     end
   end
+  return found
+end
+
+--- The first hunk `pick_all` finds, or nil: the "is there anything to do
+--- here?" question. Applying the span needs every one of them.
+function S.pick(hunks, span)
+  return S.pick_all(hunks, span)[1]
 end
 
 --- `a_text` with exactly `hunk` applied from `b_text`.
 ---
 --- The terminator is the a side's and is never rewritten: a splice may not
---- silently add or drop a file's final newline, which is also why the one
---- change this cannot stage is that newline itself.
+--- silently add or drop a file's final newline. Known limitation of that
+--- rule: a change consisting SOLELY of the final newline cannot be expressed
+--- as a line splice, so it stays on screen instead of staging.
 function S.splice(a_text, b_text, hunk)
   local a, b = lines_of(a_text), lines_of(b_text)
   local start_a, count_a, start_b, count_b = hunk[1], hunk[2], hunk[3], hunk[4]
@@ -68,6 +89,27 @@ function S.splice(a_text, b_text, hunk)
   local text = table.concat(out, "\n")
   if #out > 0 and (a_text == "" or a_text:sub(-1) == "\n") then
     return text .. "\n"
+  end
+  return text
+end
+
+--- `a_text` with every hunk in `hunks` applied from `b_text`.
+---
+--- Later hunks go first. A splice rewrites only a-side lines at or after its
+--- own start, so once the last hunk has landed every earlier hunk's a-side
+--- indices are still the ones the pair reported; ascending order would carry
+--- them off the moment one hunk changed the line count above the next. The b
+--- side is never rewritten, so its indices hold whatever the order.
+function S.splice_many(a_text, b_text, hunks)
+  local descending = {}
+  for i, hunk in ipairs(hunks) do
+    descending[i] = hunk
+  end
+  table.sort(descending, function(left, right) return left[1] > right[1] end)
+
+  local text = a_text
+  for _, hunk in ipairs(descending) do
+    text = S.splice(text, b_text, hunk)
   end
   return text
 end
