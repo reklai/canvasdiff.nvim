@@ -282,6 +282,24 @@ local function sidebar_title(state)
   return title .. ("  +%d %s%d"):format(adds, render.glyphs.minus, dels)
 end
 
+--- The sidebar half of the top band: the collection title wearing the band's
+--- group. The group rule is winbar.text's, reached through the same structural
+--- predicate rather than restated, because a rule stated twice is a rule that
+--- can drift -- and a drifted one puts a seam down the middle of a band whose
+--- whole job in this state is to announce that the comparison is read-only.
+---
+--- Escaped for the reason the canvas half is: a winbar is a statusline
+--- expression, where `%` is a format specifier. The title looks like it could
+--- not contain one -- a fixed prefix and two integers -- but the minus glyph
+--- between them is a user override validated only as "a string", so the one
+--- character that would misdraw the bar is one a user can configure into it.
+function S.title_text(state)
+  local group = lens.is_range(lens.of(state))
+      and "CanvasDiffWinbarReadOnly"
+    or "CanvasDiffWinbar"
+  return "%#" .. group .. "#" .. winbar.escape(sidebar_title(state))
+end
+
 local function ensure_hl_groups()
   vim.api.nvim_set_hl(0, "CanvasDiffSidebarDir", {
     link = "Directory",
@@ -380,10 +398,8 @@ local function update_winbar(lease, view)
   -- The band group paints the bar identically whether or not the window has
   -- focus -- that is the point: the sidebar and canvas winbars read as ONE
   -- top band instead of flipping WinBar/WinBarNC against each other.
-  -- sidebar_title produces no `%` (a fixed prefix, counts and the minus
-  -- glyph only), so no statusline escaping is needed.
   winbar.ensure_hl_groups()
-  local title = "%#CanvasDiffWinbar#" .. sidebar_title(lease.state)
+  local title = S.title_text(lease.state)
   local previous = view.applied_options.winbar
   local actual = vim.api.nvim_get_option_value("winbar", { win = view.win })
   if not view_active(lease, view) then

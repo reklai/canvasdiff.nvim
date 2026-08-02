@@ -1,5 +1,7 @@
 local H = require("helpers")
+local config = require("canvasdiff.config")
 local winbar = require("canvasdiff.ui").winbar
+local sidebar = require("canvasdiff.ui").sidebar
 local lens = require("canvasdiff.diff").lens
 
 local T = {}
@@ -18,6 +20,36 @@ T["winbar_ a range lens tints the whole bar read-only"] = function()
   local st = { lens = lens.range("main", "topic", "...") }
   H.eq(winbar.text(st, nil),
     "%#CanvasDiffWinbarReadOnly#READ-ONLY  main → topic")
+end
+
+T["winbar_ the sidebar half tints read-only with the canvas half"] = function()
+  local st = { lens = lens.range("main", "topic", ".."), sections = {} }
+  H.eq(sidebar.title_text(st), "%#CanvasDiffWinbarReadOnly#Files changed (0)")
+end
+
+T["winbar_ the sidebar half stays plain on a working lens"] = function()
+  local st = { sections = {} }
+  H.eq(sidebar.title_text(st), "%#CanvasDiffWinbar#Files changed (0)")
+end
+
+T["winbar_ the sidebar half takes the canvas half's own group"] = function()
+  local st = { lens = lens.range("main", "topic", "..."), sections = {} }
+  local canvas_group = winbar.text(st):match("^%%#(.-)#")
+  local side_group = sidebar.title_text(st):match("^%%#(.-)#")
+  H.eq(side_group, canvas_group)
+  H.eq(side_group, "CanvasDiffWinbarReadOnly")
+end
+
+T["winbar_ the sidebar half escapes a percent in the title"] = function()
+  -- Glyphs are validated as strings and nothing more, so a `%` reaches the
+  -- title through the supported override -- and a winbar is a statusline
+  -- expression, where an unescaped one is a format specifier.
+  config.setup({ glyphs = { minus = "%" } })
+  local st = { sections = { { path = "a.lua", adds = 1, dels = 2 } } }
+  local ok, text = pcall(sidebar.title_text, st)
+  config.setup({})
+  assert(ok, text)
+  H.eq(text, "%#CanvasDiffWinbar#Files changed (1)  +1 %%2")
 end
 
 T["winbar_ ensure_hl_groups defines both groups as defaults"] = function()
