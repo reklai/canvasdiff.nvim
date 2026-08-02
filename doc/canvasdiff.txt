@@ -69,10 +69,12 @@ there:
     j / k           move a line, as usual
     ]h  [h          next / previous hunk
     ]f  [f          next / previous file
+    CTRL-N  CTRL-P  scroll to the next / previous hunk (wraps)
     c               collapse or expand the file under the cursor
     <Tab>           next lens (what you are comparing)
-    s               stage this file's changes
-    u               unstage this file
+    s               stage the hunk under the cursor
+    u               unstage the hunk under the cursor
+    S  /  U         stage / unstage this whole file
     <CR>            jump to this line in the real file
     CTRL-Space      (in the real file) come back to the canvas
     q               close the review
@@ -94,10 +96,27 @@ which is why ordinary editing keys are free to be used as review commands.
 Alongside it you may see:
 
 sidebar~
-    A file tree of everything in the review. Selecting an entry moves the
-    canvas to that file. `q` in the sidebar closes just the sidebar; `o` on
-    the canvas, or |:CanvasDiff| `sidebar`, brings it back. Turn off the
-    auto-open with `sidebar = { enabled = false }` -- the toggle still works.
+    A tree of everything in the review, at two levels of content:
+    directories and files, and under each unfolded file one row per HUNK --
+    `@@ 88  render(state)  +3 −1`, the new-side line it starts at, the first
+    line it writes, and its own counts. A hunk whose label came from a
+    deleted line is struck through, as it is on the canvas. Selecting a row
+    moves the canvas to that file or that hunk; `s` and `u` on it stage or
+    unstage whichever the row names.
+
+    The tree MIRRORS the canvas's folds, and mirrors nothing else. Fold a
+    file and its hunk rows collapse into the single row the canvas shows,
+    carrying the same summary as its placeholder --
+    `▸ helpers.lua  (3 hunks, +9 −1)`. Fold a directory and it becomes one
+    row summarising what it hides -- `▸ test/  (2 files, +9 −1)`. Automatic
+    virtualization (see |canvasdiff-configuration|) is not a fold and never
+    removes hunk rows: it collapses far-from-viewport sections for speed, and
+    a tree that reflowed with it would move rows under your cursor on every
+    scroll.
+
+    `q` in the sidebar closes just the sidebar; `o` on the canvas, or
+    |:CanvasDiff| `sidebar`, brings it back. Turn off the auto-open with
+    `sidebar = { enabled = false }` -- the toggle still works.
 
 status column~
     Each line's number in the file it belongs to, plus a one-cell green/red
@@ -111,6 +130,22 @@ pinned header~
     covered row. It hides itself while the real header row is at the top of
     the window (a copy over the original would double it) and on a folded
     placeholder, whose single row already is the header.
+
+    Once the topline is inside a hunk the row continues with a breadcrumb --
+    the file, then that hunk, then its ordinal in the file: >
+
+        ▎ src/canvas.lua  (+12 −4) ●○ → @@ 88  render(state) · 3/5
+<
+    The hunk is named exactly as the sidebar's own row names it, so closing
+    the sidebar loses nothing about where you are, and `3/5` says how much
+    of the file is still ahead. It is the TOPLINE's hunk, not the cursor's,
+    so `]h` can leave the cursor inside hunk 4 while the crumb still reads
+    `3/5`. On the rows before a file's first hunk there is no hunk to name
+    and the crumb is absent. A narrow window keeps the ordinal: the label is
+    cut to fit around it, and if even a label-less crumb will not fit, the
+    crumb is dropped whole rather than drawn with its right edge past the
+    window. Both separators are configurable (`crumb`, `crumb_sep`; see
+    |canvasdiff-glyphs|).
 
 scrollbar~
     A density map of where the changes are in the whole review, not just in
@@ -174,10 +209,11 @@ closes in one step.
 
 The winbar is one continuous band across the canvas and the sidebar
 (`CanvasDiffWinbar`). The canvas half names the comparison, as in
-`HEAD → WORKTREE`, and never varies with scroll -- the file you are in is the
-pinned header's job (see |canvasdiff-canvas|). A committed range renders
-`READ-ONLY  A → B` and tints the canvas half (`CanvasDiffWinbarReadOnly`), so
-the mode is visible before the label is read.
+`HEAD → WORKTREE`, and never varies with scroll -- the file and hunk you are
+in are the pinned header's job (see |canvasdiff-canvas|). A committed range
+renders `READ-ONLY  A → B` and tints the whole band edge to edge
+(`CanvasDiffWinbarReadOnly`), sidebar half included, so the mode is visible
+before the label is read.
 
 The sidebar half reads `Files changed (N)  +A −D`. N counts changed files
 rather than visible directory rows; the stats are the whole changeset's, and
@@ -255,21 +291,60 @@ On the canvas~
     za, c                   Collapse or expand this file
     ]f  /  [f               Next / previous file
     ]h  /  [h               Next / previous hunk
-    CTRL-N  /  CTRL-P       Cycle to the next / previous file
+    CTRL-N  /  CTRL-P       Scroll to the next / previous hunk (wraps;
+                            a folded file is one stop)
     <Tab>  /  <S-Tab>       Next / previous lens
     o                       Toggle the sidebar
     r                       Refresh the current diff
-    s                       Stage this file's changes
-    u                       Unstage this file
+    s                       Stage this hunk -- or this file on its header
+    u                       Unstage this hunk -- or this file on its header
+    S                       Stage this file's changes (from anywhere in it)
+    U                       Unstage this file (from anywhere in it)
     q                       Back out: leave a stacked comparison, else
                             close the review
     <leader>lh              Show keybind cheatsheet
 
+Two canvas actions ship with no key at all:
+
+    cycle_file_next         Scroll to the next file's diff (wraps)
+    cycle_file_prev         Scroll to the previous file's diff (wraps)
+
+                                                *canvasdiff-changed-behaviour*
+Changed behaviour~
+
+CTRL-N and CTRL-P now cycle by HUNK rather than by file. They used to scroll
+one file's diff at a time; they now stop at every hunk, a folded file still
+counting as exactly one stop -- the granularity the rest of the canvas
+already worked at.
+
+`s` and `u` narrowed too. They used to take the whole file wherever they were
+pressed; they now take the hunk under the cursor, and the whole file only on
+a row that names none -- a file header, a folded placeholder, or a sidebar
+file row. `S` and `U` are new keys rather than redefinitions of old ones, and
+they are the whole-file verbs from anywhere.
+
+The file-at-a-time behaviour is intact under the two names above, so putting
+it back is one line: >lua
+
+    require("canvasdiff").setup({
+      keymaps = { canvas = {
+        cycle_next = {}, cycle_prev = {},           -- free the keys
+        cycle_file_next = "<C-n>",                  -- and take them
+        cycle_file_prev = "<C-p>",
+      } },
+    })
+<
+Freeing them first is worth the extra line. Two actions claiming one key in
+one context is not an error -- it is whichever mapping installs last, and
+that is not a thing to depend on. Drop the first line and give the hunk cycle
+other keys if you want both.
+
 In the sidebar~
 
     <CR>, za, c, <2-LeftMouse>      Select this entry
-    s                               Stage this file's changes
-    u                               Unstage this file
+    s                               Stage the row you are on -- this hunk,
+                                    or this file
+    u                               Unstage the row you are on
     q                               Close the sidebar (canvas stays open;
                                     `o` on the canvas reopens it)
     <leader>lh                      Show keybind cheatsheet
@@ -277,11 +352,41 @@ In the sidebar~
 Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
 cursor, and stealing it would make the tree impossible to browse.
 
-Staging is file-level and each key is one explicit verb: `s` stages any
-unstaged content in the file; `u` unstages staged content without changing
-the worktree. A verb with nothing to do reports `already staged` or `nothing
-staged` and performs no change. Staging is declined when a modified loaded
-buffer refers to the file, so unsaved text is never replaced by disk content.
+                                                        *canvasdiff-staging*
+Each key is one explicit verb: `s` only ever stages and `u` only ever
+unstages, without changing the worktree. The ROW decides scope, in both
+windows: on a hunk's own canvas rows, or on a sidebar hunk row, the verb
+takes that hunk; on a file header, a folded placeholder, a sidebar file row
+-- anything that names no hunk -- it takes the whole file. `S` and `U` take
+the whole file from anywhere inside it. A sidebar directory row declines.
+
+Staging writes the index directly: the hunk's lines are spliced into the
+staged blob, rather than a patch being generated and re-applied. A verb with
+nothing to do reports it (`already staged`, `hunk already staged`, `nothing
+staged`, `nothing staged here`) and performs no change. Staging is declined
+when a modified loaded buffer refers to the file, so unsaved text is never
+replaced by disk content. A rename's index identity is two paths rather than
+a line splice, so a hunk press inside one declines toward the whole-file
+verb; a binary file publishes no hunk row at all, so `s` on one is already
+that verb.
+
+In the `unstaged` lens a staged hunk VANISHES, and that is the confirmation:
+the lens shows what is not staged yet. One <Tab> on, in the `staged` lens,
+it is there.
+
+The whole-file verbs also PIVOT the lens when they succeed, so you land where
+what you just did is visible: `S` in the unstaged lens leaves you in the
+staged one, and `U` in the staged lens leaves you in the unstaged one. `s`
+and `u` deliberately do not -- pressing `s` down a file's hunks has to stay
+put -- and nothing pivots out of the all lens, which shows both halves
+already.
+
+On a file that is BOTH staged and modified, hunk staging needs a lens whose
+b side is the one the verb writes: `u` works only in the staged lens, and
+`s` declines only in the staged lens. In the wrong lens the hunk you see is
+measured against a text the index does not hold, and rather than guess which
+hunk you meant the verb declines and names a lens to use. `S` and `U` still
+work from anywhere.
 
 In a file you jumped to~
                                                           *canvasdiff-jump-back*
@@ -324,12 +429,19 @@ default. >lua
           prev_hunk  = "[h",
           cycle_next = "<C-n>",
           cycle_prev = "<C-p>",
+          -- The file axis CTRL-N/P used to walk. `{}` is "disabled", so no
+          -- map exists until you ask for one; see
+          -- |canvasdiff-changed-behaviour|.
+          cycle_file_next = {},
+          cycle_file_prev = {},
           lens_next  = "<Tab>",
           lens_prev  = "<S-Tab>",
           sidebar    = "o",
           refresh    = "r",
           stage      = "s",
           unstage    = "u",
+          stage_file   = "S",
+          unstage_file = "U",
           close      = "q",
           help       = "<leader>lh",
         },
@@ -433,6 +545,10 @@ explicit `nvim_set_hl()` of your own always wins over the derived defaults:
                              its pinned copy
     CanvasDiffWinbar         WinBar link; the top band
     CanvasDiffWinbarReadOnly Visual link; the band's read-only tint
+    CanvasDiffSidebarHunk    Comment link; a sidebar hunk row, whole
+    CanvasDiffHunkDel        CanvasDiffGhost link; a hunk label taken from a
+                             deleted line -- struck, in the sidebar row and
+                             in the pinned header's crumb alike
 
 The old `highlight.diff` option (`"quiet"`/`"classic"`/`"gutter"`) no longer
 exists -- there is nothing to pick between. A leftover `highlight.diff = ...`
@@ -450,6 +566,17 @@ cannot render them: >lua
 Or override individual slots with a table. An unknown slot name is REPORTED
 rather than ignored, because a silently-dropped option looks exactly like the
 plugin failing to honour it.
+
+Two slots are separators rather than single-cell markers, and both belong to
+the pinned header's breadcrumb (see |canvasdiff-canvas|): `crumb`, between the
+file and the hunk, and `crumb_sep`, between the hunk and its ordinal. Their
+surrounding spaces are part of the configured value, because the file part of
+that row is a byte-for-byte mirror of the header row it covers -- the
+separator owns every character between the two fields. >lua
+
+    glyphs = { crumb = " → ", crumb_sep = " · " }   -- default
+    glyphs = { crumb = " -> ", crumb_sep = " | " }  -- what "ascii" selects
+<
 
                                                           *canvasdiff-legacy*
 Options that no longer exist are reported the same way. In particular, keymaps
@@ -532,7 +659,10 @@ canvasdiff.set_range({range})                        *canvasdiff.set_range()*
 
 canvasdiff.stage()                                    *canvasdiff.stage()*
 canvasdiff.unstage()                                *canvasdiff.unstage()*
-        Stage or unstage the file selected in the canvas/sidebar. A verb
+        Stage or unstage the whole FILE selected in the canvas/sidebar --
+        what `S` and `U` do, whatever row the cursor is on. Hunk staging is
+        a keypress rather than an API call: it resolves the row under the
+        cursor, which a function called from anywhere has not got. A verb
         with nothing to do notifies and returns false without touching Git.
 
 canvasdiff.set_base({base})                           *canvasdiff.set_base()*

@@ -203,15 +203,35 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
   --
   -- Trimmed before measuring: `stale` carries its own leading space so that
   -- `#glyphs.stale` stays a correct byte offset for its highlight span, and `ctx` IS a
-  -- space. It is the glyph that has to be one cell, not the padding around it.
+  -- space. It is the glyph that has to be one cell, not the padding around it -- and
+  -- trimming is exactly what lets `stale` face the column rule below like any other
+  -- marker, which is where it belongs: it is the one ascii glyph whose whole purpose
+  -- is being distinguishable from `staged` in the TEXT.
+  --
+  -- The only slots that are NOT a column are the pinned header's crumb separators:
+  -- runs of several characters sitting between two fields, never a marker cell.
+  local NOT_A_COLUMN = { crumb = true, crumb_sep = true }
   local saved = vim.o.ambiwidth
   for _, aw in ipairs({ "single", "double" }) do
     vim.o.ambiwidth = aw
     for name, g in pairs(config.ASCII_GLYPHS) do
       local glyph = vim.trim(g)
       if glyph ~= "" then
-        H.eq(vim.fn.strwidth(glyph), 1,
-          ("%s = %q must be 1 cell at ambiwidth=%s"):format(name, g, aw))
+        -- Pure ASCII, one cell per byte, unmoved by ambiwidth. True of every
+        -- slot, separators included, and the only thing that can be asked of a
+        -- value several characters wide.
+        H.eq(vim.fn.strwidth(glyph), #glyph,
+          ("%s = %q must be %d cell(s) at ambiwidth=%s")
+            :format(name, g, #glyph, aw))
+        if not NOT_A_COLUMN[name] then
+          -- And a COLUMN glyph is one cell, which the byte rule above does not
+          -- imply: an ascii `folded = ">>"` satisfies it and still widens the
+          -- canvas prefix column and the file-header gutter by a cell, putting
+          -- a seam down every row that draws one.
+          H.eq(vim.fn.strwidth(glyph), 1,
+            ("%s = %q occupies a column, so it must be exactly one cell at ambiwidth=%s")
+              :format(name, g, aw))
+        end
       end
     end
   end

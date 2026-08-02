@@ -97,7 +97,7 @@ end
 local function binary_section(path, old_text, new_text, status, metadata)
   return with_metadata({
     binary = true,
-    adds = 0, dels = 0, nhunks = 0,
+    adds = 0, dels = 0, nhunks = 0, hunks = {},
     entries = {
       { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
       { kind = "binary", content = "binary file — no diff shown",
@@ -130,7 +130,7 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     return with_metadata({
       binary = binary or nil,
       rename_only = true,
-      adds = 0, dels = 0, nhunks = 0,
+      adds = 0, dels = 0, nhunks = 0, hunks = {},
       entries = {
         { kind = "file_hdr", content = path,
           new_lnum = nil, old_lnum = nil, hunk_idx = nil },
@@ -170,6 +170,7 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
   }
   local adds, dels = 0, 0
+  local hunks = {}
   local groups = group_hunks(raw_hunks, context)
   local offset = 0 -- new_lnum - old_lnum, valid for unchanged lines up to this point
 
@@ -185,6 +186,9 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     local hunk_entries = {}
     local new_span_lo, new_span_hi -- track new-side extremes emitted in this group
     local pending_del -- deletions waiting for a row to hang off
+    local hunk_adds, hunk_dels = 0, 0
+    local write_lo, write_hi -- new-side extremes this group WRITES, context excluded
+    local add_label, del_label
 
     -- Deletions are NOT rows. They ride on the entry that follows them, as `ghosts`,
     -- and get drawn as virtual lines above it.
@@ -203,10 +207,22 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     -- pressing Enter on a deletion silently lands you somewhere else -- always has the
     -- row you actually pointed at.
     local function push(kind, content, old_lnum, new_lnum)
-      if kind == "del" and ghost_dels then
-        pending_del = pending_del or {}
-        pending_del[#pending_del + 1] = { content = content, old_lnum = old_lnum }
-        return
+      -- Per-hunk facts are gathered HERE rather than at the call sites because a
+      -- ghosted deletion returns below without ever becoming an entry: this is
+      -- the last point at which every changed line, row or not, passes through.
+      if kind == "add" then
+        hunk_adds = hunk_adds + 1
+        add_label = add_label or content
+        write_lo = write_lo or new_lnum
+        write_hi = new_lnum
+      elseif kind == "del" then
+        hunk_dels = hunk_dels + 1
+        del_label = del_label or content
+        if ghost_dels then
+          pending_del = pending_del or {}
+          pending_del[#pending_del + 1] = { content = content, old_lnum = old_lnum }
+          return
+        end
       end
       local e = {
         kind = kind, content = content, new_lnum = new_lnum, old_lnum = old_lnum, hunk_idx = gi,
@@ -250,6 +266,13 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
       push("ctx", old_lines[lnum], lnum, lnum + offset)
     end
 
+    -- The new-side line this group's first cut sits AFTER, straight off the
+    -- pair: a hunk writing nothing reports its new side as a zero-count
+    -- position, which is exactly that line. 0 for a cut at the top of the
+    -- file. NOT window_lo's own new-side number -- that is the first CONTEXT
+    -- line, and the two only coincide when there is no context at all.
+    local seam = group.hunks[1][3]
+
     local d = 0
     local c
     if new_span_lo then
@@ -264,6 +287,27 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
       new_lnum = nil, old_lnum = nil, hunk_idx = gi,
     }
     entries[#entries + 1] = hdr
+
+    -- new_lo/new_hi deliberately exclude context: they are the worktree lines
+    -- this hunk WRITES, which is what a stage/reset span and a jump target both
+    -- mean by "the hunk". A hunk that only deletes writes nothing, so it has no
+    -- new-side range at all.
+    hunks[gi] = {
+      header = hdr.content,
+      new_lo = write_lo, new_hi = write_hi,
+      -- Present only on a hunk with no new-side range, and only while a new
+      -- side exists to seam into. Such a hunk is normally located through the
+      -- ghost its surviving neighbour carries -- but at context = 0 there is
+      -- no surviving neighbour, the ghosts hang on the header row, whose
+      -- new_lnum is nil, and this is the sole surviving record of where the
+      -- cut is. A wholly deleted file gets none: it has no new side, and its
+      -- hunk is not distinguishable from the file.
+      seam = (write_lo == nil and ghost_dels) and seam or nil,
+      adds = hunk_adds, dels = hunk_dels,
+      label = add_label or del_label or "",
+      pure_del = hunk_adds == 0 and hunk_dels > 0,
+    }
+
     for _, e in ipairs(hunk_entries) do
       entries[#entries + 1] = e
     end
@@ -283,6 +327,7 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
 
   return with_metadata({
     adds = adds, dels = dels, nhunks = #groups,
+    hunks = hunks,
     entries = entries,
   }, path, old, new, status, metadata)
 end

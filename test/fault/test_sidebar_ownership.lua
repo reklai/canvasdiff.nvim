@@ -622,7 +622,9 @@ T["sidebar_lease same-tab host rebind keeps one working view"] = function()
       return sidebar.is_open(lease) and #views(lease) == 1
     end, 10), "the view reconciled against the surviving split")
     local side_win = one_view(lease)
-    vim.api.nvim_win_set_cursor(side_win, { 6, 0 })
+    -- Each file lists its six hunks: 1 "a/", 2 one.txt, 3-8, 9 "b/", 10 two.txt,
+    -- 11-16, 17 "c/", 18 three.txt.
+    vim.api.nvim_win_set_cursor(side_win, { 18, 0 })
     sidebar.select(lease)
     local top = vim.api.nvim_win_call(survivor, function() return vim.fn.line("w0") - 1 end)
     H.eq((canvas.locate(st, top)), 3, "the rebound view selects in the surviving host")

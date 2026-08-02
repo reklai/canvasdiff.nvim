@@ -47,6 +47,52 @@ function R.section_path(section)
   return new_path
 end
 
+--- The widest prefix of `text` that fits `cells` display columns, cut on a
+--- character boundary: the text being cut is a line of source, and splitting a
+--- multibyte character mid-sequence would put invalid bytes in a buffer.
+---
+--- Shared rather than copied: the sidebar's hunk rows and the pinned header's
+--- crumb cut the same labels to two different widths, and a second
+--- implementation would be a second answer to "does this fit".
+function R.fit(text, cells)
+  if cells <= 0 then
+    return ""
+  end
+  -- Every character is at least one cell wide, so `cells` characters is already
+  -- an upper bound on what can fit -- the walk below is bounded by the width
+  -- being cut to rather than by the length of the line being cut.
+  local n = math.min(vim.fn.strchars(text), cells)
+  while n > 0 do
+    local cut = vim.fn.strcharpart(text, 0, n)
+    if vim.fn.strdisplaywidth(cut) <= cells then
+      return cut
+    end
+    n = n - 1
+  end
+  return ""
+end
+
+--- One hunk's identity as text: the `@@` marker naming its new-side line, and
+--- the first line the hunk writes.
+---
+--- ONE format wherever a hunk is named -- the sidebar's tree rows and the
+--- pinned header's crumb are the same fact read in two windows, and a hunk that
+--- answered to two names would read as two hunks.
+---
+--- Returned in two pieces because both callers need the LABEL's own bytes: they
+--- are what a narrow window cuts, and what a pure deletion strikes through.
+--- Leading indentation is dropped -- it is noise in a row that NAMES the hunk
+--- rather than reproducing the line.
+---
+--- The number is new_lo, which a pure deletion has not got: it writes no
+--- new-side line, so there is nothing to number. Which SIDE the label was taken
+--- from is a different question, and `pure_del` is what answers it.
+function R.hunk_name(hunk)
+  local label = ((hunk.label or ""):gsub("^%s+", ""))
+  local marker = hunk.new_lo and ("@@ %d  "):format(hunk.new_lo) or "@@ "
+  return marker, label
+end
+
 local HL_GROUP = {
   file_hdr = "CanvasDiffFileHeader",
   hunk_hdr = "CanvasDiffHunkHeader",
@@ -171,6 +217,25 @@ function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffStaleEmphasis", { bold = true, default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffStaged", { link = "Added", default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffUnstaged", { link = "DiagnosticWarn", default = true })
+end
+
+--- The struck-label group, defined once for every window that draws a hunk
+--- label: the sidebar's tree rows and the pinned header's crumb. A label taken
+--- from the old side is struck through, which is what CanvasDiffGhost already
+--- means everywhere else in the plugin.
+---
+--- Here rather than in either drawer for the reason the note above spells out:
+--- two `default = true` calls for one group is a trap, and whichever window
+--- opened first would silently decide what the other one looks like.
+---
+--- Unprefixed, deliberately: a hunk label is struck in the sidebar's tree AND on
+--- the canvas's own pinned header, so a user who wants to change how a removed
+--- line reads has no reason to look under "Sidebar" for it.
+function R.ensure_hunk_hl()
+  vim.api.nvim_set_hl(0, "CanvasDiffHunkDel", {
+    link = "CanvasDiffGhost",
+    default = true,
+  })
 end
 
 --- Channelwise linear interpolation between two 24-bit RGB colours.
@@ -418,18 +483,34 @@ end
 --- so a trailing `●` keeps meaning exactly one thing in every window. It also has
 --- to be this order for R.marker_spans to work unchanged -- the spans walk in from
 --- the END of the line in the reverse of append order.
+--- The shape of the change a folded section is hiding: "(2 hunks, +3 −5)", or
+--- what it is instead when counts would lie.
+---
+--- Read by the canvas placeholder AND by the sidebar's folded file row, because
+--- a folded file is one row in both windows and has to read as the same row in
+--- both. Two copies of this phrasing would drift, and the drift would be
+--- invisible until someone had the tree and the canvas open side by side.
+---
+--- "(+0 −0)" on a binary file would read as "nothing changed", which is the
+--- opposite of the truth -- it changed, we just won't show how. A rename-only
+--- section says so for the same reason: its counts are zero and its identity is
+--- the whole story.
+function R.summary(section)
+  if section.rename_only then
+    return "(renamed)"
+  end
+  if section.binary then
+    return "(binary)"
+  end
+  return ("(%d hunks, +%d " .. GLYPHS.minus .. "%d)")
+    :format(section.nhunks or 0, section.adds or 0, section.dels or 0)
+end
+
 function R.placeholder(section, stale)
   local mark = (stale and GLYPHS.stale or "")
   local marks = stage_suffix(section) .. mark
-  if section.rename_only then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (renamed)" .. marks
-  end
-  if section.binary then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (binary)" .. marks
-  end
   return GLYPHS.folded .. " " .. R.section_path(section)
-    .. ("  (%d hunks, +%d " .. GLYPHS.minus .. "%d)"):format(section.nhunks, section.adds, section.dels)
-    .. marks
+    .. "  " .. R.summary(section) .. marks
 end
 
 --- `virt_lines` chunk spec for an entry's deleted lines, or nil when it has none.

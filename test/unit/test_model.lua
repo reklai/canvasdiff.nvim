@@ -267,6 +267,121 @@ return {
     })
     H.eq({ ss[1].path, ss[2].path }, { "a.txt", "z.txt" })
   end,
+  ["model: sections publish per-hunk metadata"] = function()
+    local old = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n"
+    local new = "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nnine\nten\nELEVEN\n"
+    local s = model.build_section("a.lua", old, new, "M", 3)
+    H.eq(#s.hunks, s.nhunks, "one metadata row per hunk")
+    H.eq(s.hunks[1], {
+      header = "@@ -1,6 +1,6 @@",
+      new_lo = 3, new_hi = 3,
+      adds = 1, dels = 1,
+      label = "THREE",
+      pure_del = false,
+    })
+    -- Counts belong to ONE hunk each: bookkeeping shared across groups would
+    -- report adds = 2 and dels = 1 for this trailing append.
+    H.eq(s.hunks[2], {
+      header = "@@ -8,3 +8,4 @@",
+      new_lo = 11, new_hi = 11,
+      adds = 1, dels = 0,
+      label = "ELEVEN",
+      pure_del = false,
+    })
+    local headers, rows = {}, {}
+    for _, h in ipairs(s.hunks) do headers[#headers + 1] = h.header end
+    for _, e in ipairs(s.entries) do
+      if e.kind == "hunk_hdr" then rows[#rows + 1] = e.content end
+    end
+    H.eq(headers, rows, "hunk `gi` metadata and the `gi`th header row agree, in order")
+  end,
+  ["model: a pure-deletion hunk labels its removed line"] = function()
+    local old = "one\ntwo\nGONE\nthree\nfour\nfive\nsix\nseven\n"
+    local new = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"
+    local s = model.build_section("a.lua", old, new, "M", 1)
+    H.eq(#s.hunks, s.nhunks)
+    -- The removed line is a ghost, not a row, so the label has to be captured
+    -- before the deletion leaves the entry stream. `seam` is the new-side line
+    -- the cut sits after, and it is here rather than on new_lo/new_hi because
+    -- this hunk writes no new-side line to range over.
+    H.eq(s.hunks[1], {
+      header = "@@ -2,3 +2,2 @@",
+      new_lo = nil, new_hi = nil,
+      seam = 2,
+      adds = 0, dels = 1,
+      label = "GONE",
+      pure_del = true,
+    })
+  end,
+  ["model: a pure-deletion hunk seams even with no context row to carry it"] = function()
+    -- context = 0 leaves this hunk NO row but its header, whose new_lnum is
+    -- nil, so the seam is the only record of where the cut is. It names the
+    -- same two lines the ghost carrier would have named at any wider context.
+    local old = "one\ntwo\nGONE\nthree\nfour\n"
+    local new = "one\ntwo\nthree\nfour\n"
+    local zero = model.build_section("a.lua", old, new, "M", 0)
+    H.eq(zero.hunks[1].seam, 2)
+    H.eq(zero.hunks[1].header, "@@ -3,1 +2,0 @@")
+    local rows = {}
+    for _, e in ipairs(zero.entries) do rows[#rows + 1] = e.kind end
+    H.eq(rows, { "file_hdr", "hunk_hdr" },
+      "sanity: not one row of this hunk's own survives at context 0")
+    H.eq(model.build_section("a.lua", old, new, "M", 3).hunks[1].seam, 2,
+      "and a wider context does not move it")
+
+    -- A wholly deleted file has no new side to seam INTO: its deletions are
+    -- real rows, and its hunk is not distinguishable from the file.
+    H.eq(model.build_section("a.lua", old, "", "D").hunks[1].seam, nil)
+  end,
+  ["model: a file's counts are exactly the sum of its hunks'"] = function()
+    -- A file row shows `+2 −2` and its hunk rows show the parts, so the two
+    -- have to agree wherever both are on screen. They are separate counters
+    -- incremented on adjacent lines, which is precisely why nothing else
+    -- would notice one of them being moved.
+    local old_lines = {}
+    for i = 1, 20 do old_lines[i] = "line " .. i end
+    local new_lines = vim.deepcopy(old_lines)
+    new_lines[2] = "line 2 CHANGED"
+    table.remove(new_lines, 10)          -- a hunk that only deletes
+    table.insert(new_lines, 17, "EXTRA") -- and one that only adds
+    local s = model.build_section("a.lua",
+      table.concat(old_lines, "\n") .. "\n",
+      table.concat(new_lines, "\n") .. "\n", "M", 1)
+
+    H.eq(#s.hunks, 3, "sanity: three separated hunks, one of each shape")
+    local adds, dels = 0, 0
+    for _, h in ipairs(s.hunks) do
+      adds, dels = adds + h.adds, dels + h.dels
+    end
+    H.eq({ adds, dels }, { s.adds, s.dels },
+      "the file's counts are the sum of its hunks'")
+    H.eq({ s.adds, s.dels }, { 2, 2 }, "and both are actually counting")
+  end,
+  ["model: a merged hunk spans every line it writes"] = function()
+    local letters = {}
+    for i = 1, 20 do letters[i] = string.char(96 + i) end
+    local old_lines, new_lines = {}, {}
+    for i = 1, 20 do old_lines[i] = letters[i]; new_lines[i] = letters[i] end
+    new_lines[5] = "E"
+    new_lines[12] = "L"
+    local s = model.build_section("f.txt",
+      table.concat(old_lines, "\n") .. "\n", table.concat(new_lines, "\n") .. "\n", "M")
+    H.eq(s.nhunks, 1)
+    H.eq(#s.hunks, 1)
+    H.eq({ s.hunks[1].new_lo, s.hunks[1].new_hi }, { 5, 12 },
+      "two changes merged into one hunk span from the first written line to the last")
+    H.eq({ s.hunks[1].adds, s.hunks[1].dels }, { 2, 2 })
+    H.eq(s.hunks[1].label, "E", "the label is the FIRST changed line, not the last")
+  end,
+  ["model: sections without a diff still publish a hunk list"] = function()
+    local bin = model.build_section("a.zip", "a\0b\n", "c\0d\n", "M")
+    H.eq(bin.binary, true)
+    H.eq(bin.hunks, {}, "consumers iterate section.hunks without a nil check")
+    local ren = model.build_section("after.txt", "same\n", "same\n", "R", 3,
+      { old_path = "before.txt" })
+    H.eq(ren.rename_only, true)
+    H.eq(ren.hunks, {})
+  end,
   ["render: line text and highlights"] = function()
     local s = model.build_section("f.txt", "a\nb\n", "a\nB\n", "M")
     local lines = render.section_lines(s)

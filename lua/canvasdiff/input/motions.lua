@@ -76,13 +76,16 @@ function M.cycle(state, win, dir, count)
   return target
 end
 
---- Jump `count` stops forward/backward from the cursor row, clamping at the list
---- ends. No-op when there are no stops at all.
+--- Every row a hunk motion stops on, ascending, 0-based. One home for the stop
+--- list, shared by `]h`/`[h` and by Ctrl+N/Ctrl+P -- the two differ in what they
+--- do at the ends, not in where they may land.
 ---
 --- A stop is a hunk header -- except in a FOLDED file, which contributes exactly
 --- one: its placeholder row. So `]h` walks into a folded file rather than over it,
 --- and you press Tab there to unfold and keep going. That is what a closed fold
 --- means in Vim too: one line that motions land on.
+---
+--- A file header is never a stop: it is where hunks live, not a destination.
 ---
 --- The folded case cannot use the section's entries, and that part is arithmetic
 --- rather than policy: a folded section renders as one row but still carries every
@@ -100,13 +103,7 @@ end
 --- resync makes this compute rows past the end of the buffer and throw out of the
 --- keymap. Deliberately NOT clamped: a divergence like that is a bug worth a
 --- traceback, and clamping would turn it into `]h` quietly landing somewhere wrong.
-function M.goto_hunk(state, dir, count, win)
-  win = win or state.win
-  count = count or vim.v.count1
-  if not canvas_showing(state, win) then
-    return
-  end
-
+function M.hunk_stops(state)
   local rows = {}
   for i, section in ipairs(state.sections) do
     local start0 = (canvas.section_rows(state, i))
@@ -120,10 +117,75 @@ function M.goto_hunk(state, dir, count, win)
       end
     end
   end
+  table.sort(rows)
+  return rows
+end
+
+--- Scroll `count` hunk stops, wrapping at both ends -- Ctrl+N / Ctrl+P's
+--- mechanics at `]h`'s granularity, on the view rather than the cursor.
+---
+--- Where `]h` clamps, this wraps. That asymmetry is the point: clamping is what
+--- makes "I have seen every hunk" detectable, so the sweep keeps its finish line
+--- while this is the free-scrolling walk over the same stops.
+---
+--- The wrap is M.step's arithmetic in the stop index space. M.step itself indexes
+--- SECTIONS, and there is no honest way to hand it a stop list without inventing a
+--- second state to carry it.
+---
+--- @return integer|nil the 0-based row it scrolled to
+function M.cycle_hunk(state, win, dir, count)
+  win = win or state.win
+  if not canvas_showing(state, win) then
+    return
+  end
+  local stops = M.hunk_stops(state)
+  if #stops == 0 then
+    return
+  end
+
+  local top0 = vim.api.nvim_win_call(win, function()
+    return vim.fn.line("w0") - 1
+  end)
+  -- Where we are: the last stop at or before the topline.
+  local at = 0
+  for i, row in ipairs(stops) do
+    if row <= top0 then
+      at = i
+    else
+      break
+    end
+  end
+  -- A topline above every stop -- the rows before a file's first hunk header --
+  -- is the one position the section cycle never sees, because locate() puts every
+  -- row in a section while those rows belong to no stop. Forward it is "one before
+  -- the first", so `at = 0` lands on stops[1]; backward it has to behave like
+  -- BEING on the first, or the wrap would skip the last stop and hand back the
+  -- one before it.
+  if at == 0 and dir < 0 then
+    at = 1
+  end
+
+  count = math.max(1, count or vim.v.count1)
+  local row0 = stops[((at - 1 + dir * count) % #stops) + 1]
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = row0 + 1, lnum = row0 + 1 })
+  end)
+  return row0
+end
+
+--- Jump `count` stops forward/backward from the cursor row, clamping at the list
+--- ends. No-op when there are no stops at all. The stops are M.hunk_stops's.
+function M.goto_hunk(state, dir, count, win)
+  win = win or state.win
+  count = count or vim.v.count1
+  if not canvas_showing(state, win) then
+    return
+  end
+
+  local rows = M.hunk_stops(state)
   if #rows == 0 then
     return
   end
-  table.sort(rows)
 
   local cursor_row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
   -- `anchor_idx` is the index of the nearest qualifying row (first row

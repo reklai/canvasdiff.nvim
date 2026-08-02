@@ -1,5 +1,8 @@
 local H = require("helpers")
+local canvas = require("canvasdiff.canvas")
+local lens = require("canvasdiff.diff").lens
 local source = require("canvasdiff.source")
+local repository = require("canvasdiff.source.repository")
 local system = require("canvasdiff.os")
 
 local function sh(root, cmd)
@@ -30,6 +33,11 @@ local function with_git_fixture(spec, run)
   assert(ok, err)
 end
 
+local function index_mode(root, rel)
+  return sh(root, { "git", "--literal-pathspecs", "ls-files", "--stage", "--", rel })
+    :match("^(%d+)")
+end
+
 local function mutation_state(root)
   return {
     head = vim.trim(sh(root, { "git", "symbolic-ref", "HEAD" })),
@@ -39,6 +47,78 @@ local function mutation_state(root)
     a = read(root, "a.txt"),
     saved = read(root, "saved.txt"),
   }
+end
+
+--- Run `fn` against a live canvas opened in a throwaway tab on `cwd`,
+--- capturing notifications. The cached root facade is dropped so each test
+--- gets a fresh default App, with every ambient controller disabled.
+---
+--- `opts` overrides individual setup options -- `context` is the one a staging
+--- test has reason to move, since the number of context rows decides whether a
+--- deletion-only hunk has any row of its own.
+local function in_canvas(cwd, fn, opts)
+  local old_cwd = vim.fn.getcwd()
+  local real = vim.notify
+  local msgs = {}
+  vim.notify = function(msg, level) msgs[#msgs + 1] = { msg = msg, level = level } end
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(cwd)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  fm.setup(vim.tbl_deep_extend("force", {
+    watch = { enabled = false }, sidebar = { enabled = false },
+    scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+    highlight = { enabled = false }, virt = { enabled = false },
+    session = { enabled = false },
+  }, opts or {}))
+  local ok, err = pcall(fn, fm, msgs)
+  pcall(fm.close)
+  vim.notify = real
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_dir(old_cwd)
+  -- The config module is a process-wide singleton the tabs above cannot
+  -- scope; later test files inherit whatever options this one leaves.
+  require("canvasdiff.config").setup({})
+  assert(ok, err)
+end
+
+--- 1-based canvas row of the first entry in section `i` showing `content`.
+--- Entries are 1:1 with rendered rows, offset by the section's start anchor.
+local function content_row(st, i, content)
+  local start0 = canvas.section_rows(st, i)
+  for offset, entry in ipairs(st.sections[i].entries) do
+    if entry.content == content then
+      return start0 + offset
+    end
+  end
+  error(("no canvas row shows %q"):format(content))
+end
+
+local function press(st, row, key)
+  vim.api.nvim_set_current_win(st.win)
+  vim.api.nvim_win_set_cursor(st.win, { row, 0 })
+  vim.api.nvim_feedkeys(vim.keycode(key), "x", false)
+end
+
+local function found_notification(msgs, from, copy)
+  for i = from, #msgs do
+    if msgs[i].msg:find(copy, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+-- Changed at lines 2 and 10 with context 3: two displayed hunks, far enough
+-- apart that not even adjacent context windows can merge them (group_hunks
+-- joins windows that merely touch).
+local TWELVE = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n"
+local TWELVE_EDITED = TWELVE:gsub("two", "TWO"):gsub("ten", "TEN")
+
+local function numbered(n)
+  local lines = {}
+  for i = 1, n do lines[i] = "line " .. i end
+  return table.concat(lines, "\n") .. "\n"
 end
 
 return {
@@ -63,6 +143,7 @@ return {
       "root",
       "section_stream",
       "sections",
+      "set_index_blob",
       "show",
       "show_head",
       "stage",
@@ -1009,6 +1090,529 @@ return {
     system.run = real_run
     vim.fn.delete(root, "rf")
     assert(ok, err)
+  end,
+  ["git: index blob round-trips byte-exact through set_index_blob"] = function()
+    with_git_fixture({
+      committed = { ["a.txt"] = "one\ntwo\nthree\n" },
+      worktree = { ["a.txt"] = "ONE\nTWO\nthree\n" },
+    }, function(root)
+      H.eq(repository.show(root, ":0", "a.txt"), "one\ntwo\nthree\n")
+      H.eq(repository.show_head(root, "a.txt"), "one\ntwo\nthree\n")
+
+      H.eq(repository.set_index_blob(root, "a.txt", "one\nTWO\nthree\n"), true)
+      H.eq(repository.show(root, ":0", "a.txt"), "one\nTWO\nthree\n")
+      H.eq(repository.show_head(root, "a.txt"), "one\ntwo\nthree\n",
+        "writing the index cannot move HEAD")
+      H.eq(read(root, "a.txt"), "ONE\nTWO\nthree\n",
+        "the worktree keeps the edits that were not written to the index")
+      local partial = assert(repository.changed_files(root)[1])
+      H.eq(partial.path, "a.txt")
+      assert(partial.staged and partial.unstaged, vim.inspect(partial))
+
+      H.eq(repository.set_index_blob(root, "a.txt", "ONE\nTWO\nthree\n"), true)
+      local whole = assert(repository.changed_files(root)[1])
+      assert(whole.staged, vim.inspect(whole))
+      H.eq(whole.unstaged, nil)
+    end)
+  end,
+  ["git: blob plumbing carries CRLF bytes through unconverted"] = function()
+    with_git_fixture({
+      committed = { ["dos.txt"] = "alpha\r\nbeta\r\ngamma\r\n" },
+      worktree = { ["dos.txt"] = "alpha\r\nBETA\r\ngamma\r\n" },
+    }, function(root)
+      H.eq(repository.show_head(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+      H.eq(repository.show(root, ":0", "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+
+      H.eq(repository.set_index_blob(root, "dos.txt", "alpha\r\nBETA\r\ngamma\r\n"), true)
+      H.eq(repository.show(root, ":0", "dos.txt"), "alpha\r\nBETA\r\ngamma\r\n")
+      local file = assert(repository.changed_files(root)[1])
+      H.eq(file.staged, "M")
+      H.eq(file.unstaged, nil,
+        "git sees no worktree drift, so not one CR was rewritten on the way in")
+    end)
+  end,
+  ["git: set_index_blob keeps the indexed mode and defaults an unindexed path"] = function()
+    local magic = ":(glob)*.txt"
+    with_git_fixture({
+      committed = {
+        ["run.sh"] = "#!/bin/sh\necho old\n",
+        ["0victim.txt"] = "victim\n",
+        [magic] = "magic\n",
+      },
+    }, function(root)
+      sh(root, { "git", "update-index", "--chmod=+x", "--", "run.sh" })
+      sh(root, { "git", "--literal-pathspecs", "update-index", "--chmod=+x",
+        "--", magic })
+
+      H.eq(repository.set_index_blob(root, "run.sh", "#!/bin/sh\necho new\n"), true)
+      H.eq(index_mode(root, "run.sh"), "100755")
+      H.eq(repository.show(root, ":0", "run.sh"), "#!/bin/sh\necho new\n")
+
+      H.eq(repository.set_index_blob(root, magic, "magic staged\n"), true)
+      H.eq(index_mode(root, magic), "100755",
+        "a magic-looking name must not read another entry's mode")
+      H.eq(repository.show(root, ":0", magic), "magic staged\n")
+      H.eq(repository.show(root, ":0", "0victim.txt"), "victim\n",
+        "magic-looking user data must not expand to another index entry")
+
+      H.eq(repository.set_index_blob(root, "added.txt", "added\n"), true)
+      H.eq(index_mode(root, "added.txt"), "100644")
+      H.eq(repository.show(root, ":0", "added.txt"), "added\n")
+    end)
+  end,
+  ["git: blob plumbing reports failures instead of claiming success"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "one\n", ["empty.txt"] = "" },
+      worktree = { ["a.txt"] = "two\n", ["untracked.txt"] = "u\n" },
+    })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      local staged, staged_err = repository.show(root, ":0", "untracked.txt")
+      H.eq(staged, nil)
+      assert(type(staged_err) == "string" and staged_err:find("failed", 1, true),
+        tostring(staged_err))
+      local committed, committed_err = repository.show_head(root, "untracked.txt")
+      H.eq(committed, nil)
+      assert(type(committed_err) == "string" and committed_err:find("failed", 1, true),
+        tostring(committed_err))
+
+      local blank, blank_err = repository.show(root, ":0", "empty.txt")
+      H.eq(blank, "", "a staged empty file is content, not an absent path")
+      H.eq(blank_err, nil)
+      H.eq(repository.show_head(root, "empty.txt"), "")
+
+      local before = repository.show(root, ":0", "a.txt")
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "hash-object") then
+          return { code = 128, stdout = "", stderr = "injected hash-object failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local hashed, hash_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(hashed, nil)
+      assert(hash_err and hash_err:find("injected hash-object failure", 1, true),
+        tostring(hash_err))
+
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "update-index") then
+          return { code = 128, stdout = "", stderr = "injected update-index failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local updated, update_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(updated, nil)
+      assert(update_err and update_err:find("injected update-index failure", 1, true),
+        tostring(update_err))
+
+      -- `--cacheinfo` splits on the first two commas only, so an object id
+      -- carrying a third field renames the entry the write lands on.
+      local oid = vim.trim(sh(root, { "git", "rev-parse", "HEAD:a.txt" }))
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "hash-object") then
+          return { code = 0, stdout = oid .. ",100755,evil.txt\n", stderr = "" }
+        end
+        return real_run(cmd, opts)
+      end
+      local forged, forged_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(forged, nil)
+      assert(forged_err and forged_err:find("object id", 1, true),
+        tostring(forged_err))
+
+      system.run = real_run
+      H.eq(repository.show(root, ":0", "a.txt"), before,
+        "a failed index write leaves the staged blob byte-exact")
+      H.eq(sh(root, { "git", "ls-files" }), "a.txt\nempty.txt\n",
+        "no failed write may add an index entry under another name")
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: s inside a hunk stages only that hunk"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      H.eq(st.sections[1].nhunks, 2, "sanity: two separate displayed hunks")
+      press(st, content_row(st, 1, "TWO"), "s")
+      H.eq(repository.show(root, ":0", "a.txt"), (TWELVE:gsub("two", "TWO")),
+        "the hunk under the cursor moved into the index, the other did not")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged ~= nil, true, "index moved")
+      H.eq(f.unstaged ~= nil, true, "the second hunk stays unstaged")
+      H.eq(read(root, "a.txt"), TWELVE_EDITED, "the worktree is never touched")
+      H.eq(st.lens.id, "unstaged",
+        "a hunk verb keeps the lens; only the whole-file verb pivots")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s stages every raw change one displayed hunk hulls"] = function()
+    -- Two lines inserted after line 5 and a rewrite of line 8: context merges
+    -- them into ONE displayed hunk whose hull spans unchanged lines, while
+    -- the raw pair diff still reports them as separate hunks. Line 17's
+    -- rewrite is the control that must stay unstaged.
+    local base = numbered(20)
+    local edited = base
+      :gsub("line 5\n", "line 5\nINSERT A\nINSERT B\n")
+      :gsub("line 8\n", "line 8 CHANGED\n")
+      :gsub("line 17\n", "line 17 CHANGED\n")
+    local expected = base
+      :gsub("line 5\n", "line 5\nINSERT A\nINSERT B\n")
+      :gsub("line 8\n", "line 8 CHANGED\n")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = edited },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      H.eq(st.sections[1].nhunks, 2,
+        "sanity: the three raw changes render as exactly two displayed hunks")
+      press(st, content_row(st, 1, "INSERT A"), "s")
+      H.eq(repository.show(root, ":0", "a.txt"), expected,
+        "every raw hunk under the hull is staged; the control line is not")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s on an already-staged hunk declines and changes nothing"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    in_canvas(root, function(fm, msgs)
+      -- The all lens keeps showing a staged hunk (HEAD -> worktree does not
+      -- move when the index does), so the second press lands on live rows.
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      local row = content_row(st, 1, "TWO")
+      press(st, row, "s")
+      local snapshot = repository.show(root, ":0", "a.txt")
+      H.eq(snapshot, (TWELVE:gsub("two", "TWO")), "sanity: the first press staged")
+
+      local before = #msgs
+      press(st, row, "s")
+      H.eq(repository.show(root, ":0", "a.txt"), snapshot,
+        "a declined press leaves the index blob byte-identical")
+      assert(found_notification(msgs, before + 1, "hunk already staged"),
+        vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u inside a staged hunk unstages only it"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      H.eq(st.sections[1].nhunks, 2, "sanity: two separate displayed hunks")
+      press(st, content_row(st, 1, "TEN"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), (TWELVE:gsub("two", "TWO")),
+        "TEN reverted to ten in the index; TWO kept")
+      H.eq(read(root, "a.txt"), TWELVE_EDITED, "unstage never writes the worktree")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u reverts every raw change one staged hunk covers"] = function()
+    -- The insertion makes the pair asymmetric: HEAD and index disagree on
+    -- line numbers below it, so a reversal or ordering mistake in the
+    -- index-ward splice produces the wrong bytes rather than passing by
+    -- coincidence. Line 17 is the staged control that must survive.
+    local base = numbered(20)
+    local staged = base
+      :gsub("line 5\n", "line 5\nINSERT A\nINSERT B\n")
+      :gsub("line 8\n", "line 8 CHANGED\n")
+      :gsub("line 17\n", "line 17 CHANGED\n")
+    local expected = base:gsub("line 17\n", "line 17 CHANGED\n")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = staged },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      H.eq(st.sections[1].nhunks, 2,
+        "sanity: the three raw changes render as exactly two displayed hunks")
+      press(st, content_row(st, 1, "INSERT A"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), expected,
+        "both covered raw hunks reverted; the far staged change kept")
+      H.eq(read(root, "a.txt"), staged, "unstage never writes the worktree")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s on a pure-deletion hunk stages the cut through its seam"] = function()
+    local base = numbered(20)
+    local edited = base
+      :gsub("line 5\n", "")
+      :gsub("line 15\n", "line 15 CHANGED\n")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = edited },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      H.eq(st.sections[1].nhunks, 2, "sanity: two separate displayed hunks")
+      -- A deletion-only hunk renders as context rows with the cut riding
+      -- them as a ghost, so the press lands on one of those context rows.
+      press(st, content_row(st, 1, "line 6"), "s")
+      H.eq(repository.show(root, ":0", "a.txt"), (base:gsub("line 5\n", "")),
+        "the cut is staged; the far rewrite is not")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged ~= nil, true)
+      H.eq(f.unstaged ~= nil, true, "line 15's rewrite stays unstaged")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s stages only the hunk of a context = 0 pure deletion"] = function()
+    -- With no context at all a deletion-only group publishes NO row of its
+    -- own: its ghosts hang on the hunk header, whose new_lnum is nil, so not
+    -- one entry can carry the cut's position. The seam recorded on the hunk is
+    -- the only thing left naming it, and without that the press escalates to
+    -- the whole file -- staging the far rewrite the user never pointed at.
+    local base = numbered(20)
+    local edited = base
+      :gsub("line 5\n", "")
+      :gsub("line 15\n", "line 15 CHANGED\n")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = edited },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      H.eq(st.sections[1].nhunks, 2, "sanity: two displayed hunks at context 0")
+      local row0 = assert(canvas.context.hunk_row(st, 1, 1))
+      H.eq(canvas.context.resolve(st, row0),
+        { scope = "hunk", section = 1, hunk = 1 },
+        "sanity: the header row is the only row this hunk has, and it is hunk scope")
+      press(st, row0 + 1, "s")
+      H.eq(repository.show(root, ":0", "a.txt"), (base:gsub("line 5\n", "")),
+        "the cut is staged; the far rewrite is not")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged ~= nil, true)
+      H.eq(f.unstaged ~= nil, true, "line 15's rewrite stays unstaged")
+    end, { context = 0 })
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: a hunk with no new side says it is taking the whole file"] = function()
+    -- A wholly deleted file has no new side for a span to name, so the hunk
+    -- and the file are the same thing and the file verb runs. The escalation
+    -- is announced: otherwise the only tell is which success message arrives.
+    local root = H.git_fixture({
+      committed = { ["gone.txt"] = TWELVE },
+      worktree = { ["gone.txt"] = false },
+    })
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "two"), "s")
+      assert(found_notification(msgs, before + 1, "taking the whole file instead"),
+        vim.inspect(msgs))
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, "D", "and the escalation really did stage the deletion")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s on an untracked executable records the worktree's mode"] = function()
+    -- The index entry `s` writes has to be the one `S` would have written:
+    -- git never indexed this path, so the mode cannot come from the index and
+    -- the worktree is the only thing that knows the file is executable.
+    local root = H.git_fixture({
+      worktree = { ["hook.sh"] = "#!/bin/sh\nalpha\nbeta\n" },
+    })
+    H.eq(vim.trim(sh(root, { "git", "config", "core.fileMode" })), "true",
+      "sanity: this filesystem records the exec bit, so git reads it")
+    assert(vim.uv.fs_chmod(vim.fs.joinpath(root, "hook.sh"), tonumber("755", 8)))
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      press(st, content_row(st, 1, "beta"), "s")
+      H.eq(index_mode(root, "hook.sh"), "100755",
+        "s writes the same index entry S's `git add` would have")
+      H.eq(repository.show(root, ":0", "hook.sh"), "#!/bin/sh\nalpha\nbeta\n")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s inside an untracked file's hunk splices against an empty base"] = function()
+    local root = H.git_fixture({
+      worktree = { ["fresh.txt"] = "alpha\nbeta\ngamma\n" },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      press(st, content_row(st, 1, "beta"), "s")
+      H.eq(repository.show(root, ":0", "fresh.txt"), "alpha\nbeta\ngamma\n",
+        "a path git never indexed splices its first hunk against an empty base")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, "A")
+      H.eq(f.unstaged, nil)
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s on the file header still stages the whole file"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      press(st, canvas.section_rows(st, 1) + 1, "s")
+      H.eq(repository.show(root, ":0", "a.txt"), TWELVE_EDITED)
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged ~= nil, true)
+      H.eq(f.unstaged, nil, "both hunks staged from one header press")
+      H.eq(st.lens.id, "staged", "the file verb keeps its lens pivot")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: S and U act on the whole file from inside a hunk"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      press(st, content_row(st, 1, "TWO"), "S")
+      H.eq(repository.show(root, ":0", "a.txt"), TWELVE_EDITED,
+        "S mid-hunk stages the whole file, not the hunk")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.unstaged, nil)
+      H.eq(st.lens.id, "staged")
+
+      press(st, content_row(st, 1, "TEN"), "U")
+      H.eq(repository.show(root, ":0", "a.txt"), TWELVE,
+        "U mid-hunk resets the whole file's index entry to HEAD")
+      f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, nil)
+      H.eq(f.unstaged ~= nil, true)
+      H.eq(st.lens.id, "unstaged")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: hunk staging declines a renamed file toward the whole-file verb"] = function()
+    local root = H.git_fixture({ committed = { ["old.txt"] = TWELVE } })
+    sh(root, { "git", "mv", "old.txt", "new.txt" })
+    write(root, "new.txt", (TWELVE:gsub("two", "TWO")))
+    in_canvas(root, function(fm, msgs)
+      -- Only the all lens shows the staged rename identity with its later
+      -- edit as hunk rows on one section.
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "TWO"), "s")
+      assert(found_notification(msgs, before + 1,
+          "hunk staging needs a text file — S stages the whole file"),
+        vim.inspect(msgs))
+      H.eq(repository.show(root, ":0", "new.txt"), TWELVE,
+        "the declined press leaves the staged rename's blob untouched")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u declines on a mixed file outside the staged lens"] = function()
+    -- Staged edits at HEAD lines 20 and 30, then ten unstaged lines
+    -- inserted at the top: in the all lens the staged hunks display at
+    -- WORKTREE rows 30 and 40, so a raw line-number overlap against the
+    -- HEAD->index pair (index rows 20 and 30) would take the OTHER staged
+    -- hunk. The press must decline, never translate or guess.
+    local base = numbered(40)
+    local staged = base
+      :gsub("line 20\n", "line 20 CHANGED\n")
+      :gsub("line 30\n", "line 30 CHANGED\n")
+    local inserted = {}
+    for i = 1, 10 do inserted[i] = "new " .. i end
+    local mixed = table.concat(inserted, "\n") .. "\n" .. staged
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = staged },
+    })
+    sh(root, { "git", "add", "-A" })
+    write(root, "a.txt", mixed)
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "line 20 CHANGED"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), staged,
+        "the declined press leaves the index blob byte-identical")
+      assert(found_notification(msgs, before + 1,
+          "this file is staged and modified — unstage its hunks from the staged lens"),
+        vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s declines in the staged lens on a mixed file"] = function()
+    local half = TWELVE:gsub("two", "TWO")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = half },
+    })
+    sh(root, { "git", "add", "-A" })
+    write(root, "a.txt", TWELVE_EDITED)
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "TWO"), "s")
+      H.eq(repository.show(root, ":0", "a.txt"), half,
+        "the declined press leaves the index blob byte-identical")
+      -- Both other lenses really are offered: the guard fires on the index
+      -- being the displayed b side, which only the staged lens makes it.
+      assert(found_notification(msgs, before + 1,
+          "this file is staged and modified — stage its hunks from the unstaged or all lens"),
+        vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u in the all lens still works on a staged-only file"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      press(st, content_row(st, 1, "TEN"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), (TWELVE:gsub("two", "TWO")),
+        "index and worktree coincide, so the all-lens span names the right hunk")
+      H.eq(read(root, "a.txt"), TWELVE_EDITED, "unstage never writes the worktree")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u on a staged addition's hunk drops the index entry"] = function()
+    local root = H.git_fixture({
+      worktree = { ["fresh.txt"] = "alpha\nbeta\n" },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      press(st, content_row(st, 1, "beta"), "u")
+      H.eq(sh(root, { "git", "ls-files", "--", "fresh.txt" }), "",
+        "no empty blob stays staged where git reset -p would drop the entry")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.path, "fresh.txt")
+      H.eq(f.status, "?")
+      H.eq(f.staged, nil)
+      H.eq(f.unstaged, "?")
+      H.eq(read(root, "fresh.txt"), "alpha\nbeta\n", "worktree bytes intact")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u restores the HEAD entry of a stale staged deletion"] = function()
+    -- The staged == "D" empty index side is reachable only through
+    -- staleness: the canvas still shows hunk rows from before the entry
+    -- vanished, and press-time truth governs what the press does.
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = (TWELVE:gsub("one\n", "ONE\n", 1)) },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      local row = content_row(st, 1, "ONE")
+      sh(root, { "git", "rm", "--cached", "--", "a.txt" })
+      press(st, row, "u")
+      H.eq(repository.show(root, ":0", "a.txt"), TWELVE,
+        "the staged deletion overlapping the span is undone entry and all")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, nil)
+      H.eq(f.unstaged, "M")
+    end)
+    vim.fn.delete(root, "rf")
   end,
   ["source: modified loaded buffers are detected by exact target identity"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })

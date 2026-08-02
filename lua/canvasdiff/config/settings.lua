@@ -24,6 +24,15 @@ local DEFAULT_GLYPHS = {
   unstaged = "○",
   -- Appended to a row, so the leading space is part of the configured value.
   stale = " ●",
+  -- Separates the pinned header's file identity from the hunk breadcrumb after
+  -- it. Both spaces are part of the configured value: the file part must stay a
+  -- byte-for-byte mirror of the header row it covers, so the separator owns
+  -- every character between them.
+  crumb = " → ",
+  -- And inside the crumb, between the hunk's label and its ordinal. A second
+  -- slot rather than part of `crumb`: they sit on either side of the `@@`
+  -- marker, so one value could not produce both.
+  crumb_sep = " · ",
   -- minimap
   scroll_file = "‒",
   scroll_bar = "❘",
@@ -48,6 +57,7 @@ M.ASCII_GLYPHS = {
   ctx = " ", del = "-", add = "+",
   file = "|", folded = ">", open = "v", minus = "-", gutter = "|",
   staged = "*", unstaged = "o", stale = " !",
+  crumb = " -> ", crumb_sep = " | ",
   scroll_file = "-", scroll_bar = "|",
 }
 
@@ -103,6 +113,11 @@ M.defaults = {
       prev_hunk  = "[h",
       cycle_next = "<C-n>",
       cycle_prev = "<C-p>",
+      -- The file-at-a-time scrolling the two keys above used to do. Unbound:
+      -- `{}` means disabled, so no map installs until a user asks for one --
+      -- `cycle_file_next = "<C-n>"` puts the old behaviour back on the old key.
+      cycle_file_next = {},
+      cycle_file_prev = {},
       -- Re-collects and splices in what changed, so the same TEXT stays under your
       -- cursor. Inert to take: `ra` is replace-char, which nomodifiable makes E21.
       --
@@ -115,9 +130,18 @@ M.defaults = {
       refresh    = "r",
       -- Two explicit verbs, not a cycle: `s` only ever stages and `u` only
       -- ever unstages, so a keypress on a mixed file never picks a direction
-      -- for you. A verb with nothing to do says so instead of acting.
+      -- for you. A verb with nothing to do says so instead of acting. The
+      -- cursor decides scope: on a hunk's own rows the verb takes that hunk,
+      -- anywhere else in the file it takes the file.
       stage      = "s",
       unstage    = "u",
+      -- The whole-file verbs from anywhere inside the file: the capitals of
+      -- the hunk keys above. Free to take for the same reason `c` was: `S`
+      -- (substitute line) and `U` (undo line) belong to the editing family,
+      -- and this nofile + nomodifiable buffer refuses all of it with E21, so
+      -- neither key does anything here today.
+      stage_file   = "S",
+      unstage_file = "U",
       -- Tab forward through the lenses, Shift+Tab back. One physical key for the
       -- whole "what am I looking at" axis, and a slip between the two lands on the
       -- other direction of the same action rather than on something unrelated.

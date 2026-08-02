@@ -31,7 +31,7 @@ T["input_ facade exports exactly the supported key and motion operations"] = fun
 
   local motion_names = vim.tbl_keys(input.motions)
   table.sort(motion_names)
-  H.eq(motion_names, { "cycle", "goto_file", "goto_hunk" })
+  H.eq(motion_names, { "cycle", "cycle_hunk", "goto_file", "goto_hunk", "hunk_stops" })
   for _, name in ipairs(motion_names) do
     H.eq(type(input.motions[name]), "function",
       "input.motions." .. name .. " is callable")
@@ -886,6 +886,57 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   vim.g.mapleader = old_leader
   other.setup({ keymaps = { global = no_global_maps() } })
   config.setup({})
+end
+
+T["keys_stage_file capitals default to S and U on the canvas only"] = function()
+  H.eq(find(keys.resolved("canvas", defaults()), "stage_file"), { "S" })
+  H.eq(find(keys.resolved("canvas", defaults()), "unstage_file"), { "U" })
+  -- The sidebar's s/u are already file-level, so it needs no capital twins.
+  H.eq(find(keys.resolved("sidebar", defaults()), "stage_file"), {})
+  H.eq(find(keys.resolved("sidebar", defaults()), "unstage_file"), {})
+
+  local km = defaults()
+  km.canvas.stage_file = "gS"
+  km.canvas.unstage_file = false
+  H.eq(find(keys.resolved("canvas", km), "stage_file"), { "gS" })
+  H.eq(find(keys.resolved("canvas", km), "unstage_file"), {})
+end
+
+-- The one binding in this feature whose MEANING changed: Ctrl+N / Ctrl+P keep
+-- their keys and their scroll-and-wrap mechanics, but their stops are hunks
+-- now. The file axis they used to walk survives as its own pair of actions,
+-- shipped unbound so nobody silently gains a key -- one config line restores
+-- the previous behaviour on whatever key the user prefers.
+T["keys_cycle Ctrl+N describes hunk stops and file cycling ships unbound"] = function()
+  local km = defaults()
+  H.eq(find(keys.resolved("canvas", km), "cycle_next"), { "<C-n>" })
+  H.eq(find(keys.resolved("canvas", km), "cycle_prev"), { "<C-p>" })
+  H.eq(find(keys.resolved("canvas", km), "cycle_file_next"), {},
+    "the file-cycle action exists but installs no map until a user binds one")
+  H.eq(find(keys.resolved("canvas", km), "cycle_file_prev"), {})
+
+  local desc = {}
+  for _, m in ipairs(keys.resolved("canvas", km)) do desc[m.action] = m.desc end
+  for _, action in ipairs({ "cycle_next", "cycle_prev" }) do
+    assert(desc[action]:find("hunk", 1, true),
+      action .. " must describe hunk stops, got: " .. desc[action])
+    assert(desc[action]:find("folded", 1, true),
+      action .. " must say what a folded file counts as, got: " .. desc[action])
+  end
+
+  km.canvas.cycle_file_next = "<C-j>"
+  km.canvas.cycle_file_prev = "<C-k>"
+  local restored = keys.resolved("canvas", km)
+  H.eq(find(restored, "cycle_file_next"), { "<C-j>" },
+    "one config line brings the previous behaviour back")
+  H.eq(find(restored, "cycle_file_prev"), { "<C-k>" })
+  for _, m in ipairs(restored) do desc[m.action] = m.desc end
+  for _, action in ipairs({ "cycle_file_next", "cycle_file_prev" }) do
+    assert(desc[action]:find("file", 1, true),
+      action .. " must describe the file axis, got: " .. desc[action])
+  end
+  H.eq(keys.collisions("canvas", km), {},
+    "the restoring keys are the user's to choose and contest nothing by default")
 end
 
 T["keys_stage defaults to s and unstage to u on canvas and sidebar, both configurable"] = function()

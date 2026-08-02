@@ -26,8 +26,12 @@ K.specs = {
   { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (lands on folded ones too)" },
   { ctx = "canvas", action = "next_hunk",  group = "Navigate", desc = "Next hunk (a folded file counts as one)" },
   { ctx = "canvas", action = "prev_hunk",  group = "Navigate", desc = "Previous hunk (a folded file counts as one)" },
-  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next file (wraps)" },
-  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous file (wraps)" },
+  { ctx = "canvas", action = "cycle_next", group = "Navigate", desc = "Scroll to the next hunk (wraps; a folded file is one stop)" },
+  { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous hunk (wraps; a folded file is one stop)" },
+  -- The file axis the two above used to walk. Shipped unbound, so restoring
+  -- the previous behaviour is one config line on whatever key you prefer.
+  { ctx = "canvas", action = "cycle_file_next", group = "Navigate", desc = "Scroll to the next file (wraps)" },
+  { ctx = "canvas", action = "cycle_file_prev", group = "Navigate", desc = "Scroll to the previous file (wraps)" },
 
   { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (never changes its fold)" },
   { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas at the same spot" },
@@ -39,13 +43,15 @@ K.specs = {
 
   { ctx = "canvas", action = "refresh", group = "Canvas",
     desc = "Refresh the current diff" },
-  { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this file's changes" },
-  { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this file" },
+  { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this hunk — or this file on its header" },
+  { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this hunk — or this file on its header" },
+  { ctx = "canvas", action = "stage_file",   group = "Canvas", desc = "Stage this file's changes (from anywhere in it)" },
+  { ctx = "canvas", action = "unstage_file", group = "Canvas", desc = "Unstage this file (from anywhere in it)" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Back out: leave a stacked comparison, else close the canvas" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
-  { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage this file's changes" },
-  { ctx = "sidebar", action = "unstage", group = "Sidebar", desc = "Unstage this file" },
+  { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage the row you are on — this hunk, or this file" },
+  { ctx = "sidebar", action = "unstage", group = "Sidebar", desc = "Unstage the row you are on — this hunk, or this file" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
 
   { ctx = "canvas",  action = "help", group = "Canvas",  desc = "Show keybind cheatsheet" },

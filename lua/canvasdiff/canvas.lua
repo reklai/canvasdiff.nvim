@@ -5,16 +5,30 @@ local Paged = require("canvasdiff.canvas.paged")
 local Projection = require("canvasdiff.canvas.Projection")
 local Scheduler = require("canvasdiff.canvas.Scheduler")
 local config = require("canvasdiff.config")
+local context = require("canvasdiff.canvas.context")
 local format = require("canvasdiff.canvas.format")
 
 -- The canvas domain's exact public surface. Concrete storage and projection
 -- owners live below this facade; callers outside the domain never import them.
 return {
+  -- What a verb standing on a row is standing on -- the hunk or the file --
+  -- and the same question backwards, for a caller that names a hunk and needs
+  -- the row it lives on.
+  context = {
+    resolve = context.resolve,
+    hunk_row = context.hunk_row,
+  },
   format = {
+    -- The struck-label group and the hunk-naming format, exported because a
+    -- hunk is named in two windows: the sidebar's tree rows and the pinned
+    -- header's crumb. `fit` is the cut those two labels share.
+    ensure_hunk_hl = format.ensure_hunk_hl,
     ensure_marker_hl = format.ensure_marker_hl,
     escape_path = format.escape_path,
+    fit = format.fit,
     ghost_lines = format.ghost_lines,
     glyphs = config.glyphs,
+    hunk_name = format.hunk_name,
     marker_spans = format.marker_spans,
     placeholder = format.placeholder,
     section_hl = format.section_hl,
@@ -25,6 +39,9 @@ return {
     section_lines = format.section_lines,
     section_path = format.section_path,
     stage_mark = format.stage_mark,
+    -- The placeholder's summary without its path or markers, so the sidebar's
+    -- folded file row can say the same thing the canvas placeholder says.
+    summary = format.summary,
   },
   insert_section = Canvas.insert_section,
   is_canvas_buf = Canvas.is_canvas_buf,

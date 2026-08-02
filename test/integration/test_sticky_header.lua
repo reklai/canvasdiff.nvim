@@ -86,8 +86,11 @@ T["sticky_win appears once the header scrolls off, mirroring it exactly"] = func
   vim.cmd.redraw() -- headless: the winbar enters the layout only on redraw
   scroll_to(st, lease, 2) -- two rows into section 1
   H.eq(sticky.is_open(lease), true)
-  H.eq(shown_line(lease), render.section_line(st.sections[1], 1),
-    "the pinned row is the in-buffer header, byte for byte")
+  local header = render.section_line(st.sections[1], 1)
+  H.eq(shown_line(lease):sub(1, #header), header,
+    "the file part of the pinned row is the in-buffer header, byte for byte")
+  assert(shown_line(lease):find(render.glyphs.crumb .. "@@ ", 1, true),
+    "and the crumb names the hunk under it: " .. shown_line(lease))
 
   -- float geometry: 1 row tall, canvas-wide, under the winbar, below the minimap
   local cfg = vim.api.nvim_win_get_config(lease.win)
@@ -108,11 +111,15 @@ end
 T["sticky_win swaps at a section boundary"] = function()
   local st, lease = open_pinned()
   local boundary = (canvas.section_rows(st, 2)) -- section 2's start row, live
+  -- The file part is what swaps; the crumb after it tracks the scroll by
+  -- design, so the identity is compared as the prefix it is.
+  local one = render.section_line(st.sections[1], 1)
+  local two = render.section_line(st.sections[2], 1)
   scroll_to(st, lease, boundary - 1)
-  H.eq(shown_line(lease), render.section_line(st.sections[1], 1),
+  H.eq(shown_line(lease):sub(1, #one), one,
     "the last row of section 1 still pins section 1's header")
   scroll_to(st, lease, boundary + 1)
-  H.eq(shown_line(lease), render.section_line(st.sections[2], 1),
+  H.eq(shown_line(lease):sub(1, #two), two,
     "one row past the boundary pins section 2's header")
   sticky.close(lease)
 end
@@ -122,9 +129,16 @@ T["sticky_win row carries the bar tint and the marker spans"] = function()
   scroll_to(st, lease, 2)
   local line = shown_line(lease)
   local section = st.sections[1]
-  local spans = render.marker_spans(line, section.staged, section.unstaged, false)
+  local head = render.section_line(section, 1)
+  -- Measured off the FILE part, which is where the stage marks are:
+  -- marker_spans walks in from the end of what it is given, and the crumb now
+  -- holds the end of the row.
+  local spans = render.marker_spans(head, section.staged, section.unstaged, false)
   assert(#spans > 0,
     "the fixture carries both stage facts, so the layering must be exercised on real spans")
+  -- The crumb wears the group the canvas's own `@@` rows wear, over everything
+  -- past the file identity.
+  spans[#spans + 1] = { #head, #line, "CanvasDiffHunkHeader" }
 
   local fbuf = vim.api.nvim_win_get_buf(lease.win)
   local bar, header = false, false
@@ -163,7 +177,8 @@ T["sticky_win a reconcile's new counts reach the pinned row"] = function()
   sticky.update(lease)
   local after = shown_line(lease)
   assert(after ~= before, "the pinned row re-renders from the live section")
-  H.eq(after, render.section_line(section, 1))
+  local header = render.section_line(section, 1)
+  H.eq(after:sub(1, #header), header)
   sticky.close(lease)
 end
 

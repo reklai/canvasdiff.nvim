@@ -72,6 +72,32 @@ T["chaos_surface_ injected Git and session failures are contained"] = function()
     "no injected failure ran, so nothing hostile was actually tested")
 end
 
+-- The same principle, bound to the one action whose hostile branch carries an
+-- invariant of its own -- the byte-exact index check after a killed hunk stage.
+--
+-- It needs its own assertion because that action can legitimately do NOTHING:
+-- with no review showing, or none this harness captured at open time, it has no
+-- hunk row to press and records itself as a noop. `refusals.stage_hunk` is
+-- incremented only past both of those guards, on the branch that injects and
+-- then compares the index -- so it is the one counter that cannot be satisfied
+-- by a visit that pressed nothing. Without this, a change that quietly stopped
+-- showing_review from ever matching would revert the whole action to
+-- decoration and every campaign would still pass.
+T["chaos_surface_ the hunk stage really runs under an injected Git failure"] = function()
+  local original = vim.fn.getcwd()
+  local result = Chaos.run({ seed = SEEDS[1], actions = ACTIONS })
+  pcall(vim.api.nvim_set_current_dir, original)
+  local failure = report(result)
+  assert(not failure, failure)
+
+  assert((result.refusals.stage_hunk or 0) > 0, (
+    "stage_hunk never reached a real press with Git killed, so the byte-exact "
+    .. "index invariant was never checked. counts=%s refusals=%s"
+  ):format(vim.inspect(result.counts), vim.inspect(result.refusals)))
+  assert((result.counts.stage_hunk or 0) > 0,
+    "and the action must have pressed at least once, not only recorded noops")
+end
+
 T["chaos_surface_ a seed replays to the same campaign"] = function()
   local original = vim.fn.getcwd()
   local first = Chaos.run({ seed = 909, actions = 40 })

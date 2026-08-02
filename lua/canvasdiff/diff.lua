@@ -3,6 +3,7 @@ local anchor = require("canvasdiff.diff.anchor")
 local fold = require("canvasdiff.diff.fold")
 local lens = require("canvasdiff.diff.lens")
 local model = require("canvasdiff.diff.model")
+local stage = require("canvasdiff.diff.stage")
 local text = require("canvasdiff.diff.text")
 local word_diff = require("canvasdiff.diff.word_diff")
 
@@ -32,6 +33,7 @@ return {
   hunks = algorithm.hunks,
   is_binary = text.is_binary,
   lens = {
+    INDEX_REV = lens.INDEX_REV,
     branch = lens.branch,
     editable = lens.editable,
     from_base = lens.from_base,
@@ -45,6 +47,13 @@ return {
     step = lens.step,
     to_base = lens.to_base,
     valid = lens.valid,
+  },
+  stage = {
+    pair_hunks = stage.pair_hunks,
+    pick = stage.pick,
+    pick_all = stage.pick_all,
+    splice = stage.splice,
+    splice_many = stage.splice_many,
   },
   staged_then_changed = model.staged_then_changed,
   word_marks = word_diff.section_marks,

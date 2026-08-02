@@ -28,7 +28,9 @@ return {
   },
   motions = {
     cycle = motions.cycle,
+    cycle_hunk = motions.cycle_hunk,
     goto_file = motions.goto_file,
     goto_hunk = motions.goto_hunk,
+    hunk_stops = motions.hunk_stops,
   },
 }

@@ -113,6 +113,7 @@ return {
       "is_binary",
       "lens",
       "release_text",
+      "stage",
       "staged_then_changed",
       "word_marks",
     })

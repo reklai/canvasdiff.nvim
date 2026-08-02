@@ -206,7 +206,7 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   local i = index_of(st, "src/a.txt")
   assert(not canvas_row(i):find(render.glyphs.stale, 1, true),
     "sanity: nothing stale yet: " .. canvas_row(i))
-  H.eq(tree()[1], "▸ src/", "sanity: the folded dir row is unmarked")
+  H.eq(tree()[1], "▸ src/  (1 files, +1 −1)", "sanity: the folded dir row is unmarked")
 
   write_file(root, "src/a.txt",
     bigtext(40, "a"):gsub("a line 20", "a line 20 changed"):gsub("a line 30", "a line 30 too"))
@@ -222,7 +222,8 @@ T["stale_ the canvas placeholder and the sidebar row both show it"] = function()
   H.eq(row, render.placeholder(st.sections[i], true),
     "the placeholder carries the marker, after the counts")
   assert(row:match("^▸ src/a%.txt"), "and the ▸ gutter is untouched: " .. row)
-  H.eq(tree()[1], "▸ src/ ●", "the folded dir row says something under it moved on")
+  H.eq(tree()[1], "▸ src/  (1 files, +2 −2) ●",
+    "the folded dir row says what it hides, and that something under it moved on")
 
   -- Bring it back: both markers must go.
   st.folded = {}
@@ -274,7 +275,7 @@ T["stale_ the marker is highlighted, in the canvas and in the tree"] = function(
 
   local sbuf = sidebar_buf(sidebar, lease)
   local srows = vim.api.nvim_buf_get_lines(sbuf, 0, -1, false)
-  H.eq(srows[1], "▸ src/ ●", "sanity: the folded dir row is marked")
+  H.eq(srows[1], "▸ src/  (1 files, +2 −2) ●", "sanity: the folded dir row is marked")
   local side_ns = vim.api.nvim_create_namespace("canvasdiff.sidebar")
   H.eq(stale_span(sbuf, side_ns, 0), { #srows[1] - #render.glyphs.stale, #srows[1] },
     "and so is the tree's")
