@@ -262,8 +262,13 @@ local function check(world)
   assert(#names == 27,
     ("appearance registry changed during chaos: %d groups"):format(#names))
   for _, name in ipairs(names) do
+    assert(vim.fn.hlexists(name) == 1, name .. " disappeared during chaos")
     local definition = vim.api.nvim_get_hl(0, { name = name, link = true })
-    assert(next(definition) ~= nil, name .. " disappeared during chaos")
+    -- CanvasDiffCrumb deliberately owns an empty native definition; existence,
+    -- not incidental `default` metadata, is its zero-config invariant.
+    if name ~= "CanvasDiffCrumb" then
+      assert(next(definition) ~= nil, name .. " lost its appearance during chaos")
+    end
   end
   local bar = highlight_shape(vim.api.nvim_get_hl(0,
     { name = "CanvasDiffFileBar", link = false }))
@@ -387,11 +392,16 @@ ACTIONS.configure_appearance = function(world)
   local colors = { 0x112233, 0x334455, 0x667788, 0xaabbcc }
   local color = colors[world.rng.next(#colors) + 1]
   local hex = ("#%06x"):format(color)
+  local underlay = world.release_file_bar
+  if world.expected_file_bar.kind == "released" then
+    underlay = highlight_shape(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }))
+  end
   world.plugin.setup({ highlights = {
     CanvasDiffFileBar = { bg = hex },
   } })
   world.expected_file_bar = { kind = "override", bg = color }
-  world.release_file_bar = vim.deepcopy(world.current_default_file_bar)
+  world.release_file_bar = vim.deepcopy(underlay)
   world.expected_glyph_set = "default"
   record(world, "configure_appearance", hex)
 end
@@ -802,6 +812,12 @@ local function snapshot_colorscheme()
   }
 end
 
+local function recover_appearance()
+  vim.api.nvim_exec_autocmds("ColorScheme", {
+    group = "canvasdiff.appearance",
+  })
+end
+
 local function restore_colorscheme(snapshot)
   if snapshot.name then
     pcall(vim.cmd.colorscheme, snapshot.name)
@@ -838,7 +854,7 @@ local function released_file_bar_definition()
   local before = vim.api.nvim_get_hl(0,
     { name = "CanvasDiffFileBar", link = true })
   vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
-  require("canvasdiff.appearance").ensure()
+  recover_appearance()
   local definition = vim.deepcopy(file_bar_definition())
   local restore = vim.deepcopy(before)
   restore.force = true
@@ -852,6 +868,7 @@ function Chaos.run(opts)
   local seed = assert(opts.seed, "a campaign requires a seed")
   local actions = opts.actions or 200
   local rng = generator(seed)
+  local caller_cwd = vim.fn.getcwd()
 
   local dir = H.git_fixture({
     committed = {
@@ -871,10 +888,12 @@ function Chaos.run(opts)
     git(dir, { "git", "symbolic-ref", "--short", "HEAD" }))
 
   local caller_colorscheme = snapshot_colorscheme()
-  vim.api.nvim_set_current_dir(dir)
   package.loaded["canvasdiff"] = nil
   local plugin = require("canvasdiff")
   plugin.setup({})
+  -- Campaign invariants start from the complete zero-config registry. Cleanup
+  -- restores the caller's exact palette, including intentional empty groups.
+  recover_appearance()
 
   local caller_scheme = vim.g.colors_name or "<none>"
   local initialized_palette = snapshot_colorscheme()
@@ -889,13 +908,14 @@ function Chaos.run(opts)
   end
 
   -- The campaign splits and closes windows, so it runs in a tab of its own and
-  -- takes it away afterwards. Without that it leaves the layout changed, and
-  -- a later test measuring a viewport gets a different window height and fails
-  -- for reasons that have nothing to do with it.
+  -- takes it away afterwards, leaving later viewport tests unchanged.
   local origin_tab = vim.api.nvim_get_current_tabpage()
   vim.cmd("tabnew")
   local campaign_tab = vim.api.nvim_get_current_tabpage()
+  local restored = false
   local function restore()
+    if restored then return end
+    restored = true
     pcall(function() plugin.close() end)
     pcall(function() plugin.setup({}) end)
     if vim.api.nvim_tabpage_is_valid(campaign_tab)
@@ -906,7 +926,12 @@ function Chaos.run(opts)
     if vim.api.nvim_tabpage_is_valid(origin_tab) then
       pcall(vim.api.nvim_set_current_tabpage, origin_tab)
     end
-    restore_colorscheme(caller_colorscheme)
+    local palette_ok, palette_err = xpcall(function()
+      restore_colorscheme(caller_colorscheme)
+    end, debug.traceback)
+    local cwd_ok, cwd_err = pcall(vim.api.nvim_set_current_dir, caller_cwd)
+    if not cwd_ok then error(cwd_err) end
+    if not palette_ok then error(palette_err) end
   end
 
   local world = {
@@ -931,6 +956,7 @@ function Chaos.run(opts)
     },
     expected_glyph_set = "default",
   }
+  vim.api.nvim_set_current_dir(dir)
   for step = 1, actions do
     local name = rng.pick(ACTION_NAMES)
     local ok, failure = xpcall(function()
@@ -946,13 +972,14 @@ function Chaos.run(opts)
       check(world)
     end, debug.traceback)
     if not ok then
-      restore()
+      local cleanup_ok, cleanup_err = pcall(restore)
       return {
         seed = seed,
         status = "fail",
         failed_at = step,
         failed_action = name,
-        error = tostring(failure),
+        error = tostring(failure)
+          .. (cleanup_ok and "" or ("\ncleanup: " .. tostring(cleanup_err))),
         history = world.history,
         counts = world.counts,
         refusals = world.refusals,
@@ -960,7 +987,19 @@ function Chaos.run(opts)
     end
   end
 
-  restore()
+  local cleanup_ok, cleanup_err = pcall(restore)
+  if not cleanup_ok then
+    return {
+      seed = seed,
+      status = "fail",
+      failed_at = actions,
+      failed_action = "cleanup",
+      error = tostring(cleanup_err),
+      history = world.history,
+      counts = world.counts,
+      refusals = world.refusals,
+    }
+  end
   return {
     seed = seed,
     status = "ok",

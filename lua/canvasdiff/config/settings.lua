@@ -77,7 +77,7 @@ end
 local function capture_highlights(raw)
   if type(raw) ~= "table" then return raw end
   local captured = {}
-  for name, spec in pairs(raw) do
+  for name, spec in next, raw do
     local ok, copy = pcall(vim.deepcopy, spec)
     captured[name] = ok and copy or spec
   end

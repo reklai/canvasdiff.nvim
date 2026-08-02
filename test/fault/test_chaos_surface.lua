@@ -50,16 +50,9 @@ local function restore_test_colorscheme(name)
   require("canvasdiff.appearance").setup({})
 end
 
-local function run_campaign(opts)
-  local original = vim.fn.getcwd()
-  local result = Chaos.run(opts)
-  pcall(vim.api.nvim_set_current_dir, original)
-  return result
-end
-
 for _, seed in ipairs(SEEDS) do
   T[("chaos_surface_ ownership survives seed %d"):format(seed)] = function()
-    local result = run_campaign({ seed = seed, actions = ACTIONS })
+    local result = Chaos.run({ seed = seed, actions = ACTIONS })
     local failure = report(result)
     assert(not failure, failure)
 
@@ -81,7 +74,7 @@ end
 T["chaos_surface_ injected Git and session failures are contained"] = function()
   -- A campaign where nothing hostile ran proves nothing, so the injections
   -- are asserted to have happened rather than assumed.
-  local result = run_campaign({ seed = 4242, actions = 80 })
+  local result = Chaos.run({ seed = 4242, actions = 80 })
   local failure = report(result)
   assert(not failure, failure)
 
@@ -105,7 +98,7 @@ end
 -- showing_review from ever matching would revert the whole action to
 -- decoration and every campaign would still pass.
 T["chaos_surface_ the hunk stage really runs under an injected Git failure"] = function()
-  local result = run_campaign({ seed = SEEDS[1], actions = ACTIONS })
+  local result = Chaos.run({ seed = SEEDS[1], actions = ACTIONS })
   local failure = report(result)
   assert(not failure, failure)
 
@@ -118,8 +111,8 @@ T["chaos_surface_ the hunk stage really runs under an injected Git failure"] = f
 end
 
 T["chaos_surface_ a seed replays to the same campaign"] = function()
-  local first = run_campaign({ seed = 909, actions = 40 })
-  local second = run_campaign({ seed = 909, actions = 40 })
+  local first = Chaos.run({ seed = 909, actions = 40 })
+  local second = Chaos.run({ seed = 909, actions = 40 })
   H.eq(first.status, "ok", vim.inspect(first))
   H.eq(second.status, "ok", vim.inspect(second))
   H.eq(second.counts, first.counts, "the same seed ran different actions")
@@ -149,10 +142,16 @@ T["chaos_surface_ restores a clean unnamed colorscheme and its highlights"] = fu
   vim.cmd.colorscheme("default")
   vim.api.nvim_set_hl(0, "Normal", { fg = "#abcdef", bg = "#010203" })
   vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { bg = "#654321" })
+  vim.api.nvim_set_hl(0, "CanvasDiffWinbar", {})
+  vim.api.nvim_set_hl(0, "CanvasDiffCrumb", {})
   vim.g.colors_name = nil
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = true })
   local bar = vim.api.nvim_get_hl(0,
     { name = "CanvasDiffFileBar", link = true })
+  local empty = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffWinbar", link = true })
+  local crumb = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffCrumb", link = true })
 
   local ok, err = xpcall(function()
     local result = Chaos.run({ seed = 31337, actions = ACTIONS })
@@ -163,6 +162,12 @@ T["chaos_surface_ restores a clean unnamed colorscheme and its highlights"] = fu
     H.eq(vim.api.nvim_get_hl(0,
       { name = "CanvasDiffFileBar", link = true }), bar,
       "the campaign did not restore caller-owned CanvasDiff appearance")
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffWinbar", link = true }), empty,
+      "the campaign did not restore a caller-owned empty group")
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffCrumb", link = true }), crumb,
+      "the campaign did not preserve the intentionally empty crumb group")
   end, debug.traceback)
 
   restore_test_colorscheme(original)
@@ -193,10 +198,28 @@ T["chaos_surface_ cleanup restores colorscheme after a campaign failure"] = func
   H.eq(restored, "industry", "failure cleanup leaked the campaign colorscheme")
 end
 
+T["chaos_surface_ run restores cwd after a successful campaign"] = function()
+  local original = vim.fn.getcwd()
+  local result = Chaos.run({ seed = 31337, actions = 1 })
+  H.eq(result.status, "ok", result.error)
+  H.eq(vim.fn.getcwd(), original, "successful campaign leaked its fixture cwd")
+end
+
+T["chaos_surface_ run restores cwd after a campaign failure"] = function()
+  local original = vim.fn.getcwd()
+  local result = Chaos.run({
+    seed = 31337,
+    actions = 1,
+    after_action = function() error("injected cwd cleanup failure") end,
+  })
+  H.eq(result.status, "fail", "the injected failure must stop the campaign")
+  H.eq(vim.fn.getcwd(), original, "failed campaign leaked its fixture cwd")
+end
+
 T["chaos_surface_ released FileBar oracle rejects a stale override"] = function()
   local stale_bg
   local injected = false
-  local result = run_campaign({
+  local result = Chaos.run({
     seed = 31337,
     actions = ACTIONS,
     after_action = function(world, name)
@@ -216,7 +239,7 @@ end
 
 T["chaos_surface_ glyph oracle rejects replacement-model drift"] = function()
   local injected = false
-  local result = run_campaign({
+  local result = Chaos.run({
     seed = 31337,
     actions = ACTIONS,
     after_action = function(_, name)
@@ -233,7 +256,7 @@ end
 
 T["chaos_surface_ invalid setup oracle rejects review teardown"] = function()
   local injected = false
-  local result = run_campaign({
+  local result = Chaos.run({
     seed = 31337,
     actions = ACTIONS,
     after_action = function(world, name)

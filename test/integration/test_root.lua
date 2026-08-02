@@ -3391,6 +3391,53 @@ T["root_ setup isolates an uncopyable highlight and applies its valid sibling"] 
     messages[1].message)
 end
 
+T["root_ setup contains hostile highlight inspection and applies valid siblings"] = function()
+  local fm = require("canvasdiff")
+  local config = require("canvasdiff.config")
+  local hostile = setmetatable({}, {
+    __index = function() error("hostile index") end,
+  })
+  local highlights = {
+    CanvasDiffFileBar = hostile,
+    CanvasDiffGhost = { fg = "#123456" },
+  }
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local real_pairs = _G.pairs
+  _G.pairs = function(value)
+    if type(value) == "table"
+        and rawequal(rawget(value, "CanvasDiffFileBar"), hostile) then
+      error("hostile pairs")
+    end
+    return real_pairs(value)
+  end
+  local call_ok, call_err = pcall(fm.setup, {
+    context = 9,
+    highlights = highlights,
+  })
+  _G.pairs = real_pairs
+  local live_context = config.options.context
+  local live_ghost = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffGhost", link = false })
+  local reset_ok, reset_err = pcall(fm.setup, {})
+
+  vim.notify = real_notify
+  assert(reset_ok, reset_err)
+  H.eq(call_ok, true, tostring(call_err))
+  H.eq(live_context, 9, "the valid config sibling remains live")
+  H.eq(live_ghost.fg, 0x123456, "the valid highlight sibling remains live")
+  H.eq(#messages, 1, "the hostile sibling produces one diagnostic")
+  H.eq(messages[1].level, vim.log.levels.ERROR)
+  assert(messages[1].message:find("CanvasDiffFileBar", 1, true),
+    messages[1].message)
+  assert(messages[1].message:find("metatable", 1, true),
+    messages[1].message)
+end
+
 T["root_ Surface never issues unqualified controller teardown"] = function()
   local runtime = require("canvasdiff.runtime")
   local watch = runtime.watch

@@ -5,6 +5,13 @@ local canvas = require("canvasdiff.canvas")
 
 local T = {}
 
+local function recover_colorscheme()
+  appearance.setup({})
+  vim.api.nvim_exec_autocmds("ColorScheme", {
+    group = "canvasdiff.appearance",
+  })
+end
+
 local OLD = table.concat({
   "local a = 1",
   "local b = 2",
@@ -52,6 +59,7 @@ end
 -- These were the last two visual elements pointing straight at standard groups, so
 -- tuning the diff rows meant redefining the groups your ordinary vimdiff also uses.
 T["hl_rows the row tints go through overridable CanvasDiff aliases"] = function()
+  recover_colorscheme()
   for _, g in ipairs({ "CanvasDiffAdd", "CanvasDiffDel" }) do
     local direct = vim.api.nvim_get_hl(0, { name = g, link = false })
     assert(next(direct) ~= nil, g .. " must be defined, or the diff rows render unstyled")
@@ -104,10 +112,10 @@ local function blend(a, b, factor)
     channel(65536), channel(256), channel(1))
 end
 
--- Every derived group appearance.ensure authors. The manager's authorship record is a
--- singleton, so a group an earlier test left defined would satisfy
--- set_default and mask a broken derive; each derivation test clears
--- them all first.
+-- Every derived group the appearance manager authors. The manager's authorship
+-- record is a singleton, so a group an earlier test left defined would mask a
+-- broken derive; each derivation test clears them through the ColorScheme
+-- recovery boundary before asserting the fresh palette.
 local DIFF_GROUPS = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
@@ -119,6 +127,7 @@ local function reset_diff_groups()
   for _, g in ipairs(DIFF_GROUPS) do
     vim.api.nvim_set_hl(0, g, {})
   end
+  recover_colorscheme()
 end
 
 T["hl_rows the field is one neutral elevation shared by add and del"] = function()
@@ -195,7 +204,7 @@ end
 
 T["hl_rows the crumb states no colour, so it reads as text on the bar"] = function()
   vim.api.nvim_set_hl(0, "CanvasDiffCrumb", {})
-  appearance.ensure()
+  recover_colorscheme()
   local crumb = vim.api.nvim_get_hl(0, { name = "CanvasDiffCrumb", link = false })
   -- Emptiness is the whole contract and the easiest thing to lose: a fg here
   -- would freeze one scheme's colour into a group nothing recomputes, and a bg
@@ -290,6 +299,7 @@ T["hl_rows a user definition of CanvasDiffAdd survives every ensure"] = function
   end)
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
   config.setup({})
+  recover_colorscheme()
   assert(ok, err)
 end
 
