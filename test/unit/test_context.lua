@@ -141,4 +141,47 @@ T["context_resolve is nil when there is no section under the row"] = function()
   H.eq(context.resolve(st, 0), nil)
 end
 
+-- --- the deleted lines hanging on a row ----------------------------------
+
+T["context_ghosts answers the deleted lines a row carries"] = function()
+  -- One line replaced: the old text becomes a ghost on the row that replaced
+  -- it, which is the only handle a reader has on text that is not a row.
+  local section = model.build_section(
+    "g.txt", "keep\nGONE\ntail\n", "keep\nNEW\ntail\n", "M")
+  local st = canvas.open({ section }, {})
+  local anchor
+  for offset, e in ipairs(section.entries) do
+    if e.ghosts then anchor = offset end
+  end
+  assert(anchor, "sanity: some entry carries the ghosts")
+
+  local row0 = (canvas.section_rows(st, 1)) + anchor - 1
+  H.eq(context.ghosts(st, row0), { "GONE" })
+end
+
+T["context_ghosts is empty on a row that carries none"] = function()
+  local section = model.build_section(
+    "g.txt", "keep\nGONE\ntail\n", "keep\nNEW\ntail\n", "M")
+  local st = canvas.open({ section }, {})
+  H.eq(context.ghosts(st, (canvas.section_rows(st, 1))), {},
+    "the file header hangs no deletions")
+end
+
+T["context_ghosts includes deletions that hang below their anchor"] = function()
+  -- Deletions running past the last surviving line have no following row to
+  -- hang above, so they ride below the previous one as `ghosts_after`. A
+  -- reader sees them in the same place; the yank must find them too.
+  local section = model.build_section(
+    "g.txt", "keep\ntail\nCUT ONE\nCUT TWO\n", "keep\ntail\n", "M")
+  local st = canvas.open({ section }, {})
+  local anchor
+  for offset, e in ipairs(section.entries) do
+    if e.ghosts_after then anchor = offset end
+  end
+  assert(anchor, "sanity: the trailing deletions hang below a row")
+
+  local row0 = (canvas.section_rows(st, 1)) + anchor - 1
+  H.eq(context.ghosts(st, row0), { "CUT ONE", "CUT TWO" })
+end
+
 return T

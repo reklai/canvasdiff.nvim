@@ -44,6 +44,44 @@ function C.resolve(state, row0)
   return { scope = "hunk", section = index, hunk = entry.hunk_idx }
 end
 
+--- The deleted lines drawn around 0-based canvas row `row0`, in the order they
+--- appear, or `{}` when it carries none.
+---
+--- Deletions are virtual text, which is display-only: the cursor cannot enter a
+--- ghost and `y` cannot reach one. So the only handle on removed text is the
+--- real row it hangs on, and this is that handle. `ghosts` draw above that row;
+--- `ghosts_after` draw below it, which is where deletions running past the last
+--- surviving line have to go. A reader sees no difference between the two, so
+--- neither does this.
+function C.ghosts(state, row0)
+  local index, offset = Canvas.locate(state, row0)
+  if not index then
+    return {}
+  end
+  local section = state.sections[index]
+  -- A folded section draws one placeholder row and no ghosts at all, so its
+  -- entries name text that is not on screen to be copied.
+  if not section or fold.hidden(state, section.path) then
+    return {}
+  end
+  local entry = section.entries[offset]
+  if not entry then
+    return {}
+  end
+  -- Taken one list at a time on purpose: `ipairs{ entry.ghosts,
+  -- entry.ghosts_after }` stops at the first nil, so a row carrying only
+  -- trailing deletions would answer with nothing at all.
+  local out = {}
+  local function take(list)
+    for _, ghost in ipairs(list or {}) do
+      out[#out + 1] = ghost.content
+    end
+  end
+  take(entry.ghosts)
+  take(entry.ghosts_after)
+  return out
+end
+
 --- The 0-based canvas row of hunk `gi`'s header in section `section_i` --
 --- `resolve` read backwards, for a caller that names a hunk without a cursor
 --- to point at it. nil when that section or that hunk is not there.

@@ -1347,4 +1347,40 @@ return {
     assert(small_ok, small_failure)
   end,
 
+  ["e2e: gy copies a deleted line the cursor cannot reach"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "keep\nOLD LINE\ntail\n" },
+      worktree = { ["a.txt"] = "keep\nNEW LINE\ntail\n" },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local st = assert(fm.open())
+    local ok, failure = xpcall(function()
+      -- The deleted line is virtual: it is drawn, but it is not in the buffer,
+      -- so no cursor position and no ordinary yank can ever reach it.
+      local lines = vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)
+      for _, l in ipairs(lines) do
+        assert(not l:find("OLD LINE", 1, true),
+          "sanity: the deleted line is not a buffer row")
+      end
+
+      local target
+      for i, l in ipairs(lines) do
+        if l:find("NEW LINE", 1, true) then target = i end
+      end
+      assert(target, "sanity: the replacing row is in the buffer")
+
+      vim.fn.setreg('"', "untouched")
+      vim.api.nvim_win_set_cursor(st.win, { target, 0 })
+      vim.api.nvim_feedkeys(vim.keycode("gy"), "x", false)
+
+      H.eq(vim.fn.getreg('"'), "OLD LINE\n", "the removed text is in the register")
+      H.eq(vim.fn.getregtype('"'), "V", "linewise, so p puts it as a line")
+    end, debug.traceback)
+    fm.close()
+    vim.fn.delete(root, "rf")
+    assert(ok, failure)
+  end,
+
 }
