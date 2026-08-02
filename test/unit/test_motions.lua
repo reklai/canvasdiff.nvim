@@ -332,6 +332,9 @@ end
 -- extraction that changed behaviour.
 T["motions_ ]h walks exactly the hunk_stops list"] = function()
   local st = canvas.open(three_sections(), {})
+  -- With a fold in the middle, so a second list that merely LOOKS the same on
+  -- an all-unfolded review cannot pass this.
+  canvas.set_collapsed(st, 2, true)
   local stops = motions.hunk_stops(st)
   assert(#stops > 3, "sanity: several stops to walk")
 
