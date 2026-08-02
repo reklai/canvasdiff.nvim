@@ -229,7 +229,9 @@ T["sticky_ the crumb's label is the only part a narrow window cuts"] = function(
     "and what gave way was the tail of the label: " .. got.line)
 
   -- The strike-range arithmetic has to follow the cut, not the label that
-  -- arrived: a span measured before it would run past end-of-line.
+  -- arrived: a span measured before it would run past end-of-line. The count
+  -- is asserted first because the loop below is vacuously true over none.
+  assert(#got.spans > 0, "a cut row still carries its spans")
   for _, span in ipairs(got.spans) do
     assert(span[2] <= #got.line, "every span stays inside the row it was cut to")
   end
