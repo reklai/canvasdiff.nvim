@@ -157,12 +157,15 @@ Three things answer it, and each answers exactly one question:
 - the **band** across the top names the *comparison* (`HEAD → WORKTREE`) and
   never changes while you scroll
 - the **pinned header** under it names the *file* — a copy of that file's
-  header bar — and then, once you're inside a hunk, the hunk after it:
-  `▎ src/canvas.lua  (+12 −4) → @@ 88  render(state) · 3/5`. The `3/5` is
-  the hunk's ordinal in that file, so you know how much of it is left. On the
-  rows before a file's first hunk there is no hunk to name and the crumb is
-  absent; a narrow window keeps the ordinal and cuts the label around it,
-  and drops the crumb whole rather than clipping the ordinal off the edge
+  header bar, stage markers and all — and then, once the *top line of the
+  window* is inside a hunk, the hunk after it:
+  `▎ src/canvas.lua  (+12 −4) ●○ → @@ 88  render(state) · 3/5`. The `3/5` is
+  the hunk's ordinal in that file, so you know how much of it is left. It
+  follows the topline rather than your cursor, so `]h` can leave you inside
+  hunk 4 while the crumb still reads `3/5`. On the rows before a file's first
+  hunk there is no hunk to name and the crumb is absent; a narrow window keeps
+  the ordinal and cuts the label around it, and drops the crumb whole rather
+  than clipping the ordinal off the edge
 - the **sidebar** highlights the row for whatever is under the window top, at
   hunk depth when the tree is showing that hunk
 
@@ -182,13 +185,20 @@ blob, rather than a patch being generated and re-applied. Each key does one
 thing and says so when there's nothing to do (`hunk already staged` /
 `nothing staged here`, and `already staged` / `nothing staged` for the file
 verbs). Staging is refused while a modified loaded buffer aliases the path, so
-unsaved text can't be silently replaced by disk content. Hunk staging declines
-on binary files and renames, whose index identity is not a line splice, and
-points you at **Shift+S**.
+unsaved text can't be silently replaced by disk content. A rename's index
+identity is two paths rather than a line splice, so a hunk press inside one
+declines and points you at **Shift+S**; a binary file publishes no hunk rows at
+all, so **s** on one is already the whole-file verb.
 
 In the `unstaged` lens a staged hunk *vanishes* — that lens shows what is not
 staged yet, so the disappearance is the confirmation. One **Tab** later, in the
 `staged` lens, it's there.
+
+The two whole-file verbs also *pivot* the lens when they succeed, so you land
+where what you just did is visible: **Shift+S** in `unstaged` leaves you in
+`staged`, and **Shift+U** in `staged` leaves you in `unstaged`. The hunk verbs
+deliberately don't — pressing **s** down a file's hunks has to stay put — and
+nothing pivots out of `all`, which is already showing both halves.
 
 One case needs a particular lens. On a file that is both staged *and* modified
 again, the hunks on screen are measured against a text the index does not hold,
@@ -425,8 +435,13 @@ are tapped one after the other (with about a second between taps).
 **Ctrl+N and Ctrl+P now cycle by hunk, not by file.** They used to scroll a
 file's diff at a time; they now stop at every hunk (a folded file still counting
 as exactly one stop), which is the granularity the rest of the canvas already
-worked at. Nothing else changed meaning — `S` and `U` are new keys, not
-redefinitions.
+worked at.
+
+**s and u narrowed too.** They used to take the whole file wherever you pressed
+them; they now take the hunk under the cursor, and the whole file only on a row
+that names none — a file header bar, a folded placeholder, or a sidebar file
+row. **Shift+S** and **Shift+U** are new keys rather than redefinitions, and
+they are the whole-file verbs from anywhere.
 
 The file-at-a-time behaviour is intact under new names — `cycle_file_next` and
 `cycle_file_prev`, shipped unbound — so putting it back is one line:

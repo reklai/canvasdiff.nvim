@@ -121,7 +121,7 @@ folded placeholder, whose single row already is the header.
 Once the topline is *inside* a hunk the row continues into a **breadcrumb**:
 
 ```
-▎ src/canvas.lua  (+12 −4) → @@ 88  render(state) · 3/5
+▎ src/canvas.lua  (+12 −4) ●○ → @@ 88  render(state) · 3/5
 ```
 
 Three decisions are packed into that.
@@ -213,6 +213,69 @@ the ASCII set that distinction can't be lost to a colourscheme at all.
 
 `stale` carries its own leading space — that's deliberate, since its byte length
 positions its own highlight span.
+
+## Staging is a splice, not a patch
+
+The obvious way to stage one hunk is to generate a patch for it and hand that to
+`git apply --cached`. CanvasDiff never builds a patch. It reads **both blobs of
+the pair the verb writes** — index and worktree for `s`, HEAD and index for `u` —
+splices the hunk's lines from one side into the other, and writes the result as
+the new index entry (`git hash-object -w`, then `git update-index --cacheinfo`).
+
+The reason is context drift. A patch carries context lines and is re-applied by
+*matching* them, so it can land in the wrong place, land fuzzily, or refuse —
+three different failures, each needing its own explanation to the user, and the
+first of them silent. With both sides already in hand, applying hunk N is
+arithmetic: copy the a side up to the hunk's start, copy the b-side lines it
+writes, copy the rest. Nothing is matched, so nothing can drift. The same code
+serves both directions, too — unstaging is the identical splice with the two
+sides swapped, which is why `u` can never touch the worktree by accident.
+
+Three consequences that read like bugs until you know this:
+
+- **The mode is not in the blob.** `git add` records the worktree file's
+  owner-execute bit; a splice writes content only, so the index entry's mode has
+  to be supplied separately. It comes from the entry already there — and for a
+  path git has never indexed, which is a new file being staged a hunk at a time,
+  from the worktree file, because that is where `git add` would have read it.
+  Otherwise `s` and `S` would disagree about a new shell script.
+- **A file's final newline cannot be staged by itself.** The splice keeps the a
+  side's terminator and never rewrites it, since staging must not silently add
+  or drop one. A change consisting of nothing else therefore stays on screen.
+- **Unstaging an addition down to nothing removes the entry.** An addition's
+  HEAD side is *absence*, not an empty blob, so once its last staged line is
+  reverted the entry itself is what remains to remove — the end state `git reset`
+  reaches for a path HEAD does not carry.
+
+A rename declines rather than splicing: its index identity is two paths, so
+writing one blob would stage half of it, and the press points at `S` — which is
+`git add`, and handles it. A binary file never reaches that question: it
+publishes no hunk rows at all, so every press inside one is already the
+whole-file verb. The guard still names both, because "has a line splice" is the
+property being asserted, not "has rows".
+
+## Why a staged-and-modified file refuses one of the two hunk verbs
+
+On a file git reports in both columns — staged, then changed again — the hunk
+verbs each decline in one lens: `u` works only in the `staged` lens, `s` in any
+lens except it. That reads like an arbitrary restriction. It is the only honest
+answer available.
+
+A hunk's span is a range of line numbers on the **displayed** lens's b side: the
+worktree in `all` and `unstaged`, the index in `staged`. The splice windows the
+**verb's own** pair, whose b side is the worktree for `s` and the index for `u`.
+While index and worktree hold the same text those two coordinate systems
+coincide, and the span means the same thing in both. The moment they diverge —
+which is precisely what "staged and modified" *is* — line 40 of one is not line
+40 of the other, and the splice would take a hunk the cursor was never on.
+
+Nor could a translation rescue it. In the `all` lens one displayed hunk can fuse
+a staged change with a later unstaged one into a shape the index has never held.
+There is no hunk in index coordinates to map that onto, because what is on
+screen is not a hunk of any pair git can be asked to write. The verb has nothing
+to name, so it declines and names a lens where it would have something.
+
+`S` and `U` are unaffected throughout: a whole file needs no span.
 
 ## Keymap philosophy
 

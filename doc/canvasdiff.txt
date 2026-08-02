@@ -134,16 +134,18 @@ pinned header~
     Once the topline is inside a hunk the row continues with a breadcrumb --
     the file, then that hunk, then its ordinal in the file: >
 
-        ▎ src/canvas.lua  (+12 −4) → @@ 88  render(state) · 3/5
+        ▎ src/canvas.lua  (+12 −4) ●○ → @@ 88  render(state) · 3/5
 <
     The hunk is named exactly as the sidebar's own row names it, so closing
     the sidebar loses nothing about where you are, and `3/5` says how much
-    of the file is still ahead. On the rows before a file's first hunk there
-    is no hunk to name and the crumb is absent. A narrow window keeps the
-    ordinal: the label is cut to fit around it, and if even a label-less
-    crumb will not fit, the crumb is dropped whole rather than drawn with
-    its right edge past the window. Both separators are configurable
-    (`crumb`, `crumb_sep`; see |canvasdiff-glyphs|).
+    of the file is still ahead. It is the TOPLINE's hunk, not the cursor's,
+    so `]h` can leave the cursor inside hunk 4 while the crumb still reads
+    `3/5`. On the rows before a file's first hunk there is no hunk to name
+    and the crumb is absent. A narrow window keeps the ordinal: the label is
+    cut to fit around it, and if even a label-less crumb will not fit, the
+    crumb is dropped whole rather than drawn with its right edge past the
+    window. Both separators are configurable (`crumb`, `crumb_sep`; see
+    |canvasdiff-glyphs|).
 
 scrollbar~
     A density map of where the changes are in the whole review, not just in
@@ -313,8 +315,13 @@ Changed behaviour~
 CTRL-N and CTRL-P now cycle by HUNK rather than by file. They used to scroll
 one file's diff at a time; they now stop at every hunk, a folded file still
 counting as exactly one stop -- the granularity the rest of the canvas
-already worked at. Nothing else changed meaning: `S` and `U` are new keys,
-not redefinitions of old ones.
+already worked at.
+
+`s` and `u` narrowed too. They used to take the whole file wherever they were
+pressed; they now take the hunk under the cursor, and the whole file only on
+a row that names none -- a file header, a folded placeholder, or a sidebar
+file row. `S` and `U` are new keys rather than redefinitions of old ones, and
+they are the whole-file verbs from anywhere.
 
 The file-at-a-time behaviour is intact under the two names above, so putting
 it back is one line: >lua
@@ -358,12 +365,21 @@ staged blob, rather than a patch being generated and re-applied. A verb with
 nothing to do reports it (`already staged`, `hunk already staged`, `nothing
 staged`, `nothing staged here`) and performs no change. Staging is declined
 when a modified loaded buffer refers to the file, so unsaved text is never
-replaced by disk content, and hunk staging declines binary files and
-renames toward the whole-file verb.
+replaced by disk content. A rename's index identity is two paths rather than
+a line splice, so a hunk press inside one declines toward the whole-file
+verb; a binary file publishes no hunk row at all, so `s` on one is already
+that verb.
 
 In the `unstaged` lens a staged hunk VANISHES, and that is the confirmation:
 the lens shows what is not staged yet. One <Tab> on, in the `staged` lens,
 it is there.
+
+The whole-file verbs also PIVOT the lens when they succeed, so you land where
+what you just did is visible: `S` in the unstaged lens leaves you in the
+staged one, and `U` in the staged lens leaves you in the unstaged one. `s`
+and `u` deliberately do not -- pressing `s` down a file's hunks has to stay
+put -- and nothing pivots out of the all lens, which shows both halves
+already.
 
 On a file that is BOTH staged and modified, hunk staging needs a lens whose
 b side is the one the verb writes: `u` works only in the staged lens, and
