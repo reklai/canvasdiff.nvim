@@ -136,9 +136,8 @@ T["sticky_win row carries the bar tint and the marker spans"] = function()
   local spans = render.marker_spans(head, section.staged, section.unstaged, false)
   assert(#spans > 0,
     "the fixture carries both stage facts, so the layering must be exercised on real spans")
-  -- The crumb wears the group the canvas's own `@@` rows wear, over everything
-  -- past the file identity.
-  spans[#spans + 1] = { #head, #line, "CanvasDiffHunkHeader" }
+  -- The crumb wears its own group, over everything past the file identity.
+  spans[#spans + 1] = { #head, #line, "CanvasDiffCrumb" }
 
   local fbuf = vim.api.nvim_win_get_buf(lease.win)
   local bar, header = false, false

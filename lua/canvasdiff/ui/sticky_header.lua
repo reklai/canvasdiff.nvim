@@ -63,10 +63,11 @@ local function crumb(section, offset, head, room)
   end
   local text = lead .. label .. ordinal
   local spans = {
-    -- The crumb reads as what it names: the group the canvas's own `@@` rows
-    -- wear. It layers OVER the file header's own foreground, which the float
-    -- draws across the whole row.
-    { #head, #head + #text, "CanvasDiffHunkHeader" },
+    -- Ordinary text on the bar, not chrome: the crumb names where you ARE,
+    -- which is the same kind of fact as the filename beside it. It layers OVER
+    -- the file header's own foreground, which the float draws across the whole
+    -- row, so it needs a group of its own even to say "no colour".
+    { #head, #head + #text, "CanvasDiffCrumb" },
   }
   if hunk.pure_del and #label > 0 then
     -- Struck iff the label is old-side text: the same fact, on the same

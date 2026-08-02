@@ -504,6 +504,7 @@ colourscheme by measured factors rather than linked — the measurements are in
 | `CanvasDiffSidebarDir` / `CanvasDiffSidebarActive` | `Directory` / `Visual` | sidebar directories / active row |
 | `CanvasDiffSidebarHunk` | `Comment` | a sidebar hunk row, whole |
 | `CanvasDiffHunkDel` | `CanvasDiffGhost` | a hunk label taken from a deleted line, in the sidebar row *and* in the pinned header's crumb |
+| `CanvasDiffCrumb` | *no colour of its own* | the pinned header's `→ @@ …` crumb, which reads as ordinary text on the bar |
 | `CanvasDiffScrollFile` / `CanvasDiffScrollAdd` / `CanvasDiffScrollDel` / `CanvasDiffScrollChanged` / `CanvasDiffScrollThumb` | `Title` / `DiffAdd` / `DiffDelete` / `DiffChange` / `PmenuThumb` | the minimap |
 
 ```lua

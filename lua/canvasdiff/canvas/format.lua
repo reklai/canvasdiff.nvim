@@ -236,6 +236,14 @@ function R.ensure_hunk_hl()
     link = "CanvasDiffGhost",
     default = true,
   })
+  -- The pinned header's crumb, carrying no colour of its own on purpose. The
+  -- float draws the bar as a background-only group, so text with no foreground
+  -- of its own reads as ordinary text on it -- which is what the crumb is,
+  -- rather than chrome like the canvas's `@@` rows it used to borrow from.
+  --
+  -- Empty rather than fg = Normal's: nothing recomputes these on a colourscheme
+  -- change, and a group that states no colour cannot hold a stale one.
+  vim.api.nvim_set_hl(0, "CanvasDiffCrumb", { default = true })
 end
 
 --- Channelwise linear interpolation between two 24-bit RGB colours.

@@ -545,6 +545,8 @@ explicit `nvim_set_hl()` of your own always wins over the derived defaults:
     CanvasDiffWinbar         WinBar link; the top band
     CanvasDiffWinbarReadOnly Visual link; the band's read-only tint
     CanvasDiffSidebarHunk    Comment link; a sidebar hunk row, whole
+    CanvasDiffCrumb          no colour of its own; the pinned header's
+                             crumb reads as ordinary text on the bar
     CanvasDiffHunkDel        CanvasDiffGhost link; a hunk label taken from a
                              deleted line, in the sidebar row and in the
                              pinned header's crumb alike

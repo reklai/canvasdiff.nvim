@@ -1394,6 +1394,19 @@ T["hl_rows the field is one neutral elevation shared by add and del"] = function
   assert(del.fg ~= nil, "a deleted file's real rows read dimmed")
 end
 
+T["hl_rows the crumb states no colour, so it reads as text on the bar"] = function()
+  vim.api.nvim_set_hl(0, "CanvasDiffCrumb", {})
+  render.ensure_hunk_hl()
+  local crumb = vim.api.nvim_get_hl(0, { name = "CanvasDiffCrumb", link = false })
+  -- Emptiness is the whole contract and the easiest thing to lose: a fg here
+  -- would freeze one scheme's colour into a group nothing recomputes, and a bg
+  -- would punch a hole in the file bar the float draws underneath it.
+  H.eq(crumb.fg, nil, "no foreground: the crumb takes the bar's, which is Normal's")
+  H.eq(crumb.bg, nil, "no background: the bar owns that, and it must show through")
+  H.eq(crumb.link, nil, "not a link either -- linking Normal would bring its background")
+  H.eq(crumb.default, true, "default = true, so a colourscheme or a config wins")
+end
+
 T["hl_rows ghosts have no background and a dimmed, struck foreground"] = function()
   reset_diff_groups()
   render.ensure_diff_hl()

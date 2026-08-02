@@ -197,8 +197,8 @@ T["sticky_ a pure-deletion current hunk strikes its label"] = function()
   -- The crumb's own group runs under it, over the whole crumb.
   local crumb_start = #render.section_line(section, 1)
   H.eq(got.spans[#got.spans - 1],
-    { crumb_start, #got.line, "CanvasDiffHunkHeader" },
-    "the crumb reads as a hunk header, and the strike layers over it")
+    { crumb_start, #got.line, "CanvasDiffCrumb" },
+    "the crumb wears its own group, and the strike layers over it")
 end
 
 T["sticky_ an ordinary current hunk is struck nowhere"] = function()
@@ -209,7 +209,7 @@ T["sticky_ an ordinary current hunk is struck nowhere"] = function()
       "a hunk that adds is not a deletion: " .. span[3])
   end
   H.eq(got.spans[#got.spans],
-    { #render.section_line(st.sections[1], 1), #got.line, "CanvasDiffHunkHeader" })
+    { #render.section_line(st.sections[1], 1), #got.line, "CanvasDiffCrumb" })
 end
 
 T["sticky_ the crumb's label is the only part a narrow window cuts"] = function()
