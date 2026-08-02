@@ -30,6 +30,9 @@ return {
     section_lines = format.section_lines,
     section_path = format.section_path,
     stage_mark = format.stage_mark,
+    -- The placeholder's summary without its path or markers, so the sidebar's
+    -- folded file row can say the same thing the canvas placeholder says.
+    summary = format.summary,
   },
   insert_section = Canvas.insert_section,
   is_canvas_buf = Canvas.is_canvas_buf,

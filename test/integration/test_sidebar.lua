@@ -198,7 +198,8 @@ T["sidebar_render a hunk label is trimmed, escaped and cut to the sidebar width"
   H.eq(lines[1], "  a.lua  +1 " .. minus .. "0", "file rows are never cut -- a path is identity")
   H.eq(lines[2], "    @@ 7  return comput  +1 " .. minus .. "0",
     "leading indentation is dropped, and the counts survive the cut")
-  H.eq(vim.fn.strdisplaywidth(lines[2]), 30, "the row fills the sidebar and no more")
+  H.eq(vim.fn.strdisplaywidth(lines[2]), 30,
+    "the label is cut so the row fills the sidebar exactly")
   H.eq(spans[2][1], { 0, #lines[2], "CanvasDiffSidebarHunk" },
     "the span follows the row it was cut to")
 
@@ -207,15 +208,56 @@ T["sidebar_render a hunk label is trimmed, escaped and cut to the sidebar width"
     "given room, the whole label shows")
 end
 
+-- The strike is measured off the label, and the label is what the cut shortens.
+-- Measuring it before the cut would run the span past end-of-line, which no
+-- other assertion here would notice: the TEXT would still be right.
+T["sidebar_render a cut pure-deletion row strikes only what is left of it"] = function()
+  local label = "    self.previous_configuration = nil"
+  local secs = { { path = "a.lua", adds = 0, dels = 1, nhunks = 1, hunks = {
+    { new_lo = nil, adds = 0, dels = 1, label = label, pure_del = true } } } }
+  local lines, spans = sidebar.render_lines(sidebar.build_entries(secs, {}, {}, {}), 30)
+  local line, strike = lines[2], spans[2][2]
+  local lead, tail = "    @@ ", "  +0 " .. render.glyphs.minus .. "1"
+  assert(#line < #lead + #label + #tail, "sanity: the label really was cut: " .. line)
+
+  H.eq(strike[3], "CanvasDiffSidebarHunkDel")
+  H.eq(line:sub(strike[1] + 1, strike[2]), line:sub(#lead + 1, #line - #tail),
+    "the strike covers the label that SURVIVED the cut, not the one that arrived")
+  assert(strike[2] < #line, "so it stops short of the counts: " .. line)
+end
+
+-- A folded file is one row in BOTH windows, so the two have to say the same
+-- thing -- including where counts would lie. "(0 hunks, +0 −0)" on a binary file
+-- reads as "nothing changed", which is the opposite of the truth, and the canvas
+-- has said "(binary)" since it landed. Asserted against render.summary itself
+-- rather than a copied literal: a copy here could drift with the original and
+-- still pass.
 T["sidebar_render a folded file reads as its canvas placeholder does"] = function()
-  local s = model.build_section(
-    "src/a.lua", "one\ntwo\nthree\n", "one\nTWO\nthree\n", "M")
-  local summary = render.placeholder(s):match("%b()")
-  assert(summary, "sanity: the canvas placeholder carries a parenthesized summary")
-  local lines = sidebar.render_lines(
-    sidebar.build_entries({ s }, {}, { ["src/a.lua"] = true }, {}))
-  H.eq(lines[2], "  " .. render.glyphs.folded .. " a.lua  " .. summary,
-    "one row, one summary, the same text in both windows")
+  local BIN = "\0\1\2binary\0content\n"
+  local for_each = {
+    ["src/a.lua"] = model.build_section(
+      "src/a.lua", "one\ntwo\nthree\n", "one\nTWO\nthree\n", "M"),
+    ["src/img.png"] = model.build_section("src/img.png", "\0old\0", BIN, "M"),
+    ["src/new.zip"] = model.build_section(
+      "src/new.zip", BIN, BIN, "R", 3, { old_path = "src/old.zip" }),
+  }
+  local shapes = {}
+  for path, s in pairs(for_each) do
+    assert(s, "sanity: " .. path .. " really is a section")
+    local summary = render.summary(s)
+    assert(render.placeholder(s):find(summary, 1, true),
+      "sanity: the canvas placeholder is built from this summary: " .. summary)
+    local lines = sidebar.render_lines(
+      sidebar.build_entries({ s }, {}, { [path] = true }, {}))
+    H.eq(#lines, 2, "the src/ row, and one row for the file -- whatever kind of file it is")
+    H.eq(lines[2], "  " .. render.glyphs.folded .. " "
+      .. path:match("[^/]+$") .. "  " .. summary,
+      "one row, one summary, the same text in both windows")
+    shapes[#shapes + 1] = summary
+  end
+  table.sort(shapes)
+  H.eq(shapes, { "(1 hunks, +1 " .. render.glyphs.minus .. "1)", "(binary)", "(renamed)" },
+    "all three shapes reached the tree -- counts, and the two cases where counts would lie")
 end
 
 T["sidebar_render marks a stale file and a stale folded dir"] = function()

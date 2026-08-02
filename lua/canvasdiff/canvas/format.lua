@@ -418,18 +418,34 @@ end
 --- so a trailing `●` keeps meaning exactly one thing in every window. It also has
 --- to be this order for R.marker_spans to work unchanged -- the spans walk in from
 --- the END of the line in the reverse of append order.
+--- The shape of the change a folded section is hiding: "(2 hunks, +3 −5)", or
+--- what it is instead when counts would lie.
+---
+--- Read by the canvas placeholder AND by the sidebar's folded file row, because
+--- a folded file is one row in both windows and has to read as the same row in
+--- both. Two copies of this phrasing would drift, and the drift would be
+--- invisible until someone had the tree and the canvas open side by side.
+---
+--- "(+0 −0)" on a binary file would read as "nothing changed", which is the
+--- opposite of the truth -- it changed, we just won't show how. A rename-only
+--- section says so for the same reason: its counts are zero and its identity is
+--- the whole story.
+function R.summary(section)
+  if section.rename_only then
+    return "(renamed)"
+  end
+  if section.binary then
+    return "(binary)"
+  end
+  return ("(%d hunks, +%d " .. GLYPHS.minus .. "%d)")
+    :format(section.nhunks or 0, section.adds or 0, section.dels or 0)
+end
+
 function R.placeholder(section, stale)
   local mark = (stale and GLYPHS.stale or "")
   local marks = stage_suffix(section) .. mark
-  if section.rename_only then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (renamed)" .. marks
-  end
-  if section.binary then
-    return GLYPHS.folded .. " " .. R.section_path(section) .. "  (binary)" .. marks
-  end
   return GLYPHS.folded .. " " .. R.section_path(section)
-    .. ("  (%d hunks, +%d " .. GLYPHS.minus .. "%d)"):format(section.nhunks, section.adds, section.dels)
-    .. marks
+    .. "  " .. R.summary(section) .. marks
 end
 
 --- `virt_lines` chunk spec for an entry's deleted lines, or nil when it has none.

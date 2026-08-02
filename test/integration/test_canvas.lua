@@ -77,6 +77,7 @@ return {
       "section_lines",
       "section_path",
       "stage_mark",
+      "summary",
     })
   end,
   ["canvas: renders sections with anchors, locate works"] = function()

@@ -16,12 +16,13 @@ local S = {}
 --- it, so render_lines needs the same number S.open would have used.
 local DEFAULT_WIDTH = 32
 
---- "(2 files, +3 −5)" / "(6 hunks, +12 −4)" -- what a fold hides, in the
---- vocabulary the canvas placeholder already uses for the same fact, so a
---- folded file reads as the same row in either window.
-local function summary_of(count, noun, adds, dels)
-  return ("(%d %s, +%d " .. render.glyphs.minus .. "%d)")
-    :format(count, noun, adds, dels)
+--- "(2 files, +3 −5)" -- what a folded DIRECTORY hides. Phrased like the
+--- section summary beside it, but the sidebar owns it: the canvas has no
+--- directory rows, so there is nothing to agree with. A folded FILE says
+--- render.summary instead, which is the canvas placeholder's own words.
+local function dir_summary(files, adds, dels)
+  return ("(%d files, +%d " .. render.glyphs.minus .. "%d)")
+    :format(files, adds, dels)
 end
 
 --- One tree row for one hunk, `gi` indexing `section.hunks`.
@@ -59,9 +60,9 @@ end
 ---
 --- `aside` is an optional set of file paths the user folded themselves. It flags
 --- their rows AND decides their depth: an unfolded file lists a row per hunk, a
---- folded one is a single row carrying `(N hunks, +a −d)` instead, exactly as it
---- is a single placeholder on the canvas. A folded DIR summarizes the files it
---- hides the same way.
+--- folded one is a single row carrying the canvas placeholder's own summary
+--- (render.summary) instead, exactly as it is a single placeholder on the
+--- canvas. A folded DIR summarizes the files it hides the same way.
 ---
 --- That the predicate is `aside` -- the USER's folds -- and not "renders as one
 --- row" is the whole point. The virtualizer collapses far-from-viewport sections
@@ -144,7 +145,7 @@ function S.build_entries(sections, folded, aside, stale)
             folded = folded[prefix] or false,
             stale = (folded[prefix] and stale_dirs[prefix]) or false,
             summary = folded[prefix]
-              and summary_of(total.files, "files", total.adds, total.dels)
+              and dir_summary(total.files, total.adds, total.dels)
               or nil,
           }
         end
@@ -168,10 +169,10 @@ function S.build_entries(sections, folded, aside, stale)
         stale = stale[section.path] or false,
         staged = section.staged,
         unstaged = section.unstaged,
-        summary = put_away
-          and summary_of(
-            section.nhunks or 0, "hunks", section.adds or 0, section.dels or 0)
-          or nil,
+        -- The canvas placeholder's own words, not a copy of them: a binary file
+        -- says "(binary)" in the tree exactly as it does on the canvas, where
+        -- "(0 hunks, +0 −0)" would read as "nothing changed".
+        summary = put_away and render.summary(section) or nil,
       }
       if not put_away then
         -- Binary and rename-only sections publish no hunks, so they contribute
@@ -238,6 +239,11 @@ function S.render_lines(entries, width)
       if #lead + #label + #tail > width then
         -- Bytes are an upper bound on cells, so the arithmetic only has to be
         -- exact for a row that really is too long.
+        --
+        -- The LABEL is what gives way, and only the label: past deep nesting or
+        -- a five-digit line number the marker and counts alone can exceed the
+        -- width, and then the label goes to nothing and the row still overflows.
+        -- That is the right trade -- the counts are the reason to read the row.
         label = fit(label, width - vim.fn.strdisplaywidth(lead .. tail))
       end
       local line = lead .. label .. tail
