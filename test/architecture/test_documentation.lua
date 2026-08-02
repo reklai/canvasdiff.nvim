@@ -1,4 +1,5 @@
 local appearance = require("canvasdiff.appearance")
+local command = require("canvasdiff.input").command
 local graph = require("architecture.graph")
 local T = {}
 local HIGHLIGHT_PRECEDENCE =
@@ -28,6 +29,15 @@ T.architecture_documentation_has_install_config_and_health_paths = function()
     assert(readme:find(needle, 1, true), "README omits " .. needle)
   end
   assert(not readme:find("TODO: demo", 1, true), "demo placeholder remains")
+end
+
+T.architecture_documentation_names_every_public_command = function()
+  local readme, help = read("README.md"), read("doc/canvasdiff.txt")
+  for _, word in ipairs(command.candidate_order) do
+    local invocation = ":CanvasDiff " .. word
+    assert(readme:find(invocation, 1, true), "README omits " .. invocation)
+    assert(help:find(invocation, 1, true), "Vim help omits " .. invocation)
+  end
 end
 
 T.architecture_documentation_states_highlight_ownership_low_to_high = function()

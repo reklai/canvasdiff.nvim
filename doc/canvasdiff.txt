@@ -251,6 +251,9 @@ mean OPPOSITE things.
 
 :CanvasDiff checkout    Choose and checkout a local branch.
 
+:CanvasDiff track       Choose a remote-tracking ref, then create and switch
+                        to a local branch tracking it. Never fetches.
+
 :CanvasDiff all         Switch to the `all` lens.
 :CanvasDiff unstaged    Switch to the `unstaged` lens.
 :CanvasDiff staged      Switch to the `staged` lens.

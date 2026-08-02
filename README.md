@@ -361,6 +361,7 @@ Committed ranges such as `main..topic` and `main...topic` are read-only.
 :CanvasDiff
 :CanvasDiff open
 :CanvasDiff close
+:CanvasDiff toggle
 :CanvasDiff refresh
 :CanvasDiff sidebar
 :CanvasDiff compare
