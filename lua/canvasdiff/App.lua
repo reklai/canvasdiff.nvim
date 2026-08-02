@@ -2649,8 +2649,11 @@ end
 --- The mapping rule is fixed whatever lens is showing: stage applies the
 --- index→worktree pair, unstage the HEAD→index pair. The cursor's hunk
 --- contributes only its new-side span; the pair itself is recomputed from
---- blobs at press time, never from the screen, so a stale canvas can make
---- the verb decline but never stage the wrong bytes.
+--- blobs at press time, never from the screen.
+---
+--- The span is in the DISPLAYED lens's b-side coordinates, and those name the
+--- direction's pair only while index and worktree hold the same text -- so on
+--- a file that is both staged and modified the mismatched verb declines.
 ---
 --- Anything that is not a hunk row -- a file header, a folded placeholder, a
 --- binary notice -- falls through to the file verb, so the cursor alone
@@ -2700,6 +2703,24 @@ function App:stage_hunk(direction, owned_surface, generation, win)
   end
   if direction == "unstage" and not file.staged then
     ui.notify("nothing staged here")
+    return false
+  end
+  -- `span` counts lines on the displayed lens's b side -- the worktree in the
+  -- unstaged and all lenses, the index in the staged one -- while the pick
+  -- windows the direction's own pair, whose b side is the worktree for stage
+  -- and the index for unstage. Once those two texts differ, the same line
+  -- number names different lines in each and the pick would take a hunk the
+  -- cursor was never on. Nor could a translation save it: in the all lens one
+  -- displayed hunk can fuse staged and unstaged changes into a shape the index
+  -- has never held, so the verb has no hunk to name. `S`/`U` still act on the
+  -- whole file from anywhere.
+  local mixed = file.staged and file.unstaged
+  if mixed and direction == "unstage" and tx.lens.id ~= "staged" then
+    ui.notify("this file is staged and modified — unstage its hunks from the staged lens")
+    return false
+  end
+  if mixed and direction == "stage" and tx.lens.id == "staged" then
+    ui.notify("this file is staged and modified — stage its hunks from the unstaged lens")
     return false
   end
   if direction == "stage" then
@@ -2760,9 +2781,17 @@ function App:stage_hunk(direction, owned_surface, generation, win)
     end
   end
 
+  local spliced = diff.stage.splice_many(base, donor, applied)
   local positions = capture_file_positions(surface, st, section)
-  local written, write_err =
-    source.set_index_blob(root, path, diff.stage.splice_many(base, donor, applied))
+  local written, write_err
+  if direction == "unstage" and file.staged == "A" and spliced == "" then
+    -- An addition's HEAD side is absence, not an empty blob, so once its last
+    -- staged line is reverted the entry itself is what remains to remove --
+    -- the same end state `git reset` reaches for a path HEAD does not carry.
+    written, write_err = source.unstage(root, file)
+  else
+    written, write_err = source.set_index_blob(root, path, spliced)
+  end
   if not written then
     ui.warn(write_err)
     return nil, write_err

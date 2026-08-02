@@ -1433,6 +1433,113 @@ return {
     end)
     vim.fn.delete(root, "rf")
   end,
+  ["git: u declines on a mixed file outside the staged lens"] = function()
+    -- Staged edits at HEAD lines 20 and 30, then ten unstaged lines
+    -- inserted at the top: in the all lens the staged hunks display at
+    -- WORKTREE rows 30 and 40, so a raw line-number overlap against the
+    -- HEAD->index pair (index rows 20 and 30) would take the OTHER staged
+    -- hunk. The press must decline, never translate or guess.
+    local base = numbered(40)
+    local staged = base
+      :gsub("line 20\n", "line 20 CHANGED\n")
+      :gsub("line 30\n", "line 30 CHANGED\n")
+    local inserted = {}
+    for i = 1, 10 do inserted[i] = "new " .. i end
+    local mixed = table.concat(inserted, "\n") .. "\n" .. staged
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = staged },
+    })
+    sh(root, { "git", "add", "-A" })
+    write(root, "a.txt", mixed)
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "line 20 CHANGED"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), staged,
+        "the declined press leaves the index blob byte-identical")
+      assert(found_notification(msgs, before + 1,
+          "this file is staged and modified — unstage its hunks from the staged lens"),
+        vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s declines in the staged lens on a mixed file"] = function()
+    local half = TWELVE:gsub("two", "TWO")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = half },
+    })
+    sh(root, { "git", "add", "-A" })
+    write(root, "a.txt", TWELVE_EDITED)
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "TWO"), "s")
+      H.eq(repository.show(root, ":0", "a.txt"), half,
+        "the declined press leaves the index blob byte-identical")
+      assert(found_notification(msgs, before + 1,
+          "this file is staged and modified — stage its hunks from the unstaged lens"),
+        vim.inspect(msgs))
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u in the all lens still works on a staged-only file"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = TWELVE_EDITED },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("all") }))
+      press(st, content_row(st, 1, "TEN"), "u")
+      H.eq(repository.show(root, ":0", "a.txt"), (TWELVE:gsub("two", "TWO")),
+        "index and worktree coincide, so the all-lens span names the right hunk")
+      H.eq(read(root, "a.txt"), TWELVE_EDITED, "unstage never writes the worktree")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u on a staged addition's hunk drops the index entry"] = function()
+    local root = H.git_fixture({
+      worktree = { ["fresh.txt"] = "alpha\nbeta\n" },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      press(st, content_row(st, 1, "beta"), "u")
+      H.eq(sh(root, { "git", "ls-files", "--", "fresh.txt" }), "",
+        "no empty blob stays staged where git reset -p would drop the entry")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.path, "fresh.txt")
+      H.eq(f.status, "?")
+      H.eq(f.staged, nil)
+      H.eq(f.unstaged, "?")
+      H.eq(read(root, "fresh.txt"), "alpha\nbeta\n", "worktree bytes intact")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: u restores the HEAD entry of a stale staged deletion"] = function()
+    -- The staged == "D" empty index side is reachable only through
+    -- staleness: the canvas still shows hunk rows from before the entry
+    -- vanished, and press-time truth governs what the press does.
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = TWELVE },
+      worktree = { ["a.txt"] = (TWELVE:gsub("one\n", "ONE\n", 1)) },
+    })
+    sh(root, { "git", "add", "-A" })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("staged") }))
+      local row = content_row(st, 1, "ONE")
+      sh(root, { "git", "rm", "--cached", "--", "a.txt" })
+      press(st, row, "u")
+      H.eq(repository.show(root, ":0", "a.txt"), TWELVE,
+        "the staged deletion overlapping the span is undone entry and all")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, nil)
+      H.eq(f.unstaged, "M")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
   ["source: modified loaded buffers are detected by exact target identity"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
     local path = vim.fs.joinpath(root, "a.txt")
