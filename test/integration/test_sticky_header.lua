@@ -235,4 +235,32 @@ T["sticky_win claim refusal allocates nothing"] = function()
     "no float (or any other window) survives a refused claim")
 end
 
+T["sticky_win open defines the groups its crumb draws with"] = function()
+  -- Observed as a CALL, not as highlight state. Highlight groups are
+  -- process-global and `default = true` makes a second definition a no-op, so
+  -- any test that reads the groups back passes as soon as some earlier test in
+  -- the same process defined them -- it would go green with this call deleted.
+  -- The sidebar's own call is covered on its side; this is the half that a
+  -- canvas running with `sidebar.enabled = false` depends on, and no test
+  -- exercises that configuration.
+  local real = canvas.format.ensure_hunk_hl
+  local calls = 0
+  canvas.format.ensure_hunk_hl = function(...)
+    calls = calls + 1
+    return real(...)
+  end
+
+  local ok, err = xpcall(function()
+    local _, lease = open_pinned()
+    assert(calls > 0,
+      "SH.open must define CanvasDiffCrumb and CanvasDiffHunkDel before it can"
+        .. " draw a crumb with them -- a canvas with no sidebar has no other"
+        .. " chance to")
+    sticky.close(lease)
+  end, debug.traceback)
+
+  canvas.format.ensure_hunk_hl = real
+  assert(ok, err)
+end
+
 return T
