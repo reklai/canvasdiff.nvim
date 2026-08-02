@@ -71,6 +71,19 @@ local function is_glyph(name)
   return DEFAULT_GLYPHS[name] ~= nil
 end
 
+-- `highlights` is an extension schema whose arbitrary native values belong to
+-- appearance validation. Capture entries independently so one value Neovim's
+-- deepcopy rejects cannot abort config or discard valid siblings.
+local function capture_highlights(raw)
+  if type(raw) ~= "table" then return raw end
+  local captured = {}
+  for name, spec in pairs(raw) do
+    local ok, copy = pcall(vim.deepcopy, spec)
+    captured[name] = ok and copy or spec
+  end
+  return captured
+end
+
 -- Keymaps are grouped by the context they live in. `global` is process-wide;
 -- the other contexts name the buffer that receives the mapping, because the
 -- same key means different things in different places: `q` closes the canvas
@@ -370,6 +383,11 @@ end
 --- back to its default, which reads as "my config stopped working".
 function M.setup(opts)
   opts = opts or {}
+  local raw_highlights = opts.highlights
+  local merge_opts = {}
+  for key, value in pairs(opts) do
+    if key ~= "highlights" then merge_opts[key] = value end
+  end
   local diagnostics = {}
   local function report(message)
     diagnostics[#diagnostics + 1] = message
@@ -392,14 +410,20 @@ function M.setup(opts)
   end
   -- user_opts is captured BEFORE the strip below, so :checkhealth still sees
   -- what the user actually wrote.
-  M.user_opts = vim.deepcopy(opts)
+  M.user_opts = vim.deepcopy(merge_opts)
+  if raw_highlights ~= nil then
+    M.user_opts.highlights = capture_highlights(raw_highlights)
+  end
   -- Strip the removed key so it never lands in M.options; deepcopy first
   -- because `opts` belongs to the caller.
-  if type(opts.highlight) == "table" then
-    opts.highlight = vim.deepcopy(opts.highlight)
-    opts.highlight.diff = nil
+  if type(merge_opts.highlight) == "table" then
+    merge_opts.highlight = vim.deepcopy(merge_opts.highlight)
+    merge_opts.highlight.diff = nil
   end
-  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), merge_opts)
+  if raw_highlights ~= nil then
+    M.options.highlights = capture_highlights(raw_highlights)
+  end
 
   -- Glyphs are live configuration state rather than part of M.options: formatting
   -- reads this exact table through the canvas facade. Reset first, or two setup()
@@ -410,7 +434,7 @@ function M.setup(opts)
   -- otherwise do nothing at all and look like CanvasDiff failing to honour the option,
   -- which is exactly the failure mode the legacy-keymaps check above exists for.
   reset_glyphs()
-  local g = opts.glyphs
+  local g = merge_opts.glyphs
   if g == "ascii" then
     g = M.ASCII_GLYPHS
   end

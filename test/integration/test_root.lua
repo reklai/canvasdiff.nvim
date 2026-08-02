@@ -58,6 +58,29 @@ T["appearance app creation initializes configured highlights without setup"] = f
   assert(ok, err)
 end
 
+T["root_ App creation presents preconfigured highlight diagnostics"] = function()
+  local config = require("canvasdiff.config")
+  config.setup({ highlights = { CanvasDiffGhost = "Comment" } })
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    require("canvasdiff.App").new()
+  end, debug.traceback)
+
+  vim.notify = real_notify
+  config.setup({})
+  appearance.setup({})
+  assert(ok, err)
+  H.eq(#messages, 1, "constructor diagnostics are user-visible")
+  H.eq(messages[1].level, vim.log.levels.ERROR)
+  assert(messages[1].message:find("must be a table or false", 1, true),
+    messages[1].message)
+end
+
 --- Run `fn` in a throwaway tab with `cwd` as the working directory, capturing
 --- notifications. Restores cwd, closes the tab, and drops the cached root
 --- facade so the next test gets a fresh default App.
@@ -3298,6 +3321,38 @@ T["root_ setup presents highlight diagnostics and applies valid siblings"] = fun
   H.eq(#messages, 1, "one invalid sibling produces one diagnostic")
   H.eq(messages[1].level, vim.log.levels.ERROR)
   assert(messages[1].message:find("must be a table or false", 1, true),
+    messages[1].message)
+end
+
+T["root_ setup isolates an uncopyable highlight and applies its valid sibling"] = function()
+  local fm = require("canvasdiff")
+  local thread = coroutine.create(function() end)
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+
+  local ok, err = xpcall(function()
+    fm.setup({
+      highlights = {
+        CanvasDiffFileBar = { bg = "#112233" },
+        CanvasDiffGhost = { fg = thread },
+      },
+    })
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end, debug.traceback)
+  local reset_ok, reset_err = pcall(fm.setup, {})
+
+  vim.notify = real_notify
+  assert(ok, err)
+  assert(reset_ok, reset_err)
+  H.eq(#messages, 1, "the invalid sibling produces one diagnostic")
+  H.eq(messages[1].level, vim.log.levels.ERROR)
+  assert(messages[1].message:find("CanvasDiffGhost", 1, true),
+    messages[1].message)
+  assert(messages[1].message:find("is invalid", 1, true),
     messages[1].message)
 end
 

@@ -73,6 +73,22 @@ T["config_ highlights preserve native specs and raw health input"] = function()
   end)
 end
 
+T["config_ highlights safely retain an uncopyable native value"] = function()
+  local thread = coroutine.create(function() end)
+  with_setup({
+    highlights = {
+      CanvasDiffFileBar = { bg = "#112233" },
+      CanvasDiffGhost = { fg = thread },
+    },
+  }, function(options)
+    H.eq(options.highlights.CanvasDiffFileBar.bg, "#112233")
+    assert(options.highlights.CanvasDiffGhost.fg == thread,
+      "the invalid leaf remains available to appearance validation")
+    assert(config.user_opts.highlights.CanvasDiffGhost.fg == thread,
+      "health retains the raw invalid leaf without invoking it")
+  end)
+end
+
 -- The whole nested+list design rests on this: tbl_deep_extend REPLACES
 -- list-like values rather than merging them index-wise. If it ever merged,
 -- `collapse = "za"` would silently keep `c` and the override would be a

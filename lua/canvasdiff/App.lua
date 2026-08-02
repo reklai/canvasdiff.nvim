@@ -52,7 +52,10 @@ local GLOBAL_ACTIONS = {
 
 function App.new(opts)
   opts = opts or {}
-  appearance.setup(config.options.highlights)
+  local appearance_diagnostics = appearance.setup(config.options.highlights)
+  for _, message in native_ipairs(appearance_diagnostics) do
+    ui.err(message)
+  end
   local effects = opts.global_keymap_effects or {
     get = native_get_keymap,
     set = function(mode, lhs, callback, map_opts)

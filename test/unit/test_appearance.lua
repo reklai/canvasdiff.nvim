@@ -184,6 +184,37 @@ T["appearance replacement releases only its own old override"] = function()
   assert(ok, err)
 end
 
+T["appearance omission preserves an identical explicit override takeover"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    appearance.setup({ CanvasDiffFileBar = { bg = "#112233" } })
+    vim.api.nvim_set_hl(0, "CanvasDiffFileBar", { bg = "#112233" })
+    appearance.setup({})
+    local value = vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = true })
+    H.eq(value.bg, 0x112233)
+    assert(value.default ~= true,
+      "an identical explicit definition retains foreign provenance")
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
+  appearance.setup({})
+  assert(ok, err)
+end
+
+T["appearance isolates a throwing deepcopy and applies its valid sibling"] = function()
+  local thread = coroutine.create(function() end)
+  with_appearance({
+    CanvasDiffFileBar = { bg = "#112233" },
+    CanvasDiffGhost = { fg = thread },
+  }, function(diagnostics)
+    H.eq(#diagnostics, 1, vim.inspect(diagnostics))
+    assert(diagnostics[1]:find("CanvasDiffGhost", 1, true), diagnostics[1])
+    assert(diagnostics[1]:find("is invalid", 1, true), diagnostics[1])
+    H.eq(vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false }).bg, 0x112233)
+  end)
+end
+
 T["appearance false releases an owned override to the current default"] = function()
   appearance.setup({})
   local ok, err = xpcall(function()

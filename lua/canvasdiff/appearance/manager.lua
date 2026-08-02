@@ -41,13 +41,18 @@ local function validate(raw)
       diagnostics[#diagnostics + 1] =
         ("highlights.%s cannot set default or force"):format(name)
     elseif spec ~= false then
-      local copy = vim.deepcopy(spec)
-      local ok, err = pcall(vim.api.nvim_set_hl, VALIDATE_NS, name, copy)
-      if ok then
-        accepted[name] = copy
-      else
+      local copied, copy = pcall(vim.deepcopy, spec)
+      if not copied then
         diagnostics[#diagnostics + 1] =
-          ("highlights.%s is invalid: %s"):format(name, tostring(err))
+          ("highlights.%s is invalid: %s"):format(name, tostring(copy))
+      else
+        local valid, err = pcall(vim.api.nvim_set_hl, VALIDATE_NS, name, copy)
+        if valid then
+          accepted[name] = copy
+        else
+          diagnostics[#diagnostics + 1] =
+            ("highlights.%s is invalid: %s"):format(name, tostring(err))
+        end
       end
     end
   end
@@ -86,7 +91,11 @@ function M.ensure()
   for _, name in ipairs(names) do
     local spec = overrides[name]
     if spec then
-      vim.api.nvim_set_hl(0, name, spec)
+      local marked = vim.tbl_extend("force", vim.deepcopy(spec), {
+        default = true,
+        force = true,
+      })
+      vim.api.nvim_set_hl(0, name, marked)
       override_authored[name] = readback(name)
     end
   end
