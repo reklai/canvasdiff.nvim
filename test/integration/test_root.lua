@@ -5,6 +5,18 @@ local appearance = require("canvasdiff.appearance")
 
 local T = {}
 
+T["README LazyVim opts apply through the root setup"] = function()
+  local plugin = require("canvasdiff")
+  plugin.setup({ highlights = {
+    CanvasDiffFileBar = { fg = "#112233", bg = "#445566" },
+  } })
+  local value = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = false })
+  H.eq(value.fg, 0x112233)
+  H.eq(value.bg, 0x445566)
+  plugin.setup({})
+end
+
 local function with_appearance(overrides, fn)
   appearance.setup({})
   local ok, err = xpcall(function()

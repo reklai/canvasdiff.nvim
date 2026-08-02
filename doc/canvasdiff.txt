@@ -11,6 +11,7 @@ CONTENTS                                                  *canvasdiff-contents*
     6. Commands ............................. |canvasdiff-commands|
     7. Mappings ............................. |canvasdiff-mappings|
     8. Configuration ........................ |canvasdiff-configuration|
+       Highlights ........................... |canvasdiff-highlights|
     9. Sessions ............................. |canvasdiff-sessions|
    10. Lua API .............................. |canvasdiff-api|
    11. Troubleshooting ...................... |canvasdiff-troubleshooting|
@@ -309,22 +310,7 @@ Two canvas actions ship with no key at all:
     cycle_file_next         Scroll to the next file's diff (wraps)
     cycle_file_prev         Scroll to the previous file's diff (wraps)
 
-                                                *canvasdiff-changed-behaviour*
-Changed behaviour~
-
-CTRL-N and CTRL-P now cycle by HUNK rather than by file. They used to scroll
-one file's diff at a time; they now stop at every hunk, a folded file still
-counting as exactly one stop -- the granularity the rest of the canvas
-already worked at.
-
-`s` and `u` narrowed too. They used to take the whole file wherever they were
-pressed; they now take the hunk under the cursor, and the whole file only on
-a row that names none -- a file header, a folded placeholder, or a sidebar
-file row. `S` and `U` are new keys rather than redefinitions of old ones, and
-they are the whole-file verbs from anywhere.
-
-The file-at-a-time behaviour is intact under the two names above, so putting
-it back is one line: >lua
+To bind file-at-a-time cycling to CTRL-N/P instead: >lua
 
     require("canvasdiff").setup({
       keymaps = { canvas = {
@@ -334,10 +320,8 @@ it back is one line: >lua
       } },
     })
 <
-Freeing them first is worth the extra line. Two actions claiming one key in
-one context is not an error -- it is whichever mapping installs last, and
-that is not a thing to depend on. Drop the first line and give the hunk cycle
-other keys if you want both.
+Two actions claiming one key in one context resolve to whichever map installs
+last, so disable or move the hunk-cycle actions before reusing their keys.
 
 In the sidebar~
 
@@ -414,6 +398,7 @@ default. >lua
     require("canvasdiff").setup({
       context = 3,
       base = "HEAD",
+      highlights = {},
 
       keymaps = {
         global = {
@@ -429,9 +414,7 @@ default. >lua
           prev_hunk  = "[h",
           cycle_next = "<C-n>",
           cycle_prev = "<C-p>",
-          -- The file axis CTRL-N/P used to walk. `{}` is "disabled", so no
-          -- map exists until you ask for one; see
-          -- |canvasdiff-changed-behaviour|.
+          -- File-at-a-time cycling ships disabled: no map exists until set.
           cycle_file_next = {},
           cycle_file_prev = {},
           lens_next  = "<Tab>",
@@ -502,8 +485,8 @@ You will notice three differences on such a review:
 Set `paged = { enabled = false }` to always use the ordinary canvas, at the
 cost of memory on very large reviews. Below the threshold nothing changes.
 
-                                                  *canvasdiff-highlight-diff*
-Diff row colouring~
+                          *canvasdiff-highlights* *canvasdiff-highlight-diff*
+Highlights~
 
 There is one rendering, made of three channels, every value derived from the
 live colourscheme when the canvas draws:
@@ -527,34 +510,82 @@ live colourscheme when the canvas draws:
   `statuscolumn.enabled = true` (the default); the prefix is in the text and
   always there.
 
-The groups, all defined with `default = true` so a colourscheme or an
-explicit `nvim_set_hl()` of your own always wins over the derived defaults:
+`setup().highlights` maps exact group names to native |nvim_set_hl()|
+specifications. `fg`, `bg`, `sp`, `link`, `blend`, `bold`, `italic`,
+`undercurl`, and every other Neovim-supported attribute are accepted. Each
+table is the COMPLETE intended definition: setting a highlight replaces its
+definition; it does not inherit omitted fields from the old one. `default`
+and `force` are manager-owned fields and are rejected. Example: >lua
 
-    CanvasDiffAdd            derived neutral elevation; an added row's
-                             background
-    CanvasDiffDel            elevation plus dimmed foreground; a wholly
-                             deleted file's real rows
-    CanvasDiffGhost          dimmed foreground, no background; ghost
-                             deletion lines
-    CanvasDiffPrefixAdd      derived green/red foreground; the `+`/`-`
-    CanvasDiffPrefixDel      prefix cell
-    CanvasDiffGutterAdd      the same green/red; the statuscolumn bar
-    CanvasDiffGutterDel
-    CanvasDiffFileBar        derived, tinted toward Directory; the file
-                             header row and its pinned copy
-    CanvasDiffWinbar         WinBar link; the top band
-    CanvasDiffWinbarReadOnly Visual link; the band's read-only tint
-    CanvasDiffSidebarHunk    Comment link; a sidebar hunk row, whole
-    CanvasDiffCrumb          no colour of its own; the pinned header's
-                             crumb reads as ordinary text on the bar
-    CanvasDiffHunkDel        CanvasDiffGhost link; a hunk label taken from a
-                             deleted line, in the sidebar row and in the
-                             pinned header's crumb alike
+    require("canvasdiff").setup({
+      highlights = {
+        CanvasDiffFileBar = {
+          fg = "#c6d0f5",
+          bg = "#303446",
+          bold = true,
+        },
+        CanvasDiffGhost = { link = "Comment" },
+      },
+    })
+<
+Precedence, from lowest to highest:
 
-The old `highlight.diff` option (`"quiet"`/`"classic"`/`"gutter"`) no longer
-exists -- there is nothing to pick between. A leftover `highlight.diff = ...`
-in a config gets one diagnostic from `setup()` and is otherwise ignored;
-override the groups above instead.
+    colourscheme -> CanvasDiff defaults -> setup().highlights
+
+CanvasDiff defaults use native default ownership, so a colourscheme definition
+wins over them. An explicit setup override wins over both. One process-wide
+|ColorScheme| callback reapplies current CanvasDiff defaults, then the explicit
+overrides; repeated setup replaces this state and does not add callbacks.
+
+On a later `setup()` call, omitting a group or assigning `false` releases its
+managed override and returns it to the CanvasDiff/colourscheme default: >lua
+
+    require("canvasdiff").setup({
+      highlights = { CanvasDiffFileBar = false },
+    })
+<
+A direct definition made after CanvasDiff's write belongs to its author and is
+not cleared by a later reset. Colourscheme authors should define the complete
+group with |nvim_set_hl()| and should not also put the same group in
+`setup().highlights`: >lua
+
+    vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {
+      fg = "#c6d0f5",
+      bg = "#303446",
+    })
+<
+Public groups (27):
+
+    CanvasDiffAdd            derived elevation; added rows
+    CanvasDiffDel            elevation + dimmed fg; real deletion rows
+    CanvasDiffGhost          dimmed fg; ghost deletion lines
+    CanvasDiffPrefixAdd      derived add fg; `+` prefix
+    CanvasDiffPrefixDel      derived delete fg; `-` prefix
+    CanvasDiffGutterAdd      derived add fg; statuscolumn bar
+    CanvasDiffGutterDel      derived delete fg; statuscolumn bar
+    CanvasDiffFileBar        derived Directory-tinted file bar
+    CanvasDiffFileHeader     Title link; filename on the file bar
+    CanvasDiffHunkHeader     Comment link; hunk header rows
+    CanvasDiffBinary         Comment link; binary-file notices
+    CanvasDiffWinbar         WinBar link; editable comparison band
+    CanvasDiffWinbarReadOnly Visual link; read-only comparison band
+    CanvasDiffStaged         Added link; staged marker
+    CanvasDiffUnstaged       DiagnosticWarn link; unstaged marker
+    CanvasDiffStale          DiagnosticError link; stale marker
+    CanvasDiffStaleEmphasis  bold; stale-marker emphasis
+    CanvasDiffSidebarDir     Directory link; directory rows
+    CanvasDiffSidebarActive  Visual link; active sidebar row
+    CanvasDiffSidebarHunk    Comment link; sidebar hunk rows
+    CanvasDiffHunkDel        CanvasDiffGhost link; deleted-line hunk label
+    CanvasDiffCrumb          empty; ordinary breadcrumb text on the file bar
+    CanvasDiffScrollFile     Title link; minimap file boundary
+    CanvasDiffScrollAdd      DiffAdd link; minimap additions
+    CanvasDiffScrollDel      DiffDelete link; minimap deletions
+    CanvasDiffScrollChanged  DiffChange link; minimap changed region
+    CanvasDiffScrollThumb    PmenuThumb link; minimap viewport thumb
+
+The removed `highlight.diff` option is diagnosed and ignored. Customize the
+groups above instead.
 
                                                           *canvasdiff-glyphs*
 Glyphs~
