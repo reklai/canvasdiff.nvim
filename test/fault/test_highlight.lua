@@ -1331,29 +1331,6 @@ T["hl_rows the row tints go through overridable CanvasDiff aliases"] = function(
     .. vim.inspect(linked))
 end
 
--- The word-diff marks have to beat the row tint they sit inside, and a BACKGROUND
--- cannot be relied on to: which one wins is colourscheme luck. Measured both ways --
--- under tokyonight-moon DiffText clears an added row by 9 and Search by 39, and under
--- Neovim's builtin scheme that reverses to 28 and 19, with the row itself clearing
--- Normal by 41 so neither dominates.
---
--- So the requirement is that these carry ATTRIBUTES and NO background: attributes
--- compose over whatever is underneath instead of competing with it, which is the only
--- form of this that holds under every colourscheme. This test is therefore structural
--- on purpose -- a luminance assertion here would pass or fail on the test runner's
--- colourscheme rather than on anything canvasdiff decides.
-T["hl_rows word-diff marks emphasise by attribute, not by a competing background"] = function()
-  for _, name in ipairs({ "CanvasDiffWordAdd", "CanvasDiffWordDel" }) do
-    local h = vim.api.nvim_get_hl(0, { name = name, link = false })
-    assert(next(h) ~= nil, name .. " must be defined, or changed spans get no mark at all")
-    assert(h.bg == nil, name .. " must not set a background: it sits inside the row tint, "
-      .. "so a background competes with one that already claimed the contrast range "
-      .. "(linking back to DiffText or Search is what breaks this)")
-    assert(h.bold or h.underline or h.reverse or h.italic or h.undercurl,
-      name .. " must carry at least one attribute, or it marks nothing")
-  end
-end
-
 -- --- the diff-row group values -----------------------------------------------
 --
 -- The field is DERIVED from the live scheme, and it is one statement per

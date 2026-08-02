@@ -8,9 +8,13 @@ local fold = model.fold
 
 local T = {}
 
+-- Real Lua, in a .lua section, because two tests below use "this section has
+-- marks" as their precondition and treesitter is the only thing that puts them
+-- there. A .txt fixture parses to nothing, so those tests would assert against
+-- an empty mark set and pass whatever the code did.
 local function bigtext(n, tag)
   local t = {}
-  for i = 1, n do t[i] = ("%s line %d"):format(tag, i) end
+  for i = 1, n do t[i] = ("local %s_%d = %d"):format(tag, i, i) end
   return table.concat(t, "\n") .. "\n"
 end
 
@@ -28,9 +32,9 @@ end
 
 local function open_three()
   return canvas.open({
-    big_section("a/one.txt", "a"),
-    big_section("b/two.txt", "b"),
-    big_section("c/three.txt", "c"),
+    big_section("a/one.lua", "a"),
+    big_section("b/two.lua", "b"),
+    big_section("c/three.lua", "c"),
   }, {})
 end
 
@@ -139,12 +143,12 @@ T["collapse_ hl never marks a collapsed section"] = function()
   local st = open_three()
   reset_view(st)
   local lease = hl.attach(st, { margin = 1000 })
-  assert(lease.ids_by_path["a/one.txt"] and #lease.ids_by_path["a/one.txt"] > 0,
+  assert(lease.ids_by_path["a/one.lua"] and #lease.ids_by_path["a/one.lua"] > 0,
     "sanity: attach marked section 1 before collapsing")
 
   canvas.set_collapsed(st, 1, true)
   hl.apply_now(lease)
-  H.eq(lease.ids_by_path["a/one.txt"], nil,
+  H.eq(lease.ids_by_path["a/one.lua"], nil,
     "ids_by_path has no entry for the collapsed section")
 
   local ns = vim.api.nvim_create_namespace("canvasdiff.canvas.ts")
@@ -172,7 +176,7 @@ T["collapse_ set_collapsed on a folded-away section splices nothing"] = function
 
   canvas.set_collapsed(st, 2, true)
   H.eq(fired, 0, "already one row, so there is nothing to re-splice")
-  H.eq(st.collapsed["b/two.txt"], "user", "but the intent is recorded")
+  H.eq(st.collapsed["b/two.lua"], "user", "but the intent is recorded")
   local s, e = canvas.section_rows(st, 2)
   H.eq(e - s, 1, "still exactly one row")
 
@@ -206,13 +210,13 @@ T["collapse_ hl never marks a folded-away section"] = function()
   local st = open_three()
   reset_view(st)
   local lease = hl.attach(st, { margin = 1000 })
-  assert(lease.ids_by_path["b/two.txt"] and #lease.ids_by_path["b/two.txt"] > 0,
+  assert(lease.ids_by_path["b/two.lua"] and #lease.ids_by_path["b/two.lua"] > 0,
     "sanity: attach marked section 2 before folding")
 
   st.folded = { ["b/"] = true }
   canvas.resync_visibility(st, fold.indices_under(st.sections, "b/"))
   hl.apply_now(lease)
-  H.eq(lease.ids_by_path["b/two.txt"], nil, "no ids tracked for a folded-away section")
+  H.eq(lease.ids_by_path["b/two.lua"], nil, "no ids tracked for a folded-away section")
 
   -- The real failure mode: a section that renders as one row still carries all
   -- its entries, so a reader that thinks it expanded writes marks at

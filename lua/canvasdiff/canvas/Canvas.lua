@@ -191,9 +191,9 @@ local function apply_section_hl(buf, start_row, section, collapsed, read_row)
   -- was proportional to your window width rather than to the size of the change: a
   -- three-character edit painted green to the right edge of a 200-column window. That
   -- is a lot of the strongest visual channel spent on "this line is involved", which
-  -- is the least interesting thing on screen once you have word-diff marks saying
-  -- which TOKENS changed. Measured budget before this: the row tint stood 27 luminance
-  -- clear of Normal while the word-diff mark stood only 9 clear of the row it sat on.
+  -- is the least interesting thing on screen: the +/- prefix already said it, in one
+  -- column instead of two hundred. Measured budget before this: the row tint stood 27
+  -- luminance clear of Normal, most of the contrast range for the least new fact.
   --
   -- Dropping it costs nothing for the other kinds -- file_hdr, hunk_hdr and binary all
   -- resolve to foreground-only groups (Title, Comment), where hl_eol has nothing to

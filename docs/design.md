@@ -71,17 +71,25 @@ window rather than with the change. It also muddied code: on a tinted row,
 `@comment` sat at only 47 luminance delta against the fill where every other
 syntax group had 103–153.
 
-**Word-diff emphasises by attribute, never by a competing background.** This mark sits
-*inside* the row's elevation, so a background here has to out-contrast one that already
-claimed most of the range — and which wins is pure colourscheme luck. Linked to `DiffText` it
-cleared an added row by just **9** luminance under tokyonight while the row itself
-cleared `Normal` by 27, so the strongest signal was "this line is involved" and the
-weakest was "this is the token that changed" — backwards, since the second is the only
-one you can't already read off the `+`/`-`. Switching the link to `Search` fixed that
-under tokyonight (+39) and *reversed it* under Neovim's builtin scheme (19, versus
-`DiffText`'s 28). Bold + underline sidesteps the contest entirely: attributes compose
-over whatever is underneath, identically under every colourscheme, and an underline
-states the exact extent where a background only says "somewhere in here".
+**There is no intra-line emphasis, and that is a reversal.** The canvas used to mark
+which spans of a paired line differed — bold + underline, chosen as attributes because a
+background there loses to the row's own elevation by pure colourscheme luck (linked to
+`DiffText` it cleared an added row by 9 luminance under tokyonight while the row cleared
+`Normal` by 27, and switching to `Search` fixed that under tokyonight and *reversed* it
+under the builtin scheme). The attribute reasoning was sound; the feature was not worth
+it here, for two reasons that are structural rather than cosmetic.
+
+It was half a feature by construction. Extmarks cannot be placed inside virtual text, so
+once deletions became ghosts only the `+` side could be marked — you were told which
+words were new, never which were removed, and still had to read the ghost to learn what
+it had been. And the pairing beneath it was positional: ghost *k* with add *k*, which is
+right when one line replaced one line and arbitrary otherwise. On a reflowed paragraph it
+compared lines that were never versions of each other and underlined the letters they
+happened to share, which reads as confetti and is confidently wrong rather than merely
+noisy. Ghost deletions were the right call — they made every canvas row map 1:1 to a real
+file line — but they are what reduced this to half of itself. The ghost also sits directly
+above the line it explains, aligned, which is the comparison intra-line marking exists to
+save you in a unified diff where the two halves are far apart.
 
 The `+`/`-` prefixes stay regardless — they're the only **shape**-based channel, so
 they're what survives red/green colour blindness and a monochrome terminal, which
@@ -171,16 +179,18 @@ Two deliberate limits:
   with no new side is *empty*, and ghosting would turn its entire content into virtual
   text you can't yank, search, or put a cursor on — when those lines are all it has to
   show. The rule is: the result view applies when there is a result.
-- **Word-diff marks only the new side.** Extmarks can't be placed inside virtual
-  text, so the ghost renders whole and the `+` line carries the intra-line detail —
-  the half that says what the code became.
+- **A ghost cannot carry a mark.** Extmarks can't be placed inside virtual text, so
+  the ghost renders whole and nothing can be highlighted *within* it. That constraint
+  is what hollowed out intra-line marking until it was worth removing — see "There is
+  no intra-line emphasis" above.
 
 `CanvasDiffGhost`'s default is the dimming plus a strikethrough: dimmed because
 deletions read as context for the line that replaced them rather than something to
-study on their own; struck because the dim floor deliberately parks ghosts at comment
-brightness, which makes a deleted block and a comment block luminance twins — the
-strike is what tells them apart at a glance, before you read a character, and it
-survives colour blindness where the margin's red does not.
+study on their own; struck because shape is the half of "removed" that survives colour
+blindness and a monochrome terminal, where the dim and the margin's red both say
+nothing. The two corroborate rather than one carrying the fact alone — which is why
+the dim is set below its own ceiling rather than on it (see the ghost-dim measurement
+above).
 
 ## The stale marker
 
@@ -199,7 +209,7 @@ under tokyonight but only **23** under Neovim's builtin scheme, where `Diagnosti
 resolves to a pale salmon rather than a dark red. Two pale pastels 23 apart is not a
 distinction, and this is the one place where getting it wrong means reading the wrong
 fact about a file. Bold composes over whatever colour is underneath, identically
-everywhere — the same reasoning as the word-diff marks.
+everywhere — the same reasoning that governs every other attribute choice here.
 
 If the two `●`s are still hard to tell apart, the most reliable fix is a different
 *glyph*: `glyphs = { stale = " !" }`.

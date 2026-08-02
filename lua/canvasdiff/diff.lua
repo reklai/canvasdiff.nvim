@@ -5,7 +5,6 @@ local lens = require("canvasdiff.diff.lens")
 local model = require("canvasdiff.diff.model")
 local stage = require("canvasdiff.diff.stage")
 local text = require("canvasdiff.diff.text")
-local word_diff = require("canvasdiff.diff.word_diff")
 
 -- The diff domain is pure over caller-provided text and file metadata.
 -- Consumers outside this directory import only this curated facade.
@@ -56,5 +55,4 @@ return {
     splice_many = stage.splice_many,
   },
   staged_then_changed = model.staged_then_changed,
-  word_marks = word_diff.section_marks,
 }

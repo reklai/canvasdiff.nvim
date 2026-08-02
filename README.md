@@ -22,7 +22,7 @@ where you were reading. Status: pre-alpha.
 ## Features
 
 - **One canvas** — every changed file, concatenated into a single buffer with
-  your own treesitter highlighting plus word-level diff emphasis
+  your own treesitter highlighting
 - **Edit in place** — Enter opens the real file at that exact line; Ctrl+Space
   returns to the same spot, with the diff regenerated from buffer content,
   saved or not
@@ -342,7 +342,7 @@ require("canvasdiff").setup({
   context = 3,          -- unified-diff context lines around each hunk
   base = "HEAD",        -- lens the canvas opens in: "HEAD" (all) or "index" (unstaged)
   highlight = {
-    enabled = true,     -- syntax + word-diff highlighting of hunk content
+    enabled = true,     -- treesitter syntax highlighting of hunk content
     margin = 100,       -- rows beyond the viewport kept highlighted
     debounce_ms = 30,   -- scroll debounce before re-applying highlights
   },
@@ -494,7 +494,6 @@ colourscheme by measured factors rather than linked — the measurements are in
 | `CanvasDiffGhost` | dimmed fg + strikethrough | ghost deletion lines |
 | `CanvasDiffPrefixAdd` / `CanvasDiffPrefixDel` | derived green/red fg | the `+`/`-` prefix cell |
 | `CanvasDiffGutterAdd` / `CanvasDiffGutterDel` | the same green/red | the statuscolumn bar |
-| `CanvasDiffWordAdd` / `CanvasDiffWordDel` | bold + underline | the changed span within a line |
 | `CanvasDiffFileBar` | derived bar elevation | the file header row and its pinned copy |
 | `CanvasDiffFileHeader` | `Title` | the filename on the bar |
 | `CanvasDiffHunkHeader` | `Comment` | `@@ … @@` hunk header rows |

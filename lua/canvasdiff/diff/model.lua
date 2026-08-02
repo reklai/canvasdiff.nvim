@@ -90,10 +90,9 @@ end
 
 --- Section shown for a file we refuse to diff. Carries no ctx/add/del
 --- entries at all, which is what keeps every downstream consumer safe without
---- each needing its own binary check: the word-diff tier only pairs del/add
---- runs, treesitter highlighting only colors content rows, the statuscolumn
---- only numbers rows with a new_lnum, and hunk motions only stop at hunk
---- headers. None of them find anything here.
+--- each needing its own binary check: treesitter highlighting only colors
+--- content rows, the statuscolumn only numbers rows with a new_lnum, and hunk
+--- motions only stop at hunk headers. None of them find anything here.
 local function binary_section(path, old_text, new_text, status, metadata)
   return with_metadata({
     binary = true,
@@ -138,11 +137,10 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     }, path, old, new, status, metadata)
   end
 
-  -- Binary never gets diffed. vim.text.diff would emit meaningless line noise
-  -- for a zip, and the NUL bytes are actively fatal: Vim strings cannot hold
-  -- NUL, so one reaching vim.fn.split in the word-diff tier becomes a Blob and
-  -- throws E976, taking the whole open() down. git refuses too, printing
-  -- "Binary files differ" rather than a patch.
+  -- Binary never gets diffed: vim.text.diff would emit meaningless line noise
+  -- for a zip, and git refuses too, printing "Binary files differ" rather than
+  -- a patch. NUL bytes are the second reason -- see diff.text.is_binary for the
+  -- Vim-string hazard they carry into any Vimscript call.
   if binary then
     return binary_section(path, old, new, status, metadata)
   end

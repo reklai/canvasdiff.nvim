@@ -103,7 +103,7 @@ local HL_GROUP = {
   -- diff rows meant redefining the groups your full-window vimdiff also uses. And the
   -- defaults a colourscheme picks for DiffAdd/DiffDelete are chosen for a two-pane
   -- vimdiff, where a whole-window wash is the point; here they sit under
-  -- syntax-highlighted code and compete with the word-diff marks on top of them.
+  -- syntax-highlighted code that has to stay readable through them.
   del = "CanvasDiffDel",
   add = "CanvasDiffAdd",
 }
@@ -470,8 +470,7 @@ function R.marker_spans(line, staged, unstaged, stale)
     -- means reading the wrong fact about a file.
     --
     -- Bold cannot lose that contest because it is not in it: it composes over whatever
-    -- colour is underneath, identically under every scheme. Same conclusion the
-    -- word-diff marks reached, for the same reason.
+    -- colour is underneath, identically under every scheme.
     take(GLYPHS.stale, "CanvasDiffStale")
     local s = spans[#spans]
     spans[#spans + 1] = { s[1], s[2], "CanvasDiffStaleEmphasis" }
@@ -529,10 +528,10 @@ end
 ---
 --- Shape is what nvim_buf_set_extmark wants: a list of lines, each a list of
 --- `{ text, hl }` chunks. Two chunks per line: the prefix, then the content whole.
---- Intra-line word-diff on the ghost side is deliberately NOT attempted: extmarks
---- cannot reach into virtual text, so it would mean splitting each ghost into
---- unchanged/changed/unchanged chunks at render time. The ADD side keeps its
---- word-diff marks, which is the half that says what the code became.
+--- Nothing is highlighted WITHIN a ghost: extmarks cannot reach into virtual text,
+--- so it would mean splitting each ghost into chunks at render time. That constraint
+--- is what left intra-line marking able to speak for only one of the two sides, and
+--- eventually why it was removed -- see docs/design.md.
 ---
 --- Keeps the `-` prefix so a ghost still reads as a deletion at a glance, and so the
 --- column of content lines up with the ` `/`+` rows around it. The prefix is its own

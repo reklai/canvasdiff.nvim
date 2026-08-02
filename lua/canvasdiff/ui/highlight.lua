@@ -252,40 +252,6 @@ function M.section_ts_marks(section, lease)
   return marks
 end
 
---- The intra-line marks: which SPANS of a paired -/+ line actually differ.
----
---- ATTRIBUTES, not a colour, and deliberately no background of their own.
----
---- The problem being solved: this mark sits INSIDE a CanvasDiffAdd/CanvasDiffDel row tint, so a
---- background here has to out-contrast a background that has already claimed most of
---- the available range. It used to link to DiffText and lost that fight badly -- under
---- tokyonight-moon DiffText's background cleared the row it sat on by only 9 luminance,
---- while the row itself cleared Normal by 27. The strongest signal was "this line is
---- involved" and the weakest was "this is the token that changed", which is backwards:
---- the second is the only one you cannot already read off the +/- in column one.
----
---- No link fixes that, because which background wins is pure colourscheme luck. The
---- link was briefly `Search` on the strength of tokyonight numbers (+39 against an
---- added row, against DiffText's +9) -- and then measured under Neovim's builtin
---- scheme, where it REVERSES: DiffText clears the row by 28 and Search by only 19,
---- and the row clears Normal by 41 so neither dominates. Optimising a colour against
---- one colourscheme is not a fix.
----
---- Bold plus underline cannot lose that fight because it is not in it. Attributes
---- compose over whatever background is underneath instead of competing with it, so the
---- span keeps the row's tint and the code's syntax colour and gains an unmissable mark
---- on top -- identically under every colourscheme, with no measurement luck involved.
---- Underline also states the extent exactly, which is the whole point of a word-diff:
---- a background says "somewhere in here", an underline says "these characters".
----
---- Same reasoning that settled the sidebar markers and the +/- prefixes: a shape cue
---- survives colour-vision deficiency and a monochrome terminal, a hue cue does not.
---- `default = true`, so a colourscheme or your config can still replace these outright.
-local function ensure_hl_groups()
-  vim.api.nvim_set_hl(0, "CanvasDiffWordAdd", { bold = true, underline = true, default = true })
-  vim.api.nvim_set_hl(0, "CanvasDiffWordDel", { bold = true, underline = true, default = true })
-end
-
 local function close_timer(timer)
   if not timer then
     return
@@ -604,10 +570,6 @@ local function apply_section(lease, i, epoch)
   if not active(lease) or lease.epoch ~= epoch then
     return false
   end
-  local word_marks = diff.word_marks(sec)
-  if not active(lease) or lease.epoch ~= epoch then
-    return false
-  end
 
   local ids = {}
   lease.pending[ids] = true
@@ -635,7 +597,6 @@ local function apply_section(lease, i, epoch)
       end
     end
     place(ts_marks)
-    place(word_marks)
   end)
   if not ok then
     rollback_pending(lease, buf, ids)
@@ -933,10 +894,6 @@ function M.attach(state, opts, callbacks)
   local ok, err = pcall(function()
     if not active(lease) then
       error("highlighter owner is no longer alive", 0)
-    end
-    ensure_hl_groups()
-    if not active(lease) then
-      error("highlighter attach was disposed while defining groups", 0)
     end
     if not (state and state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
       error("highlighter requires a valid canvas state", 0)

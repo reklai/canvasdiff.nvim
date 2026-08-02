@@ -25,9 +25,10 @@ T["binary_ is_binary only sniffs the head, like git"] = function()
   H.eq(model.is_binary(string.rep("a", 100) .. "\0"), true, "an early NUL is")
 end
 
--- Regression: a binary file was diffed as text. vim.text.diff produced pages
--- of line noise, and the NUL bytes reaching vim.fn.split in the word-diff
--- tier became a Blob and threw E976, taking the entire open() down.
+-- Regression: a binary file was diffed as text, and vim.text.diff produced
+-- pages of line noise. NUL bytes made it worse than ugly -- they cannot live in
+-- a Vim string, so any Vimscript call on that content threw E976 and took the
+-- whole open() down with it.
 T["binary_ a binary section carries no content entries"] = function()
   local sec = model.build_section("a.zip", BIN_OLD, BIN_NEW, "M", 3)
   assert(sec, "a changed binary file still gets a section")
@@ -36,7 +37,7 @@ T["binary_ a binary section carries no content entries"] = function()
   local kinds = {}
   for _, e in ipairs(sec.entries) do kinds[#kinds + 1] = e.kind end
   H.eq(kinds, { "file_hdr", "binary" },
-    "no ctx/add/del rows, which is what keeps worddiff and treesitter away from it")
+    "no ctx/add/del rows, which is what keeps treesitter away from it")
 end
 
 T["binary_ either side being binary is enough"] = function()
