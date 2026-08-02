@@ -129,16 +129,16 @@ T["sticky_win row carries the bar tint and the marker spans"] = function()
   scroll_to(st, lease, 2)
   local line = shown_line(lease)
   local section = st.sections[1]
-  local header = render.section_line(section, 1)
+  local head = render.section_line(section, 1)
   -- Measured off the FILE part, which is where the stage marks are:
   -- marker_spans walks in from the end of what it is given, and the crumb now
   -- holds the end of the row.
-  local spans = render.marker_spans(header, section.staged, section.unstaged, false)
+  local spans = render.marker_spans(head, section.staged, section.unstaged, false)
   assert(#spans > 0,
     "the fixture carries both stage facts, so the layering must be exercised on real spans")
   -- The crumb wears the group the canvas's own `@@` rows wear, over everything
   -- past the file identity.
-  spans[#spans + 1] = { #header, #line, "CanvasDiffHunkHeader" }
+  spans[#spans + 1] = { #head, #line, "CanvasDiffHunkHeader" }
 
   local fbuf = vim.api.nvim_win_get_buf(lease.win)
   local bar, header = false, false

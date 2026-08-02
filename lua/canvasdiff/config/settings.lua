@@ -29,6 +29,10 @@ local DEFAULT_GLYPHS = {
   -- byte-for-byte mirror of the header row it covers, so the separator owns
   -- every character between them.
   crumb = " → ",
+  -- And inside the crumb, between the hunk's label and its ordinal. A second
+  -- slot rather than part of `crumb`: they sit on either side of the `@@`
+  -- marker, so one value could not produce both.
+  crumb_sep = " · ",
   -- minimap
   scroll_file = "‒",
   scroll_bar = "❘",
@@ -53,7 +57,7 @@ M.ASCII_GLYPHS = {
   ctx = " ", del = "-", add = "+",
   file = "|", folded = ">", open = "v", minus = "-", gutter = "|",
   staged = "*", unstaged = "o", stale = " !",
-  crumb = " -> ",
+  crumb = " -> ", crumb_sep = " | ",
   scroll_file = "-", scroll_bar = "|",
 }
 

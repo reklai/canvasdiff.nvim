@@ -209,21 +209,6 @@ end
 --- already separates it from both filled markers whatever colour it lands on.
 --- DiagnosticWarn rather than `Changed` because `Changed` is cyan in several popular
 --- schemes (tokyonight included), which breaks the progression for no gain.
---- The struck-label group, defined once for every window that draws a hunk
---- label: the sidebar's tree rows and the pinned header's crumb. A label taken
---- from the old side is struck through, which is what CanvasDiffGhost already
---- means everywhere else in the plugin.
----
---- Here rather than in either drawer for the reason the note above spells out:
---- two `default = true` calls for one group is a trap, and whichever window
---- opened first would silently decide what the other one looks like.
-function R.ensure_hunk_hl()
-  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunkDel", {
-    link = "CanvasDiffGhost",
-    default = true,
-  })
-end
-
 function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffStale", { link = "DiagnosticError", default = true })
   -- Layered over CanvasDiffStale, carrying an attribute and no colour of its own, so the
@@ -232,6 +217,25 @@ function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffStaleEmphasis", { bold = true, default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffStaged", { link = "Added", default = true })
   vim.api.nvim_set_hl(0, "CanvasDiffUnstaged", { link = "DiagnosticWarn", default = true })
+end
+
+--- The struck-label group, defined once for every window that draws a hunk
+--- label: the sidebar's tree rows and the pinned header's crumb. A label taken
+--- from the old side is struck through, which is what CanvasDiffGhost already
+--- means everywhere else in the plugin.
+---
+--- Here rather than in either drawer for the reason the note above spells out:
+--- two `default = true` calls for one group is a trap, and whichever window
+--- opened first would silently decide what the other one looks like.
+---
+--- Unprefixed, deliberately: a hunk label is struck in the sidebar's tree AND on
+--- the canvas's own pinned header, so a user who wants to change how a removed
+--- line reads has no reason to look under "Sidebar" for it.
+function R.ensure_hunk_hl()
+  vim.api.nvim_set_hl(0, "CanvasDiffHunkDel", {
+    link = "CanvasDiffGhost",
+    default = true,
+  })
 end
 
 --- Channelwise linear interpolation between two 24-bit RGB colours.

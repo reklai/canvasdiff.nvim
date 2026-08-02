@@ -184,7 +184,7 @@ T["sidebar_render a pure-deletion hunk row is struck through the ghost group"] =
   local del = spans[6]
   H.eq(#del, 2, "the row's own dimming, and the strike over its label")
   H.eq(del[1], { 0, #lines[6], "CanvasDiffSidebarHunk" })
-  H.eq(del[2][3], "CanvasDiffSidebarHunkDel")
+  H.eq(del[2][3], "CanvasDiffHunkDel")
   H.eq(lines[6]:sub(del[2][1] + 1, del[2][2]), "GONE",
     "the strike covers the old-side text and nothing else -- not the @@, not the counts")
 end
@@ -222,7 +222,7 @@ T["sidebar_render a cut pure-deletion row strikes only what is left of it"] = fu
   local lead, tail = "    @@ ", "  +0 " .. render.glyphs.minus .. "1"
   assert(#line < #lead + #label + #tail, "sanity: the label really was cut: " .. line)
 
-  H.eq(strike[3], "CanvasDiffSidebarHunkDel")
+  H.eq(strike[3], "CanvasDiffHunkDel")
   H.eq(line:sub(strike[1] + 1, strike[2]), line:sub(#lead + 1, #line - #tail),
     "the strike covers the label that SURVIVED the cut, not the one that arrived")
   assert(strike[2] < #line, "so it stops short of the counts: " .. line)
@@ -1335,21 +1335,21 @@ T["sidebar_fold hunk rows carry the dim group, and a deletion the ghost"] = func
   local lease = assert(sidebar.open(st, { width = 30 }))
   H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffSidebarHunk" }).link, "Comment",
     "one step dimmer than the file rows, on the canvas's own de-emphasis channel")
-  H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffSidebarHunkDel" }).link, "CanvasDiffGhost",
+  H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffHunkDel" }).link, "CanvasDiffGhost",
     "and a removed line is struck exactly as the canvas strikes its ghosts")
 
   local groups = {}
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(
     sidebar_buf(lease), SIDE_NS, 0, -1, { details = true })) do
     local group = m[4] and m[4].hl_group
-    if group and group:find("SidebarHunk", 1, true) then
+    if group and group:find("Hunk", 1, true) then
       groups[#groups + 1] = { m[2], group }
     end
   end
   H.eq(groups, {
     { 1, "CanvasDiffSidebarHunk" },
     { 3, "CanvasDiffSidebarHunk" },
-    { 3, "CanvasDiffSidebarHunkDel" },
+    { 3, "CanvasDiffHunkDel" },
   }, "row 1 is a.lua's hunk; row 3 is b.lua's, struck because it only removes")
   done(st, lease)
 end

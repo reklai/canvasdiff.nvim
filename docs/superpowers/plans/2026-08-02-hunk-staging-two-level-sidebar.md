@@ -707,12 +707,12 @@ cycle_file_next/prev, unbound by default; one config line restores it."
 - Produces, in `build_entries` output (all pure tables):
   - After each **unfolded** file entry: one `{ kind = "hunk", path = section.path, hunk = gi, name = "@@ <new_lo>  <label>", counts = "+a −d", pure_del = bool, depth = file_depth + 1 }` per hunk, in order. Folded files and files under a folded directory contribute none (fold-mirror; the existing `hidden` walk already skips children of folded dirs — hunk rows ride the same skip).
   - **Folded file** entries carry `summary = "(N hunks, +a −d)"`; **folded dir** entries carry `summary = "(N files, +a −d)"` (aggregate of hidden children). Unfolded entries have `summary = nil`.
-- `render_lines` renders hunk rows indented under their file, `CanvasDiffSidebarHunk` spans for the row, `CanvasDiffSidebarHunkDel` (strikethrough via `CanvasDiffGhost` link) instead when `pure_del`.
+- `render_lines` renders hunk rows indented under their file, `CanvasDiffSidebarHunk` spans for the row, `CanvasDiffHunkDel` (strikethrough via `CanvasDiffGhost` link) instead when `pure_del`.
 - New groups in `ensure_hl_groups`:
 
 ```lua
 vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunk", { link = "Comment", default = true })
-vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunkDel", { link = "CanvasDiffGhost", default = true })
+vim.api.nvim_set_hl(0, "CanvasDiffHunkDel", { link = "CanvasDiffGhost", default = true })
 ```
 
 - [ ] **Step 1: Failing tests** (unit, pure — hand-built `sections` with `hunks` tables):
@@ -744,7 +744,7 @@ end
 T["ui_sidebar a pure-deletion hunk row is marked for the ghost group"] = function()
   local entries = S.build_entries(sections, {}, {}, {})
   -- b.lua's hunk row: pure_del true, and render_lines emits a
-  -- CanvasDiffSidebarHunkDel span covering the label.
+  -- CanvasDiffHunkDel span covering the label.
 end
 ```
 
@@ -752,7 +752,7 @@ end
 
 - [ ] **Step 2: Run**: `make test SUITE=unit FILTER='ui_sidebar unfolded'` → FAIL.
 
-- [ ] **Step 3: Implement** in `build_entries`: after pushing an unfolded file entry, loop `section.hunks` pushing hunk entries; on the folded-file branch attach `summary` from `nhunks`/`adds`/`dels`; accumulate per-dir aggregates during the existing prefix walk for the folded-dir branch. In `render_lines`, render `entry.kind == "hunk"` with two extra indent spaces, name + counts, and emit the span table rows for `CanvasDiffSidebarHunk` / `CanvasDiffSidebarHunkDel` the same way existing rows emit their spans.
+- [ ] **Step 3: Implement** in `build_entries`: after pushing an unfolded file entry, loop `section.hunks` pushing hunk entries; on the folded-file branch attach `summary` from `nhunks`/`adds`/`dels`; accumulate per-dir aggregates during the existing prefix walk for the folded-dir branch. In `render_lines`, render `entry.kind == "hunk"` with two extra indent spaces, name + counts, and emit the span table rows for `CanvasDiffSidebarHunk` / `CanvasDiffHunkDel` the same way existing rows emit their spans.
 
 - [ ] **Step 4: Run**: `make test SUITE=unit` → PASS; `make test SUITE=integration FILTER='^sidebar'` → PASS (existing sidebar integration tests assert row text — update expectations where unfolded files now carry hunk rows; each such update is the feature, not a regression).
 
@@ -832,7 +832,7 @@ falling back to the file row on headers and folded files."
 
 **Interfaces:**
 - Consumes: `section.hunks` (Task 1), `canvas.locate`, existing `render.section_line`/`render.marker_spans`.
-- Produces: `SH.content(st, top0)` return gains the crumb: `line = <file header line> .. glyphs.crumb .. "@@ " .. new_lo .. "  " .. label .. " · " .. gi .. "/" .. nhunks`, with spans extended by one `CanvasDiffHunkHeader` span over the crumb (or `CanvasDiffSidebarHunkDel` over the label when `pure_del`). File-only (no crumb) when no hunk header sits at/above `top0` within the section. The ordinal and file part are never truncated; the label is (SH.update already clamps to window width — truncate the label before concatenation to `win_width - #rest` when needed, mirroring the sidebar's truncation helper).
+- Produces: `SH.content(st, top0)` return gains the crumb: `line = <file header line> .. glyphs.crumb .. "@@ " .. new_lo .. "  " .. label .. " · " .. gi .. "/" .. nhunks`, with spans extended by one `CanvasDiffHunkHeader` span over the crumb (or `CanvasDiffHunkDel` over the label when `pure_del`). File-only (no crumb) when no hunk header sits at/above `top0` within the section. The ordinal and file part are never truncated; the label is (SH.update already clamps to window width — truncate the label before concatenation to `win_width - #rest` when needed, mirroring the sidebar's truncation helper).
 - Settings: `glyphs.crumb = " → "`; ASCII preset `" -> "`; the glyph-name validation list gains `crumb`.
 
 - [ ] **Step 1: Failing tests** (append to `test/unit/test_sticky_content.lua`, reusing its state fixtures):
@@ -853,7 +853,7 @@ end
 
 T["sticky_ a pure-deletion current hunk strikes its label"] = function()
   -- hunk with pure_del = true under top0: one span with group
-  -- CanvasDiffSidebarHunkDel covering the label range.
+  -- CanvasDiffHunkDel covering the label range.
 end
 ```
 
@@ -930,7 +930,7 @@ group as the canvas half -- one state, one band, no seam."
 
 - [ ] **Step 2: E2e sweep** (append to `test/e2e/test_e2e.lua`, real keys via `nvim_feedkeys(..., "x")`): fixture with one 3-hunk file; open in the unstaged lens; land on hunk 1 (`]h`), press `s`; assert the canvas re-rendered without that hunk (the vanish is the feedback — assert section `nhunks` dropped to 2 and the buffer no longer contains hunk 1's added line); press `<Tab>` to the staged lens and assert the staged hunk IS there; press Ctrl+N twice and assert the topline moved to hunk stops (wrap included). Run `make e2e` → PASS.
 
-- [ ] **Step 3: Docs.** README: keymap table gains `stage_file`/`unstage_file` rows ("hold **Shift** + **s**/**u** — stage/unstage the whole file from anywhere") and rewords `stage`/`unstage` ("the hunk under the cursor; the file when on its header") and `cycle_next`/`cycle_prev` ("scroll to the next/previous **hunk**, wrapping — a folded file is one stop"); Configuration block gains the two capitals, the two unbound file-cycle actions, and `crumb` in glyphs; highlight-groups table gains `CanvasDiffSidebarHunk` / `CanvasDiffSidebarHunkDel`; the sidebar section describes hunk rows, fold summaries, and the fold-mirror rule; "Knowing where you are" describes the crumb + ordinal; the read-only band paragraph drops "tints the canvas half" for "tints the band"; a short **Changed behavior** note states the Ctrl+N/P change and the one-line restore. `doc/canvasdiff.txt`: mirror all of the above in sections 4/7/8; regenerate helptags (`nvim --headless --clean -c 'helptags doc' -c q` — `doc/tags` is gitignored).
+- [ ] **Step 3: Docs.** README: keymap table gains `stage_file`/`unstage_file` rows ("hold **Shift** + **s**/**u** — stage/unstage the whole file from anywhere") and rewords `stage`/`unstage` ("the hunk under the cursor; the file when on its header") and `cycle_next`/`cycle_prev` ("scroll to the next/previous **hunk**, wrapping — a folded file is one stop"); Configuration block gains the two capitals, the two unbound file-cycle actions, and `crumb` in glyphs; highlight-groups table gains `CanvasDiffSidebarHunk` / `CanvasDiffHunkDel`; the sidebar section describes hunk rows, fold summaries, and the fold-mirror rule; "Knowing where you are" describes the crumb + ordinal; the read-only band paragraph drops "tints the canvas half" for "tints the band"; a short **Changed behavior** note states the Ctrl+N/P change and the one-line restore. `doc/canvasdiff.txt`: mirror all of the above in sections 4/7/8; regenerate helptags (`nvim --headless --clean -c 'helptags doc' -c q` — `doc/tags` is gitignored).
 
 - [ ] **Step 4: Full verification**: `make test` → 100% PASS; `make architecture` → PASS. Fix stragglers before committing.
 

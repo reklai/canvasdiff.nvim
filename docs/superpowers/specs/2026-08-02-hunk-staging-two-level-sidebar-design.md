@@ -94,7 +94,7 @@ cursor decides granularity, capitals override to file scope.
   than file rows (`CanvasDiffSidebarHunk`, link `Comment` — the same
   de-emphasis the canvas's `@@` rows carry), counts render as they do on
   file rows. **A pure-deletion hunk's label is struck + dimmed**
-  (`CanvasDiffSidebarHunkDel`, link `CanvasDiffGhost`): the label shows text
+  (`CanvasDiffHunkDel`, link `CanvasDiffGhost`): the label shows text
   that won't exist in the result, which is exactly the fact ghost styling
   already encodes on the canvas. Changed/addition hunks show new-side text
   and render unstruck. The rule: strikethrough iff the label text is
@@ -215,7 +215,7 @@ index + hunk ordinal (display identity only — nothing is persisted about
 hunks). Tracking and select resolve through the same context resolver. Two
 new highlight groups, both `default = true` and documented in the README
 groups table: `CanvasDiffSidebarHunk` (link `Comment`) and
-`CanvasDiffSidebarHunkDel` (link `CanvasDiffGhost`, for pure-deletion hunk
+`CanvasDiffHunkDel` (link `CanvasDiffGhost`, for pure-deletion hunk
 labels — sidebar and crumb alike).
 
 ## Compatibility

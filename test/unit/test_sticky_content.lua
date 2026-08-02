@@ -7,6 +7,7 @@
 local H = require("helpers")
 local canvas = require("canvasdiff.canvas")
 local render = canvas.format
+local config = require("canvasdiff.config")
 local model = require("canvasdiff.diff")
 local ui = require("canvasdiff.ui")
 local sticky = ui.sticky_header
@@ -56,6 +57,12 @@ end
 --- row of that hunk, resolved live rather than counted by hand.
 local function inside_hunk(st, i, gi)
   return assert(canvas.context.hunk_row(st, i, gi)) + 1
+end
+
+--- The ordinal as the row spells it, from the live glyph table -- a
+--- `glyphs = "ascii"` config must not be able to break these expectations.
+local function ordinal(n, total)
+  return ("%s%d/%d"):format(render.glyphs.crumb_sep, n, total)
 end
 
 --- What the sidebar's own tree row calls hunk `gi` of `path`. The crumb has to
@@ -128,18 +135,18 @@ T["sticky_ mid-hunk content carries the crumb and ordinal"] = function()
   local got = sticky.content(st, inside_hunk(st, 1, 2))
   assert(got.line:find(render.glyphs.crumb .. "@@ ", 1, true),
     "crumb present: " .. got.line)
-  assert(got.line:find(" · 2/2", 1, true), "ordinal present: " .. got.line)
+  assert(got.line:find(ordinal(2, 2), 1, true), "ordinal present: " .. got.line)
   H.eq(got.line,
     render.section_line(section, 1)
-      .. render.glyphs.crumb .. sidebar_name(st, section.path, 2) .. " · 2/2",
+      .. render.glyphs.crumb .. sidebar_name(st, section.path, 2) .. ordinal(2, 2),
     "the whole row: the file header, then the sidebar's own name for the hunk")
 
   -- The hunk the topline is INSIDE, not the nearest one in either direction.
   local first = sticky.content(st, inside_hunk(st, 1, 1))
-  assert(first.line:find(" · 1/2", 1, true), "ordinal counts from 1: " .. first.line)
+  assert(first.line:find(ordinal(1, 2), 1, true), "ordinal counts from 1: " .. first.line)
   H.eq(first.line,
     render.section_line(section, 1)
-      .. render.glyphs.crumb .. sidebar_name(st, section.path, 1) .. " · 1/2")
+      .. render.glyphs.crumb .. sidebar_name(st, section.path, 1) .. ordinal(1, 2))
 end
 
 T["sticky_ the hunk header row is already inside its own hunk"] = function()
@@ -147,7 +154,7 @@ T["sticky_ the hunk header row is already inside its own hunk"] = function()
   -- The float COVERS the top text row, so the `@@` row under it is exactly the
   -- one the crumb has to name -- "at or above the topline", not strictly above.
   local got = sticky.content(st, assert(canvas.context.hunk_row(st, 1, 2)))
-  assert(got.line:find(" · 2/2", 1, true), "ordinal present: " .. got.line)
+  assert(got.line:find(ordinal(2, 2), 1, true), "ordinal present: " .. got.line)
 end
 
 T["sticky_ the file lead-in is file-only"] = function()
@@ -175,11 +182,11 @@ T["sticky_ a pure-deletion current hunk strikes its label"] = function()
   local got = sticky.content(st, inside_hunk(st, 1, 1))
   H.eq(got.line,
     render.section_line(section, 1)
-      .. render.glyphs.crumb .. sidebar_name(st, section.path, 1) .. " · 1/1")
+      .. render.glyphs.crumb .. sidebar_name(st, section.path, 1) .. ordinal(1, 1))
 
   local struck = {}
   for _, span in ipairs(got.spans) do
-    if span[3] == "CanvasDiffSidebarHunkDel" then
+    if span[3] == "CanvasDiffHunkDel" then
       struck[#struck + 1] = span
     end
   end
@@ -198,7 +205,7 @@ T["sticky_ an ordinary current hunk is struck nowhere"] = function()
   local st = two_hunk_state()
   local got = sticky.content(st, inside_hunk(st, 1, 2))
   for _, span in ipairs(got.spans) do
-    assert(span[3] ~= "CanvasDiffSidebarHunkDel",
+    assert(span[3] ~= "CanvasDiffHunkDel",
       "a hunk that adds is not a deletion: " .. span[3])
   end
   H.eq(got.spans[#got.spans],
@@ -216,7 +223,7 @@ T["sticky_ the crumb's label is the only part a narrow window cuts"] = function(
   assert(vim.fn.strdisplaywidth(got.line) <= room,
     "the row is cut to the window: " .. got.line)
   H.eq(got.line:sub(1, #header), header, "the file identity is never cut")
-  H.eq(got.line:sub(-#" · 2/2"), " · 2/2", "nor is the ordinal")
+  H.eq(got.line:sub(-#ordinal(2, 2)), ordinal(2, 2), "nor is the ordinal")
   assert(#got.line < #full, "something gave way: " .. got.line)
   assert(got.line:find("local recon", 1, true),
     "and what gave way was the tail of the label: " .. got.line)
@@ -228,6 +235,41 @@ T["sticky_ the crumb's label is the only part a narrow window cuts"] = function(
   end
   H.eq(sticky.content(st, row, vim.fn.strdisplaywidth(full)).line, full,
     "given exactly enough room, nothing is cut")
+end
+
+-- The preset exists for a restricted font or a framebuffer console, where a
+-- character it cannot draw comes out as a box. Every character the crumb
+-- introduces has to come from the glyph table, or the one row this feature
+-- exists for is the row that shows the box.
+T["sticky_ the crumb is spelled with the configured glyphs"] = function()
+  local st = two_hunk_state()
+  local row = inside_hunk(st, 1, 2)
+  local ok, err = pcall(function()
+    config.setup({ glyphs = "ascii" })
+    local line = sticky.content(st, row).line
+    assert(line:find(" -> @@ ", 1, true), "the crumb separator is the preset's: " .. line)
+    assert(line:find(" | 2/2", 1, true), "and so is the ordinal's: " .. line)
+    assert(not line:find("·", 1, true), "no middle dot survives the preset: " .. line)
+    assert(not line:find("→", 1, true), "nor an arrow: " .. line)
+  end)
+  -- Glyphs are live process state, so the restore has to happen even on failure.
+  config.setup({})
+  assert(ok, err)
+end
+
+T["sticky_ a window with no room for the crumb keeps the file alone"] = function()
+  local st = two_hunk_state()
+  local section = st.sections[1]
+  local header = render.section_line(section, 1)
+  -- Room for a few cells past the file identity: not enough for the marker and
+  -- the ordinal even with the label gone.
+  local got = sticky.content(st, inside_hunk(st, 1, 2),
+    vim.fn.strdisplaywidth(header) + 6)
+  H.eq(got.line, header,
+    "a crumb whose ordinal the window would clip is worse than no crumb")
+  H.eq(got.spans,
+    render.marker_spans(header, section.staged, section.unstaged, false),
+    "and the file part keeps its own spans, unchanged")
 end
 
 return T

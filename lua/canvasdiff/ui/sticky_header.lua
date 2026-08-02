@@ -32,7 +32,9 @@ local SH = {}
 ---
 --- `room` is the window's column count when the caller has one. Only the LABEL
 --- gives way to it: the file identity and the ordinal are the two answers the
---- row exists to give, and half of either is worse than none.
+--- row exists to give, and half of either is worse than none -- which is also
+--- why a window too narrow for the crumb even without a label gets no crumb at
+--- all, rather than one whose ordinal the window clips off the right edge.
 local function crumb(section, offset, head, room)
   local entry = (section.entries or {})[offset]
   local gi = entry and entry.hunk_idx or nil
@@ -45,13 +47,19 @@ local function crumb(section, offset, head, room)
   label = render.escape_path(label)
   -- Counted off the same list the ordinal indexes, so "3/5" can never name a
   -- hunk from outside its own denominator.
-  local ordinal = (" · %d/%d"):format(gi, #hunks)
+  local ordinal = ("%s%d/%d"):format(render.glyphs.crumb_sep, gi, #hunks)
   local lead = render.glyphs.crumb .. marker
   -- Bytes are an upper bound on cells, so the arithmetic only has to be exact
   -- for a row that really is too long.
   if room and #head + #lead + #label + #ordinal > room then
     label = render.fit(label,
       room - vim.fn.strdisplaywidth(head .. lead .. ordinal))
+    if vim.fn.strdisplaywidth(head .. lead .. label .. ordinal) > room then
+      -- Even with the label gone the crumb does not fit, so it would be drawn
+      -- with its right edge -- the ordinal -- off the window. File-only is the
+      -- honest answer for a window with no room for the rest.
+      return nil
+    end
   end
   local text = lead .. label .. ordinal
   local spans = {
@@ -65,7 +73,7 @@ local function crumb(section, offset, head, room)
     -- channel, as the sidebar's hunk row and the canvas's ghost deletions.
     -- Measured off the label that SURVIVED the cut above, never the one that
     -- arrived -- a span from before it would run past end-of-line.
-    spans[2] = { #head + #lead, #head + #lead + #label, "CanvasDiffSidebarHunkDel" }
+    spans[2] = { #head + #lead, #head + #lead + #label, "CanvasDiffHunkDel" }
   end
   return text, spans
 end
@@ -87,6 +95,11 @@ function SH.content(st, top0, room)
   if not section then
     return nil
   end
+  -- Both clauses are load-bearing, and neither shadows the other. A folded
+  -- section renders as ONE row, so every topline inside it lands on offset 1 --
+  -- but locate has no upper clamp, and a row past the last section's placeholder
+  -- comes back with a larger offset. Without fold.hidden that row would pin the
+  -- EXPANDED header of a file the buffer is drawing as a placeholder.
   if fold.hidden(st, section.path) or offset == 1 then
     return nil
   end

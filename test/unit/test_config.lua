@@ -210,13 +210,15 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
     for name, g in pairs(config.ASCII_GLYPHS) do
       local glyph = vim.trim(g)
       if glyph ~= "" then
-        -- `crumb` separates two fields of the pinned header rather than
-        -- occupying a column, so it is the one slot allowed more than a cell.
-        -- What must hold for it is what the single-cell rule proves about the
-        -- others: pure ASCII, one cell per byte, unmoved by ambiwidth.
-        local cells = name == "crumb" and #glyph or 1
-        H.eq(vim.fn.strwidth(glyph), cells,
-          ("%s = %q must be %d cell(s) at ambiwidth=%s"):format(name, g, cells, aw))
+        -- A glyph that occupies a COLUMN is one cell. The separators inside the
+        -- pinned header's crumb are not columns and are several characters
+        -- wide, so the rule for every slot is the property the single-cell rule
+        -- proves about the narrow ones: pure ASCII, one cell per byte, unmoved
+        -- by ambiwidth. Stated generally so the next separator needs no
+        -- exemption of its own.
+        H.eq(vim.fn.strwidth(glyph), #glyph,
+          ("%s = %q must be %d cell(s) at ambiwidth=%s")
+            :format(name, g, #glyph, aw))
       end
     end
   end

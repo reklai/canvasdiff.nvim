@@ -227,7 +227,7 @@ function S.render_lines(entries, width)
       if e.pure_del then
         -- Struck iff the label is old-side text: the same fact, on the same
         -- channel, as the canvas's ghost deletions.
-        spans[i][2] = { #lead, #lead + #label, "CanvasDiffSidebarHunkDel" }
+        spans[i][2] = { #lead, #lead + #label, "CanvasDiffHunkDel" }
       end
     else
       local stage = render.stage_mark(e.staged, e.unstaged)
