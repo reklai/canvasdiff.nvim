@@ -1,5 +1,6 @@
 local H = require("helpers")
 local source = require("canvasdiff.source")
+local repository = require("canvasdiff.source.repository")
 local system = require("canvasdiff.os")
 
 local function sh(root, cmd)
@@ -28,6 +29,11 @@ local function with_git_fixture(spec, run)
   local ok, err = xpcall(function() run(root) end, debug.traceback)
   vim.fn.delete(root, "rf")
   assert(ok, err)
+end
+
+local function index_mode(root, rel)
+  return sh(root, { "git", "--literal-pathspecs", "ls-files", "--stage", "--", rel })
+    :match("^(%d+)")
 end
 
 local function mutation_state(root)
@@ -1005,6 +1011,138 @@ return {
         "a failed add must not discard the already-staged rename")
       H.eq(source.show(root, ":0", "new.txt"), before_blob,
         "the staged blob remains byte-exact on failure")
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: index blob round-trips byte-exact through set_index_blob"] = function()
+    with_git_fixture({
+      committed = { ["a.txt"] = "one\ntwo\nthree\n" },
+      worktree = { ["a.txt"] = "ONE\nTWO\nthree\n" },
+    }, function(root)
+      H.eq(repository.index_blob(root, "a.txt"), "one\ntwo\nthree\n")
+      H.eq(repository.head_blob(root, "a.txt"), "one\ntwo\nthree\n")
+
+      H.eq(repository.set_index_blob(root, "a.txt", "one\nTWO\nthree\n"), true)
+      H.eq(repository.index_blob(root, "a.txt"), "one\nTWO\nthree\n")
+      H.eq(repository.head_blob(root, "a.txt"), "one\ntwo\nthree\n",
+        "writing the index cannot move HEAD")
+      H.eq(read(root, "a.txt"), "ONE\nTWO\nthree\n",
+        "the worktree keeps the edits that were not written to the index")
+      local partial = assert(repository.changed_files(root)[1])
+      H.eq(partial.path, "a.txt")
+      assert(partial.staged and partial.unstaged, vim.inspect(partial))
+
+      H.eq(repository.set_index_blob(root, "a.txt", "ONE\nTWO\nthree\n"), true)
+      local whole = assert(repository.changed_files(root)[1])
+      assert(whole.staged, vim.inspect(whole))
+      H.eq(whole.unstaged, nil)
+    end)
+  end,
+  ["git: blob plumbing carries CRLF bytes through unconverted"] = function()
+    with_git_fixture({
+      committed = { ["dos.txt"] = "alpha\r\nbeta\r\ngamma\r\n" },
+      worktree = { ["dos.txt"] = "alpha\r\nBETA\r\ngamma\r\n" },
+    }, function(root)
+      H.eq(repository.head_blob(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+      H.eq(repository.index_blob(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+
+      H.eq(repository.set_index_blob(root, "dos.txt", "alpha\r\nBETA\r\ngamma\r\n"), true)
+      H.eq(repository.index_blob(root, "dos.txt"), "alpha\r\nBETA\r\ngamma\r\n")
+      local file = assert(repository.changed_files(root)[1])
+      H.eq(file.staged, "M")
+      H.eq(file.unstaged, nil,
+        "git sees no worktree drift, so not one CR was rewritten on the way in")
+    end)
+  end,
+  ["git: set_index_blob keeps the indexed mode and defaults an unindexed path"] = function()
+    local magic = ":(glob)*.txt"
+    with_git_fixture({
+      committed = {
+        ["run.sh"] = "#!/bin/sh\necho old\n",
+        ["0victim.txt"] = "victim\n",
+        [magic] = "magic\n",
+      },
+    }, function(root)
+      sh(root, { "git", "update-index", "--chmod=+x", "--", "run.sh" })
+      sh(root, { "git", "--literal-pathspecs", "update-index", "--chmod=+x",
+        "--", magic })
+
+      H.eq(repository.set_index_blob(root, "run.sh", "#!/bin/sh\necho new\n"), true)
+      H.eq(index_mode(root, "run.sh"), "100755")
+      H.eq(repository.index_blob(root, "run.sh"), "#!/bin/sh\necho new\n")
+
+      H.eq(repository.set_index_blob(root, magic, "magic staged\n"), true)
+      H.eq(index_mode(root, magic), "100755",
+        "a magic-looking name must not read another entry's mode")
+      H.eq(repository.index_blob(root, magic), "magic staged\n")
+      H.eq(repository.index_blob(root, "0victim.txt"), "victim\n",
+        "magic-looking user data must not expand to another index entry")
+
+      H.eq(repository.set_index_blob(root, "added.txt", "added\n"), true)
+      H.eq(index_mode(root, "added.txt"), "100644")
+      H.eq(repository.index_blob(root, "added.txt"), "added\n")
+    end)
+  end,
+  ["git: blob plumbing reports failures instead of claiming success"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "one\n" },
+      worktree = { ["a.txt"] = "two\n", ["untracked.txt"] = "u\n" },
+    })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      local staged, staged_err = repository.index_blob(root, "untracked.txt")
+      H.eq(staged, nil)
+      assert(type(staged_err) == "string" and staged_err:find("failed", 1, true),
+        tostring(staged_err))
+      local committed, committed_err = repository.head_blob(root, "untracked.txt")
+      H.eq(committed, nil)
+      assert(type(committed_err) == "string" and committed_err:find("failed", 1, true),
+        tostring(committed_err))
+
+      local before = repository.index_blob(root, "a.txt")
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "hash-object") then
+          return { code = 128, stdout = "", stderr = "injected hash-object failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local hashed, hash_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(hashed, nil)
+      assert(hash_err and hash_err:find("injected hash-object failure", 1, true),
+        tostring(hash_err))
+
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "update-index") then
+          return { code = 128, stdout = "", stderr = "injected update-index failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local updated, update_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(updated, nil)
+      assert(update_err and update_err:find("injected update-index failure", 1, true),
+        tostring(update_err))
+
+      -- `--cacheinfo` splits on the first two commas only, so an object id
+      -- carrying a third field renames the entry the write lands on.
+      local oid = vim.trim(sh(root, { "git", "rev-parse", "HEAD:a.txt" }))
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "hash-object") then
+          return { code = 0, stdout = oid .. ",100755,evil.txt\n", stderr = "" }
+        end
+        return real_run(cmd, opts)
+      end
+      local forged, forged_err = repository.set_index_blob(root, "a.txt", "two\n")
+      H.eq(forged, nil)
+      assert(forged_err and forged_err:find("object id", 1, true),
+        tostring(forged_err))
+
+      system.run = real_run
+      H.eq(repository.index_blob(root, "a.txt"), before,
+        "a failed index write leaves the staged blob byte-exact")
+      H.eq(sh(root, { "git", "ls-files" }), "a.txt\n",
+        "no failed write may add an index entry under another name")
     end, debug.traceback)
     system.run = real_run
     vim.fn.delete(root, "rf")
