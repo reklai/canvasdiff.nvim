@@ -204,21 +204,32 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
   -- Trimmed before measuring: `stale` carries its own leading space so that
   -- `#glyphs.stale` stays a correct byte offset for its highlight span, and `ctx` IS a
   -- space. It is the glyph that has to be one cell, not the padding around it.
+  -- The slots that are NOT a column: the pinned header's crumb separators are
+  -- runs of several characters sitting between two fields, and `stale` carries
+  -- its own leading space so `#glyphs.stale` stays a correct byte offset for
+  -- its highlight span. Everything else occupies exactly one screen column.
+  local NOT_A_COLUMN = { crumb = true, crumb_sep = true, stale = true }
   local saved = vim.o.ambiwidth
   for _, aw in ipairs({ "single", "double" }) do
     vim.o.ambiwidth = aw
     for name, g in pairs(config.ASCII_GLYPHS) do
       local glyph = vim.trim(g)
       if glyph ~= "" then
-        -- A glyph that occupies a COLUMN is one cell. The separators inside the
-        -- pinned header's crumb are not columns and are several characters
-        -- wide, so the rule for every slot is the property the single-cell rule
-        -- proves about the narrow ones: pure ASCII, one cell per byte, unmoved
-        -- by ambiwidth. Stated generally so the next separator needs no
-        -- exemption of its own.
+        -- Pure ASCII, one cell per byte, unmoved by ambiwidth. True of every
+        -- slot, separators included, and the only thing that can be asked of a
+        -- value several characters wide.
         H.eq(vim.fn.strwidth(glyph), #glyph,
           ("%s = %q must be %d cell(s) at ambiwidth=%s")
             :format(name, g, #glyph, aw))
+        if not NOT_A_COLUMN[name] then
+          -- And a COLUMN glyph is one cell, which the byte rule above does not
+          -- imply: an ascii `folded = ">>"` satisfies it and still widens the
+          -- canvas prefix column and the file-header gutter by a cell, putting
+          -- a seam down every row that draws one.
+          H.eq(vim.fn.strwidth(glyph), 1,
+            ("%s = %q occupies a column, so it must be exactly one cell at ambiwidth=%s")
+              :format(name, g, aw))
+        end
       end
     end
   end

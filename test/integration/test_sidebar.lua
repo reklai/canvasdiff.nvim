@@ -1,4 +1,5 @@
 local H = require("helpers")
+local config = require("canvasdiff.config")
 local sidebar = require("canvasdiff.ui").sidebar
 local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
@@ -297,6 +298,50 @@ T["sidebar_render escapes control bytes without changing entry identity"] = func
     "▾ dir\\t/",
     "    \\nfile.txt  +2 −1",
   }, "a path component can never split or tab-align a sidebar row")
+end
+
+-- The one row-shape test whose oracle is NOT the glyph table.
+--
+-- Every other expectation here builds its expected string out of
+-- `render.glyphs.*`, which reads the same live table the renderer does -- so a
+-- row that spells a glyph itself instead of reading it moves the oracle with it
+-- and passes anyway. Measured: hardcoding `−` where the hunk row's counts are
+-- built leaves the entire suite green.
+--
+-- The ASCII preset is the one place a literal expectation is legitimate,
+-- because the preset FIXES what every slot must be: under it, a `−` anywhere in
+-- a rendered row is a character no configured glyph could have produced. That
+-- makes these literals the detector, and it is the reason the preset exists at
+-- all -- a hardcoded glyph is exactly the box that shows up on the font that
+-- cannot draw it.
+T["sidebar_render every row spells its glyphs from the ascii preset"] = function()
+  local secs = hunky()
+  local ok, err = pcall(function()
+    config.setup({ glyphs = "ascii" })
+    H.eq(sidebar.render_lines(
+      sidebar.build_entries(secs, {}, { ["src/b.lua"] = true }, {})), {
+      "v src/",
+      "    a.lua  +3 -1",
+      "      @@ 3  THREE  +2 -1",
+      "      @@ 9  NINE  +1 -0",
+      "  > b.lua  (1 hunks, +0 -4)",
+    }, "the open dir, a file's counts, two hunk rows' counts, and the folded "
+      .. "file's summary -- every one in ASCII, none of them a U+2212")
+
+    H.eq(sidebar.render_lines(
+      sidebar.build_entries(secs, { ["src/"] = true }, {}, {}))[1],
+      "> src/  (2 files, +3 -5)",
+      "and the folded directory's own aggregate, which the sidebar words itself")
+
+    -- A folded file is one row in BOTH windows and has to read the same in
+    -- each, so the canvas placeholder answers the literals too.
+    H.eq(render.placeholder(secs[2]), "> src/b.lua  (1 hunks, +0 -4)",
+      "the canvas placeholder spells the same summary with the same glyphs")
+  end)
+  -- Glyphs are live process state: the restore has to happen even on failure,
+  -- or an ASCII canvas leaks into every test that runs after this one.
+  config.setup({})
+  assert(ok, err)
 end
 
 -- STALE and STAGED are the SAME character (`●`), so a staged file that has since

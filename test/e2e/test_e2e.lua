@@ -1137,6 +1137,140 @@ return {
     H.eq(vim.api.nvim_get_current_buf(), buf_before, "close() must not touch the current buffer when nothing was ever opened")
   end,
 
+  -- The sweep the whole feature exists for, pressed rather than called.
+  --
+  -- In the unstaged lens the canvas shows what is NOT staged yet, so staging a
+  -- hunk makes it vanish -- and the vanish IS the feedback. There is no
+  -- per-hunk stage marker and deliberately never will be: the lens already
+  -- answers "what is left", and a marker would answer it a second time, in a
+  -- second place, that could disagree. So the assertion is the disappearance,
+  -- at both depths the model has -- the section's hunk count, and the added
+  -- line itself no longer being a row -- plus the other half of the same fact:
+  -- one <Tab> away, in the lens that shows the index, the hunk IS there.
+  ["e2e: s stages the hunk you are on; the unstaged lens loses exactly it"] = function()
+    local function body(marked)
+      local out = {}
+      for i = 1, 30 do
+        out[i] = "line " .. i
+      end
+      if marked then
+        -- Twelve rows apart, so three context-3 hunks stay three hunks rather
+        -- than merging into one.
+        out[3] = "line 3 ALPHA"
+        out[15] = "line 15 BETA"
+        out[27] = "line 27 GAMMA"
+      end
+      return table.concat(out, "\n") .. "\n"
+    end
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = body() },
+      worktree = { ["a.txt"] = body(true) },
+    })
+    vim.api.nvim_set_current_dir(root)
+    package.loaded["canvasdiff"] = nil
+    local fm = require("canvasdiff")
+    local lens = require("canvasdiff.diff").lens
+    local session = require("canvasdiff.session")
+    -- Nothing is staged yet, so index and HEAD agree and the unstaged lens
+    -- (index vs worktree) is the whole change.
+    local st = assert(fm.open({ lens = lens.get("unstaged") }))
+    local cwin = vim.api.nvim_get_current_win()
+
+    local function lines()
+      return vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)
+    end
+    local function has(text)
+      for _, line in ipairs(lines()) do
+        if line == text then
+          return true
+        end
+      end
+      return false
+    end
+    --- 1-based canvas rows carrying a hunk header -- the stops Ctrl+N walks,
+    --- read off the rendered text rather than from the motion under test.
+    local function stops()
+      local rows = {}
+      for i, line in ipairs(lines()) do
+        if line:match("^@@") then
+          rows[#rows + 1] = i
+        end
+      end
+      return rows
+    end
+    local function topline()
+      return vim.api.nvim_win_call(cwin, function()
+        return vim.fn.line("w0")
+      end)
+    end
+
+    H.eq(#st.sections, 1, "sanity: one file in the review")
+    H.eq(st.sections[1].nhunks, 3, "sanity: and it really has three hunks")
+    for _, added in ipairs({ "+line 3 ALPHA", "+line 15 BETA", "+line 27 GAMMA" }) do
+      assert(has(added), "sanity: " .. added .. " is a row on the canvas")
+    end
+
+    -- `]h` from the top lands on the first hunk header. The canvas buffer is a
+    -- singleton that remembers its cursor, so where we start is stated rather
+    -- than inherited from whatever ran before.
+    vim.api.nvim_set_current_win(cwin)
+    vim.api.nvim_win_set_cursor(cwin, { 1, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("]h"), "x", false)
+    H.eq(vim.api.nvim_win_get_cursor(cwin)[1], stops()[1],
+      "]h put the cursor on the first hunk's header")
+
+    vim.api.nvim_feedkeys(vim.keycode("s"), "x", false)
+
+    H.eq(st.sections[1].nhunks, 2,
+      "the staged hunk left the unstaged lens, so the section is down to two")
+    assert(not has("+line 3 ALPHA"),
+      "the hunk under the cursor is gone from the canvas -- that IS the feedback")
+    assert(has("+line 15 BETA") and has("+line 27 GAMMA"),
+      "and only that one went: the two hunks nobody pressed on are untouched")
+
+    -- One <Tab> forward is the staged lens (all -> unstaged -> staged), which
+    -- compares HEAD against the index: the half of the file that just moved.
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    H.eq(lens.of(st).id, "staged", "<Tab> from unstaged lands on staged")
+    assert(has("+line 3 ALPHA"),
+      "the hunk that vanished from one lens is present in the other -- it was "
+      .. "staged, not lost")
+    assert(not has("+line 15 BETA"),
+      "and nothing else followed it into the index")
+
+    -- Ctrl+N walks HUNKS now, not files. In this lens the review is one stop,
+    -- so every press wraps onto it -- which is the behaviour to pin: a cycle
+    -- of one wraps rather than running off the end.
+    local only = stops()
+    H.eq(#only, 1, "sanity: the staged lens holds exactly the hunk that was staged")
+    vim.api.nvim_win_call(cwin, function()
+      vim.fn.winrestview({ topline = 1, lnum = 1 })
+    end)
+    vim.api.nvim_feedkeys(vim.keycode("<C-n>"), "x", false)
+    H.eq(topline(), only[1], "Ctrl+N scrolled the hunk stop to the top")
+    vim.api.nvim_feedkeys(vim.keycode("<C-n>"), "x", false)
+    H.eq(topline(), only[1], "and pressing again wrapped onto it rather than past it")
+
+    -- Back in the unstaged lens there are two stops, which is what makes the
+    -- wrap observable as MOVEMENT: parked on the last one, the next press must
+    -- come back to the first and the one after that go forward again.
+    vim.api.nvim_feedkeys(vim.keycode("<S-Tab>"), "x", false)
+    H.eq(lens.of(st).id, "unstaged", "<S-Tab> came back")
+    local two = stops()
+    H.eq(#two, 2, "sanity: the two hunks that were not staged")
+    vim.api.nvim_win_call(cwin, function()
+      vim.fn.winrestview({ topline = two[2], lnum = two[2] })
+    end)
+    vim.api.nvim_feedkeys(vim.keycode("<C-n>"), "x", false)
+    H.eq(topline(), two[1], "from the last stop, Ctrl+N wraps to the first")
+    vim.api.nvim_feedkeys(vim.keycode("<C-n>"), "x", false)
+    H.eq(topline(), two[2], "and carries on from there")
+
+    fm.close()
+    os.remove(session.path_for(root))
+    remove_fixture(root)
+  end,
+
   ["e2e: a large review opens paged, and a small one does not"] = function()
     -- The switchover, through the real command. A review below the threshold
     -- must stay eager, because the eager canvas is simpler and every plugin

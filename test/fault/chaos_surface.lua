@@ -493,6 +493,111 @@ end
 ACTIONS.stage = stage_verb("stage")
 ACTIONS.unstage = stage_verb("unstage")
 
+--- The whole index, as Git itself reports it: mode, object id and stage number
+--- for every path. Read through vim.system rather than canvasdiff.os, so the
+--- seam an action injects failure at can never also fake the measurement it is
+--- being measured by.
+local function index_snapshot(dir)
+  return git(dir, { "git", "ls-files", "--stage", "-z" })
+end
+
+--- The canvas rows that ARE hunk rows, asked of the resolver the verb itself
+--- routes through -- so "a hunk row" means here exactly what it means at press
+--- time, rather than a guess made from the text.
+local function hunk_rows(state)
+  local rows = {}
+  local ok, total = pcall(vim.api.nvim_buf_line_count, state.buf)
+  if not ok then
+    return rows
+  end
+  for row0 = 0, total - 1 do
+    local resolved = require("canvasdiff.canvas").context.resolve(state, row0)
+    if resolved and resolved.scope == "hunk" then
+      rows[#rows + 1] = row0
+    end
+  end
+  return rows
+end
+
+--- The live review showing in this tab, and the window showing it.
+---
+--- Learned from the Surfaces the harness captured at open time, the same way
+--- everything else here learns about them: a Surface that opened INTERNALLY
+--- was never handed to remember(), and this declines to act on one rather than
+--- reaching into App's private index for it.
+local function showing_review(world)
+  local win = canvas_window()
+  if not win then
+    return nil
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  for _, surface in pairs(world.surfaces) do
+    local st = surface:is_alive() and surface.state or nil
+    if st and st.buf == buf then
+      return st, win
+    end
+  end
+end
+
+--- The canvas's own `s`, pressed on a row that really is a hunk row.
+---
+--- The file verbs above land on a random buffer row, which is a hunk row only
+--- by luck; this asks which rows are hunks and presses on one of those, so the
+--- hunk path is visited on purpose rather than occasionally. It goes through
+--- the buffer-local mapping instead of a module call because the hunk verb has
+--- no public entry point -- `canvasdiff.stage()` is the FILE verb -- and the
+--- mapping is what a user actually presses.
+---
+--- Half the presses run with Git killed under them. That half is the one worth
+--- asserting: an index write is hash-object followed by update-index, two
+--- commands with a window between them, so a failure that half-applied would
+--- leave a staged blob nobody asked for. The invariant is the mixed-rename
+--- test's, extended to the hunk verb and widened to the WHOLE index -- a
+--- failed press may not move any path, not merely the one it was pressed on.
+---
+--- Both draws happen before the live-state guard, for the replay-determinism
+--- reason the window actions above spell out.
+ACTIONS.stage_hunk = function(world)
+  local state, win = showing_review(world)
+  local rows = state and hunk_rows(state) or {}
+  local row0 = rows[world.rng.next(math.max(#rows, 1)) + 1]
+  local hostile = world.rng.chance(50)
+  if not (win and row0) then
+    return record(world, "stage_hunk", "noop")
+  end
+  vim.api.nvim_set_current_win(win)
+  pcall(vim.api.nvim_win_set_cursor, win, { row0 + 1, 0 })
+
+  local press
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(state.buf, "n")) do
+    if mapping.lhs == "s" then
+      press = mapping.callback
+    end
+  end
+  if not press then
+    return record(world, "stage_hunk", "unmapped")
+  end
+
+  local before = index_snapshot(world.dir)
+  local ok
+  if hostile then
+    local system = require("canvasdiff.os")
+    local real = system.run
+    system.run = function()
+      return { code = 128, stdout = "", stderr = "injected git failure" }
+    end
+    ok = pcall(press)
+    system.run = real
+    world.refusals.stage_hunk = (world.refusals.stage_hunk or 0) + 1
+    H.eq(index_snapshot(world.dir), before,
+      "an injected Git failure moved the index while staging a hunk")
+  else
+    ok = pcall(press)
+  end
+  record(world, "stage_hunk", hostile and "hostile" or "clean")
+  assert(ok, "stage_hunk threw instead of refusing")
+end
+
 ACTIONS.sidebar_toggle = function(world)
   -- With no review showing this must warn-and-refuse; with one showing it
   -- retires or claims the Surface's one sidebar lease. Either way, never a
