@@ -27,18 +27,14 @@ end
 
 --- One tree row for one hunk, `gi` indexing `section.hunks`.
 ---
+--- The name comes from render.hunk_name, which is also what the pinned header's
+--- crumb says: a hunk is named identically in every window.
+---
 --- `label` is carried beside `name` because rendering has to know which BYTES
 --- of the row came out of the file: they are what a narrow window cuts, and
 --- what a pure deletion strikes through. `name` ends with it, by construction.
----
---- The line number is new_lo, which a pure deletion has not got -- it writes no
---- new-side line, so there is nothing to number. Which SIDE the label was taken
---- from is a different question, and `pure_del` is what answers it.
 local function hunk_entry(path, depth, gi, hunk)
-  -- Indentation is noise in a thirty-column tree: the row names the hunk, it
-  -- does not reproduce the line.
-  local label = ((hunk.label or ""):gsub("^%s+", ""))
-  local marker = hunk.new_lo and ("@@ %d  "):format(hunk.new_lo) or "@@ "
+  local marker, label = render.hunk_name(hunk)
   return {
     kind = "hunk",
     path = path,
@@ -188,27 +184,6 @@ function S.build_entries(sections, folded, aside, stale)
   return entries
 end
 
---- The widest prefix of `text` that fits `cells` display columns, cut on a
---- character boundary: a hunk label is a line of source, and splitting a
---- multibyte character mid-sequence would put invalid bytes in the buffer.
-local function fit(text, cells)
-  if cells <= 0 then
-    return ""
-  end
-  -- Every character is at least one cell wide, so `cells` characters is already
-  -- an upper bound on what can fit -- the walk below is bounded by the sidebar's
-  -- width rather than by the length of the line being cut.
-  local n = math.min(vim.fn.strchars(text), cells)
-  while n > 0 do
-    local cut = vim.fn.strcharpart(text, 0, n)
-    if vim.fn.strdisplaywidth(cut) <= cells then
-      return cut
-    end
-    n = n - 1
-  end
-  return ""
-end
-
 --- Render entries to display lines (pure). Returns the lines, and the highlight
 --- spans a row needs beyond its marker glyphs, keyed by row: `{ start_col,
 --- end_col, group }` byte ranges, outermost first, so a later span layers over
@@ -244,7 +219,7 @@ function S.render_lines(entries, width)
         -- a five-digit line number the marker and counts alone can exceed the
         -- width, and then the label goes to nothing and the row still overflows.
         -- That is the right trade -- the counts are the reason to read the row.
-        label = fit(label, width - vim.fn.strdisplaywidth(lead .. tail))
+        label = render.fit(label, width - vim.fn.strdisplaywidth(lead .. tail))
       end
       local line = lead .. label .. tail
       lines[i] = line
@@ -322,12 +297,9 @@ local function ensure_hl_groups()
     link = "Comment",
     default = true,
   })
-  -- A label taken from the old side is struck through, which is what
-  -- CanvasDiffGhost already means everywhere else in the plugin.
-  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunkDel", {
-    link = "CanvasDiffGhost",
-    default = true,
-  })
+  -- The struck label for a pure deletion, defined in render because the pinned
+  -- header's crumb draws the same group -- see the note there.
+  render.ensure_hunk_hl()
   render.ensure_marker_hl()
 end
 

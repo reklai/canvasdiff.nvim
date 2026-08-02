@@ -24,6 +24,11 @@ local DEFAULT_GLYPHS = {
   unstaged = "○",
   -- Appended to a row, so the leading space is part of the configured value.
   stale = " ●",
+  -- Separates the pinned header's file identity from the hunk breadcrumb after
+  -- it. Both spaces are part of the configured value: the file part must stay a
+  -- byte-for-byte mirror of the header row it covers, so the separator owns
+  -- every character between them.
+  crumb = " → ",
   -- minimap
   scroll_file = "‒",
   scroll_bar = "❘",
@@ -48,6 +53,7 @@ M.ASCII_GLYPHS = {
   ctx = " ", del = "-", add = "+",
   file = "|", folded = ">", open = "v", minus = "-", gutter = "|",
   staged = "*", unstaged = "o", stale = " !",
+  crumb = " -> ",
   scroll_file = "-", scroll_bar = "|",
 }
 

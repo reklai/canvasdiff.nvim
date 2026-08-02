@@ -1,8 +1,8 @@
 -- The sticky file-header row: a one-row float pinned under the winbar that
--- mirrors the in-buffer header of the section under the topline. SH.content
--- is the pure half: given a state and a 0-based topline, what (if anything)
--- should the row show. The float half below (open/update/close) renders that
--- answer.
+-- mirrors the in-buffer header of the section under the topline, followed by a
+-- breadcrumb naming the hunk you are inside it. SH.content is the pure half:
+-- given a state and a 0-based topline, what (if anything) should the row show.
+-- The float half below (open/update/close) renders that answer.
 --
 -- The lease machinery here is DELIBERATELY the scrollbar's, ported rather
 -- than shared: sidebar, status column and scrollbar each own their lease
@@ -15,11 +15,69 @@ local fold = require("canvasdiff.diff").fold
 
 local SH = {}
 
+--- The breadcrumb after the file identity: which hunk the topline is inside,
+--- and how far through the file that is -- "→ @@ 88  render(state) · 3/5".
+--- Returns the text and its spans (byte columns absolute on the finished row,
+--- which is why it is given `head`), or nil when no hunk header sits at or
+--- above the row `offset` names: a binary notice, a pure rename, any row a
+--- section publishes outside its hunks.
+---
+--- This is the answer a closed sidebar would otherwise cost you. It is also the
+--- only part of the row that MAY change while the file stays the same -- the
+--- file part is a verbatim mirror of the header row underneath, which is what
+--- lets the float hide itself when that row reaches the top.
+---
+--- A body row already knows its hunk (`entry.hunk_idx`, the same `gi` the
+--- sidebar's rows carry), so nothing walks upward looking for the header.
+---
+--- `room` is the window's column count when the caller has one. Only the LABEL
+--- gives way to it: the file identity and the ordinal are the two answers the
+--- row exists to give, and half of either is worse than none.
+local function crumb(section, offset, head, room)
+  local entry = (section.entries or {})[offset]
+  local gi = entry and entry.hunk_idx or nil
+  local hunks = section.hunks or {}
+  local hunk = gi and hunks[gi] or nil
+  if not hunk then
+    return nil
+  end
+  local marker, label = render.hunk_name(hunk)
+  label = render.escape_path(label)
+  -- Counted off the same list the ordinal indexes, so "3/5" can never name a
+  -- hunk from outside its own denominator.
+  local ordinal = (" · %d/%d"):format(gi, #hunks)
+  local lead = render.glyphs.crumb .. marker
+  -- Bytes are an upper bound on cells, so the arithmetic only has to be exact
+  -- for a row that really is too long.
+  if room and #head + #lead + #label + #ordinal > room then
+    label = render.fit(label,
+      room - vim.fn.strdisplaywidth(head .. lead .. ordinal))
+  end
+  local text = lead .. label .. ordinal
+  local spans = {
+    -- The crumb reads as what it names: the group the canvas's own `@@` rows
+    -- wear. It layers OVER the file header's own foreground, which the float
+    -- draws across the whole row.
+    { #head, #head + #text, "CanvasDiffHunkHeader" },
+  }
+  if hunk.pure_del and #label > 0 then
+    -- Struck iff the label is old-side text: the same fact, on the same
+    -- channel, as the sidebar's hunk row and the canvas's ghost deletions.
+    -- Measured off the label that SURVIVED the cut above, never the one that
+    -- arrived -- a span from before it would run past end-of-line.
+    spans[2] = { #head + #lead, #head + #lead + #label, "CanvasDiffSidebarHunkDel" }
+  end
+  return text, spans
+end
+
 --- nil = show nothing: empty canvas, nothing resolvable, a folded
 --- placeholder (that single row IS the header), or the real header row
 --- sitting exactly at the top -- pinning a copy over the original would
 --- double it.
-function SH.content(st, top0)
+---
+--- `room` is optional: without it nothing truncates, which is what keeps this
+--- answerable with no window to measure.
+function SH.content(st, top0, room)
   if type(st) ~= "table" or type(st.sections) ~= "table"
       or #st.sections == 0 then
     return nil
@@ -36,13 +94,22 @@ function SH.content(st, top0)
   if not line then
     return nil
   end
-  return {
-    line = line,
-    -- Never a stale span: the pinned section is on screen, and fold.stale
-    -- is false by construction for anything you can see (the same reason
-    -- the expanded in-buffer header carries none).
-    spans = render.marker_spans(line, section.staged, section.unstaged, false),
-  }
+  -- Measured on the FILE line, before the crumb joins it: marker_spans walks in
+  -- from the END of what it is given, so the whole row would put the stage
+  -- marks on the crumb's last bytes.
+  --
+  -- Never a stale span either: the pinned section is on screen, and fold.stale
+  -- is false by construction for anything you can see (the same reason
+  -- the expanded in-buffer header carries none).
+  local spans = render.marker_spans(line, section.staged, section.unstaged, false)
+  local text, crumb_spans = crumb(section, offset, line, room)
+  if text then
+    line = line .. text
+    for _, span in ipairs(crumb_spans) do
+      spans[#spans + 1] = span
+    end
+  end
+  return { line = line, spans = spans }
 end
 
 local NS = vim.api.nvim_create_namespace("canvasdiff.sticky")
@@ -185,7 +252,10 @@ function SH.update(lease, state)
   if not active(lease) then
     return false
   end
-  local content = SH.content(state, top0)
+  -- The same width the float is about to be given, so the crumb's label is cut
+  -- to the room the row will actually have.
+  local content = SH.content(state, top0,
+    math.max(vim.api.nvim_win_get_width(state.win), 1))
   if not active(lease) then
     return false
   end
@@ -253,17 +323,19 @@ function SH.update(lease, state)
     hl_group = "CanvasDiffFileHeader",
     priority = 100,
   })
-  for _, span in ipairs(content.spans) do
+  for i, span in ipairs(content.spans) do
     if not active(lease) then
       return false
     end
-    -- Never a CanvasDiffStaleEmphasis span here (SH.content passes
-    -- stale = false by construction), so the flat 101 matches the
-    -- in-buffer header's non-stale priority exactly.
+    -- The first is 101, which is the in-buffer header's non-stale priority
+    -- exactly (SH.content passes stale = false by construction, so there is
+    -- never a CanvasDiffStaleEmphasis span to layer here). The rest step up
+    -- from it, because spans arrive outermost-first: the crumb's strike has to
+    -- land over the crumb's own group, the way the sidebar layers the same two.
     vim.api.nvim_buf_set_extmark(lease.buf, NS, 0, span[1], {
       end_col = span[2],
       hl_group = span[3],
-      priority = 101,
+      priority = 101 + i - 1,
     })
   end
   return active(lease)
@@ -448,6 +520,11 @@ function SH.open(state, opts, callbacks)
     if not active(lease) then
       error("sticky header owner is no longer alive", 0)
     end
+    -- Every other group this row wears is authored by the canvas that must
+    -- already be showing for the row to exist. The struck crumb label is the
+    -- exception: its group belongs to the hunk vocabulary the sidebar shares,
+    -- and the sidebar may never have opened at all.
+    render.ensure_hunk_hl()
     lease.group_id = vim.api.nvim_create_augroup(lease.group_name, { clear = true })
     if not active(lease) then
       pcall(vim.api.nvim_del_augroup_by_id, lease.group_id)

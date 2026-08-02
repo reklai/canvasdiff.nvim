@@ -47,6 +47,52 @@ function R.section_path(section)
   return new_path
 end
 
+--- The widest prefix of `text` that fits `cells` display columns, cut on a
+--- character boundary: the text being cut is a line of source, and splitting a
+--- multibyte character mid-sequence would put invalid bytes in a buffer.
+---
+--- Shared rather than copied: the sidebar's hunk rows and the pinned header's
+--- crumb cut the same labels to two different widths, and a second
+--- implementation would be a second answer to "does this fit".
+function R.fit(text, cells)
+  if cells <= 0 then
+    return ""
+  end
+  -- Every character is at least one cell wide, so `cells` characters is already
+  -- an upper bound on what can fit -- the walk below is bounded by the width
+  -- being cut to rather than by the length of the line being cut.
+  local n = math.min(vim.fn.strchars(text), cells)
+  while n > 0 do
+    local cut = vim.fn.strcharpart(text, 0, n)
+    if vim.fn.strdisplaywidth(cut) <= cells then
+      return cut
+    end
+    n = n - 1
+  end
+  return ""
+end
+
+--- One hunk's identity as text: the `@@` marker naming its new-side line, and
+--- the first line the hunk writes.
+---
+--- ONE format wherever a hunk is named -- the sidebar's tree rows and the
+--- pinned header's crumb are the same fact read in two windows, and a hunk that
+--- answered to two names would read as two hunks.
+---
+--- Returned in two pieces because both callers need the LABEL's own bytes: they
+--- are what a narrow window cuts, and what a pure deletion strikes through.
+--- Leading indentation is dropped -- it is noise in a row that NAMES the hunk
+--- rather than reproducing the line.
+---
+--- The number is new_lo, which a pure deletion has not got: it writes no
+--- new-side line, so there is nothing to number. Which SIDE the label was taken
+--- from is a different question, and `pure_del` is what answers it.
+function R.hunk_name(hunk)
+  local label = ((hunk.label or ""):gsub("^%s+", ""))
+  local marker = hunk.new_lo and ("@@ %d  "):format(hunk.new_lo) or "@@ "
+  return marker, label
+end
+
 local HL_GROUP = {
   file_hdr = "CanvasDiffFileHeader",
   hunk_hdr = "CanvasDiffHunkHeader",
@@ -163,6 +209,21 @@ end
 --- already separates it from both filled markers whatever colour it lands on.
 --- DiagnosticWarn rather than `Changed` because `Changed` is cyan in several popular
 --- schemes (tokyonight included), which breaks the progression for no gain.
+--- The struck-label group, defined once for every window that draws a hunk
+--- label: the sidebar's tree rows and the pinned header's crumb. A label taken
+--- from the old side is struck through, which is what CanvasDiffGhost already
+--- means everywhere else in the plugin.
+---
+--- Here rather than in either drawer for the reason the note above spells out:
+--- two `default = true` calls for one group is a trap, and whichever window
+--- opened first would silently decide what the other one looks like.
+function R.ensure_hunk_hl()
+  vim.api.nvim_set_hl(0, "CanvasDiffSidebarHunkDel", {
+    link = "CanvasDiffGhost",
+    default = true,
+  })
+end
+
 function R.ensure_marker_hl()
   vim.api.nvim_set_hl(0, "CanvasDiffStale", { link = "DiagnosticError", default = true })
   -- Layered over CanvasDiffStale, carrying an attribute and no colour of its own, so the
