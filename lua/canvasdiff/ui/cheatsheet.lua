@@ -49,6 +49,17 @@ local function grouped_column(title, by_action, order, skip)
   if #sections == 0 then
     return nil
   end
+  -- A group named for its own column holds that column's own verbs, and the
+  -- title above them already says so. Left where K.group_order puts it, the
+  -- repeated heading reads as a section beside Navigate and View rather than
+  -- as the thing the column is named after -- so it leads, unheaded.
+  for i, sec in ipairs(sections) do
+    if sec.name == title then
+      sec.name = nil
+      table.insert(sections, 1, table.remove(sections, i))
+      break
+    end
+  end
   return { title = title, sections = sections }
 end
 

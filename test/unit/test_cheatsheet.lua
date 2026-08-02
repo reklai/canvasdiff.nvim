@@ -119,18 +119,50 @@ T["cheatsheet_model keeps group sub-headers only in the Canvas column"] = functi
   local model = cheatsheet.model(defaults())
   for _, col in ipairs(model) do
     if col.title == "Canvas" then
-      local names = {}
-      for _, sec in ipairs(col.sections) do names[#names + 1] = sec.name end
-      -- Subset of K.group_order, in order; Navigate must be present.
-      H.eq(names[1], "Navigate")
-      for _, n in ipairs(names) do
-        assert(type(n) == "string" and n ~= "", "canvas sections carry group names")
+      -- Indexed rather than appended: `names[#names + 1] = sec.name` drops a
+      -- nil silently, so the unheaded lead section would vanish from the very
+      -- list meant to enumerate it and this would pass without seeing it.
+      H.eq(col.sections[1].name, nil, "the column's own verbs lead unheaded")
+      H.eq(col.sections[2].name, "Navigate")
+      for i = 2, #col.sections do
+        local n = col.sections[i].name
+        assert(type(n) == "string" and n ~= "", "later canvas sections carry group names")
       end
     else
       H.eq(#col.sections, 1, col.title .. " is a flat list")
       H.eq(col.sections[1].name, nil, col.title .. " has no sub-header")
     end
   end
+end
+
+T["cheatsheet_model the column's own group leads it unheaded"] = function()
+  local canvas
+  for _, col in ipairs(cheatsheet.model(defaults())) do
+    if col.title == "Canvas" then canvas = col end
+  end
+  assert(canvas, "sanity: the Canvas column exists")
+  H.eq(canvas.sections[1].name, nil,
+    "the group named for the column leads it with no sub-header of its own")
+  for _, sec in ipairs(canvas.sections) do
+    assert(sec.name ~= canvas.title,
+      "no sub-header repeats the column title")
+  end
+  local actions = {}
+  for _, row in ipairs(canvas.sections[1].rows) do
+    actions[#actions + 1] = row.action
+  end
+  H.eq(actions,
+    { "refresh", "stage", "unstage", "stage_file", "unstage_file", "close" },
+    "the canvas's own verbs, in spec order")
+end
+
+T["cheatsheet_lines a column title is never repeated as a sub-header"] = function()
+  local lines = cheatsheet.lines(cheatsheet.model(defaults()), 40)
+  local seen = 0
+  for _, line in ipairs(lines) do
+    if vim.trim(line) == "Canvas" then seen = seen + 1 end
+  end
+  H.eq(seen, 1, "Canvas names the column once, and never a section inside it")
 end
 
 T["cheatsheet_model omits disabled actions and empty columns"] = function()
