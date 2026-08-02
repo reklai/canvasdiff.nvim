@@ -24,7 +24,7 @@ T.architecture_documentation_has_install_config_and_health_paths = function()
   local readme = read("README.md")
   for _, needle in ipairs({
     '"reklai/canvasdiff.nvim"', "opts =", 'cmd = "CanvasDiff"',
-    "CanvasDiffFileBar", ":checkhealth canvasdiff", "CONTRIBUTING.md",
+    "CanvasDiffFileBar", ":checkhealth canvasdiff", "docs/architecture.md",
   }) do
     assert(readme:find(needle, 1, true), "README omits " .. needle)
   end

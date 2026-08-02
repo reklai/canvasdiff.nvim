@@ -25,7 +25,7 @@ local function read(relative)
 end
 
 T.architecture_layout_documents_contributor_entry_path = function()
-  local contributing = read("CONTRIBUTING.md")
+  local architecture = read("docs/architecture.md")
   local makefile = read("Makefile")
   for _, target in ipairs({
     "unit",
@@ -43,10 +43,10 @@ T.architecture_layout_documents_contributor_entry_path = function()
     local command = "make " .. target
     local command_pattern = "make%s+"
       .. target:gsub("%-", "%%-") .. "%f[^%w%-]"
-    assert(contributing:find(command_pattern), "missing " .. command)
+    assert(architecture:find(command_pattern), "missing " .. command)
   end
 
-  local replay = contributing:gsub("%s+", " ")
+  local replay = architecture:gsub("%s+", " ")
   assert(replay:find("benchmark/chaos/worker.lua", 1, true),
     "missing deterministic chaos worker command")
   assert(replay:find("SEED ACTIONS HARNESS", 1, true),

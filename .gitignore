@@ -2,3 +2,5 @@
 .worktrees/
 *.log
 doc/tags
+docs
+/CONTRIBUTING.md

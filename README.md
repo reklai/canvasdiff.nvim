@@ -427,14 +427,13 @@ CanvasDiff motions, folds, search, and row positions remain exact.
 - `:h canvasdiff` — searchable commands, mappings, configuration, highlights,
   troubleshooting, and Lua API.
 - [docs/design.md](docs/design.md) — behavior and visual design rationale.
-- [docs/architecture.md](docs/architecture.md) — module boundaries and state
-  ownership.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — repository layout, tests, and change
-  requirements.
+- [docs/architecture.md](docs/architecture.md) — module boundaries, state
+  ownership, contributor workflow, and verification requirements.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Focused and full checks include:
+See [docs/architecture.md](docs/architecture.md). Focused and full checks
+include:
 
 ```sh
 make unit
