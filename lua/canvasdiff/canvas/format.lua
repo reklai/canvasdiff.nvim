@@ -288,12 +288,21 @@ local ELEVATION_FACTOR = 0.04
 local BAR_FACTOR = 0.16
 
 -- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
--- 0.30 by measurement: the LARGEST candidate whose ghost fg keeps a luma
--- delta against Normal bg at or above @comment's -- a ghost must never read
--- dimmer than a comment. The builtin scheme is the binding one (@comment
--- |dL| 135.9; the ghost reads 143.1 at 0.30 but 133.1 at 0.35);
--- tokyonight-moon's @comment sits at 74.1, where every candidate clears.
-local GHOST_DIM_FACTOR = 0.30
+--
+-- The ceiling is still @comment: a ghost must never read dimmer than a
+-- comment, and under the builtin scheme (the binding one, @comment |dL|
+-- 135.9) that rules out 0.35, which reads 133.1. But sitting AT the ceiling
+-- is what made the strikethrough load-bearing rather than merely helpful:
+-- 0.30 reads 143.1, clearing @comment by 7.3, so the two were luminance
+-- twins and the strike carried the whole distinction -- over text it also
+-- had to stay legible through.
+--
+-- 0.20 reads 163.2: 27.4 clear of @comment, so dim and strike each carry
+-- part of "removed" instead of one doing both, and 41 below Normal's own
+-- 204.2, so "dimming says removed" still reads at a glance. The strike is
+-- kept -- shape survives colour blindness and a monochrome terminal, which
+-- luminance alone does not.
+local GHOST_DIM_FACTOR = 0.20
 
 -- When a transparent scheme gives Normal no background there is nothing to
 -- elevate from; a fixed near-Normal pair keeps the field visible.

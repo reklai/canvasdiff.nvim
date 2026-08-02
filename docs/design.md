@@ -19,7 +19,7 @@ One rendering, three channels — each carrying exactly one fact:
   interesting fact.
 - **Dimming says "removed".** Ghost deletion lines — and a wholly deleted file's
   rows, the only real `-` rows left — render with `Normal`'s foreground moved
-  **30% toward its background**.
+  **20% toward its background**.
 - **The margin hue says which direction.** The green/red lives *only* on the
   one-cell `+`/`-` prefix and the statuscolumn bar: `DiffAdd`/`DiffDelete`'s
   **foreground**, or a fixed `#2ea043`/`#db4444` when those groups carry none
@@ -46,11 +46,17 @@ factor is measured, not felt:
   near-neutral, so tinting just lightens the bar into `Visual`'s band (gap 5.9),
   and under moon it collapses the stale marker's contrast on the bar from 23.3
   to 11.6.
-- **30% (the ghost dim)** is the largest candidate whose dimmed foreground keeps
-  at least `@comment`'s luma delta against `Normal`'s background — a deletion
-  must never read dimmer than a comment. The builtin scheme is the binding one
-  (`@comment` at 135.9; the ghost reads 143.1 at 0.30 but 133.1 at 0.35);
-  moon's `@comment` sits at 74.1, where every candidate clears.
+- **20% (the ghost dim)** sits deliberately below its own ceiling. The ceiling
+  is `@comment`: a deletion must never read dimmer than a comment, which under
+  the builtin scheme (the binding one, `@comment` at 135.9) rules out 0.35 at
+  133.1. The first version took that ceiling — 0.30 reads 143.1, clearing
+  `@comment` by **7.3** — and that turned out to be the mistake. Two channels
+  are supposed to say "removed" here, dim and strike, and parking the dim at
+  comment brightness made them one: the strike carried the whole distinction,
+  over text it also had to leave legible. 0.20 reads 163.2, **27.4** clear of
+  `@comment` and 41 below `Normal`'s own 204.2, so each channel does part of
+  the work and the deleted line stays readable. Moon's `@comment` sits at 74.1,
+  where every candidate clears.
 
 A transparent scheme gives `Normal` no background at all, so there is nothing to
 elevate from; a fixed near-Normal pair (`#2c2c2c` dark, `#e4e4e4` light) keeps the

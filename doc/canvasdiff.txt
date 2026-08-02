@@ -514,11 +514,12 @@ live colourscheme when the canvas draws:
   canvas most of the screen is changed rows, so a hued wash would spend the
   strongest visual channel on the least interesting fact.
 - Dimming says REMOVED: ghost deletion lines -- and a wholly deleted file's
-  rows, the only real `-` rows left -- use `Normal`'s foreground moved 30%
-  toward its background, a factor measured so a deletion never reads dimmer
-  than a comment. Ghosts are additionally struck through: parked at comment
-  brightness by that very floor, the strikethrough is what separates a
-  deleted block from a comment block at a glance.
+  rows, the only real `-` rows left -- use `Normal`'s foreground moved 20%
+  toward its background, a factor measured to clear comment brightness with
+  room to spare rather than to sit on it, so a deleted line stays readable.
+  Ghosts are additionally struck through: dim and strike each carry part of
+  "removed", and the strike is the half that survives colour blindness and a
+  monochrome terminal, where luminance alone says nothing.
 - The margin hue says WHICH DIRECTION: green/red only on the one-cell
   `+`/`-` prefix and the statuscolumn bar (the `gutter` glyph, default `▎`),
   from `DiffAdd`/`DiffDelete`'s foreground, or a fixed green/red pair when

@@ -1427,9 +1427,23 @@ T["hl_rows ghosts have no background and a dimmed, struck foreground"] = functio
   assert(luma(ghost.fg) < luma(normal.fg) and luma(ghost.fg) > luma(normal.bg),
     "dimmed means moved toward the background, not past it and not brighter")
   H.eq(ghost.strikethrough, true,
-    "struck through: the dim floor pins ghosts at comment luminance, so the"
-      .. " strike is what separates a deleted block from a comment block at"
-      .. " a glance")
+    "struck through: shape is the half of 'removed' that survives colour"
+      .. " blindness and a monochrome terminal, where luminance says nothing")
+
+  -- The dim's ceiling is @comment -- a deletion must never read dimmer than
+  -- one -- but sitting ON that ceiling is what made the strike load-bearing
+  -- rather than corroborating, over text it also had to leave legible. The
+  -- factor is chosen to clear it with room, so the two channels split the
+  -- work; drift back toward the ceiling and this fails before the docs that
+  -- quote the clearance go quietly false.
+  local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
+  if comment.fg then
+    local bg = luma(normal.bg)
+    local clearance = math.abs(luma(ghost.fg) - bg) - math.abs(luma(comment.fg) - bg)
+    assert(clearance >= 15,
+      ("a ghost must clear @comment by a real margin, not sit on it (got %.1f)")
+        :format(clearance))
+  end
 end
 
 T["hl_rows margin hue lives on the prefix and gutter groups, identically"] = function()
