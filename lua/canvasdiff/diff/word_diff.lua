@@ -5,13 +5,43 @@ local W = {}
 -- Guard against quadratic char-diff blowups on minified/generated lines.
 local MAX_LINE_BYTES = 500
 
--- offs[i] = 0-based byte offset where char i starts; offs[#chars + 1] = #line.
-local function byte_offsets(chars)
+-- offs[i] = 0-based byte offset where token i starts; offs[#tokens + 1] = #line.
+local function byte_offsets(tokens)
   local offs = { 0 }
-  for i, c in ipairs(chars) do
+  for i, c in ipairs(tokens) do
     offs[i + 1] = offs[i] + #c
   end
   return offs
+end
+
+--- One token per run of word characters, plus one per separator character.
+---
+--- Diffing by CHARACTER is what the eye reads as confetti: prose lines share
+--- their letters by coincidence, so the diff answers with a scatter of one- and
+--- two-letter runs underlined through the middle of words. A token is the
+--- smallest unit a reader can act on, so it is the smallest unit worth marking.
+---
+--- A byte >= 0x80 counts as word-ish: `\zs` has already split whole characters,
+--- and a letter outside ASCII is still a letter -- `%w` is ASCII-only, so
+--- without this "héllo" tokenizes as h / é / llo and the mark lands mid-word on
+--- exactly the text that most needs to stay whole.
+local function tokens(line)
+  local out, word = {}, nil
+  for _, c in ipairs(vim.fn.split(line, "\\zs")) do
+    if c:match("^[%w_]$") or c:byte() >= 0x80 then
+      word = word and (word .. c) or c
+    else
+      if word then
+        out[#out + 1] = word
+        word = nil
+      end
+      out[#out + 1] = c
+    end
+  end
+  if word then
+    out[#out + 1] = word
+  end
+  return out
 end
 
 local function pair_marks(out, del_row, del_content, add_row, add_content)
@@ -22,10 +52,11 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
     return
   end
 
-  -- Char-level diff: one character per "line", then map char indices back to
-  -- byte columns (multibyte safe -- \zs splits between characters).
-  local dc = vim.fn.split(del_content, "\\zs")
-  local ac = vim.fn.split(add_content, "\\zs")
+  -- Token-level diff: one token per "line", then map token indices back to
+  -- byte columns. A token never splits a character, so this stays multibyte
+  -- safe for the same reason the character version was.
+  local dc = tokens(del_content)
+  local ac = tokens(add_content)
   local hunks = algorithm.hunks(table.concat(dc, "\n"), table.concat(ac, "\n"))
   local doff, aoff = byte_offsets(dc), byte_offsets(ac)
 
@@ -56,7 +87,7 @@ local function pair_marks(out, del_row, del_content, add_row, add_content)
   end
 end
 
---- Char-level word-diff marks for one section (pure data, same shape as
+--- Token-level word-diff marks for one section (pure data, same shape as
 --- hl.section_ts_marks but priority 105). Within each consecutive del-run
 --- followed by an add-run, del k pairs with add k; leftovers are unpaired.
 function W.section_marks(section)

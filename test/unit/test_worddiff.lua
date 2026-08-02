@@ -20,12 +20,14 @@ T["word_marks highlight only the changed span of a paired line"] = function()
     { "local a = 1", "local b = 20 -- changed", "local c = 3", "local d = 4", "local e = 5" }
   )
   local marks = word_marks(s)
-  -- "local b = 2" -> "local b = 20 -- changed": vim.diff treats the "2" as a unit
-  -- and produces hunks for "2"→"2" (row 3 and 4, cols 11-12) and insertion of
-  -- "0 -- changed" (row 4, cols 12-24). Together they cover bytes 10-23.
+  -- "local b = 2" -> "local b = 20 -- changed". The changed unit is the number
+  -- `20`, not the digit inside it that happens to differ: one mark covers it
+  -- whole (cols 11-13), the next the inserted " -- changed" (13-24). Diffing
+  -- by character split `20` across the two marks, with `2` in one and `0` in
+  -- the other.
   H.eq(marks, {
-    { row = 3, col = 11, end_col = 12, group = "CanvasDiffWordAdd", priority = 105 },
-    { row = 3, col = 12, end_col = 24, group = "CanvasDiffWordAdd", priority = 105 },
+    { row = 3, col = 11, end_col = 13, group = "CanvasDiffWordAdd", priority = 105 },
+    { row = 3, col = 13, end_col = 24, group = "CanvasDiffWordAdd", priority = 105 },
   })
   for _, m in ipairs(marks) do
     H.eq(m.group, "CanvasDiffWordAdd", "no CanvasDiffWordDel marks: there is no del row to put one on")
@@ -35,14 +37,54 @@ end
 T["word_marks are byte-correct on multibyte lines"] = function()
   local s = section({ "x = 'héllo'" }, { "x = 'hállo'" })
   local marks = word_marks(s)
-  -- chars: x,' ',=,' ',',h,é,l,l,o,' — the change is char 7 (é -> á), whose
-  -- 0-based source byte offset is 6. Mark contract: col = source byte + 1
-  -- (the rendered prefix), so col = 7; é/á are 2 UTF-8 bytes, so end_col = 9.
+  -- The changed unit is the WORD, so the mark spans "hállo" whole. It starts
+  -- after "x = '" -- 0-based byte 5, and the mark contract is col = source
+  -- byte + 1 for the rendered prefix, so col = 6 -- and runs six bytes,
+  -- because á is two. Marking only á would be the mid-word cut tokenizing
+  -- exists to avoid, and the byte arithmetic still has to survive a multibyte
+  -- character sitting inside the token, which is what this pins.
   H.eq(#marks, 1, "add side only -- the deleted line is virtual and cannot hold a mark")
   local add = marks[1]
   H.eq(add.group, "CanvasDiffWordAdd")
-  H.eq(add.col, 7)
-  H.eq(add.end_col, 9)  -- á is 2 bytes
+  H.eq(add.col, 6)
+  H.eq(add.end_col, 12)
+  local content
+  for _, e in ipairs(s.entries) do
+    if e.kind == "add" then content = e.content end
+  end
+  H.eq(content:sub(add.col, add.end_col - 1), "hállo",
+    "the mark covers the whole word, not the one character that differs")
+end
+
+T["word_marks land on token boundaries, never inside a word"] = function()
+  -- Prose lines share their letters by coincidence, and a character-level diff
+  -- answers that with a scatter of one- and two-letter marks cutting through
+  -- the middle of words. Every mark must begin and end where a token does.
+  -- `result` and `outcome` share u and t in order, so a character-level diff
+  -- keeps those and marks the letters around them -- boundaries strictly
+  -- inside a word. A fixture whose only change is one character (4 -> 5) would
+  -- not discriminate: that character IS a whole token, so both tokenizations
+  -- agree on it and the mutant survives.
+  local s = section(
+    { "  local result = compute(a, b)" },
+    { "  local outcome = compute(a, b)" }
+  )
+  local marks = word_marks(s)
+  local content
+  for _, e in ipairs(s.entries) do
+    if e.kind == "add" then content = e.content end
+  end
+  assert(#marks > 0, "sanity: this pair does produce marks")
+  for _, m in ipairs(marks) do
+    local text = content:sub(m.col, m.end_col - 1)
+    local before = m.col > 1 and content:sub(m.col - 1, m.col - 1) or " "
+    local after = content:sub(m.end_col, m.end_col)
+    -- A boundary is wrong exactly when word characters sit on both sides of it.
+    assert(not (before:match("[%w_]") and text:match("^[%w_]")),
+      ("mark starts inside a word: %q before %q"):format(before, text))
+    assert(not (after:match("[%w_]") and text:match("[%w_]$")),
+      ("mark ends inside a word: %q after %q"):format(text, after))
+  end
 end
 
 T["word_marks skip unpaired and blank lines"] = function()
