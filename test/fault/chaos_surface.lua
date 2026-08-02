@@ -101,6 +101,27 @@ local function canvas_buffers()
   return found
 end
 
+local function highlight_shape(definition)
+  local out = {}
+  for key, value in pairs(definition or {}) do
+    if key ~= "default" and key ~= "force" then
+      out[key] = value
+    end
+  end
+  return out
+end
+
+local function assert_displayed_review(snapshot)
+  local surface = snapshot.surface
+  assert(surface:is_alive(), "invalid setup dismantled its live Surface")
+  assert(surface.state == snapshot.state,
+    "invalid setup replaced the live Surface state")
+  assert(vim.api.nvim_win_is_valid(snapshot.win),
+    "invalid setup dismantled its review window")
+  assert(vim.api.nvim_win_get_buf(snapshot.win) == snapshot.buf,
+    "invalid setup dismantled the displayed review")
+end
+
 --- Everything that must hold after every action.
 ---
 --- The strongest of these is the augroup check. A Surface owns numbered
@@ -224,6 +245,13 @@ local function check(world)
     end
   end
 
+
+  local invalid_review = world.pending_invalid_review
+  world.pending_invalid_review = nil
+  if invalid_review then
+    assert_displayed_review(invalid_review)
+  end
+
   -- Appearance is process-wide state, so configuration churn has to leave the
   -- complete public registry live after EVERY action, including actions that
   -- never draw a review. An accepted explicit file-bar override is an oracle,
@@ -237,12 +265,22 @@ local function check(world)
     local definition = vim.api.nvim_get_hl(0, { name = name, link = true })
     assert(next(definition) ~= nil, name .. " disappeared during chaos")
   end
-  if world.expected_file_bar then
-    local bar = vim.api.nvim_get_hl(0,
-      { name = "CanvasDiffFileBar", link = false })
-    assert(bar.bg == world.expected_file_bar,
+  local bar = highlight_shape(vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = false }))
+  if world.expected_file_bar.kind == "override" then
+    assert(bar.bg == world.expected_file_bar.bg,
       "configured file bar did not survive the last action")
+  else
+    assert(vim.deep_equal(bar, world.expected_file_bar.definition),
+      "released CanvasDiffFileBar did not return to its expected default: "
+        .. vim.inspect({ expected = world.expected_file_bar.definition,
+          actual = bar }))
   end
+  local expected_file_glyph = world.expected_glyph_set == "ascii" and "|" or "▎"
+  local actual_file_glyph = require("canvasdiff.config").glyphs.file
+  assert(actual_file_glyph == expected_file_glyph,
+    ("configured glyph set drifted: expected %s file glyph %q, got %q")
+      :format(world.expected_glyph_set, expected_file_glyph, actual_file_glyph))
   local commands = vim.api.nvim_get_autocmds({
     group = "canvasdiff.appearance",
   })
@@ -296,6 +334,20 @@ local function canvas_window()
   end
 end
 
+local function showing_review(world)
+  local win = canvas_window()
+  if not win then
+    return nil
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  for _, surface in pairs(world.surfaces) do
+    local st = surface:is_alive() and surface.state or nil
+    if st and st.buf == buf then
+      return st, win
+    end
+  end
+end
+
 --- Change what the review compares: pivot in place when one is showing, open
 --- with an explicit lens when none is. The split exists because set_lens and
 --- friends open INTERNALLY when nothing is showing and return only `true` --
@@ -338,11 +390,29 @@ ACTIONS.configure_appearance = function(world)
   world.plugin.setup({ highlights = {
     CanvasDiffFileBar = { bg = hex },
   } })
-  world.expected_file_bar = color
+  world.expected_file_bar = { kind = "override", bg = color }
+  world.release_file_bar = vim.deepcopy(world.current_default_file_bar)
+  world.expected_glyph_set = "default"
   record(world, "configure_appearance", hex)
 end
 
 ACTIONS.configure_invalid = function(world)
+  local state, win = showing_review(world)
+  if not state then
+    state = world.plugin.open()
+    remember(world, state)
+    win = state and state.win
+  end
+  assert(state and state.surface and win,
+    "configure_invalid could not establish a live displayed review")
+  local review = {
+    surface = state.surface,
+    state = state,
+    win = win,
+    buf = state.buf,
+  }
+  assert_displayed_review(review)
+
   -- The public setup path presents appearance diagnostics through vim.notify.
   -- Capture only this action so deliberate invalid input does not flood long
   -- campaigns, while still proving both the typo and malformed public group
@@ -368,26 +438,47 @@ ACTIONS.configure_invalid = function(world)
   assert(diagnostic:find("CanvasDiffGhost", 1, true),
     "invalid highlight diagnostic did not name CanvasDiffGhost: "
       .. vim.inspect(messages))
-  world.expected_file_bar = nil
+  assert_displayed_review(review)
+  world.pending_invalid_review = review
+  world.expected_file_bar = {
+    kind = "released",
+    definition = vim.deepcopy(world.release_file_bar),
+  }
+  world.expected_glyph_set = "default"
   record(world, "configure_invalid")
 end
 
 ACTIONS.reset_config = function(world)
   world.plugin.setup({})
-  world.expected_file_bar = nil
+  world.expected_file_bar = {
+    kind = "released",
+    definition = vim.deepcopy(world.release_file_bar),
+  }
+  world.expected_glyph_set = "default"
   record(world, "reset_config")
 end
 
 ACTIONS.change_colorscheme = function(world)
   vim.cmd.colorscheme("default")
+  world.current_default_file_bar =
+    vim.deepcopy(world.default_scheme_file_bar)
+  world.release_file_bar = vim.deepcopy(world.current_default_file_bar)
+  if world.expected_file_bar.kind == "released" then
+    world.expected_file_bar.definition =
+      vim.deepcopy(world.release_file_bar)
+  end
   record(world, "change_colorscheme")
 end
 
 ACTIONS.toggle_glyph_set = function(world)
-  world.ascii = not world.ascii
-  world.plugin.setup({ glyphs = world.ascii and "ascii" or nil })
-  world.expected_file_bar = nil
-  record(world, "toggle_glyph_set", world.ascii and "ascii" or "default")
+  local ascii = world.expected_glyph_set ~= "ascii"
+  world.plugin.setup({ glyphs = ascii and "ascii" or nil })
+  world.expected_file_bar = {
+    kind = "released",
+    definition = vim.deepcopy(world.release_file_bar),
+  }
+  world.expected_glyph_set = ascii and "ascii" or "default"
+  record(world, "toggle_glyph_set", world.expected_glyph_set)
 end
 
 ACTIONS.set_lens = function(world)
@@ -609,20 +700,6 @@ end
 --- everything else here learns about them: a Surface that opened INTERNALLY
 --- was never handed to remember(), and this declines to act on one rather than
 --- reaching into App's private index for it.
-local function showing_review(world)
-  local win = canvas_window()
-  if not win then
-    return nil
-  end
-  local buf = vim.api.nvim_win_get_buf(win)
-  for _, surface in pairs(world.surfaces) do
-    local st = surface:is_alive() and surface.state or nil
-    if st and st.buf == buf then
-      return st, win
-    end
-  end
-end
-
 --- The canvas's own `s`, pressed on a row that really is a hunk row.
 ---
 --- The file verbs above land on a random buffer row, which is a hunk row only
@@ -715,6 +792,60 @@ end
 table.sort(ACTION_NAMES)
 Chaos.action_names = ACTION_NAMES
 
+-- ColorScheme owns process-wide highlights, not merely colors_name. Snapshot
+-- both so named schemes with local tweaks and unnamed palettes restore exactly.
+local function snapshot_colorscheme()
+  return {
+    name = vim.g.colors_name,
+    background = vim.o.background,
+    highlights = vim.deepcopy(vim.api.nvim_get_hl(0, {})),
+  }
+end
+
+local function restore_colorscheme(snapshot)
+  if snapshot.name then
+    pcall(vim.cmd.colorscheme, snapshot.name)
+  else
+    pcall(vim.cmd, "highlight clear")
+  end
+  vim.o.background = snapshot.background
+  for name in pairs(vim.api.nvim_get_hl(0, {})) do
+    if snapshot.highlights[name] ~= nil
+        or name:sub(1, #"CanvasDiff") ~= "CanvasDiff" then
+      vim.api.nvim_set_hl(0, name, {})
+    end
+  end
+  for name, definition in pairs(snapshot.highlights) do
+    local exact = vim.deepcopy(definition)
+    exact.force = true
+    vim.api.nvim_set_hl(0, name, exact)
+  end
+  vim.g.colors_name = snapshot.name
+  local loaded, appearance = pcall(require, "canvasdiff.appearance")
+  if loaded then appearance.ensure() end
+end
+
+local function file_bar_definition()
+  return highlight_shape(vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = false }))
+end
+
+-- Establish an action-independent oracle for the manager-authored released
+-- definition. A caller may already own CanvasDiffFileBar, so temporarily clear
+-- just that group and ask ensure() to reveal the current palette's default,
+-- then restore that exact group before any campaign action runs.
+local function released_file_bar_definition()
+  local before = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = true })
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", {})
+  require("canvasdiff.appearance").ensure()
+  local definition = vim.deepcopy(file_bar_definition())
+  local restore = vim.deepcopy(before)
+  restore.force = true
+  vim.api.nvim_set_hl(0, "CanvasDiffFileBar", restore)
+  return definition
+end
+
 --- Run one campaign against a real repository.
 function Chaos.run(opts)
   opts = opts or {}
@@ -739,10 +870,23 @@ function Chaos.run(opts)
   local default_branch = vim.trim(
     git(dir, { "git", "symbolic-ref", "--short", "HEAD" }))
 
+  local caller_colorscheme = snapshot_colorscheme()
   vim.api.nvim_set_current_dir(dir)
   package.loaded["canvasdiff"] = nil
   local plugin = require("canvasdiff")
   plugin.setup({})
+
+  local caller_scheme = vim.g.colors_name or "<none>"
+  local initialized_palette = snapshot_colorscheme()
+  local initialized_file_bar = vim.deepcopy(file_bar_definition())
+  local caller_default_file_bar = released_file_bar_definition()
+  local default_scheme_file_bar = caller_default_file_bar
+  if caller_scheme ~= "default" then
+    vim.cmd.colorscheme("default")
+    plugin.setup({})
+    default_scheme_file_bar = released_file_bar_definition()
+    restore_colorscheme(initialized_palette)
+  end
 
   -- The campaign splits and closes windows, so it runs in a tab of its own and
   -- takes it away afterwards. Without that it leaves the layout changed, and
@@ -762,6 +906,7 @@ function Chaos.run(opts)
     if vim.api.nvim_tabpage_is_valid(origin_tab) then
       pcall(vim.api.nvim_set_current_tabpage, origin_tab)
     end
+    restore_colorscheme(caller_colorscheme)
   end
 
   local world = {
@@ -777,13 +922,22 @@ function Chaos.run(opts)
     baseline_buffers = #canvas_buffers(),
     branches = { [POOL[1]] = true, [POOL[2]] = true },
     default_branch = default_branch ~= "" and default_branch or "main",
-    expected_file_bar = nil,
-    ascii = false,
+    current_default_file_bar = caller_default_file_bar,
+    default_scheme_file_bar = default_scheme_file_bar,
+    release_file_bar = initialized_file_bar,
+    expected_file_bar = {
+      kind = "released",
+      definition = vim.deepcopy(initialized_file_bar),
+    },
+    expected_glyph_set = "default",
   }
   for step = 1, actions do
     local name = rng.pick(ACTION_NAMES)
     local ok, failure = xpcall(function()
       ACTIONS[name](world)
+      if opts.after_action then
+        opts.after_action(world, name)
+      end
       -- Let the loop turn. Canvas-buffer reclamation and window adoption are
       -- both deferred by vim.schedule, so a campaign that never yields would
       -- measure a world where neither has happened yet -- and report an
