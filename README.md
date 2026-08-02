@@ -12,10 +12,10 @@ where you were reading. Status: pre-alpha.
 ```
  HEAD → WORKTREE                      │ Files changed (12)  +340 −128
 ████ src/canvas.lua  (+12 −4) ●○ █████│ ▾ src/
-   40    local M = {}                 │     canvas.lua   +12 −4  ●○
+   40    local M = {}                 │     canvas.lua  +12 −4 ●○
        - return nil                   │       @@ 41  return M  +1 −1
-   41  + return M                     │     sidebar.lua  +2 −0   ○
-████ src/sidebar.lua  (+2 −0) ○ ██████│   ▸ test/
+   41  + return M                     │     sidebar.lua  +2 −0 ○
+████ src/sidebar.lua  (+2 −0) ○ ██████│ ▸ test/  (1 files, +9 −1)
 ▸ test/helpers.lua  (3 hunks, +9 −1)  │
 ```
 

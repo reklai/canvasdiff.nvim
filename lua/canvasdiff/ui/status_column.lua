@@ -717,12 +717,15 @@ function M.render(lease, win, lnum, virtnum)
   -- is a user override validated only as "a string" -- the same defect the
   -- winbar had. It cannot throw here, because the OPTION is the constant `%!`
   -- expression at the bottom of this file and only its RESULT carries the
-  -- glyph; it corrupts silently instead. `gutter = "%"` emits `%%*`, which
-  -- draws the literal text `%*` and loses the highlight reset that was meant
-  -- to end the bar; `gutter = "%f"` draws `[No Name]`, which also breaks the
-  -- column alignment strwidth computes one line below -- it measures two cells
-  -- and nine are drawn. Pre-existing and out of scope where it was found; the
-  -- fix is winbar.escape's, applied to `glyph` before either use.
+  -- glyph; it corrupts silently instead. Measured with nvim_eval_statusline
+  -- over the result this builds: `gutter = "%"` draws the literal text `%*`,
+  -- having consumed the `%*` that was meant to END the bar's highlight, and
+  -- occupies two cells where strdisplaywidth measured one. `gutter = "%f"`
+  -- draws the canvas buffer's own name -- `canvasdiff://canvas/N`, 21 cells at
+  -- id 1 -- where the pad arithmetic one line below measured two, so every
+  -- line number in the column is misaligned by the difference. Pre-existing and
+  -- out of scope where it was found; the fix is winbar.escape's, applied to
+  -- `glyph` before either use.
   local glyph = config.glyphs.gutter
   local pad = (" "):rep(vim.fn.strdisplaywidth(glyph))
 

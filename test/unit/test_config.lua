@@ -203,12 +203,14 @@ T["config_ glyphs = 'ascii' selects the preset"] = function()
   --
   -- Trimmed before measuring: `stale` carries its own leading space so that
   -- `#glyphs.stale` stays a correct byte offset for its highlight span, and `ctx` IS a
-  -- space. It is the glyph that has to be one cell, not the padding around it.
-  -- The slots that are NOT a column: the pinned header's crumb separators are
-  -- runs of several characters sitting between two fields, and `stale` carries
-  -- its own leading space so `#glyphs.stale` stays a correct byte offset for
-  -- its highlight span. Everything else occupies exactly one screen column.
-  local NOT_A_COLUMN = { crumb = true, crumb_sep = true, stale = true }
+  -- space. It is the glyph that has to be one cell, not the padding around it -- and
+  -- trimming is exactly what lets `stale` face the column rule below like any other
+  -- marker, which is where it belongs: it is the one ascii glyph whose whole purpose
+  -- is being distinguishable from `staged` in the TEXT.
+  --
+  -- The only slots that are NOT a column are the pinned header's crumb separators:
+  -- runs of several characters sitting between two fields, never a marker cell.
+  local NOT_A_COLUMN = { crumb = true, crumb_sep = true }
   local saved = vim.o.ambiwidth
   for _, aw in ipairs({ "single", "double" }) do
     vim.o.ambiwidth = aw

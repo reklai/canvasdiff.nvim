@@ -562,8 +562,11 @@ ACTIONS.stage_hunk = function(world)
   local rows = state and hunk_rows(state) or {}
   local row0 = rows[world.rng.next(math.max(#rows, 1)) + 1]
   local hostile = world.rng.chance(50)
+  -- Recorded under their OWN names, not as `stage_hunk` with a detail: the
+  -- suite's coverage assertion counts distinct action NAMES, so a visit that
+  -- pressed nothing must not be able to report this action as exercised.
   if not (win and row0) then
-    return record(world, "stage_hunk", "noop")
+    return record(world, "stage_hunk_noop", "no hunk row showing")
   end
   vim.api.nvim_set_current_win(win)
   pcall(vim.api.nvim_win_set_cursor, win, { row0 + 1, 0 })
@@ -575,7 +578,7 @@ ACTIONS.stage_hunk = function(world)
     end
   end
   if not press then
-    return record(world, "stage_hunk", "unmapped")
+    return record(world, "stage_hunk_noop", "unmapped")
   end
 
   local before = index_snapshot(world.dir)
