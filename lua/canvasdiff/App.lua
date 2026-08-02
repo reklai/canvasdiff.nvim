@@ -2553,9 +2553,15 @@ end
 --- deletion at the edge of a merged group falls OUTSIDE new_lo/new_hi, and an
 --- unwidened span would stage half of what the rows show. Every ghost
 --- carrier's seam -- the surviving line each cut sits between -- widens the
---- span instead, and a pure-deletion hunk is nothing but its seams. nil when
---- no bound exists at all, which only a hunk with no surviving new side can
---- produce (a whole-file deletion).
+--- span instead, and a pure-deletion hunk is nothing but its seams.
+---
+--- With no context rows a pure-deletion hunk has no ghost CARRIER either: its
+--- ghosts hang on the header row, whose new_lnum is nil. The model records
+--- that hunk's seam directly, and it is read here the way `stage.pick_all`
+--- windows a zero-count hunk -- the two lines the cut sits between.
+---
+--- nil when no bound exists at all: a hunk with no surviving new side (a
+--- whole-file deletion), or an ordinal naming a hunk this section has not got.
 local function hunk_span(section, gi)
   local hunk = section.hunks and section.hunks[gi]
   if not hunk then
@@ -2577,6 +2583,9 @@ local function hunk_span(section, gi)
     end
   end
   if not lo then
+    if hunk.seam then
+      return { lo = hunk.seam, hi = hunk.seam + 1 }
+    end
     return nil
   end
   return { lo = lo, hi = hi }
@@ -2714,8 +2723,13 @@ function App:stage_hunk(direction, owned_surface, generation, win, target)
   end
   local span = hunk_span(section, ctx.hunk)
   if not span then
-    -- Not even a seam row survives (the whole new side is gone): this hunk
-    -- is indistinguishable from the file, so the file verb is the honest one.
+    -- Nothing names this hunk on the new side -- its whole new side is gone
+    -- (a deleted file), or the ordinal that reached here names a hunk the
+    -- model no longer has. Either way it is indistinguishable from the file,
+    -- so the file verb is the honest one. Said out loud because the verb the
+    -- user pressed was the narrow one: without this the only tell that the
+    -- granularity changed is which of two success messages arrives.
+    ui.notify("that hunk cannot be taken on its own — taking the whole file instead")
     return self:stage_file(direction, named, owned_surface, generation)
   end
 
@@ -2744,13 +2758,20 @@ function App:stage_hunk(direction, owned_surface, generation, win, target)
   -- displayed hunk can fuse staged and unstaged changes into a shape the index
   -- has never held, so the verb has no hunk to name. `S`/`U` still act on the
   -- whole file from anywhere.
+  --
+  -- Which SIDE the lens shows is the question, not which lens it is: a second
+  -- index-sided lens would make `staged` the wrong test, and asymmetrically so.
+  -- `u` would merely over-decline; `s` would run the splice with a span in
+  -- index coordinates against an index->worktree pair, which is the mismatch
+  -- this whole guard exists to prevent.
+  local index_side = tx.lens.new == lens.INDEX_REV
   local mixed = file.staged and file.unstaged
-  if mixed and direction == "unstage" and tx.lens.id ~= "staged" then
+  if mixed and direction == "unstage" and not index_side then
     ui.notify("this file is staged and modified — unstage its hunks from the staged lens")
     return false
   end
-  if mixed and direction == "stage" and tx.lens.id == "staged" then
-    ui.notify("this file is staged and modified — stage its hunks from the unstaged lens")
+  if mixed and direction == "stage" and index_side then
+    ui.notify("this file is staged and modified — stage its hunks from the unstaged or all lens")
     return false
   end
   if direction == "stage" then

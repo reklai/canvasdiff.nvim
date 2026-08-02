@@ -564,7 +564,14 @@ end
 --- Point the index at `content` for `path`, leaving the worktree alone.
 ---
 --- The mode comes from the entry already in the index, so an executable stays
---- executable; a path the index does not carry yet becomes a plain file.
+--- executable. A path the index does not carry yet is an UNTRACKED file being
+--- staged a hunk at a time, and its worktree file is what git would have read
+--- the mode from: `git add` records 100755 for an owner-executable file, so a
+--- hunk press on a new shell script or hook has to record the same, or `s` and
+--- `S` would write different index entries for it. Only a regular file can
+--- carry that bit here -- a symlink's own permissions say nothing about the
+--- blob this writes -- and a path with no worktree file at all falls back to a
+--- plain mode, which is all a caller inventing an entry can mean by it.
 --- @param root string
 --- @param path string
 --- @param content string
@@ -577,7 +584,14 @@ function M.set_index_blob(root, path, content)
   if entry.code ~= 0 or entry.stdout == nil then
     return nil, command_error("git ls-files --stage", entry)
   end
-  local mode = entry.stdout:match("^(%d+)") or "100644"
+  local mode = entry.stdout:match("^(%d+)")
+  if not mode then
+    local stat = vim.uv.fs_lstat(vim.fs.joinpath(root, path))
+    local executable = stat ~= nil
+      and stat.type == "file"
+      and bit.band(stat.mode, tonumber("100", 8)) ~= 0
+    mode = executable and "100755" or "100644"
+  end
 
   -- `--path` applies the attributes of that path, so the blob is the one
   -- `git add` would have written for it.

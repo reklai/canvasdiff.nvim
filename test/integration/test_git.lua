@@ -52,7 +52,11 @@ end
 --- Run `fn` against a live canvas opened in a throwaway tab on `cwd`,
 --- capturing notifications. The cached root facade is dropped so each test
 --- gets a fresh default App, with every ambient controller disabled.
-local function in_canvas(cwd, fn)
+---
+--- `opts` overrides individual setup options -- `context` is the one a staging
+--- test has reason to move, since the number of context rows decides whether a
+--- deletion-only hunk has any row of its own.
+local function in_canvas(cwd, fn, opts)
   local old_cwd = vim.fn.getcwd()
   local real = vim.notify
   local msgs = {}
@@ -61,12 +65,12 @@ local function in_canvas(cwd, fn)
   vim.api.nvim_set_current_dir(cwd)
   package.loaded["canvasdiff"] = nil
   local fm = require("canvasdiff")
-  fm.setup({
+  fm.setup(vim.tbl_deep_extend("force", {
     watch = { enabled = false }, sidebar = { enabled = false },
     scrollbar = { enabled = false }, statuscolumn = { enabled = false },
     highlight = { enabled = false }, virt = { enabled = false },
     session = { enabled = false },
-  })
+  }, opts or {}))
   local ok, err = pcall(fn, fm, msgs)
   pcall(fm.close)
   vim.notify = real
@@ -1360,6 +1364,74 @@ return {
     end)
     vim.fn.delete(root, "rf")
   end,
+  ["git: s stages only the hunk of a context = 0 pure deletion"] = function()
+    -- With no context at all a deletion-only group publishes NO row of its
+    -- own: its ghosts hang on the hunk header, whose new_lnum is nil, so not
+    -- one entry can carry the cut's position. The seam recorded on the hunk is
+    -- the only thing left naming it, and without that the press escalates to
+    -- the whole file -- staging the far rewrite the user never pointed at.
+    local base = numbered(20)
+    local edited = base
+      :gsub("line 5\n", "")
+      :gsub("line 15\n", "line 15 CHANGED\n")
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = base },
+      worktree = { ["a.txt"] = edited },
+    })
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      H.eq(st.sections[1].nhunks, 2, "sanity: two displayed hunks at context 0")
+      local row0 = assert(canvas.context.hunk_row(st, 1, 1))
+      H.eq(canvas.context.resolve(st, row0),
+        { scope = "hunk", section = 1, hunk = 1 },
+        "sanity: the header row is the only row this hunk has, and it is hunk scope")
+      press(st, row0 + 1, "s")
+      H.eq(repository.show(root, ":0", "a.txt"), (base:gsub("line 5\n", "")),
+        "the cut is staged; the far rewrite is not")
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged ~= nil, true)
+      H.eq(f.unstaged ~= nil, true, "line 15's rewrite stays unstaged")
+    end, { context = 0 })
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: a hunk with no new side says it is taking the whole file"] = function()
+    -- A wholly deleted file has no new side for a span to name, so the hunk
+    -- and the file are the same thing and the file verb runs. The escalation
+    -- is announced: otherwise the only tell is which success message arrives.
+    local root = H.git_fixture({
+      committed = { ["gone.txt"] = TWELVE },
+      worktree = { ["gone.txt"] = false },
+    })
+    in_canvas(root, function(fm, msgs)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      local before = #msgs
+      press(st, content_row(st, 1, "two"), "s")
+      assert(found_notification(msgs, before + 1, "taking the whole file instead"),
+        vim.inspect(msgs))
+      local f = assert(repository.changed_files(root)[1])
+      H.eq(f.staged, "D", "and the escalation really did stage the deletion")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: s on an untracked executable records the worktree's mode"] = function()
+    -- The index entry `s` writes has to be the one `S` would have written:
+    -- git never indexed this path, so the mode cannot come from the index and
+    -- the worktree is the only thing that knows the file is executable.
+    local root = H.git_fixture({
+      worktree = { ["hook.sh"] = "#!/bin/sh\nalpha\nbeta\n" },
+    })
+    H.eq(vim.trim(sh(root, { "git", "config", "core.fileMode" })), "true",
+      "sanity: this filesystem records the exec bit, so git reads it")
+    assert(vim.uv.fs_chmod(vim.fs.joinpath(root, "hook.sh"), tonumber("755", 8)))
+    in_canvas(root, function(fm)
+      local st = assert(fm.open({ lens = lens.get("unstaged") }))
+      press(st, content_row(st, 1, "beta"), "s")
+      H.eq(index_mode(root, "hook.sh"), "100755",
+        "s writes the same index entry S's `git add` would have")
+      H.eq(repository.show(root, ":0", "hook.sh"), "#!/bin/sh\nalpha\nbeta\n")
+    end)
+    vim.fn.delete(root, "rf")
+  end,
   ["git: s inside an untracked file's hunk splices against an empty base"] = function()
     local root = H.git_fixture({
       worktree = { ["fresh.txt"] = "alpha\nbeta\ngamma\n" },
@@ -1478,8 +1550,10 @@ return {
       press(st, content_row(st, 1, "TWO"), "s")
       H.eq(repository.show(root, ":0", "a.txt"), half,
         "the declined press leaves the index blob byte-identical")
+      -- Both other lenses really are offered: the guard fires on the index
+      -- being the displayed b side, which only the staged lens makes it.
       assert(found_notification(msgs, before + 1,
-          "this file is staged and modified — stage its hunks from the unstaged lens"),
+          "this file is staged and modified — stage its hunks from the unstaged or all lens"),
         vim.inspect(msgs))
     end)
     vim.fn.delete(root, "rf")

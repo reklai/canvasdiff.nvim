@@ -1837,7 +1837,7 @@ T["sidebar_hunk s on a hunk row declines in the staged lens on a mixed file"] = 
     H.eq(source.show(root, ":0", "a.txt"), half,
       "the declined press leaves the index blob byte-identical")
     assert(notified(msgs,
-      "this file is staged and modified — stage its hunks from the unstaged lens"),
+      "this file is staged and modified — stage its hunks from the unstaged or all lens"),
       vim.inspect(msgs))
   end)
 end

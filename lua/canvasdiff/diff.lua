@@ -33,6 +33,7 @@ return {
   hunks = algorithm.hunks,
   is_binary = text.is_binary,
   lens = {
+    INDEX_REV = lens.INDEX_REV,
     branch = lens.branch,
     editable = lens.editable,
     from_base = lens.from_base,

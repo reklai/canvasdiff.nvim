@@ -266,6 +266,13 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
       push("ctx", old_lines[lnum], lnum, lnum + offset)
     end
 
+    -- The new-side line this group's first cut sits AFTER, straight off the
+    -- pair: a hunk writing nothing reports its new side as a zero-count
+    -- position, which is exactly that line. 0 for a cut at the top of the
+    -- file. NOT window_lo's own new-side number -- that is the first CONTEXT
+    -- line, and the two only coincide when there is no context at all.
+    local seam = group.hunks[1][3]
+
     local d = 0
     local c
     if new_span_lo then
@@ -288,6 +295,14 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
     hunks[gi] = {
       header = hdr.content,
       new_lo = write_lo, new_hi = write_hi,
+      -- Present only on a hunk with no new-side range, and only while a new
+      -- side exists to seam into. Such a hunk is normally located through the
+      -- ghost its surviving neighbour carries -- but at context = 0 there is
+      -- no surviving neighbour, the ghosts hang on the header row, whose
+      -- new_lnum is nil, and this is the sole surviving record of where the
+      -- cut is. A wholly deleted file gets none: it has no new side, and its
+      -- hunk is not distinguishable from the file.
+      seam = (write_lo == nil and ghost_dels) and seam or nil,
       adds = hunk_adds, dels = hunk_dels,
       label = add_label or del_label or "",
       pure_del = hunk_adds == 0 and hunk_dels > 0,
