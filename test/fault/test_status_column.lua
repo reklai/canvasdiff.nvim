@@ -1762,6 +1762,60 @@ T["statuscol_ the bar column renders on add, del and ghost rows by default"] = f
   assert(ok, err)
 end
 
+-- The glyph is a user override validated only as "a string", and it lands in a
+-- 'statuscolumn' RESULT, which Neovim reparses for format items. Unescaped, a
+-- `%` in it is not drawn but INTERPRETED, and every consequence is silent: the
+-- option itself is the constant `%!` expression, so nothing ever throws.
+T["statuscol_ a percent in the gutter glyph is drawn, not interpreted"] = function()
+  detach_tracked()
+  local config = require("canvasdiff.config")
+  local ok, err = xpcall(function()
+    local st = canvas.open({
+      model.build_section("a.txt", "one\ntwo\n", "one\ntwo\nthree\n", "M"),
+    }, {})
+    vim.api.nvim_set_current_win(st.win)
+    local lease = statuscol.attach(st, {
+      windows = function() return { st.win } end,
+    })
+    vim.g.statusline_winid = st.win
+
+    local add_row, add_entry
+    for off, entry in ipairs(st.sections[1].entries) do
+      if entry.kind == "add" then
+        add_row, add_entry = (canvas.section_rows(st, 1)) + off - 1, entry
+      end
+    end
+    assert(add_row, "sanity: an add row exists")
+    local number = ("%4d "):format(add_entry.new_lnum)
+
+    -- `%` alone: unescaped it consumes the `%*` that ENDS the bar's highlight,
+    -- so the literal text `%*` reaches the screen and the cell count doubles.
+    config.setup({ glyphs = { gutter = "%" } })
+    local one = statuscol.render(lease, st.win, add_row + 1)
+    H.eq(one, "%#CanvasDiffGutterAdd#%%%*" .. number,
+      "the glyph is escaped where it is embedded")
+    local drawn = vim.api.nvim_eval_statusline(one, { winid = st.win })
+    H.eq(drawn.str, "%" .. number, "and Neovim draws it as the one character it is")
+    H.eq(drawn.width, 1 + #number, "the bar still occupies exactly its own cell")
+
+    -- `%f` alone: unescaped it expands to the canvas buffer's own name, which
+    -- is 21 cells where the pad arithmetic measured two -- every line number
+    -- in the column then sits at a different column from its neighbours'.
+    config.setup({ glyphs = { gutter = "%f" } })
+    local two = vim.api.nvim_eval_statusline(
+      statuscol.render(lease, st.win, add_row + 1), { winid = st.win })
+    H.eq(two.str, "%f" .. number, "no expansion reaches the drawn column")
+    H.eq(two.width, vim.fn.strdisplaywidth("%f") + #number,
+      "so a two-cell glyph really does draw two cells")
+
+    vim.g.statusline_winid = nil
+    statuscol.detach(lease)
+  end, debug.traceback)
+  config.setup({})
+  detach_tracked()
+  assert(ok, err)
+end
+
 T["statuscol_ renders for the drawn window even while focus is elsewhere"] = function()
   detach_tracked()
   local st = canvas.open(three_sections(), {})

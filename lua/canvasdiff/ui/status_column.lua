@@ -1,6 +1,7 @@
 local canvas = require("canvasdiff.canvas")
 local config = require("canvasdiff.config")
 local fold = require("canvasdiff.diff").fold
+local winbar = require("canvasdiff.ui.winbar")
 
 local M = {}
 
@@ -713,19 +714,11 @@ function M.render(lease, win, lnum, virtnum)
   -- Every row carries a one-cell bar column: the coloured glyph on add/del
   -- rows, padding elsewhere so the line numbers stay aligned.
   --
-  -- TODO(escaping): `glyph` goes into a 'statuscolumn' result unescaped, and it
-  -- is a user override validated only as "a string" -- the same defect the
-  -- winbar had. It cannot throw here, because the OPTION is the constant `%!`
-  -- expression at the bottom of this file and only its RESULT carries the
-  -- glyph; it corrupts silently instead. Measured with nvim_eval_statusline
-  -- over the result this builds: `gutter = "%"` draws the literal text `%*`,
-  -- having consumed the `%*` that was meant to END the bar's highlight, and
-  -- occupies two cells where strdisplaywidth measured one. `gutter = "%f"`
-  -- draws the canvas buffer's own name -- `canvasdiff://canvas/N`, 21 cells at
-  -- id 1 -- where the pad arithmetic one line below measured two, so every
-  -- line number in the column is misaligned by the difference. Pre-existing and
-  -- out of scope where it was found; the fix is winbar.escape's, applied to
-  -- `glyph` before either use.
+  -- The glyph is a user override validated only as "a string", and this is a
+  -- 'statuscolumn' RESULT, which Neovim reparses for format items -- so it is
+  -- escaped where it is embedded below. Measured raw here, deliberately:
+  -- escaping changes the bytes, not the cells they draw, and the pad has to
+  -- match what lands on screen or every line number below it shifts.
   local glyph = config.glyphs.gutter
   local pad = (" "):rep(vim.fn.strdisplaywidth(glyph))
 
@@ -747,7 +740,7 @@ function M.render(lease, win, lnum, virtnum)
   local ghost = virtnum ~= nil and virtnum ~= 0
   local group = GUTTER_HL[ghost and "del" or entry.kind]
   if group then
-    pad = "%#" .. group .. "#" .. glyph .. "%*"
+    pad = "%#" .. group .. "#" .. winbar.escape(glyph) .. "%*"
   end
   if entry.new_lnum and not ghost then
     return pad .. ("%4d "):format(entry.new_lnum)
