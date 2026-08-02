@@ -109,7 +109,7 @@ interrupts and never as just another cursor line (measurements above).
 canvas half names the comparison — `HEAD → WORKTREE` — and never varies with
 scroll, so the band is something you check, not something that flickers.
 
-The file you are in is the **pinned header's** job: a one-row float directly
+Where you are is the **pinned header's** job: a one-row float directly
 under the band showing the current file's own header row — the same bar tint,
 counts and stage marks as the row it mirrors, kept current by the same
 reconcile. It *covers* the first canvas row rather than pushing anything down,
@@ -117,6 +117,34 @@ so showing and hiding it never reflows the canvas or moves your view, and clicks
 fall through to the row beneath it. It hides itself while the real header row is
 at the top of the window — a copy over the original would double it — and on a
 folded placeholder, whose single row already is the header.
+
+Once the topline is *inside* a hunk the row continues into a **breadcrumb**:
+
+```
+▎ src/canvas.lua  (+12 −4) → @@ 88  render(state) · 3/5
+```
+
+Three decisions are packed into that.
+
+The file part stays a **byte-for-byte mirror** of the header row it covers, and
+the crumb is appended after it. That is why the separators are glyphs with their
+spaces baked in (`crumb`, `crumb_sep`) rather than padding the drawer adds: the
+stage-mark highlight spans are measured by walking in from the end of the file
+part, so a single character of drift between the mirror and the original puts
+the markers on the wrong bytes.
+
+The hunk is named by **the same formatter the sidebar's tree rows use**. A hunk
+that answered to two names would read as two hunks, and the whole reason the
+sidebar is closable is that the canvas keeps saying everything it said.
+
+The **ordinal** (`3/5`) is the part that could not be read off the screen. Which
+file you are in is one glance at the tree; how much of it is left is not, and a
+crumb that named the hunk without ranking it would be an identifier where a
+progress reading was wanted. So the ordinal is what a narrow window keeps: the
+label is cut to fit around it, and when even a label-less crumb would not fit,
+the crumb is dropped whole rather than drawn with its right edge — the ordinal —
+past the window. A crumb clipped at the ordinal is worse than no crumb, because
+it silently answers the one question the row was added to answer.
 
 ## Ghost deletions: the result view
 

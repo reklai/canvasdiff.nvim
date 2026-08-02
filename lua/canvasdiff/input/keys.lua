@@ -50,8 +50,8 @@ K.specs = {
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Back out: leave a stacked comparison, else close the canvas" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },
-  { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage this file's changes" },
-  { ctx = "sidebar", action = "unstage", group = "Sidebar", desc = "Unstage this file" },
+  { ctx = "sidebar", action = "stage",   group = "Sidebar", desc = "Stage the row you are on — this hunk, or this file" },
+  { ctx = "sidebar", action = "unstage", group = "Sidebar", desc = "Unstage the row you are on — this hunk, or this file" },
   { ctx = "sidebar", action = "close",     group = "Sidebar",  desc = "Close the sidebar (canvas stays open)" },
 
   { ctx = "canvas",  action = "help", group = "Canvas",  desc = "Show keybind cheatsheet" },
