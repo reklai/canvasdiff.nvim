@@ -115,9 +115,18 @@ M.defaults = {
       refresh    = "r",
       -- Two explicit verbs, not a cycle: `s` only ever stages and `u` only
       -- ever unstages, so a keypress on a mixed file never picks a direction
-      -- for you. A verb with nothing to do says so instead of acting.
+      -- for you. A verb with nothing to do says so instead of acting. The
+      -- cursor decides scope: on a hunk's own rows the verb takes that hunk,
+      -- anywhere else in the file it takes the file.
       stage      = "s",
       unstage    = "u",
+      -- The whole-file verbs from anywhere inside the file: the capitals of
+      -- the hunk keys above. Free to take for the same reason `c` was: `S`
+      -- (substitute line) and `U` (undo line) belong to the editing family,
+      -- and this nofile + nomodifiable buffer refuses all of it with E21, so
+      -- neither key does anything here today.
+      stage_file   = "S",
+      unstage_file = "U",
       -- Tab forward through the lenses, Shift+Tab back. One physical key for the
       -- whole "what am I looking at" axis, and a slip between the two lands on the
       -- other direction of the same action rather than on something unrelated.

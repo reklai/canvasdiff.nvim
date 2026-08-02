@@ -145,12 +145,33 @@ T["cheatsheet_model omits disabled actions and empty columns"] = function()
       sidebar_rows = #col.sections[1].rows
     end
   end
-  H.eq(sidebar_rows, 1, "Sidebar keeps its remaining row (close; help sits in Global)")
-  -- Disable that too and the whole column goes:
+  H.eq(sidebar_rows, 3,
+    "Sidebar keeps its remaining rows (stage, unstage, close; help sits in Global)")
+  -- Disable those too and the whole column goes:
+  km.sidebar.stage = false
+  km.sidebar.unstage = false
   km.sidebar.close = false
   for _, col in ipairs(cheatsheet.model(km)) do
     assert(col.title ~= "Sidebar", "a column with no rows is omitted")
   end
+end
+
+T["cheatsheet_model hunk-aware canvas staging keeps stage out of Global"] = function()
+  -- `s` means "this hunk -- or this file on its header" on the canvas but
+  -- stays file-level in the sidebar. Same key, different meaning: each
+  -- column must say what the key does THERE, exactly like close.
+  local seen = {}
+  for _, col in ipairs(cheatsheet.model(defaults())) do
+    for _, sec in ipairs(col.sections) do
+      for _, row in ipairs(sec.rows) do
+        if row.action == "stage" or row.action == "unstage" then
+          seen[col.title] = true
+        end
+      end
+    end
+  end
+  H.eq(seen["Global"], nil, "differing descs must keep stage/unstage per column")
+  H.eq({ seen["Canvas"], seen["Sidebar"] }, { true, true })
 end
 
 T["cheatsheet_model reflects overridden keys, not defaults"] = function()

@@ -888,6 +888,20 @@ T["keys_global compare expands leader at each setup without crossing App ownersh
   config.setup({})
 end
 
+T["keys_stage_file capitals default to S and U on the canvas only"] = function()
+  H.eq(find(keys.resolved("canvas", defaults()), "stage_file"), { "S" })
+  H.eq(find(keys.resolved("canvas", defaults()), "unstage_file"), { "U" })
+  -- The sidebar's s/u are already file-level, so it needs no capital twins.
+  H.eq(find(keys.resolved("sidebar", defaults()), "stage_file"), {})
+  H.eq(find(keys.resolved("sidebar", defaults()), "unstage_file"), {})
+
+  local km = defaults()
+  km.canvas.stage_file = "gS"
+  km.canvas.unstage_file = false
+  H.eq(find(keys.resolved("canvas", km), "stage_file"), { "gS" })
+  H.eq(find(keys.resolved("canvas", km), "unstage_file"), {})
+end
+
 T["keys_stage defaults to s and unstage to u on canvas and sidebar, both configurable"] = function()
   H.eq(find(keys.resolved("canvas", defaults()), "stage"), { "s" })
   H.eq(find(keys.resolved("sidebar", defaults()), "stage"), { "s" })

@@ -966,9 +966,16 @@ local function canvas_actions(app, surface, st, cfg)
     end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
     refresh    = owned_action(surface, generation, function() app:refresh() end),
+    -- The unshifted verbs resolve their scope from the cursor at press time
+    -- (hunk row -> that hunk, anything else -> the file); the capitals are
+    -- the from-anywhere file verbs.
     stage      = owned_action(surface, generation,
-      function() app:stage(nil, surface, generation) end),
+      function(_, win) app:stage_hunk("stage", surface, generation, win) end),
     unstage    = owned_action(surface, generation,
+      function(_, win) app:stage_hunk("unstage", surface, generation, win) end),
+    stage_file = owned_action(surface, generation,
+      function() app:stage(nil, surface, generation) end),
+    unstage_file = owned_action(surface, generation,
       function() app:unstage(nil, surface, generation) end),
     lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
     lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
@@ -2398,21 +2405,12 @@ local function stage_refresh_failure(message)
   return nil, err
 end
 
---- Stage or unstage the file under the canvas cursor.
----
---- `direction` is "stage" or "unstage". The old auto-cycle decided this from
---- the file's XY state; two explicit verbs mean a keypress never surprises by
---- picking the other direction on a mixed file. A verb with nothing to do
---- reports itself as information and returns false without touching Git.
----
---- Git is the irreversible boundary: all ownership checks happen before it,
---- and every failure after it says explicitly that the index already changed.
---- `path`/`owned_surface`/`generation` are owner-only routing arguments used
---- by the sidebar callback; the public root calls this with no arguments.
-function App:stage_file(direction, path, owned_surface, generation)
-  assert(direction == "stage" or direction == "unstage",
-    "stage_file: direction must be 'stage' or 'unstage', got " .. tostring(direction))
-  local surface = owned_surface or active_surface(self)
+--- The rails every index mutation rides before Git may run: a live owned
+--- surface, a worktree lens, and one press-scoped transaction whose guard
+--- every later step re-checks. Both the file verb and the hunk verb start
+--- here, so neither can grow a private notion of ownership.
+local function begin_stage(app, owned_surface, generation)
+  local surface = owned_surface or active_surface(app)
   if not (surface and surface:is_alive()) then
     local err = "no live diff canvas"
     ui.warn(err)
@@ -2431,7 +2429,7 @@ function App:stage_file(direction, path, owned_surface, generation)
   local transaction = surface.stage_epoch
   local model_epoch = claim_model_epoch(surface)
   local function guard()
-    return self.surfaces[st.buf] == surface
+    return app.surfaces[st.buf] == surface
       and surface:guard(generation)
       and surface.stage_epoch == transaction
       and surface.model_epoch == model_epoch
@@ -2441,6 +2439,151 @@ function App:stage_file(direction, path, owned_surface, generation)
     ui.warn(err)
     return nil, err
   end
+  return { surface = surface, st = st, lens = current_lens, guard = guard }
+end
+
+--- The press-time XY truth for one cached section: git status re-read under
+--- the transaction guard, then disambiguated to the record the verb should
+--- act on. The screen's cached identity only ROUTES; what git says now is
+--- what gets acted on.
+local function press_time_file(tx, cached_file)
+  local files, status_err = source.changed_files(tx.st.root)
+  if not tx.guard() then
+    local err = "stage action was superseded during status preflight"
+    ui.warn(err)
+    return nil, err
+  end
+  if not files then
+    ui.warn(status_err)
+    return nil, status_err
+  end
+  local file = action_file(files, cached_file, tx.lens)
+  if not file then
+    local err = cached_file.path .. " has no changes any more"
+    ui.warn(err)
+    return nil, err
+  end
+  if not file.staged and not file.unstaged then
+    local err = file.path .. " has no stage status"
+    ui.warn(err)
+    return nil, err
+  end
+  return file
+end
+
+--- Disk-derived bytes must never replace text a loaded buffer still holds
+--- unsaved, whichever verb is about to write the index.
+local function refuse_modified_alias(root, file)
+  if source.buffer_modified(root, file) then
+    local err = "cannot stage " .. file.path .. ": its loaded buffer has unsaved changes"
+    ui.warn(err)
+    return nil, err
+  end
+  return true
+end
+
+--- The refresh tail every successful index mutation shares: re-read git
+--- status, reconcile the canvas onto `target_lens`, and put every canvas
+--- cursor back on the text it was on. Git already ran -- every failure from
+--- here says so explicitly instead of pretending the press did nothing.
+local function finish_stage(tx, file, positions, target_lens, success)
+  local surface, st, guard = tx.surface, tx.st, tx.guard
+  if not guard() then
+    return stage_refresh_failure("the owning review changed during Git")
+  end
+  local files, status_err = source.changed_files(st.root)
+  if not files then
+    return stage_refresh_failure(status_err)
+  end
+  if not guard() then
+    return stage_refresh_failure("the owning review changed during status refresh")
+  end
+  local remains = post_mutation_file(files, file)
+  if not remains then
+    local reconciled, reconcile_err = pivot(surface, tx.lens, guard)
+    if not reconciled then
+      if reconcile_err == STALE_COMPARE then
+        reconcile_err = "the owning review changed during clean reconcile"
+      end
+      return stage_refresh_failure(reconcile_err)
+    end
+    if not guard() then
+      return stage_refresh_failure("the owning review changed after clean reconcile")
+    end
+    ui.notify(file.path .. " is clean")
+    return true
+  end
+
+  local reconciled, reconcile_err = pivot(surface, target_lens, guard)
+  if not reconciled then
+    if reconcile_err == STALE_COMPARE then
+      reconcile_err = "the owning review changed during reconcile"
+    end
+    return stage_refresh_failure(reconcile_err)
+  end
+  if not guard() then
+    return stage_refresh_failure("the owning review changed after reconcile")
+  end
+  restore_file_positions(st, positions)
+  ui.notify(success)
+  return true
+end
+
+--- The displayed hunk's new-side span, in the b-side line numbers
+--- `stage.pick_all` windows against.
+---
+--- The hull alone is not enough: a deletion writes no new-side line, so a
+--- deletion at the edge of a merged group falls OUTSIDE new_lo/new_hi, and an
+--- unwidened span would stage half of what the rows show. Every ghost
+--- carrier's seam -- the surviving line each cut sits between -- widens the
+--- span instead, and a pure-deletion hunk is nothing but its seams. nil when
+--- no bound exists at all, which only a hunk with no surviving new side can
+--- produce (a whole-file deletion).
+local function hunk_span(section, gi)
+  local hunk = section.hunks and section.hunks[gi]
+  if not hunk then
+    return nil
+  end
+  local lo, hi = hunk.new_lo, hunk.new_hi
+  local function widen(l, h)
+    if not lo or l < lo then lo = l end
+    if not hi or h > hi then hi = h end
+  end
+  for _, entry in ipairs(section.entries or {}) do
+    if entry.hunk_idx == gi and entry.new_lnum then
+      if entry.ghosts then
+        widen(math.max(0, entry.new_lnum - 1), entry.new_lnum)
+      end
+      if entry.ghosts_after then
+        widen(entry.new_lnum, entry.new_lnum + 1)
+      end
+    end
+  end
+  if not lo then
+    return nil
+  end
+  return { lo = lo, hi = hi }
+end
+
+--- Stage or unstage the file under the canvas cursor.
+---
+--- `direction` is "stage" or "unstage". The old auto-cycle decided this from
+--- the file's XY state; two explicit verbs mean a keypress never surprises by
+--- picking the other direction on a mixed file. A verb with nothing to do
+--- reports itself as information and returns false without touching Git.
+---
+--- Git is the irreversible boundary: all ownership checks happen before it,
+--- and every failure after it says explicitly that the index already changed.
+--- `path`/`owned_surface`/`generation` are owner-only routing arguments used
+--- by the sidebar callback; the public root calls this with no arguments.
+function App:stage_file(direction, path, owned_surface, generation)
+  assert(direction == "stage" or direction == "unstage",
+    "stage_file: direction must be 'stage' or 'unstage', got " .. tostring(direction))
+  local tx, tx_err = begin_stage(self, owned_surface, generation)
+  if not tx then
+    return nil, tx_err
+  end
+  local surface, st, current_lens = tx.surface, tx.st, tx.lens
 
   local section_i, cached_file
   if path then
@@ -2457,26 +2600,9 @@ function App:stage_file(direction, path, owned_surface, generation)
     return nil, err
   end
 
-  local files, status_err = source.changed_files(st.root)
-  if not guard() then
-    local err = "stage action was superseded during status preflight"
-    ui.warn(err)
-    return nil, err
-  end
-  if not files then
-    ui.warn(status_err)
-    return nil, status_err
-  end
-  local file = action_file(files, cached_file, current_lens)
+  local file, file_err = press_time_file(tx, cached_file)
   if not file then
-    local err = cached_file.path .. " has no changes any more"
-    ui.warn(err)
-    return nil, err
-  end
-  if not file.staged and not file.unstaged then
-    local err = file.path .. " has no stage status"
-    ui.warn(err)
-    return nil, err
+    return nil, file_err
   end
 
   if direction == "stage" and not file.unstaged then
@@ -2489,10 +2615,11 @@ function App:stage_file(direction, path, owned_surface, generation)
   end
 
   local action = direction
-  if action == "stage" and source.buffer_modified(st.root, file) then
-    local err = "cannot stage " .. file.path .. ": its loaded buffer has unsaved changes"
-    ui.warn(err)
-    return nil, err
+  if action == "stage" then
+    local clear, alias_err = refuse_modified_alias(st.root, file)
+    if not clear then
+      return nil, alias_err
+    end
   end
 
   local positions = capture_file_positions(surface, st, cached_file)
@@ -2506,32 +2633,6 @@ function App:stage_file(direction, path, owned_surface, generation)
     ui.warn(mutation_err)
     return nil, mutation_err
   end
-  if not guard() then
-    return stage_refresh_failure("the owning review changed during Git")
-  end
-
-  local files, status_err = source.changed_files(st.root)
-  if not files then
-    return stage_refresh_failure(status_err)
-  end
-  if not guard() then
-    return stage_refresh_failure("the owning review changed during status refresh")
-  end
-  local remains = post_mutation_file(files, file)
-  if not remains then
-    local reconciled, reconcile_err = pivot(surface, current_lens, guard)
-    if not reconciled then
-      if reconcile_err == STALE_COMPARE then
-        reconcile_err = "the owning review changed during clean reconcile"
-      end
-      return stage_refresh_failure(reconcile_err)
-    end
-    if not guard() then
-      return stage_refresh_failure("the owning review changed after clean reconcile")
-    end
-    ui.notify(file.path .. " is clean")
-    return true
-  end
 
   local target_lens = current_lens
   if action == "stage" and current_lens.id == "unstaged" then
@@ -2539,19 +2640,137 @@ function App:stage_file(direction, path, owned_surface, generation)
   elseif action == "unstage" and current_lens.id == "staged" then
     target_lens = lens.get("unstaged")
   end
-  local reconciled, reconcile_err = pivot(surface, target_lens, guard)
-  if not reconciled then
-    if reconcile_err == STALE_COMPARE then
-      reconcile_err = "the owning review changed during reconcile"
+  return finish_stage(tx, file, positions, target_lens,
+    (action == "stage" and "staged " or "unstaged ") .. file.path)
+end
+
+--- Stage or unstage ONE hunk -- the one under the cursor in `win`.
+---
+--- The mapping rule is fixed whatever lens is showing: stage applies the
+--- index→worktree pair, unstage the HEAD→index pair. The cursor's hunk
+--- contributes only its new-side span; the pair itself is recomputed from
+--- blobs at press time, never from the screen, so a stale canvas can make
+--- the verb decline but never stage the wrong bytes.
+---
+--- Anything that is not a hunk row -- a file header, a folded placeholder, a
+--- binary notice -- falls through to the file verb, so the cursor alone
+--- decides granularity and `s` is always safe to press.
+function App:stage_hunk(direction, owned_surface, generation, win)
+  assert(direction == "stage" or direction == "unstage",
+    "stage_hunk: direction must be 'stage' or 'unstage', got " .. tostring(direction))
+  local surface = owned_surface or active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  local st = surface.state
+  win = win or vim.api.nvim_get_current_win()
+  local ctx = canvas_showing(st, win)
+    and canvas.context.resolve(st, vim.api.nvim_win_get_cursor(win)[1] - 1)
+    or nil
+  if not (ctx and ctx.scope == "hunk") then
+    return self:stage_file(direction, nil, owned_surface, generation)
+  end
+  local section = st.sections[ctx.section]
+  -- A rename's index identity is two paths; writing one blob would stage
+  -- half of it. A binary blob has no line splice at all.
+  if section.binary or section.renamed then
+    ui.notify("hunk staging needs a text file — S stages the whole file")
+    return false
+  end
+  local span = hunk_span(section, ctx.hunk)
+  if not span then
+    -- Not even a seam row survives (the whole new side is gone): this hunk
+    -- is indistinguishable from the file, so the file verb is the honest one.
+    return self:stage_file(direction, nil, owned_surface, generation)
+  end
+
+  local tx, tx_err = begin_stage(self, owned_surface, generation)
+  if not tx then
+    return nil, tx_err
+  end
+  local file, file_err = press_time_file(tx, section)
+  if not file then
+    return nil, file_err
+  end
+  if direction == "stage" and not file.unstaged then
+    ui.notify("hunk already staged")
+    return false
+  end
+  if direction == "unstage" and not file.staged then
+    ui.notify("nothing staged here")
+    return false
+  end
+  if direction == "stage" then
+    local clear, alias_err = refuse_modified_alias(st.root, file)
+    if not clear then
+      return nil, alias_err
     end
-    return stage_refresh_failure(reconcile_err)
   end
-  if not guard() then
-    return stage_refresh_failure("the owning review changed after reconcile")
+
+  -- Read the direction's fixed pair. `show` answers nil for a path the
+  -- revision does not carry, and for these XY states that is absence, not
+  -- failure: an untracked file has no index entry, a staged addition no HEAD
+  -- one, a staged deletion no index one -- each such side is an empty base,
+  -- while any OTHER nil is a real error that must stop the press.
+  local root, path = st.root, file.path
+  local a_text, a_err, b_text, b_err
+  if direction == "stage" then
+    if file.status == "?" then
+      a_text = ""
+    else
+      a_text, a_err = source.show(root, ":0", path)
+    end
+    b_text = source.worktree_text(root, path, file.status)
+  else
+    if file.staged == "A" then
+      a_text = ""
+    else
+      a_text, a_err = source.show_head(root, path)
+    end
+    if file.staged == "D" then
+      b_text = ""
+    else
+      b_text, b_err = source.show(root, ":0", path)
+    end
   end
-  restore_file_positions(st, positions)
-  ui.notify((action == "stage" and "staged " or "unstaged ") .. file.path)
-  return true
+  if not (a_text and b_text) then
+    local err = a_err or b_err or "could not read the blobs to splice"
+    ui.warn(err)
+    return nil, err
+  end
+
+  -- Context merging can seat SEVERAL raw pair hunks inside one displayed
+  -- hunk's span; every one of them goes, or the press would stage half of
+  -- what the user pointed at.
+  local covered = diff.stage.pick_all(diff.stage.pair_hunks(a_text, b_text), span)
+  if #covered == 0 then
+    ui.notify(direction == "stage" and "hunk already staged" or "nothing staged here")
+    return false
+  end
+  local base, donor, applied = a_text, b_text, covered
+  if direction == "unstage" then
+    -- Applied index-ward: each covered hunk swaps sides, so the splice
+    -- rewrites index lines with their HEAD originals and the worktree is
+    -- never touched.
+    base, donor, applied = b_text, a_text, {}
+    for i, h in ipairs(covered) do
+      applied[i] = { h[3], h[4], h[1], h[2] }
+    end
+  end
+
+  local positions = capture_file_positions(surface, st, section)
+  local written, write_err =
+    source.set_index_blob(root, path, diff.stage.splice_many(base, donor, applied))
+  if not written then
+    ui.warn(write_err)
+    return nil, write_err
+  end
+  -- No lens pivot for a hunk verb: the file usually still has content on
+  -- both sides, and `s s s` down the remaining hunks must stay put.
+  return finish_stage(tx, file, positions, tx.lens,
+    (direction == "stage" and "staged hunk in " or "unstaged hunk in ") .. path)
 end
 
 --- Stage the file under the canvas cursor (or `path`).

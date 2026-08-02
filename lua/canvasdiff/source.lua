@@ -24,6 +24,7 @@ return {
   root = repository.root,
   section_stream = collect.section_stream,
   sections = collect.sections,
+  set_index_blob = repository.set_index_blob,
   show = repository.show,
   show_head = repository.show_head,
   stage = repository.stage,

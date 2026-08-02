@@ -259,8 +259,10 @@ On the canvas~
     <Tab>  /  <S-Tab>       Next / previous lens
     o                       Toggle the sidebar
     r                       Refresh the current diff
-    s                       Stage this file's changes
-    u                       Unstage this file
+    s                       Stage this hunk -- or this file on its header
+    u                       Unstage this hunk -- or this file on its header
+    S                       Stage this file's changes (from anywhere in it)
+    U                       Unstage this file (from anywhere in it)
     q                       Back out: leave a stacked comparison, else
                             close the review
     <leader>lh              Show keybind cheatsheet
@@ -277,11 +279,16 @@ In the sidebar~
 Single `<LeftMouse>` is deliberately NOT bound: it is how you position the
 cursor, and stealing it would make the tree impossible to browse.
 
-Staging is file-level and each key is one explicit verb: `s` stages any
-unstaged content in the file; `u` unstages staged content without changing
-the worktree. A verb with nothing to do reports `already staged` or `nothing
-staged` and performs no change. Staging is declined when a modified loaded
-buffer refers to the file, so unsaved text is never replaced by disk content.
+Each key is one explicit verb: `s` only ever stages and `u` only ever
+unstages, without changing the worktree. On the canvas the cursor decides
+scope -- on a hunk's own rows the verb takes that hunk, on the file header
+(or any other row) the whole file -- while `S` and `U` take the whole file
+from anywhere inside it. Sidebar staging is always file-level. A verb with
+nothing to do reports it (`already staged`, `hunk already staged`, `nothing
+staged`, `nothing staged here`) and performs no change. Staging is declined
+when a modified loaded buffer refers to the file, so unsaved text is never
+replaced by disk content, and hunk staging declines binary files and
+renames toward the whole-file verb.
 
 In a file you jumped to~
                                                           *canvasdiff-jump-back*

@@ -639,11 +639,16 @@ T["root_ s and u canvas keys invoke the same public transactions"] = function()
       session = { enabled = false } })
     local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("unstaged") }))
     vim.api.nvim_set_current_win(st.win)
+    -- On the file header deliberately: the unshifted verbs resolve scope
+    -- from the cursor, and the reused canvas buffer remembers whatever row
+    -- an earlier test left it on.
+    vim.api.nvim_win_set_cursor(st.win, { canvas.section_rows(st, 1) + 1, 0 })
     vim.api.nvim_feedkeys(vim.keycode("s"), "x", false)
     local file = assert(source.changed_files(root)[1])
     assert(file.staged and not file.unstaged, vim.inspect(file))
     H.eq(st.lens.id, "staged")
 
+    vim.api.nvim_win_set_cursor(st.win, { canvas.section_rows(st, 1) + 1, 0 })
     vim.api.nvim_feedkeys(vim.keycode("u"), "x", false)
     file = assert(source.changed_files(root)[1])
     assert(file.unstaged and not file.staged, vim.inspect(file))
