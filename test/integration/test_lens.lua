@@ -509,7 +509,7 @@ T["lens_range released new-side highlighting rehydrates the committed object"] =
 
   local App = require("canvasdiff.App")
   local range_model = require("canvasdiff.diff")
-  local highlighter = require("canvasdiff.ui").highlight
+  local syntax = require("canvasdiff.ui").syntax
   local app = App.new()
   local old_cwd = vim.fn.getcwd()
   local expected, got
@@ -521,11 +521,11 @@ T["lens_range released new-side highlighting rehydrates the committed object"] =
     local surface = assert(app.opened[#app.opened])
     local lease = assert(surface.controllers.hl)
     local section = assert(st.sections[1])
-    expected = highlighter.section_ts_marks(section)
+    expected = syntax.section_ts_marks(section)
     assert(#expected > 0, "the committed side has syntax marks")
     range_model.release_text(section)
-    highlighter.invalidate(lease, section.path)
-    got = highlighter.section_ts_marks(section, lease)
+    syntax.invalidate(lease, section.path)
+    got = syntax.section_ts_marks(section, lease)
   end, debug.traceback)
   pcall(function() app:close() end)
   vim.api.nvim_set_current_dir(old_cwd)

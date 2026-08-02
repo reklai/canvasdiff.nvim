@@ -20,8 +20,8 @@ end
 T["ui facade exports its curated presentation operations"] = function()
   local names = vim.tbl_keys(ui)
   table.sort(names)
-  H.eq(names, { "cheatsheet", "err", "highlight", "notify", "scrollbar", "sidebar",
-    "status_column", "sticky_header", "warn", "winbar" })
+  H.eq(names, { "cheatsheet", "err", "notify", "scrollbar", "sidebar",
+    "status_column", "sticky_header", "syntax", "warn", "winbar" })
 end
 
 T["ui_sidebar legacy sidebar module path is deleted rather than shimmed"] = function()
@@ -60,13 +60,20 @@ T["ui_status_column installs an expression that resolves back to its owner"] = f
     "and must call its entrypoint: " .. installed)
 end
 
-T["ui_highlight facade exposes the lease operations its owners call"] = function()
+T["ui_syntax facade exposes the lease operations its owners call"] = function()
   for _, name in ipairs({
     "attach", "detach", "apply_now", "invalidate", "lang_for", "section_ts_marks",
   }) do
-    H.eq(type(ui.highlight[name]), "function",
-      "ui.highlight." .. name .. " is callable")
+    H.eq(type(ui.syntax[name]), "function",
+      "ui.syntax." .. name .. " is callable")
   end
+end
+
+T["ui_syntax old highlighter owner path is deleted rather than shimmed"] = function()
+  package.loaded["canvasdiff.ui.highlight"] = nil
+  local loaded = pcall(require, "canvasdiff.ui.highlight")
+  assert(not loaded,
+    "canvasdiff.ui.highlight must not remain as a forwarding module")
 end
 
 T["ui_highlight legacy hl module path is deleted rather than shimmed"] = function()

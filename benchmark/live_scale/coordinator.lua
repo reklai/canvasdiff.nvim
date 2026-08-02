@@ -56,7 +56,7 @@ end
 local RESOURCE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
-  "canvasdiff.highlight",
+  "canvasdiff.syntax",
   "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.scrollbar",

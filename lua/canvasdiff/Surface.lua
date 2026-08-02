@@ -4,7 +4,7 @@ local session = require("canvasdiff.session")
 local input = require("canvasdiff.input")
 local jump = input.jump
 local ui = require("canvasdiff.ui")
-local hl = ui.highlight
+local syntax = ui.syntax
 local scrollbar = ui.scrollbar
 local sticky_header = ui.sticky_header
 local sidebar = ui.sidebar
@@ -412,7 +412,7 @@ function Surface:dispose(reason)
   attempt("hl.detach", function()
     local lease = self.controllers.hl
     if lease then
-      hl.detach(lease)
+      syntax.detach(lease)
     end
   end)
   attempt("sidebar.close", function()

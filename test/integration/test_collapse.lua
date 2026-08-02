@@ -3,7 +3,7 @@ local canvas = require("canvasdiff.canvas")
 local model = require("canvasdiff.diff")
 local render = require("canvasdiff.canvas").format
 local scrollbar = require("canvasdiff.ui").scrollbar
-local hl = require("canvasdiff.ui").highlight
+local hl = require("canvasdiff.ui").syntax
 local fold = model.fold
 
 local T = {}

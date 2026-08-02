@@ -11,7 +11,7 @@ local PROJECT_ROOT = H.project_root
 local RESOURCE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
-  "canvasdiff.highlight",
+  "canvasdiff.syntax",
   "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.scrollbar",
@@ -26,7 +26,7 @@ local RESOURCE_GROUPS = {
 local SURFACE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
-  "canvasdiff.highlight",
+  "canvasdiff.syntax",
   "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.session",
@@ -72,7 +72,7 @@ end
 local function reset_auxiliary_owners()
   -- These owners hold exact leases, so there is no unqualified teardown to
   -- call: sweep the per-lease groups an earlier unit file left armed.
-  for _, prefix in ipairs({ "canvasdiff.highlight", "canvasdiff.status_column" }) do
+  for _, prefix in ipairs({ "canvasdiff.syntax", "canvasdiff.status_column" }) do
     for _, name in ipairs(controller_groups(prefix)) do
       pcall(vim.api.nvim_del_augroup_by_name, name)
     end
@@ -483,7 +483,7 @@ T["lifecycle_ racing terminal paths dispose and persist exactly once"] = functio
     local specs = {
       { name = "session.save", target = require("canvasdiff.session"), method = "save" },
       { name = "watch.stop", target = runtime.watch, method = "stop" },
-      { name = "hl.detach", target = require("canvasdiff.ui").highlight, method = "detach" },
+      { name = "hl.detach", target = require("canvasdiff.ui").syntax, method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.ui").sidebar, method = "close" },
       { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },
@@ -558,7 +558,7 @@ T["lifecycle_ a queued old callback cannot dispose its replacement"] = function(
     local old_statuscol = assert(old.controllers.statuscol)
     local session = require("canvasdiff.session")
     local watch = runtime.watch
-    local hl = require("canvasdiff.ui").highlight
+    local hl = require("canvasdiff.ui").syntax
     local virt = runtime.virtualizer
     local statuscol = require("canvasdiff.ui").status_column
 
@@ -695,7 +695,7 @@ T["lifecycle_ one explicit close performs one complete teardown pass"] = functio
     local specs = {
       { name = "session.save", target = require("canvasdiff.session"), method = "save" },
       { name = "watch.stop", target = runtime.watch, method = "stop" },
-      { name = "hl.detach", target = require("canvasdiff.ui").highlight, method = "detach" },
+      { name = "hl.detach", target = require("canvasdiff.ui").syntax, method = "detach" },
       { name = "sidebar.close", target = require("canvasdiff.ui").sidebar, method = "close" },
       { name = "scrollbar.close", target = scrollbar, method = "close" },
       { name = "virt.detach", target = runtime.virtualizer, method = "detach" },

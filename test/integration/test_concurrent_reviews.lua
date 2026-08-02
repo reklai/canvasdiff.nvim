@@ -29,7 +29,7 @@ end
 local RESOURCE_PREFIXES = {
   "canvasdiff.watch",
   "canvasdiff.virt",
-  "canvasdiff.highlight",
+  "canvasdiff.syntax",
   "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.scrollbar",

@@ -11,7 +11,7 @@ local SESSION_FACADE = "canvasdiff.session"
 local SESSION_CODEC_OWNER = "canvasdiff.session.codec"
 local UI_FACADE = "canvasdiff.ui"
 local SCROLLBAR_OWNER = "canvasdiff.ui.scrollbar"
-local HIGHLIGHT_OWNER = "canvasdiff.ui.highlight"
+local SYNTAX_OWNER = "canvasdiff.ui.syntax"
 local SIDEBAR_OWNER = "canvasdiff.ui.sidebar"
 local STATUS_COLUMN_OWNER = "canvasdiff.ui.status_column"
 local INPUT_FACADE = "canvasdiff.input"
@@ -118,7 +118,7 @@ T.architecture_watch_is_a_producer_not_a_ui_fanout_hub = function()
   assert_inspected_module(inspection, WATCH_OWNER)
 
   local forbidden = {
-    [HIGHLIGHT_OWNER] = true,
+    [SYNTAX_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     [SIDEBAR_OWNER] = true,
     [RUNTIME_FACADE] = true,
@@ -140,7 +140,7 @@ T.architecture_virtualizer_is_not_a_peer_controller_fanout_hub = function()
   assert_inspected_module(inspection, VIRTUALIZER_OWNER)
 
   local forbidden = {
-    [HIGHLIGHT_OWNER] = true,
+    [SYNTAX_OWNER] = true,
     [SCROLLBAR_OWNER] = true,
     [SIDEBAR_OWNER] = true,
     [RUNTIME_FACADE] = true,
@@ -209,7 +209,7 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
   assert_inspected_module(inspection, UI_FACADE)
   assert_inspected_module(inspection, SCROLLBAR_OWNER)
-  assert_inspected_module(inspection, HIGHLIGHT_OWNER)
+  assert_inspected_module(inspection, SYNTAX_OWNER)
   assert_inspected_module(inspection, SIDEBAR_OWNER)
   assert_inspected_module(inspection, STATUS_COLUMN_OWNER)
 
@@ -235,7 +235,7 @@ T.architecture_ui_internals_are_reached_only_through_the_ui_facade = function()
   end
 
   H.eq(facade_edges[SCROLLBAR_OWNER], 1, "the UI facade owns the one scrollbar edge")
-  H.eq(facade_edges[HIGHLIGHT_OWNER], 1, "the UI facade owns the one highlighter edge")
+  H.eq(facade_edges[SYNTAX_OWNER], 1, "the UI facade owns the one syntax edge")
   H.eq(facade_edges[SIDEBAR_OWNER], 1, "the UI facade owns the one sidebar edge")
   H.eq(facade_edges[STATUS_COLUMN_OWNER], 1,
     "the UI facade owns the one status-column edge")
@@ -301,7 +301,7 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, STATUS_COLUMN_OWNER)
 
   local forbidden = {
-    [HIGHLIGHT_OWNER] = true,
+    [SYNTAX_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,
@@ -318,10 +318,10 @@ T.architecture_status_column_has_no_peer_controller_edges = function()
   assert_no_errors(violations, "status column must be composed by its Surface owner")
 end
 
-T.architecture_highlighter_has_no_peer_controller_edges = function()
+T.architecture_syntax_has_no_peer_controller_edges = function()
   local inspection = inspect_repo()
   assert_no_errors(inspection.errors, "architecture dependency scan failed")
-  assert_inspected_module(inspection, HIGHLIGHT_OWNER)
+  assert_inspected_module(inspection, SYNTAX_OWNER)
 
   local forbidden = {
     [RUNTIME_FACADE] = true,
@@ -333,12 +333,12 @@ T.architecture_highlighter_has_no_peer_controller_edges = function()
   }
   local violations = {}
   for _, edge in ipairs(inspection.edges) do
-    if edge.from == HIGHLIGHT_OWNER and forbidden[edge.to] then
+    if edge.from == SYNTAX_OWNER and forbidden[edge.to] then
       violations[#violations + 1] = edge.from .. " -> " .. edge.to
     end
   end
 
-  assert_no_errors(violations, "highlighter must report through its Surface owner")
+  assert_no_errors(violations, "syntax must report through its Surface owner")
 end
 
 T.architecture_sidebar_has_no_peer_controller_edges = function()
@@ -347,7 +347,7 @@ T.architecture_sidebar_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, SIDEBAR_OWNER)
 
   local forbidden = {
-    [HIGHLIGHT_OWNER] = true,
+    [SYNTAX_OWNER] = true,
     [JUMP_OWNER] = true,
     ["canvasdiff.input.motions"] = true,
     [RUNTIME_FACADE] = true,
@@ -372,7 +372,7 @@ T.architecture_jump_has_no_peer_controller_edges = function()
   assert_inspected_module(inspection, JUMP_OWNER)
 
   local forbidden = {
-    [HIGHLIGHT_OWNER] = true,
+    [SYNTAX_OWNER] = true,
     [RUNTIME_FACADE] = true,
     [VIRTUALIZER_OWNER] = true,
     [WATCH_OWNER] = true,

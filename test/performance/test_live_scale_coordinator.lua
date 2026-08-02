@@ -238,7 +238,7 @@ local function valid_payload(rows, run_index)
       checked_group_prefixes = {
         "canvasdiff.watch",
         "canvasdiff.virt",
-        "canvasdiff.highlight",
+        "canvasdiff.syntax",
         "canvasdiff.status_column",
         "canvasdiff.sidebar",
         "canvasdiff.scrollbar",

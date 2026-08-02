@@ -433,7 +433,7 @@ return {
     select_cr()
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.sidebar",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.syntax", "canvasdiff.sidebar",
       "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(group_alive(g), "sanity: " .. g .. " is armed before the close")
@@ -444,7 +444,7 @@ return {
     vim.wait(200, function() return not group_alive("canvasdiff.watch") end)
 
     for _, g in ipairs({
-      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.highlight", "canvasdiff.status_column",
+      "canvasdiff.watch", "canvasdiff.virt", "canvasdiff.syntax", "canvasdiff.status_column",
       "canvasdiff.sidebar", "canvasdiff.scrollbar", "canvasdiff.session",
     }) do
       assert(not group_alive(g), g .. " must be torn down by `:q`, not left running")

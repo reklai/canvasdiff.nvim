@@ -26,7 +26,7 @@ local WATCH_CONVERGENCE_MAX_MS = 5000
 local RESOURCE_GROUPS = {
   "canvasdiff.watch",
   "canvasdiff.virt",
-  "canvasdiff.highlight",
+  "canvasdiff.syntax",
   "canvasdiff.status_column",
   "canvasdiff.sidebar",
   "canvasdiff.scrollbar",

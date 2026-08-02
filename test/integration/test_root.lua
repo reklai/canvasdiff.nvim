@@ -3359,7 +3359,7 @@ end
 T["root_ Surface never issues unqualified controller teardown"] = function()
   local runtime = require("canvasdiff.runtime")
   local watch = runtime.watch
-  local hl = require("canvasdiff.ui").highlight
+  local hl = require("canvasdiff.ui").syntax
   local sidebar = require("canvasdiff.ui").sidebar
   local scrollbar = require("canvasdiff.ui").scrollbar
   local virt = runtime.virtualizer

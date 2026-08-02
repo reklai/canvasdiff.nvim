@@ -11,7 +11,7 @@ local virt = runtime.virtualizer
 local watch = runtime.watch
 local session = require("canvasdiff.session")
 local ui = require("canvasdiff.ui")
-local hl = ui.highlight
+local syntax = ui.syntax
 local scrollbar = ui.scrollbar
 local sticky = ui.sticky_header
 local sidebar = ui.sidebar
@@ -822,7 +822,7 @@ end
 local function sync_after_collapse(surface, st)
   local lease = surface and surface.controllers.hl
   if lease then
-    hl.apply_now(lease)
+    syntax.apply_now(lease)
   end
   local side = surface and surface.controllers.sidebar
   if side then
@@ -1457,7 +1457,7 @@ end
   -- syntax colour inside hunks -- a visible loss, chosen over silently
   -- reintroducing the structure the design forbids.
   if config.options.highlight.enabled and not st.paged then
-    local hl_lease = hl.attach(st, config.options.highlight, {
+    local syntax_lease = syntax.attach(st, config.options.highlight, {
       claim = function(lease)
         if not surface:guard(generation) or surface.controllers.hl ~= nil then
           return false
@@ -1494,8 +1494,8 @@ end
           section.old_path or section.path) or ""
       end,
     })
-    if hl_lease then
-      assert(surface.controllers.hl == hl_lease,
+    if syntax_lease then
+      assert(surface.controllers.hl == syntax_lease,
         "highlighter claim must publish its returned exact lease")
     end
   end

@@ -1,5 +1,5 @@
 local cheatsheet = require("canvasdiff.ui.cheatsheet")
-local highlight = require("canvasdiff.ui.highlight")
+local syntax = require("canvasdiff.ui.syntax")
 local notifications = require("canvasdiff.ui.notifications")
 local scrollbar = require("canvasdiff.ui.scrollbar")
 local sidebar = require("canvasdiff.ui.sidebar")
@@ -14,12 +14,12 @@ local winbar = require("canvasdiff.ui.winbar")
 return {
   cheatsheet = cheatsheet,
   err = notifications.err,
-  highlight = highlight,
   notify = notifications.notify,
   scrollbar = scrollbar,
   sidebar = sidebar,
   status_column = status_column,
   sticky_header = sticky_header,
+  syntax = syntax,
   warn = notifications.warn,
   winbar = winbar,
 }
