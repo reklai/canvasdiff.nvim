@@ -202,7 +202,7 @@ T["stage_splice_many applies every hunk one hull covers"] = function()
   H.eq(both, b, "both changes and nothing else: for this pair that IS the b side")
 
   H.eq(stage.splice(a, b, stage.pick(hunks, hull)) ~= both, true,
-    "one hunk alone is not the same answer -- the bug this replaces")
+    "a span covering two hunks is not the same answer as either one alone")
 end
 
 T["stage_splice_many over a single hunk agrees with splice"] = function()

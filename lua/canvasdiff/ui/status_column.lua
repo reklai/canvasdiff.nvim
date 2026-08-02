@@ -712,6 +712,17 @@ function M.render(lease, win, lnum, virtnum)
 
   -- Every row carries a one-cell bar column: the coloured glyph on add/del
   -- rows, padding elsewhere so the line numbers stay aligned.
+  --
+  -- TODO(escaping): `glyph` goes into a 'statuscolumn' result unescaped, and it
+  -- is a user override validated only as "a string" -- the same defect the
+  -- winbar had. It cannot throw here, because the OPTION is the constant `%!`
+  -- expression at the bottom of this file and only its RESULT carries the
+  -- glyph; it corrupts silently instead. `gutter = "%"` emits `%%*`, which
+  -- draws the literal text `%*` and loses the highlight reset that was meant
+  -- to end the bar; `gutter = "%f"` draws `[No Name]`, which also breaks the
+  -- column alignment strwidth computes one line below -- it measures two cells
+  -- and nine are drawn. Pre-existing and out of scope where it was found; the
+  -- fix is winbar.escape's, applied to `glyph` before either use.
   local glyph = config.glyphs.gutter
   local pad = (" "):rep(vim.fn.strdisplaywidth(glyph))
 

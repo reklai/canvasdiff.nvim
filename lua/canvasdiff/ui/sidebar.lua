@@ -283,16 +283,21 @@ local function sidebar_title(state)
 end
 
 --- The sidebar half of the top band: the collection title wearing the band's
---- group. The group rule is winbar.text's, reached through the same structural
---- predicate rather than restated, because a rule stated twice is a rule that
---- can drift -- and a drifted one puts a seam down the middle of a band whose
---- whole job in this state is to announce that the comparison is read-only.
+--- group. What is shared with winbar.text is the PREDICATE -- `is_range` over
+--- the state's own lens -- not the group names, which are spelled out in both
+--- files. So the drift this cannot prevent is a renamed group, and what guards
+--- that is test_winbar.lua's "the sidebar half takes the canvas half's own
+--- group", which asks both modules and compares their answers. A drifted
+--- answer puts a seam down the middle of a band whose whole job in this state
+--- is to announce that the comparison is read-only.
 ---
 --- Escaped for the reason the canvas half is: a winbar is a statusline
 --- expression, where `%` is a format specifier. The title looks like it could
 --- not contain one -- a fixed prefix and two integers -- but the minus glyph
---- between them is a user override validated only as "a string", so the one
---- character that would misdraw the bar is one a user can configure into it.
+--- between them is a user override validated only as "a string". Unescaped,
+--- the option set does not draw the bar wrongly, it REFUSES the value:
+--- nvim_set_option_value throws `E539: Illegal character`, and update_winbar
+--- calls it unprotected.
 function S.title_text(state)
   local group = lens.is_range(lens.of(state))
       and "CanvasDiffWinbarReadOnly"

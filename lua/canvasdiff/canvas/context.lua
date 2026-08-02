@@ -19,6 +19,11 @@ local C = {}
 --- section = i }` for 0-based canvas row `row0`; nil when no section is under
 --- it. `hunk` is the section's hunk ordinal -- the index into `section.hunks`,
 --- and the same `gi` that `entry.hunk_idx` carries.
+---
+--- "No section under it" is narrower than it sounds on the eager path:
+--- Canvas.locate CLAMPS, answering the nearest section for a row past the last
+--- one rather than refusing it. So nil means the canvas has no sections at
+--- all, and a caller cannot use it to detect a cursor off the end.
 function C.resolve(state, row0)
   local index, offset = Canvas.locate(state, row0)
   if not index then

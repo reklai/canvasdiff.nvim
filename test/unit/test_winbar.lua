@@ -50,6 +50,24 @@ T["winbar_ the sidebar half escapes a percent in the title"] = function()
   config.setup({})
   assert(ok, text)
   H.eq(text, "%#CanvasDiffWinbar#Files changed (1)  +1 %%2")
+
+  -- The escaped string alone does not say what the escape is FOR. This does:
+  -- an unescaped `%` is not a bar that draws wrongly, it is a value 'winbar'
+  -- rejects outright -- and sidebar's update_winbar sets the option
+  -- unprotected, so the throw would escape into whatever asked for a refresh.
+  local win = vim.api.nvim_get_current_win()
+  local prior = vim.api.nvim_get_option_value("winbar", { win = win })
+  local set_escaped = pcall(vim.api.nvim_set_option_value, "winbar", text,
+    { win = win, scope = "local" })
+  local set_raw, raw_err = pcall(vim.api.nvim_set_option_value, "winbar",
+    (text:gsub("%%%%", "%%")), { win = win, scope = "local" })
+  pcall(vim.api.nvim_set_option_value, "winbar", prior,
+    { win = win, scope = "local" })
+  assert(set_escaped, "the escaped title must be settable as a real winbar")
+  assert(not set_raw,
+    "an unescaped % must be REFUSED by the option, not merely drawn wrong")
+  assert(tostring(raw_err):find("E539", 1, true),
+    "and refused as an illegal character: " .. tostring(raw_err))
 end
 
 T["winbar_ ensure_hl_groups defines both groups as defaults"] = function()
