@@ -1021,12 +1021,12 @@ return {
       committed = { ["a.txt"] = "one\ntwo\nthree\n" },
       worktree = { ["a.txt"] = "ONE\nTWO\nthree\n" },
     }, function(root)
-      H.eq(repository.index_blob(root, "a.txt"), "one\ntwo\nthree\n")
-      H.eq(repository.head_blob(root, "a.txt"), "one\ntwo\nthree\n")
+      H.eq(repository.show(root, ":0", "a.txt"), "one\ntwo\nthree\n")
+      H.eq(repository.show_head(root, "a.txt"), "one\ntwo\nthree\n")
 
       H.eq(repository.set_index_blob(root, "a.txt", "one\nTWO\nthree\n"), true)
-      H.eq(repository.index_blob(root, "a.txt"), "one\nTWO\nthree\n")
-      H.eq(repository.head_blob(root, "a.txt"), "one\ntwo\nthree\n",
+      H.eq(repository.show(root, ":0", "a.txt"), "one\nTWO\nthree\n")
+      H.eq(repository.show_head(root, "a.txt"), "one\ntwo\nthree\n",
         "writing the index cannot move HEAD")
       H.eq(read(root, "a.txt"), "ONE\nTWO\nthree\n",
         "the worktree keeps the edits that were not written to the index")
@@ -1045,11 +1045,11 @@ return {
       committed = { ["dos.txt"] = "alpha\r\nbeta\r\ngamma\r\n" },
       worktree = { ["dos.txt"] = "alpha\r\nBETA\r\ngamma\r\n" },
     }, function(root)
-      H.eq(repository.head_blob(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
-      H.eq(repository.index_blob(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+      H.eq(repository.show_head(root, "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
+      H.eq(repository.show(root, ":0", "dos.txt"), "alpha\r\nbeta\r\ngamma\r\n")
 
       H.eq(repository.set_index_blob(root, "dos.txt", "alpha\r\nBETA\r\ngamma\r\n"), true)
-      H.eq(repository.index_blob(root, "dos.txt"), "alpha\r\nBETA\r\ngamma\r\n")
+      H.eq(repository.show(root, ":0", "dos.txt"), "alpha\r\nBETA\r\ngamma\r\n")
       local file = assert(repository.changed_files(root)[1])
       H.eq(file.staged, "M")
       H.eq(file.unstaged, nil,
@@ -1071,37 +1071,42 @@ return {
 
       H.eq(repository.set_index_blob(root, "run.sh", "#!/bin/sh\necho new\n"), true)
       H.eq(index_mode(root, "run.sh"), "100755")
-      H.eq(repository.index_blob(root, "run.sh"), "#!/bin/sh\necho new\n")
+      H.eq(repository.show(root, ":0", "run.sh"), "#!/bin/sh\necho new\n")
 
       H.eq(repository.set_index_blob(root, magic, "magic staged\n"), true)
       H.eq(index_mode(root, magic), "100755",
         "a magic-looking name must not read another entry's mode")
-      H.eq(repository.index_blob(root, magic), "magic staged\n")
-      H.eq(repository.index_blob(root, "0victim.txt"), "victim\n",
+      H.eq(repository.show(root, ":0", magic), "magic staged\n")
+      H.eq(repository.show(root, ":0", "0victim.txt"), "victim\n",
         "magic-looking user data must not expand to another index entry")
 
       H.eq(repository.set_index_blob(root, "added.txt", "added\n"), true)
       H.eq(index_mode(root, "added.txt"), "100644")
-      H.eq(repository.index_blob(root, "added.txt"), "added\n")
+      H.eq(repository.show(root, ":0", "added.txt"), "added\n")
     end)
   end,
   ["git: blob plumbing reports failures instead of claiming success"] = function()
     local root = H.git_fixture({
-      committed = { ["a.txt"] = "one\n" },
+      committed = { ["a.txt"] = "one\n", ["empty.txt"] = "" },
       worktree = { ["a.txt"] = "two\n", ["untracked.txt"] = "u\n" },
     })
     local real_run = system.run
     local ok, err = xpcall(function()
-      local staged, staged_err = repository.index_blob(root, "untracked.txt")
+      local staged, staged_err = repository.show(root, ":0", "untracked.txt")
       H.eq(staged, nil)
       assert(type(staged_err) == "string" and staged_err:find("failed", 1, true),
         tostring(staged_err))
-      local committed, committed_err = repository.head_blob(root, "untracked.txt")
+      local committed, committed_err = repository.show_head(root, "untracked.txt")
       H.eq(committed, nil)
       assert(type(committed_err) == "string" and committed_err:find("failed", 1, true),
         tostring(committed_err))
 
-      local before = repository.index_blob(root, "a.txt")
+      local blank, blank_err = repository.show(root, ":0", "empty.txt")
+      H.eq(blank, "", "a staged empty file is content, not an absent path")
+      H.eq(blank_err, nil)
+      H.eq(repository.show_head(root, "empty.txt"), "")
+
+      local before = repository.show(root, ":0", "a.txt")
       system.run = function(cmd, opts)
         if vim.tbl_contains(cmd, "hash-object") then
           return { code = 128, stdout = "", stderr = "injected hash-object failure\n" }
@@ -1139,9 +1144,9 @@ return {
         tostring(forged_err))
 
       system.run = real_run
-      H.eq(repository.index_blob(root, "a.txt"), before,
+      H.eq(repository.show(root, ":0", "a.txt"), before,
         "a failed index write leaves the staged blob byte-exact")
-      H.eq(sh(root, { "git", "ls-files" }), "a.txt\n",
+      H.eq(sh(root, { "git", "ls-files" }), "a.txt\nempty.txt\n",
         "no failed write may add an index entry under another name")
     end, debug.traceback)
     system.run = real_run

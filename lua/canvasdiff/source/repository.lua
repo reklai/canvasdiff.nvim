@@ -556,24 +556,9 @@ end
 --- @param root string
 --- @param path string
 --- @return string|nil
+--- @return string|nil
 function M.show_head(root, path)
   return M.show(root, "HEAD", path)
-end
-
---- @param root string
---- @param path string
---- @return string|nil
---- @return string|nil
-function M.index_blob(root, path)
-  return M.show(root, ":0", path)
-end
-
---- @param root string
---- @param path string
---- @return string|nil
---- @return string|nil
-function M.head_blob(root, path)
-  return M.show_head(root, path)
 end
 
 --- Point the index at `content` for `path`, leaving the worktree alone.

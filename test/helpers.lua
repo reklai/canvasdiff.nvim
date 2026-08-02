@@ -50,6 +50,9 @@ function H.git_fixture(spec)
   sh(root, { "git", "init", "-b", "main" })
   sh(root, { "git", "config", "user.email", "t@t" })
   sh(root, { "git", "config", "user.name", "t" })
+  -- Line endings are content here. A developer whose global config converts
+  -- them would otherwise decide what these fixtures contain.
+  sh(root, { "git", "config", "core.autocrlf", "false" })
   for rel, content in pairs(spec.committed or {}) do
     local abs = vim.fs.joinpath(root, rel)
     vim.fn.mkdir(vim.fs.dirname(abs), "p")
