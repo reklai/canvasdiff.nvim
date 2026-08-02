@@ -1,3 +1,7 @@
+-- One review's rendered-row owner. Canvas projects model sections into an
+-- eager scratch buffer or paged store and keeps its anchors, folds, and row
+-- lookup coherent. It does not parse repositories or own window controllers;
+-- the returned state is the review lifetime, and `show` only adds another view.
 local paged = require("canvasdiff.canvas.paged")
 local render = require("canvasdiff.canvas.format")
 local appearance = require("canvasdiff.appearance")
