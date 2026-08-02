@@ -23,6 +23,10 @@ local DEFAULT_SURFACE_ACTIONS = 200
 local DEFAULT_SEEDS = { 20260727, 990001, 4242 }
 local MINIMUM_SEEDS = 3
 local MINIMUM_DISTINCT_ACTIONS = 10
+local REQUIRED_SURFACE_ACTIONS = {
+  "configure_appearance", "configure_invalid", "reset_config",
+  "change_colorscheme", "toggle_glyph_set",
+}
 -- One action can splice, compact, rebuild a projection and sweep every
 -- invariant, so a full campaign is minutes rather than seconds per seed.
 local WORKER_TIMEOUT_MS = 1800000
@@ -189,6 +193,7 @@ local aggregate = {
     minimum_seeds = MINIMUM_SEEDS,
     minimum_actions_per_seed = DEFAULT_ACTIONS,
     minimum_distinct_actions = MINIMUM_DISTINCT_ACTIONS,
+    required_surface_actions = REQUIRED_SURFACE_ACTIONS,
   },
   environment = {
     revision = git({ "rev-parse", "HEAD" }),
@@ -265,6 +270,15 @@ local function judge(payload, harness)
   if (payload.distinct_actions or 0) < minimum_distinct then
     verdicts[#verdicts + 1] = ("only %d distinct actions ran; the campaign did not reach its seams")
       :format(payload.distinct_actions or 0)
+  end
+  if harness.name == "surface" then
+    local counts = payload.counts or {}
+    for _, action in ipairs(REQUIRED_SURFACE_ACTIONS) do
+      if (counts[action] or 0) < 1 then
+        verdicts[#verdicts + 1] = action
+          .. " never ran; configuration/appearance coverage is incomplete"
+      end
+    end
   end
 
   -- A campaign where nothing was ever refused injected no hostility. The

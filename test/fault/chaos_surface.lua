@@ -223,6 +223,31 @@ local function check(world)
       end
     end
   end
+
+  -- Appearance is process-wide state, so configuration churn has to leave the
+  -- complete public registry live after EVERY action, including actions that
+  -- never draw a review. An accepted explicit file-bar override is an oracle,
+  -- not a snapshot of whatever Neovim currently says: ColorScheme must restore
+  -- that exact value until another setup action deliberately replaces it.
+  local appearance = require("canvasdiff.appearance")
+  local names = appearance.names()
+  assert(#names == 27,
+    ("appearance registry changed during chaos: %d groups"):format(#names))
+  for _, name in ipairs(names) do
+    local definition = vim.api.nvim_get_hl(0, { name = name, link = true })
+    assert(next(definition) ~= nil, name .. " disappeared during chaos")
+  end
+  if world.expected_file_bar then
+    local bar = vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false })
+    assert(bar.bg == world.expected_file_bar,
+      "configured file bar did not survive the last action")
+  end
+  local commands = vim.api.nvim_get_autocmds({
+    group = "canvasdiff.appearance",
+  })
+  assert(#commands == 1,
+    ("appearance autocmd count grew to %d"):format(#commands))
 end
 Chaos.check = check
 
@@ -304,6 +329,65 @@ end
 ACTIONS.refresh = function(world)
   world.plugin.refresh()
   record(world, "refresh")
+end
+
+ACTIONS.configure_appearance = function(world)
+  local colors = { 0x112233, 0x334455, 0x667788, 0xaabbcc }
+  local color = colors[world.rng.next(#colors) + 1]
+  local hex = ("#%06x"):format(color)
+  world.plugin.setup({ highlights = {
+    CanvasDiffFileBar = { bg = hex },
+  } })
+  world.expected_file_bar = color
+  record(world, "configure_appearance", hex)
+end
+
+ACTIONS.configure_invalid = function(world)
+  -- The public setup path presents appearance diagnostics through vim.notify.
+  -- Capture only this action so deliberate invalid input does not flood long
+  -- campaigns, while still proving both the typo and malformed public group
+  -- are named rather than swallowed.
+  local real_notify = vim.notify
+  local messages = {}
+  vim.notify = function(message)
+    messages[#messages + 1] = tostring(message)
+  end
+  local ok, err = xpcall(function()
+    world.plugin.setup({ highlights = {
+      CanvasDiffFyleBar = { bg = "#000000" },
+      CanvasDiffGhost = 42,
+    } })
+  end, debug.traceback)
+  vim.notify = real_notify
+  assert(ok, err)
+
+  local diagnostic = table.concat(messages, "\n")
+  assert(diagnostic:find("CanvasDiffFyleBar", 1, true),
+    "invalid highlight diagnostic did not name CanvasDiffFyleBar: "
+      .. vim.inspect(messages))
+  assert(diagnostic:find("CanvasDiffGhost", 1, true),
+    "invalid highlight diagnostic did not name CanvasDiffGhost: "
+      .. vim.inspect(messages))
+  world.expected_file_bar = nil
+  record(world, "configure_invalid")
+end
+
+ACTIONS.reset_config = function(world)
+  world.plugin.setup({})
+  world.expected_file_bar = nil
+  record(world, "reset_config")
+end
+
+ACTIONS.change_colorscheme = function(world)
+  vim.cmd.colorscheme("default")
+  record(world, "change_colorscheme")
+end
+
+ACTIONS.toggle_glyph_set = function(world)
+  world.ascii = not world.ascii
+  world.plugin.setup({ glyphs = world.ascii and "ascii" or nil })
+  world.expected_file_bar = nil
+  record(world, "toggle_glyph_set", world.ascii and "ascii" or "default")
 end
 
 ACTIONS.set_lens = function(world)
@@ -658,6 +742,7 @@ function Chaos.run(opts)
   vim.api.nvim_set_current_dir(dir)
   package.loaded["canvasdiff"] = nil
   local plugin = require("canvasdiff")
+  plugin.setup({})
 
   -- The campaign splits and closes windows, so it runs in a tab of its own and
   -- takes it away afterwards. Without that it leaves the layout changed, and
@@ -668,6 +753,7 @@ function Chaos.run(opts)
   local campaign_tab = vim.api.nvim_get_current_tabpage()
   local function restore()
     pcall(function() plugin.close() end)
+    pcall(function() plugin.setup({}) end)
     if vim.api.nvim_tabpage_is_valid(campaign_tab)
         and vim.api.nvim_get_current_tabpage() == campaign_tab
         and vim.api.nvim_tabpage_is_valid(origin_tab) then
@@ -691,6 +777,8 @@ function Chaos.run(opts)
     baseline_buffers = #canvas_buffers(),
     branches = { [POOL[1]] = true, [POOL[2]] = true },
     default_branch = default_branch ~= "" and default_branch or "main",
+    expected_file_bar = nil,
+    ascii = false,
   }
   for step = 1, actions do
     local name = rng.pick(ACTION_NAMES)
@@ -725,6 +813,7 @@ function Chaos.run(opts)
     actions = actions,
     counts = world.counts,
     refusals = world.refusals,
+    history = world.history,
     peak_reviews = world.peak_reviews,
   }
 end

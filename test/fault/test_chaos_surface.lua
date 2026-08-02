@@ -14,7 +14,11 @@ local H = require("helpers")
 local Chaos = require("fault.chaos_surface")
 
 local SEEDS = { 31337, 20260728, 8675309 }
-local ACTIONS = 60
+local ACTIONS = 120
+local REQUIRED_CONFIGURATION_ACTIONS = {
+  "configure_appearance", "configure_invalid", "reset_config",
+  "change_colorscheme", "toggle_glyph_set",
+}
 
 local T = {}
 
@@ -52,6 +56,10 @@ for _, seed in ipairs(SEEDS) do
     assert(distinct >= 6, (
       "seed %d exercised only %d distinct actions"
     ):format(seed, distinct))
+    for _, action in ipairs(REQUIRED_CONFIGURATION_ACTIONS) do
+      assert((result.counts[action] or 0) > 0,
+        action .. " never ran: " .. vim.inspect(result.counts))
+    end
   end
 end
 
@@ -106,6 +114,11 @@ T["chaos_surface_ a seed replays to the same campaign"] = function()
   H.eq(first.status, "ok", first.error)
   H.eq(second.status, "ok", second.error)
   H.eq(second.counts, first.counts, "the same seed ran different actions")
+  assert(type(first.history) == "table",
+    "a successful campaign must retain replay history")
+  H.eq(#first.history, 40, "every replayed action must retain its history")
+  H.eq(second.history, first.history,
+    "the same seed selected different actions or arguments")
 end
 
 return T
