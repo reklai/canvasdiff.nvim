@@ -530,12 +530,14 @@ and `force` are manager-owned fields and are rejected. Example: >lua
 <
 Precedence, from lowest to highest:
 
-    colourscheme -> CanvasDiff defaults -> setup().highlights
+    CanvasDiff defaults -> colorscheme/direct definition -> setup().highlights
 
-CanvasDiff defaults use native default ownership, so a colourscheme definition
-wins over them. An explicit setup override wins over both. One process-wide
-|ColorScheme| callback reapplies current CanvasDiff defaults, then the explicit
-overrides; repeated setup replaces this state and does not add callbacks.
+CanvasDiff defaults use native default ownership, so a colourscheme or later
+direct definition wins over them. An explicit setup override wins over both.
+Reload order is separate: one process-wide |ColorScheme| callback asks
+CanvasDiff to reapply its defaults after the scheme (still yielding to the
+scheme), then reapplies explicit overrides. Repeated setup replaces this state
+and does not add callbacks.
 
 On a later `setup()` call, omitting a group or assigning `false` releases its
 managed override and returns it to the CanvasDiff/colourscheme default: >lua
@@ -678,7 +680,17 @@ canvasdiff.track()                                      *canvasdiff.track()*
         tracking it. Never fetches.
 
 canvasdiff.set_lens({lens})                          *canvasdiff.set_lens()*
-        Set the lens to `"all"`, `"unstaged"` or `"staged"`.
+        Set a canonical lens record. Named strings are NOT accepted. The
+        three named record shapes are: >lua
+
+            { id = "all", old = "HEAD", new = "worktree" }
+            { id = "unstaged", old = ":0", new = "worktree" }
+            { id = "staged", old = "HEAD", new = ":0" }
+<
+        `:0` is Git's staged index blob. Prefer |:CanvasDiff| `all`,
+        `unstaged`, or `staged` for named changes; |canvasdiff.cycle_lens()|
+        cycles them, and |canvasdiff.set_base()| selects the all/unstaged
+        worktree bases.
 
 canvasdiff.cycle_lens({delta})                     *canvasdiff.cycle_lens()*
         Move {delta} steps through the named lenses. Wraps.

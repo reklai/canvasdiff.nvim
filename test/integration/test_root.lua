@@ -5,16 +5,39 @@ local appearance = require("canvasdiff.appearance")
 
 local T = {}
 
-T["README LazyVim opts apply through the root setup"] = function()
+local function with_readme_highlights(fn)
   local plugin = require("canvasdiff")
   plugin.setup({ highlights = {
     CanvasDiffFileBar = { fg = "#112233", bg = "#445566" },
   } })
-  local value = vim.api.nvim_get_hl(0,
-    { name = "CanvasDiffFileBar", link = false })
-  H.eq(value.fg, 0x112233)
-  H.eq(value.bg, 0x445566)
+  local ok, err = xpcall(function() fn(plugin) end, debug.traceback)
   plugin.setup({})
+  assert(ok, err)
+end
+
+T["README LazyVim opts apply through the root setup"] = function()
+  with_readme_highlights(function()
+    local value = vim.api.nvim_get_hl(0,
+      { name = "CanvasDiffFileBar", link = false })
+    H.eq(value.fg, 0x112233)
+    H.eq(value.bg, 0x445566)
+  end)
+end
+
+T["README setup cleanup runs after a failed assertion"] = function()
+  local plugin = require("canvasdiff")
+  plugin.setup({})
+  local before = vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = true })
+
+  local ok = pcall(with_readme_highlights, function()
+    error("injected README assertion failure")
+  end)
+
+  H.eq(ok, false, "the injected assertion must escape the helper")
+  H.eq(vim.api.nvim_get_hl(0,
+    { name = "CanvasDiffFileBar", link = true }), before,
+    "the README override must be reset even when its assertion fails")
 end
 
 local function with_appearance(overrides, fn)

@@ -155,17 +155,19 @@ it replaces that group's definition rather than filling fields from the old
 one. Do not omit `fg`, `bg`, or attributes you intend the resulting group to
 retain.
 
-The precedence is:
+Ownership precedence, from lowest to highest, is:
 
 ```text
-colorscheme → CanvasDiff defaults → setup().highlights
+CanvasDiff defaults -> colorscheme/direct definition -> setup().highlights
 ```
 
 CanvasDiff's derived and linked groups are defaults, so a colorscheme may own
-any group. Explicit `setup().highlights` values win over both. One process-wide
-`ColorScheme` callback reapplies current defaults first and explicit overrides
-second after a scheme reload. Repeated setup calls replace that state instead
-of accumulating callbacks.
+any group and a direct definition may take ownership afterward. Explicit
+`setup().highlights` values win over both. Reload order is separate from
+ownership precedence: one process-wide `ColorScheme` callback asks CanvasDiff
+to reapply its defaults after a scheme reload (those defaults still yield to
+the scheme), then reapplies explicit overrides. Repeated setup calls replace
+that state instead of accumulating callbacks.
 
 To release an explicit override, omit it from a later `setup()` call or set it
 to `false`:
@@ -406,8 +408,10 @@ CanvasDiff motions, folds, search, and row positions remain exact.
 ## Troubleshooting
 
 - Run `:checkhealth canvasdiff` first. It reports version/Git failures,
-  misspelled options and glyphs, removed options, invalid highlights, and
-  global mapping collisions.
+  unknown or removed options, and invalid highlight specifications.
+- Also read load/setup notifications. Unknown glyph names, invalid glyph
+  values, and global mapping collisions are reported when configuration and
+  mappings are applied; `:checkhealth` does not repeat those diagnostics.
 - If nothing opens, confirm the current window is inside a Git worktree.
 - If Ctrl+Space does nothing, your terminal may not transmit it; replace
   `keymaps.file.back`.
