@@ -127,7 +127,7 @@ was removed with the modes themselves, and a leftover `highlight.diff = ...` in 
 config now gets one diagnostic from `setup()` and is otherwise ignored — override
 the groups instead.
 
-## Profiles are colors only
+## Profiles are colours only
 
 `profile` swaps which *defaults* the eleven diff-row groups derive — quiet
 (the measured palette above), classic (`DiffAdd`/`DiffDelete` links, the

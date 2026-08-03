@@ -342,10 +342,11 @@ require("canvasdiff").setup({
 `context` controls diff context. `base` selects the initial worktree
 comparison. `profile` selects the diff-row color vocabulary; unknown names are
 diagnosed and fall back to quiet. `highlight` controls Tree-sitter syntax
-work; `watch` controls live reconciliation. `virt` auto-collapses distant sections once either threshold
-is exceeded; `paged` switches to the page-backed canvas at `min_rows` rendered
-rows. `sidebar`, `scrollbar`, `statuscolumn`, and `session` independently enable
-their named features. `glyphs = "ascii"` selects a single-cell ASCII set.
+work; `watch` controls live reconciliation. `virt` auto-collapses distant
+sections once either threshold is exceeded; `paged` switches to the
+page-backed canvas at `min_rows` rendered rows. `sidebar`, `scrollbar`,
+`statuscolumn`, and `session` independently enable their named features.
+`glyphs = "ascii"` selects a single-cell ASCII set.
 
 ### Highlight groups
 
