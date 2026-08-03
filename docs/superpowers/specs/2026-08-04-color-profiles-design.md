@@ -15,7 +15,7 @@ chroma-over-luma trick applied to rows) is explicitly deferred until its
 factors are measured under the builtin dark scheme and tokyonight-moon with
 the same rigor as the existing budgets.
 
-## Scope: the ten diff-vocabulary groups
+## Scope: the eleven diff-vocabulary groups
 
 Profiles define defaults for exactly:
 
@@ -46,7 +46,7 @@ Visual/CursorLine collision escape. No behavior change for existing users.
   scheme's `DiffAdd` collides with its `Visual`, that is the scheme's
   choice, not ours to correct.
 
-**mono** — zero chroma across all ten groups:
+**mono** — zero chroma across all eleven groups:
 
 - Rows and ghosts: quiet's derivations (elevation, ghost dim, escape rule).
 - `CanvasDiffPrefixAdd`/`CanvasDiffGutterAdd`: `Normal`'s foreground.
@@ -73,7 +73,7 @@ Visual/CursorLine collision escape. No behavior change for existing users.
 - Fault suite (`test/fault/test_palette.lua` idiom):
   - classic: the three links are present as links (not flattened), and an
     explicit user override still wins.
-  - mono: chroma == 0 for every one of the ten groups under a scheme whose
+  - mono: chroma == 0 for every one of the eleven groups under a scheme whose
     diff groups carry hue (pin the invariant, not values).
   - quiet: existing tests pass untouched — the profile argument defaulting
     to quiet must be invisible to them.
