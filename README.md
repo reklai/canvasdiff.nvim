@@ -9,14 +9,15 @@ unsaved edits intact; edit it, then jump back to the same place in the review.
 CanvasDiff is **pre-alpha**. Its behavior is tested, but the public surface may
 still change before the first stable release.
 
-![Live update: canvas reflects a just-saved edit](media/hero.png)
+![The whole changeset as one canvas: sidebar, file bars, staged dots, minimap](media/hero.png)
 
 ### Screenshots
 
-**1. Live edit — before / after**
-Edit the real file, save, and the canvas refreshes in place.
+**1. Live edit — the canvas is a workspace, not a viewer**
+Enter opens the real file with your LSP, Tree-sitter, and unsaved edits
+intact. Edit, save, jump back: the canvas already shows the new line.
 
-![Live edit before and after](media/01-live-edit.png)
+![Live edit demo](media/01-live-edit.gif)
 
 **2. Comparison mode**
 Read-only revision ranges without checking out branches.
@@ -24,7 +25,8 @@ Read-only revision ranges without checking out branches.
 ![Comparison mode](media/02-compare.png)
 
 **3. Sidebar fold & jump**
-Left: `src/` folded to one summary. Right: Enter on a row jumps the canvas.
+Left: `lua/` folded to one summary row, mirrored by the canvas. Right: Enter
+on a hunk row jumps the canvas there, with the pinned crumb naming the spot.
 
 ![Sidebar fold and jump](media/03-sidebar-fold-jump.png)
 
@@ -34,9 +36,13 @@ All · unstaged · staged — same review, different filters.
 ![Lens states](media/04-lenses.png)
 
 **5. Key menus**
-Help cheatsheet, compare picker, and checkout.
+Help cheatsheet, compare picker, and checkout (pickers shown with a
+`vim.ui.select` frontend; plain Neovim uses a numbered prompt).
 
 ![Key menus](media/05-keys.png)
+
+Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
+`media/shoot/run.sh` to regenerate them.
 
 ## Features
 
@@ -165,6 +171,22 @@ require("canvasdiff").setup({
       bold = true,
     },
     CanvasDiffGhost = { link = "Comment" },
+  },
+})
+```
+
+The default palette is deliberately quiet: added and changed rows carry a
+neutral elevation derived from your colorscheme, and the green/red lives only
+on the `+`/`-` prefix and the gutter, so syntax highlighting stays readable
+inside hunks. If you prefer classic green/red diff washes, opt in by linking
+the row groups to the standard diff groups:
+
+```lua
+require("canvasdiff").setup({
+  highlights = {
+    CanvasDiffAdd = { link = "DiffAdd" },
+    CanvasDiffDel = { link = "DiffDelete" },
+    CanvasDiffGhost = { link = "DiffDelete" },
   },
 })
 ```
