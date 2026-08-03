@@ -127,6 +127,20 @@ was removed with the modes themselves, and a leftover `highlight.diff = ...` in 
 config now gets one diagnostic from `setup()` and is otherwise ignored — override
 the groups instead.
 
+## Profiles are colors only
+
+`profile` swaps which *defaults* the eleven diff-row groups derive — quiet
+(the measured palette above), classic (`DiffAdd`/`DiffDelete` links, the
+scheme's own vocabulary, deliberately unguarded), and mono (zero chroma;
+the `+` margin at `Normal`'s foreground, the `-` margin at the ghost dim,
+minimap marks collapsed to the shared elevation). Profiles never change
+what is drawn, and every profile output stays a `default = true`
+definition beneath colorschemes and explicit overrides. A `tinted` profile
+(diff hue blended into the elevation, the file bar's chroma-over-luma
+trick applied to rows) is deferred until its factors are measured under
+the builtin dark scheme and tokyonight-moon with the same rigor as the
+budgets above.
+
 ## The file bar and the pinned header
 
 **Each file's header row is a full-width tinted bar**, so a boundary registers in

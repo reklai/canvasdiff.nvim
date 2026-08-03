@@ -178,8 +178,22 @@ require("canvasdiff").setup({
 The default palette is deliberately quiet: added and changed rows carry a
 neutral elevation derived from your colorscheme, and the green/red lives only
 on the `+`/`-` prefix and the gutter, so syntax highlighting stays readable
-inside hunks. If you prefer classic green/red diff washes, opt in by linking
-the row groups to the standard diff groups:
+inside hunks. `profile` selects a different default vocabulary for the diff
+rows — colors only, element toggles are independent:
+
+```lua
+require("canvasdiff").setup({
+  profile = "classic", -- "quiet" (default) | "classic" | "mono"
+})
+```
+
+- `quiet` — neutral row elevation; hue only on the prefix and gutter.
+- `classic` — traditional `DiffAdd`/`DiffDelete` row washes.
+- `mono` — no hue anywhere: elevation, dimming, and `+`/`-` shapes carry
+  everything (colorblind-safe, monochrome-terminal-safe).
+
+Explicit `highlights` overrides win over any profile, so the equivalent of
+`classic` can also be rolled by hand — or partially, for one group:
 
 ```lua
 require("canvasdiff").setup({
@@ -258,6 +272,7 @@ setup call; ordinary option tables deep-merge with these defaults.
 require("canvasdiff").setup({
   context = 3,
   base = "HEAD",
+  profile = "quiet",
   highlights = {},
 
   keymaps = {
@@ -325,8 +340,9 @@ require("canvasdiff").setup({
 ```
 
 `context` controls diff context. `base` selects the initial worktree
-comparison. `highlight` controls Tree-sitter syntax work; `watch` controls live
-reconciliation. `virt` auto-collapses distant sections once either threshold
+comparison. `profile` selects the diff-row color vocabulary; unknown names are
+diagnosed and fall back to quiet. `highlight` controls Tree-sitter syntax
+work; `watch` controls live reconciliation. `virt` auto-collapses distant sections once either threshold
 is exceeded; `paged` switches to the page-backed canvas at `min_rows` rendered
 rows. `sidebar`, `scrollbar`, `statuscolumn`, and `session` independently enable
 their named features. `glyphs = "ascii"` selects a single-cell ASCII set.

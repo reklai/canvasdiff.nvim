@@ -401,6 +401,7 @@ default. >lua
     require("canvasdiff").setup({
       context = 3,
       base = "HEAD",
+      profile = "quiet",
       highlights = {},
 
       keymaps = {
@@ -591,6 +592,21 @@ Public groups (27):
 
 The removed `highlight.diff` option is diagnosed and ignored. Customize the
 groups above instead.
+
+                                                         *canvasdiff-profile*
+Profile~
+
+`setup().profile` selects which default colour vocabulary the diff rows
+derive. One of:
+
+    "quiet"    neutral row elevation; green/red only on the `+`/`-` margin
+               (the default)
+    "classic"  traditional DiffAdd/DiffDelete row washes
+    "mono"     no hue anywhere; luminance and `+`/`-` shapes carry direction
+
+Colours only: element toggles (statuscolumn, scrollbar) are independent, and
+explicit |canvasdiff-highlights| overrides win over any profile. Unknown
+names are reported and fall back to "quiet".
 
                                                           *canvasdiff-glyphs*
 Glyphs~
