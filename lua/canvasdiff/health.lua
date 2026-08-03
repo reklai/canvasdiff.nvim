@@ -30,8 +30,10 @@ function M.check()
 
   local config = require("canvasdiff.config")
   local report = config.health()
-  local appearance_diagnostics =
-    require("canvasdiff.appearance").audit(config.user_opts.highlights)
+  -- Audit what the user actually wrote, so a bad profile name keeps showing
+  -- in :checkhealth even after setup fell back to quiet.
+  local appearance_diagnostics = require("canvasdiff.appearance")
+    .audit(config.user_opts.highlights, config.user_opts.profile)
   for _, message in ipairs(report.removed) do
     health.warn(message)
   end

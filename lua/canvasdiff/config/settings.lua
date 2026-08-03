@@ -209,6 +209,12 @@ M.defaults = {
   context = 3,
   base = "HEAD",
   highlights = {}, -- exact CanvasDiff group -> native highlight spec; false resets
+  -- Which default colour vocabulary the diff rows derive: "quiet" (neutral
+  -- elevation, hue on the margin only), "classic" (DiffAdd/DiffDelete row
+  -- washes), or "mono" (no hue anywhere). Colors only -- element toggles
+  -- like statuscolumn and scrollbar are independent. The appearance manager
+  -- validates the name; config just carries it.
+  profile = "quiet",
   sidebar = {
     enabled = true,
     width = 32,

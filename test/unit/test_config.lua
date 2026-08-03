@@ -327,4 +327,15 @@ T["config_ a typo'd glyph name is reported, not silently ignored"] = function()
   end)
 end
 
+T["config profile defaults to quiet and passes through unvalidated"] = function()
+  config.setup({})
+  H.eq(config.options.profile, "quiet")
+  local _, diagnostics = config.setup({ profile = "classic" })
+  H.eq(diagnostics, {}, "config carries the string; appearance validates it")
+  H.eq(config.options.profile, "classic")
+  H.eq(config.health().unknown, {},
+    "profile is schema, not an unknown path")
+  config.setup({})
+end
+
 return T

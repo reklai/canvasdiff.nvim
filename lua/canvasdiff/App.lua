@@ -55,7 +55,8 @@ local GLOBAL_ACTIONS = {
 
 function App.new(opts)
   opts = opts or {}
-  local appearance_diagnostics = appearance.setup(config.options.highlights)
+  local appearance_diagnostics =
+    appearance.setup(config.options.highlights, config.options.profile)
   for _, message in native_ipairs(appearance_diagnostics) do
     ui.err(message)
   end
@@ -684,7 +685,8 @@ end
 --- when setup() is never called.
 function App:setup(opts)
   local options, diagnostics = config.setup(opts)
-  vim.list_extend(diagnostics, appearance.setup(options.highlights))
+  vim.list_extend(diagnostics,
+    appearance.setup(options.highlights, options.profile))
   for _, message in ipairs(diagnostics or {}) do
     ui.err(message)
   end

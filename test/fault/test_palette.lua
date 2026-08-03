@@ -284,7 +284,11 @@ T["hl_profile mono spends no chroma anywhere in the diff vocabulary"] = function
   vim.api.nvim_set_hl(0, "DiffAdd", real_add)
   vim.api.nvim_set_hl(0, "DiffDelete", real_del)
   appearance.setup({})
-  recover_colorscheme()
+  -- Redefining Normal above made Neovim drop the `default` flag on every
+  -- group, so the manager now reads its own derivations as user-owned and
+  -- would refuse to re-derive for whoever runs next. Clear the vocabulary
+  -- so the recovery boundary hands back fresh defaults.
+  reset_diff_groups()
   assert(ok, err)
 end
 
@@ -443,6 +447,17 @@ T["hl_rows a user definition of CanvasDiffAdd survives every ensure"] = function
   end)
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
   config.setup({})
+  recover_colorscheme()
+  assert(ok, err)
+end
+
+T["hl_profile the configured profile reaches the appearance manager"] = function()
+  local ok, err = xpcall(function()
+    require("canvasdiff").setup({ profile = "classic" })
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }).link,
+      "DiffAdd", "setup({ profile = ... }) must flow through App")
+  end, debug.traceback)
+  require("canvasdiff").setup({})
   recover_colorscheme()
   assert(ok, err)
 end
