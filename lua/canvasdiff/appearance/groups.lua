@@ -271,6 +271,20 @@ function G.definitions(profile)
     out.CanvasDiffAdd = { link = "DiffAdd" }
     out.CanvasDiffDel = { link = "DiffDelete" }
     out.CanvasDiffGhost = { link = "DiffDelete" }
+  elseif profile == "mono" then
+    -- Zero chroma anywhere in the diff vocabulary: rows and ghosts already
+    -- derive neutral above; the margin drops the borrowed diff hue. The
+    -- `+` reads at Normal's own full contrast and the `-` reads at the
+    -- ghost dim, so direction survives on the luminance channel the ghost
+    -- rows already taught. The minimap's three marks share the elevation:
+    -- density stays visible, direction comes from position in the review.
+    out.CanvasDiffPrefixAdd = { fg = normal.fg or pole }
+    out.CanvasDiffGutterAdd = { fg = normal.fg or pole }
+    out.CanvasDiffPrefixDel = { fg = ghost_fg }
+    out.CanvasDiffGutterDel = { fg = ghost_fg }
+    out.CanvasDiffScrollAdd = { bg = elevation }
+    out.CanvasDiffScrollDel = { bg = elevation }
+    out.CanvasDiffScrollChanged = { bg = elevation }
   end
   return out
 end

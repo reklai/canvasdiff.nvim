@@ -121,6 +121,12 @@ local DIFF_GROUPS = {
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
   "CanvasDiffGutterAdd", "CanvasDiffGutterDel",
   "CanvasDiffFileBar",
+  -- The minimap marks became profile-derived with mono. They must reset with
+  -- the rest because redefining Normal (as the mono test does) makes Neovim
+  -- 0.12 drop the `default` flag on every group, which freezes a previous
+  -- test's authorship as foreign-owned unless cleared through the recovery
+  -- boundary below.
+  "CanvasDiffScrollAdd", "CanvasDiffScrollDel", "CanvasDiffScrollChanged",
 }
 
 local function reset_diff_groups()
@@ -232,6 +238,51 @@ T["hl_profile classic yields to an explicit override"] = function()
     H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false }).bg,
       0x123456, "explicit highlights win over any profile")
   end, debug.traceback)
+  appearance.setup({})
+  recover_colorscheme()
+  assert(ok, err)
+end
+
+-- mono removes hue from the entire diff vocabulary: rows and ghosts keep
+-- quiet's neutral derivations, the + margin takes Normal's own foreground,
+-- the - margin takes the ghost dim (dimming already says "removed"), and
+-- the minimap's three marks collapse to the one neutral elevation. Normal
+-- is pinned to pure greys here so "no chroma" is exact rather than
+-- "no more chroma than the scheme's own text".
+T["hl_profile mono spends no chroma anywhere in the diff vocabulary"] = function()
+  local real_normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  local real_add = vim.api.nvim_get_hl(0, { name = "DiffAdd", link = false })
+  local real_del = vim.api.nvim_get_hl(0, { name = "DiffDelete", link = false })
+  vim.api.nvim_set_hl(0, "Normal", { fg = 0xd0d0d0, bg = 0x1e1e1e })
+  vim.api.nvim_set_hl(0, "DiffAdd", { fg = 0x2ea043, bg = 0x14261c })
+  vim.api.nvim_set_hl(0, "DiffDelete", { fg = 0xdb4444, bg = 0x2d1215 })
+  local ok, err = xpcall(function()
+    reset_diff_groups()
+    appearance.setup({}, "mono")
+    local vocabulary = {
+      "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost", "CanvasDiffHunkDel",
+      "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
+      "CanvasDiffGutterAdd", "CanvasDiffGutterDel",
+      "CanvasDiffScrollAdd", "CanvasDiffScrollDel", "CanvasDiffScrollChanged",
+    }
+    for _, name in ipairs(vocabulary) do
+      local hl = vim.api.nvim_get_hl(0, { name = name, link = false })
+      assert(next(hl) ~= nil, name .. " must still be defined")
+      for _, channel in ipairs({ "fg", "bg", "sp" }) do
+        local colour = hl[channel]
+        assert(colour == nil or chroma(colour) == 0,
+          ("%s.%s carries hue (#%06x) under mono"):format(name, channel, colour or 0))
+      end
+    end
+    -- Direction still reads: the + margin is brighter than the - margin.
+    local plus = vim.api.nvim_get_hl(0, { name = "CanvasDiffPrefixAdd", link = false })
+    local minus = vim.api.nvim_get_hl(0, { name = "CanvasDiffPrefixDel", link = false })
+    assert(luma(plus.fg) > luma(minus.fg),
+      "the + prefix reads at full contrast, the - prefix reads dimmed")
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "Normal", real_normal)
+  vim.api.nvim_set_hl(0, "DiffAdd", real_add)
+  vim.api.nvim_set_hl(0, "DiffDelete", real_del)
   appearance.setup({})
   recover_colorscheme()
   assert(ok, err)
