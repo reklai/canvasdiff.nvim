@@ -133,6 +133,8 @@ local ELEVATION_ESCAPE_STEP = 0.01
 -- the whole ladder in, the candidate keeping the largest worst-case gap is
 -- the honest best effort.
 local ELEVATION_ESCAPE_LIMIT = 0.10
+
+-- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
 --
 -- The ceiling is still @comment: a ghost must never read dimmer than a
 -- comment, and under the builtin scheme (the binding one, @comment |dL|
@@ -278,6 +280,8 @@ function G.definitions(profile)
     -- ghost dim, so direction survives on the luminance channel the ghost
     -- rows already taught. The minimap's three marks share the elevation:
     -- density stays visible, direction comes from position in the review.
+    -- gui-only, like the ghost dim these mirror: a 256-colour terminal
+    -- falls back to the shape channel, which is mono's whole premise.
     out.CanvasDiffPrefixAdd = { fg = normal.fg or pole }
     out.CanvasDiffGutterAdd = { fg = normal.fg or pole }
     out.CanvasDiffPrefixDel = { fg = ghost_fg }
