@@ -140,6 +140,13 @@ local function with_fake_statuscolumn(callback)
       end
       return runtime.options[spec.win] or ""
     end
+    -- Forward the caller's arity faithfully: Neovim 0.13's vim.o calls this
+    -- API with no opts argument at all, and the C side rejects an explicit
+    -- nil ("Expected Lua table"), so `real_get_option(name, spec)` with a
+    -- forwarded nil breaks every vim.o read made under this fake.
+    if spec == nil then
+      return real_get_option(name)
+    end
     return real_get_option(name, spec)
   end
   vim.api.nvim_set_option_value = function(name, value, spec)
@@ -152,6 +159,10 @@ local function with_fake_statuscolumn(callback)
       runtime.options[spec.win] = value
       runtime.sets[#runtime.sets + 1] = { win = spec.win, value = value }
       return
+    end
+    -- Same arity rule as the getter above.
+    if spec == nil then
+      return real_set_option(name, value)
     end
     return real_set_option(name, value, spec)
   end
