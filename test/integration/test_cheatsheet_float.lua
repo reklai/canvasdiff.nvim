@@ -106,7 +106,10 @@ T["cheatsheet_help key is installed on the canvas and closing the canvas closes 
 
   local help
   for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
-    if m.lhs == H.norm_lhs("<leader>lh") then help = m end
+    -- Both sides normalized, per norm_lhs's contract: Neovim 0.13's keytrans
+    -- renders a literal backslash as <Bslash>, so comparing a raw lhs against
+    -- a normalized one breaks the moment the leader default is involved.
+    if H.norm_lhs(m.lhs) == H.norm_lhs("<leader>lh") then help = m end
   end
   assert(help, "<leader>lh must be installed on the canvas buffer")
   help.callback()

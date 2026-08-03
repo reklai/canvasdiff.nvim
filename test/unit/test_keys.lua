@@ -971,7 +971,10 @@ T["keys_install every canvas mapping is registered with a desc"] = function()
 
   local installed = {}
   for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
-    installed[#installed + 1] = m.lhs
+    -- Normalized like `expected` below: keytrans notation drifts across
+    -- Neovim versions (0.13 renders a raw backslash as <Bslash>), and only
+    -- a comparison with both sides normalized survives that.
+    installed[#installed + 1] = H.norm_lhs(m.lhs)
     assert(m.desc and m.desc ~= "",
       "every mapping needs a desc so it shows up in :map / which-key; missing on " .. m.lhs)
   end

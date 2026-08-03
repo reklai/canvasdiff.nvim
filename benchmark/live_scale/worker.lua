@@ -456,7 +456,30 @@ local function install_adapters()
   -- Track raw timers before loading App: the highlighter allocates directly
   -- from libuv, while the other controllers allocate through canvasdiff.os.
   local uv_timer_wrapper = function(...)
-    return track_timer(original_uv_new_timer(...), "canvasdiff")
+    -- Attribute by allocation site, not by allocation time. "Everything
+    -- allocated after install is CanvasDiff's" held until Neovim 0.13, whose
+    -- core autoread watcher (runtime/lua/nvim/autoread.lua) allocates a
+    -- session-lifetime timer inside `:edit` -- on the plugin's legitimate
+    -- jump path. The editor's own infrastructure is not a plugin leak, so
+    -- ownership comes from the innermost named frame: canvasdiff source
+    -- charges the plugin, Neovim's runtime charges the editor.
+    local owner = "external"
+    local level = 2
+    while true do
+      local info = debug.getinfo(level, "S")
+      if not info then
+        break
+      end
+      if info.source:find("/lua/canvasdiff/", 1, true) then
+        owner = "canvasdiff"
+        break
+      elseif info.source:find("/runtime/lua/", 1, true) then
+        owner = "nvim-core"
+        break
+      end
+      level = level + 1
+    end
+    return track_timer(original_uv_new_timer(...), owner)
   end
   installed_wrappers._uv_timer_wrapper = uv_timer_wrapper
   uv.new_timer = uv_timer_wrapper
@@ -1775,7 +1798,13 @@ cleanup_attempt("inspect editor resources", function()
   local timer_owners = {}
   for timer, owner in pairs(tracked_timers) do
     if timer_is_open(timer) then
-      open_timers = open_timers + 1
+      -- Every open handle is recorded for the evidence trail. Only handles
+      -- attributed to Neovim's own runtime are exempt from the invariant
+      -- (see the ownership attribution in install_adapters); anything else
+      -- open here -- plugin or unattributed -- is a leak.
+      if owner ~= "nvim-core" then
+        open_timers = open_timers + 1
+      end
       timer_owners[#timer_owners + 1] = owner
     end
   end

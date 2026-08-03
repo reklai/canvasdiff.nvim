@@ -97,7 +97,15 @@ local function with_fake_runtime(callback)
     runtime.groups[id] = nil
     runtime.free_groups[#runtime.free_groups + 1] = id
   end
-  vim.api.nvim_create_autocmd = function(_, spec)
+  vim.api.nvim_create_autocmd = function(event, spec)
+    -- Capture only what lands in a FAKED augroup. Neovim's own runtime also
+    -- creates autocmds through this API (0.13 registers a SafeState hook
+    -- mid-test): swallowing those would break the editor under us, and
+    -- counting them would shift the positional indices these tests read
+    -- (autocmds[1] is A's WinScrolled, autocmds[2] is B's).
+    if not (type(spec.group) == "number" and runtime.groups[spec.group]) then
+      return real_create_autocmd(event, spec)
+    end
     local item = { group = spec.group, callback = spec.callback }
     runtime.autocmds[#runtime.autocmds + 1] = item
     return #runtime.autocmds

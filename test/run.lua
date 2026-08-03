@@ -18,6 +18,15 @@ package.path = test_root .. "/?.lua;" .. test_root .. "/?/init.lua;" .. package.
 local state_dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_state_" .. vim.uv.hrtime())
 vim.env.XDG_STATE_HOME = state_dir
 
+-- Neovim 0.13 arms a core file watcher per edited file while 'autoread' is
+-- on (runtime/lua/nvim/autoread.lua). This suite edits hundreds of fixture
+-- files and then deletes their roots; the accumulated watchers starve the
+-- main loop enough that a later test's 500ms vim.wait on a scheduled
+-- callback times out (measured: root_ "post-switch collection failure"
+-- fails after ~10 predecessor tests with autoread on, 44/44 with it off).
+-- The plugin ships its own watch module; core autoread is not under test.
+vim.o.autoread = false
+
 local function argument(index)
   local value = _G.arg and _G.arg[index] or nil
   if value == nil or value == "" then
