@@ -1251,9 +1251,16 @@ local function open_canvas(sections)
   end
   -- A paged canvas that cannot be built is a reason to fall back, not a
   -- reason to fail the review: the eager one still renders it correctly, just
-  -- expensively.
-  local state = canvas.open_paged(sections, {})
-  return state or canvas.open(sections, {})
+  -- expensively. Loudly, though -- the fallback pays that eager cost on a
+  -- review sized for paging, and a silent one would make every field failure
+  -- of the paged store look like nothing happened.
+  local state, paged_err = canvas.open_paged(sections, {})
+  if state then
+    return state
+  end
+  ui.warn(("paged canvas unavailable (%s); using the eager canvas")
+    :format(paged_err or "unknown reason"))
+  return canvas.open(sections, {})
 end
 
 local function discard_unpublished_canvas(st, win, restore_buf)
