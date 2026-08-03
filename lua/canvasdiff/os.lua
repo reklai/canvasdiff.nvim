@@ -12,7 +12,9 @@ return {
   -- The whole file's bytes, or nil when it cannot be opened.
   read_file = fs.read_file,
   -- Synchronous argv-vector process; returns vim.system's completed result
-  -- table { code, stdout, stderr, ... }.
+  -- table { code, stdout, stderr, ... }. Always bounded: a default timeout
+  -- applies unless the caller passes one, and a timed-out run reports
+  -- code 124 with the reason appended to stderr.
   run = process.run,
   -- Creates the parent directory, then writes. Failures stay EXCEPTIONS so
   -- the owning domain decides whether persistence failure is fatal.
