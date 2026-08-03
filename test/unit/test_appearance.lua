@@ -65,16 +65,31 @@ T["appearance ordinary ensure preserves an intentional foreign clear"] = functio
   end)
 end
 
-T["appearance ensure preserves an identical explicit takeover during rederive"] = function()
+-- The ownership tie-break, decided by the flag-wipe bug: an explicit takeover
+-- whose shape DIFFERS from the authorship record in any field survives every
+-- rederive, while one that is byte-identical to the record is reclaimed. The
+-- two intents read back identically once Neovim wipes the `default` flag
+-- (any Normal redefinition does), so the record is the only honest
+-- discriminator left -- and reclaiming the identical shape is the harmless
+-- side of the ambiguity, where freezing it locked the whole palette.
+T["appearance rederive keeps a differing takeover and reclaims an identical one"] = function()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = true })
+  -- Self-sufficient under a filtered run: the ColorScheme hook below only
+  -- exists once setup has installed it.
+  appearance.setup({})
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
   vim.api.nvim_set_hl(0, "CanvasDiffDel", {})
+  vim.api.nvim_set_hl(0, "CanvasDiffGhost", {})
   vim.api.nvim_exec_autocmds("ColorScheme", {})
   local authored = vim.api.nvim_get_hl(0, {
     name = "CanvasDiffAdd",
     link = true,
   })
+  -- Identical takeover: indistinguishable from our own flag-wiped write.
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", { bg = authored.bg })
+  -- Differing takeover: a real user pin, and it must survive.
+  local pinned = authored.bg == 0x123456 and 0x654321 or 0x123456
+  vim.api.nvim_set_hl(0, "CanvasDiffGhost", { fg = pinned })
 
   local ok, err = xpcall(function()
     local changed = vim.deepcopy(normal)
@@ -82,8 +97,8 @@ T["appearance ensure preserves an identical explicit takeover during rederive"] 
     changed.default = nil
     vim.api.nvim_set_hl(0, "Normal", changed)
     -- A colourscheme clear removes manager defaults before the new palette is
-    -- installed. Keep one manager-owned group on that path while the identical
-    -- explicit takeover remains nonempty and foreign-owned.
+    -- installed. Keep one manager-owned group on that path alongside the two
+    -- takeovers.
     vim.api.nvim_set_hl(0, "CanvasDiffDel", {})
     vim.api.nvim_exec_autocmds("ColorScheme", {})
 
@@ -95,7 +110,13 @@ T["appearance ensure preserves an identical explicit takeover during rederive"] 
       name = "CanvasDiffDel",
       link = true,
     })
-    H.eq(add.bg, authored.bg, "the identical explicit definition owns the group")
+    local ghost = vim.api.nvim_get_hl(0, {
+      name = "CanvasDiffGhost",
+      link = true,
+    })
+    H.eq(ghost.fg, pinned, "a takeover that differs from the record survives")
+    assert(add.bg ~= authored.bg,
+      "a shape identical to the record is reclaimed and rederived")
     assert(del.bg ~= authored.bg, "the manager-owned palette was rederived")
   end, debug.traceback)
 
@@ -105,6 +126,37 @@ T["appearance ensure preserves an identical explicit takeover during rederive"] 
   vim.api.nvim_set_hl(0, "Normal", restore)
   vim.api.nvim_set_hl(0, "CanvasDiffAdd", {})
   vim.api.nvim_set_hl(0, "CanvasDiffDel", {})
+  vim.api.nvim_set_hl(0, "CanvasDiffGhost", {})
+  vim.api.nvim_exec_autocmds("ColorScheme", {})
+  assert(ok, err)
+end
+
+-- Redefining Normal makes Neovim drop the `default` flag from EVERY highlight
+-- group (measured on 0.12.4). The flag therefore cannot be the ownership
+-- discriminator on its own: trusting it froze every derivation -- and every
+-- profile switch -- for the rest of the session the moment any plugin or
+-- transparency toggle touched Normal. A shape that still matches the
+-- manager's authorship record is the manager's, flag or no flag.
+T["appearance a wiped default flag does not freeze the derived palette"] = function()
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = true })
+  appearance.setup({})
+  vim.api.nvim_exec_autocmds("ColorScheme", {})
+  local ok, err = xpcall(function()
+    local changed = vim.deepcopy(normal)
+    changed.bg = normal.bg == 0x101010 and 0x202020 or 0x101010
+    changed.default = nil
+    vim.api.nvim_set_hl(0, "Normal", changed)
+
+    local diagnostics = appearance.setup({}, "classic")
+    H.eq(diagnostics, {})
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }).link,
+      "DiffAdd", "a profile switch must take effect after the flag wipe")
+  end, debug.traceback)
+  local restore = vim.deepcopy(normal)
+  restore.default = nil
+  restore.force = true
+  vim.api.nvim_set_hl(0, "Normal", restore)
+  appearance.setup({})
   vim.api.nvim_exec_autocmds("ColorScheme", {})
   assert(ok, err)
 end

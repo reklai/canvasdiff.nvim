@@ -107,8 +107,16 @@ local function set_default(name, value, recover_cleared)
     if authored[name] ~= nil or existed then spec.force = true end
   end
   if next(current_shape) ~= nil then
-    if current.default ~= true
-        or not native_deep_equal(current_shape, authored[name]) then
+    -- Ownership is decided by the authorship record, not by the `default`
+    -- flag: redefining Normal makes Neovim drop the flag from EVERY group
+    -- (measured on 0.12.4), so trusting the flag froze every derivation --
+    -- and every profile switch -- for the rest of the session the moment
+    -- any plugin or transparency toggle touched Normal. The collision this
+    -- accepts is someone explicitly pinning the exact bytes we last derived
+    -- and losing that pin at the next rederive: unlikely, and invisible at
+    -- the moment it happens because the two values are identical. A pin
+    -- that differs from the record in any field still wins.
+    if not native_deep_equal(current_shape, authored[name]) then
       return -- colorscheme or direct user definition owns it
     end
     if native_deep_equal(current_shape, shape(spec)) then
