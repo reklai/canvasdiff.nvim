@@ -144,6 +144,63 @@ T["hl_rows the field is one neutral elevation shared by add and del"] = function
   assert(del.fg ~= nil, "a deleted file's real rows read dimmed")
 end
 
+-- The elevation is quiet on purpose, which is exactly the band a scheme's own
+-- quiet row tints live in. Visual paints over the field when a user selects
+-- inside an added hunk, and the canvas runs with 'cursorline', so either
+-- neighbour landing on the elevation makes its overlay invisible there. The
+-- bar already keeps >= 8 luma from both (BAR_FACTOR's rule); these pin the
+-- same rule onto the field, applied only when the collision exists.
+T["hl_rows the elevation escapes a Visual that sits on it"] = function()
+  local real_visual = vim.api.nvim_get_hl(0, { name = "Visual", link = false })
+  local real_cursor = vim.api.nvim_get_hl(0, { name = "CursorLine", link = false })
+  local ok, err = xpcall(function()
+    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    -- Park Visual exactly on the unguarded 0.04 elevation and move CursorLine
+    -- out of the escape corridor: the colourscheme whose Visual is the same
+    -- quiet tint the field would derive.
+    local parked = tonumber(blend(normal.bg, 0xffffff, 0.04):sub(2), 16)
+    vim.api.nvim_set_hl(0, "Visual", { bg = parked })
+    vim.api.nvim_set_hl(0, "CursorLine", { bg = 0x808080 })
+    reset_diff_groups()
+    appearance.ensure()
+
+    local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
+    local gap = math.abs(luma(add.bg) - luma(parked))
+    assert(gap >= 8,
+      ("a selection inside an added hunk must stay visible: elevation luma"
+        .. " %.1f sits %.1f from Visual's"):format(luma(add.bg), gap))
+    assert(luma(add.bg) > luma(normal.bg), "the escape stays an elevation")
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "Visual", real_visual)
+  vim.api.nvim_set_hl(0, "CursorLine", real_cursor)
+  reset_diff_groups()
+  assert(ok, err)
+end
+
+T["hl_rows the elevation escapes a CursorLine that sits on it"] = function()
+  local real_visual = vim.api.nvim_get_hl(0, { name = "Visual", link = false })
+  local real_cursor = vim.api.nvim_get_hl(0, { name = "CursorLine", link = false })
+  local ok, err = xpcall(function()
+    local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    local parked = tonumber(blend(normal.bg, 0xffffff, 0.04):sub(2), 16)
+    vim.api.nvim_set_hl(0, "CursorLine", { bg = parked })
+    vim.api.nvim_set_hl(0, "Visual", { bg = 0x808080 })
+    reset_diff_groups()
+    appearance.ensure()
+
+    local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false })
+    local gap = math.abs(luma(add.bg) - luma(parked))
+    assert(gap >= 8,
+      ("the cursor row must stay visible inside an added hunk: elevation luma"
+        .. " %.1f sits %.1f from CursorLine's"):format(luma(add.bg), gap))
+    assert(luma(add.bg) > luma(normal.bg), "the escape stays an elevation")
+  end, debug.traceback)
+  vim.api.nvim_set_hl(0, "Visual", real_visual)
+  vim.api.nvim_set_hl(0, "CursorLine", real_cursor)
+  reset_diff_groups()
+  assert(ok, err)
+end
+
 -- The file bar borrows the scheme's Directory hue so it can be DIMMER than a
 -- purely lighter bar could be: CursorLine and Visual are neutral in the schemes
 -- that box the luma factor in, so chroma separates the bar from them on an axis

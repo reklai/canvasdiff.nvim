@@ -35,7 +35,14 @@ factor is measured, not felt:
   under the builtin dark scheme and 14.7% under tokyonight-moon, and 0.04 is the
   largest of the 0.03–0.10 candidates whose worst loss fits both budgets (6.6%
   builtin, 12.0% moon — 0.05 already overshoots moon's by a hair). It lands about
-  +9 luma from `Normal` under both schemes.
+  +9 luma from `Normal` under both schemes. One runtime exception: a scheme that
+  parks its own quiet tint in that band — a `Visual` or `CursorLine` background
+  within 8 luma of the elevation — would make a selection or the cursor row
+  invisible inside an added hunk, so the factor steps up by 0.01 until every
+  such neighbour is cleared by ≥ 8 (the bar's own rule, below), capped at 0.10,
+  the top of the measured range. When both neighbours box the whole ladder in,
+  the candidate with the largest worst-case gap is kept. Schemes without the
+  collision keep the measured 0.04 untouched.
 - **16% (the file bar, `CanvasDiffFileBar`)** is the smallest of the measured
   candidates whose bar clears the elevation by at least 10 luma under both
   schemes (builtin +37.1 against the field's +9.0; moon +34.8 against +8.9)

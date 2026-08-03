@@ -104,7 +104,24 @@ local BAR_TINT_FACTOR = 0.10
 -- what it takes to out-chroma a neutral CursorLine.
 local BAR_TINT_MIN_CHROMA = 60
 
--- How far a ghost's foreground moves from Normal's fg toward Normal's bg.
+-- The field elevation must stay legible UNDER the scheme's own quiet row
+-- tints: the canvas runs with 'cursorline', and a Visual selection paints
+-- over added rows, so a CursorLine or Visual background in the elevation's
+-- luminance band makes that overlay invisible exactly where a review reads
+-- it. The bar already keeps >= 8 luma from both (see BAR_FACTOR); the field
+-- adopts the same rule, but derived at runtime because 0.04 cannot know
+-- where a scheme parks its quiet tints. The factor moves only when a
+-- collision exists, in 0.01 steps, taking the first candidate that clears
+-- every neighbour by >= 8.
+local ELEVATION_MIN_GAP = 8
+local ELEVATION_ESCAPE_STEP = 0.01
+
+-- The escape's ceiling is the top of the range ELEVATION_FACTOR was measured
+-- over: past 0.10 the field starts spending the bar's >= 10 clearance and
+-- syntax contrast no collision can buy back. When CursorLine and Visual box
+-- the whole ladder in, the candidate keeping the largest worst-case gap is
+-- the honest best effort.
+local ELEVATION_ESCAPE_LIMIT = 0.10
 --
 -- The ceiling is still @comment: a ghost must never read dimmer than a
 -- comment, and under the builtin scheme (the binding one, @comment |dL|
@@ -127,6 +144,15 @@ local ELEVATION_FALLBACK_BG = { dark = 0x2c2c2c, light = 0xe4e4e4 }
 -- foreground (bg-only diff groups are the common case). Never derived from
 -- their bg: those are bg-tuned colours and read as mud when used as fg.
 local HUE_FALLBACK_FG = { add = 0x2ea043, del = 0xdb4444 }
+
+-- Rec.709 luma of a 24-bit colour, 0..255 -- the measure every factor above
+-- was calibrated in.
+local function luma(colour)
+  local r = math.floor(colour / 65536) % 256
+  local g = math.floor(colour / 256) % 256
+  local b = colour % 256
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+end
 
 -- How far a 24-bit colour sits from grey: max channel minus min, 0..255.
 local function chroma(colour)
@@ -171,6 +197,33 @@ function G.definitions()
   local normal_bg = normal.bg
     or ELEVATION_FALLBACK_BG[dark and "dark" or "light"]
   local elevation = tonumber(blend(normal_bg, pole, ELEVATION_FACTOR):sub(2), 16)
+  local quiet = {}
+  for _, name in ipairs({ "Visual", "CursorLine" }) do
+    local group = vim.api.nvim_get_hl(0, { name = name, link = false })
+    if group.bg then quiet[#quiet + 1] = luma(group.bg) end
+  end
+  local function worst_gap(colour)
+    local gap = math.huge
+    for _, other in ipairs(quiet) do
+      gap = math.min(gap, math.abs(luma(colour) - other))
+    end
+    return gap
+  end
+  if worst_gap(elevation) < ELEVATION_MIN_GAP then
+    local best, best_gap = elevation, worst_gap(elevation)
+    local factor = ELEVATION_FACTOR + ELEVATION_ESCAPE_STEP
+    while factor <= ELEVATION_ESCAPE_LIMIT + 1e-9 do
+      local candidate = tonumber(blend(normal_bg, pole, factor):sub(2), 16)
+      local gap = worst_gap(candidate)
+      if gap >= ELEVATION_MIN_GAP then
+        best = candidate
+        break
+      end
+      if gap > best_gap then best, best_gap = candidate, gap end
+      factor = factor + ELEVATION_ESCAPE_STEP
+    end
+    elevation = best
+  end
   local ghost_fg = tonumber(
     blend(normal.fg or pole, normal.bg or anti_pole, GHOST_DIM_FACTOR):sub(2), 16)
   local bar = tonumber(blend(normal_bg, pole, BAR_FACTOR):sub(2), 16)
