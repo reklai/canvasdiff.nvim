@@ -8,11 +8,16 @@ local C = {
   ASCII_GLYPHS = settings.ASCII_GLYPHS,
   defaults = settings.defaults,
   glyphs = settings.glyphs,
+  -- The :checkhealth audit of the captured user_opts: returns
+  -- { unknown = dotted-path[], removed = message[] }, both possibly empty.
   health = settings.health,
   options = settings.options,
   user_opts = settings.user_opts,
 }
 
+-- Merge `opts` over the defaults (deep, `opts` wins), reset and reapply the
+-- glyph overrides, and return (options, diagnostics). Never errors: legacy
+-- shapes, removed options and bad glyph values become diagnostic strings.
 function C.setup(opts)
   local options, diagnostics = settings.setup(opts)
   C.options = settings.options

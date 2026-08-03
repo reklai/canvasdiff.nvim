@@ -302,6 +302,21 @@ not translate the next line of Lua into English. Keep load-bearing comments
 beside the ordering, identity check, or bound they protect; do not narrate
 aliases, loops, obvious branches, or every function.
 
+Comments here are load-bearing, so maintaining them is part of the change,
+not a courtesy:
+
+- When a change touches a measured constant or invalidates a stated
+  invariant, re-read the neighboring comment block in the same commit and
+  update whatever it made false. A stale measurement is worse than no
+  comment: readers here trust the numbers literally.
+- Changes to measured constants argue with measurements, not taste. The
+  existing comment states the experiment that chose the value; a replacement
+  value brings a replacement experiment (see docs/design.md for the
+  vocabulary those experiments use).
+- Every exported symbol on a domain facade carries its contract -- what it
+  takes, what it returns, and its failure mode -- verified against the
+  implementation, never inferred from the name.
+
 ## Repository guardrails
 
 - Keep production Lua under its owning domain. Do not add a new flat
