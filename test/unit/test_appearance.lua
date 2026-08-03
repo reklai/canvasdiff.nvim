@@ -410,6 +410,15 @@ T["appearance audit reports a bad profile without changing state"] = function()
     H.eq(appearance.audit({}, "mono"), {}, "a valid name is silent")
     H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }), before,
       "audit never mutates highlight state")
+    -- Comparing highlight state alone cannot see audit corrupting the ACTIVE
+    -- profile: that would only surface at the next rederive. Force one -- if
+    -- either audit above leaked its argument into the manager, this reload
+    -- rederives as mono (or errors), not classic.
+    vim.api.nvim_exec_autocmds("ColorScheme", {
+      group = "canvasdiff.appearance",
+    })
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }).link,
+      "DiffAdd", "the audited profile names must not survive into rederives")
   end, debug.traceback)
   appearance.setup({})
   vim.api.nvim_exec_autocmds("ColorScheme", {})

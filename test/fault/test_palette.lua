@@ -112,8 +112,11 @@ local function blend(a, b, factor)
     channel(65536), channel(256), channel(1))
 end
 
--- Every derived group the appearance manager authors. The manager's authorship
--- record is a singleton, so a group an earlier test left defined would mask a
+-- Every PROFILE-VARYING group the appearance manager authors -- the manager
+-- also authors static links (CanvasDiffHunkDel, the headers, the scroll
+-- thumb), but those read the same under every profile, so stale authorship
+-- of them can never disagree with a derivation test. The authorship record
+-- is a singleton, so a group an earlier test left defined would mask a
 -- broken derive; each derivation test clears them through the ColorScheme
 -- recovery boundary before asserting the fresh palette.
 local DIFF_GROUPS = {
@@ -283,11 +286,11 @@ T["hl_profile mono spends no chroma anywhere in the diff vocabulary"] = function
   vim.api.nvim_set_hl(0, "Normal", real_normal)
   vim.api.nvim_set_hl(0, "DiffAdd", real_add)
   vim.api.nvim_set_hl(0, "DiffDelete", real_del)
-  appearance.setup({})
   -- Redefining Normal above made Neovim drop the `default` flag on every
-  -- group, so the manager now reads its own derivations as user-owned and
-  -- would refuse to re-derive for whoever runs next. Clear the vocabulary
-  -- so the recovery boundary hands back fresh defaults.
+  -- group. The manager reclaims shapes that match its authorship record
+  -- even flagless, but clearing the vocabulary through the recovery
+  -- boundary still hands the next test provably fresh defaults. The reset's
+  -- own setup({}) also returns the active profile to quiet.
   reset_diff_groups()
   assert(ok, err)
 end
