@@ -21,6 +21,17 @@ local ORDER = {
 local KNOWN = {}
 for _, name in ipairs(ORDER) do KNOWN[name] = true end
 
+-- The color profiles: named DEFAULT vocabularies for the eleven diff-row
+-- groups (rows, ghosts, prefixes, gutter, minimap marks). Colors only --
+-- a profile never changes what is drawn. Everything a profile emits stays
+-- a `default = true` definition, so a colorscheme or an explicit override
+-- outranks it exactly as it outranks the quiet derivation today.
+local PROFILES = { quiet = true, classic = true, mono = true }
+
+function G.known_profile(name)
+  return PROFILES[name] == true
+end
+
 -- Static meanings live beside the derived palette so every CanvasDiff group
 -- has one definition owner. Empty CanvasDiffCrumb deliberately carries no
 -- colour: ordinary text reads through the file-bar background beneath it.
@@ -189,7 +200,8 @@ end
 -- dim foreground says removed, and green/red hue lives only on the prefix and
 -- gutter margin. CanvasDiffDel carries both elevation and dim foreground for
 -- real deletion rows; every definition remains an overridable default.
-function G.definitions()
+function G.definitions(profile)
+  profile = G.known_profile(profile) and profile or "quiet"
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
   local dark = vim.o.background == "dark"
   local pole = dark and 0xffffff or 0x000000
@@ -251,6 +263,14 @@ function G.definitions()
     for _, name in ipairs(pair) do
       out[name] = { fg = hue, ctermfg = source.ctermfg }
     end
+  end
+  if profile == "classic" then
+    -- The traditional whole-row wash, as links so the scheme's own diff
+    -- colours flow through live. No collision guard here: if a scheme's
+    -- DiffAdd sits on its Visual, that is the scheme's own vocabulary.
+    out.CanvasDiffAdd = { link = "DiffAdd" }
+    out.CanvasDiffDel = { link = "DiffDelete" }
+    out.CanvasDiffGhost = { link = "DiffDelete" }
   end
   return out
 end

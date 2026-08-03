@@ -332,6 +332,38 @@ T["appearance false releases an owned override to the current default"] = functi
   assert(ok, err)
 end
 
+T["appearance setup diagnoses an unknown profile and derives quiet"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    local diagnostics = appearance.setup({}, "solarized")
+    H.eq(#diagnostics, 1, vim.inspect(diagnostics))
+    assert(diagnostics[1]:find("profile", 1, true), diagnostics[1])
+    local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
+    H.eq(add.link, nil, "fell back to the quiet derivation, not classic")
+    assert(add.bg ~= nil, "and the quiet elevation is present")
+  end, debug.traceback)
+  appearance.setup({})
+  vim.api.nvim_exec_autocmds("ColorScheme", {})
+  assert(ok, err)
+end
+
+T["appearance audit reports a bad profile without changing state"] = function()
+  appearance.setup({})
+  local ok, err = xpcall(function()
+    appearance.setup({}, "classic")
+    local before = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
+    local diagnostics = appearance.audit({}, 42)
+    H.eq(#diagnostics, 1, vim.inspect(diagnostics))
+    assert(diagnostics[1]:find("profile", 1, true), diagnostics[1])
+    H.eq(appearance.audit({}, "mono"), {}, "a valid name is silent")
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true }), before,
+      "audit never mutates highlight state")
+  end, debug.traceback)
+  appearance.setup({})
+  vim.api.nvim_exec_autocmds("ColorScheme", {})
+  assert(ok, err)
+end
+
 T["appearance explicitly supplied override replaces a foreign definition"] = function()
   appearance.setup({})
   local ok, err = xpcall(function()

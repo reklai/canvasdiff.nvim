@@ -11,6 +11,10 @@ local overrides = {}
 local override_authored = {}
 local underlays = {}
 local underlay_known = {}
+-- The active colour profile: which default vocabulary groups.definitions
+-- derives. Validated on the way in; every reload (ensure, ColorScheme)
+-- rederives under this name.
+local active_profile = "quiet"
 local VALIDATE_NS = vim.api.nvim_create_namespace("canvasdiff.appearance.validate")
 local native_deep_equal = vim.deep_equal
 
@@ -33,6 +37,16 @@ end
 local function safe_text(value)
   local ok, rendered = pcall(tostring, value)
   return ok and rendered or ("<unprintable %s>"):format(type(value))
+end
+
+local function validate_profile(profile)
+  if profile == nil then return "quiet", nil end
+  if type(profile) == "string" and groups.known_profile(profile) then
+    return profile, nil
+  end
+  return "quiet",
+    ('profile must be "quiet", "classic" or "mono"; got %s -- using quiet')
+      :format(safe_text(profile))
 end
 
 local function validate(raw)
@@ -107,7 +121,7 @@ local function set_default(name, value, recover_cleared)
 end
 
 local function apply_defaults(recover_cleared)
-  local definitions = groups.definitions()
+  local definitions = groups.definitions(active_profile)
   for _, name in ipairs(groups.names()) do
     set_default(name, assert(definitions[name], "missing definition: " .. name),
       recover_cleared)
@@ -151,13 +165,22 @@ function M.ensure()
   ensure(false)
 end
 
-function M.audit(raw)
+function M.audit(raw, profile)
   local _, diagnostics = validate(raw)
+  local _, profile_diagnostic = validate_profile(profile)
+  if profile_diagnostic then
+    diagnostics[#diagnostics + 1] = profile_diagnostic
+  end
   return diagnostics
 end
 
-function M.setup(raw)
+function M.setup(raw, profile)
   local accepted, diagnostics = validate(raw)
+  local profile_diagnostic
+  active_profile, profile_diagnostic = validate_profile(profile)
+  if profile_diagnostic then
+    diagnostics[#diagnostics + 1] = profile_diagnostic
+  end
 
   -- Establish the default layer before remembering what a first override
   -- displaces. This also preserves a colorscheme or direct definition.

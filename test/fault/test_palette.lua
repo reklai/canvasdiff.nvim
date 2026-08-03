@@ -201,6 +201,42 @@ T["hl_rows the elevation escapes a CursorLine that sits on it"] = function()
   assert(ok, err)
 end
 
+-- Profiles select the DEFAULT vocabulary for the diff-row groups and nothing
+-- else. classic is the traditional wash: whole-row DiffAdd/DiffDelete links,
+-- which the ownership chain must still let a colorscheme or an explicit
+-- override displace.
+T["hl_profile classic links the row field to the scheme's diff wash"] = function()
+  reset_diff_groups()
+  local ok, err = xpcall(function()
+    appearance.setup({}, "classic")
+    local add = vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = true })
+    H.eq(add.link, "DiffAdd")
+    local del = vim.api.nvim_get_hl(0, { name = "CanvasDiffDel", link = true })
+    H.eq(del.link, "DiffDelete")
+    local ghost = vim.api.nvim_get_hl(0, { name = "CanvasDiffGhost", link = true })
+    H.eq(ghost.link, "DiffDelete")
+    -- The margin already carries the scheme's diff hue under quiet; classic
+    -- must not disturb it.
+    local prefix = vim.api.nvim_get_hl(0, { name = "CanvasDiffPrefixAdd", link = false })
+    assert(prefix.fg ~= nil, "the + prefix keeps its derived foreground")
+  end, debug.traceback)
+  appearance.setup({})
+  recover_colorscheme()
+  assert(ok, err)
+end
+
+T["hl_profile classic yields to an explicit override"] = function()
+  reset_diff_groups()
+  local ok, err = xpcall(function()
+    appearance.setup({ CanvasDiffAdd = { bg = "#123456" } }, "classic")
+    H.eq(vim.api.nvim_get_hl(0, { name = "CanvasDiffAdd", link = false }).bg,
+      0x123456, "explicit highlights win over any profile")
+  end, debug.traceback)
+  appearance.setup({})
+  recover_colorscheme()
+  assert(ok, err)
+end
+
 -- The file bar borrows the scheme's Directory hue so it can be DIMMER than a
 -- purely lighter bar could be: CursorLine and Visual are neutral in the schemes
 -- that box the luma factor in, so chroma separates the bar from them on an axis
