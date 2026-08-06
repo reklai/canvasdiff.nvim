@@ -181,25 +181,17 @@ T["motions_ ]f counts every section, folded or not"] = function()
   set_folds(st, {})
 end
 
--- goto_file and cycle are public functions with an explicit count parameter, and
--- there is no zero-count motion in Vim -- so 0 clamps to 1 rather than meaning
--- "stay put", and it must mean the same in both of them. It briefly did not: the
--- old stepping helpers clamped while the plain-index path used the count raw.
-T["motions_ count = 0 clamps to 1 in both goto_file and cycle"] = function()
+-- goto_file takes an explicit count parameter, and there is no zero-count
+-- motion in Vim -- so 0 clamps to 1 rather than meaning "stay put". It
+-- briefly did not: the old stepping helpers clamped while the plain-index
+-- path used the count raw.
+T["motions_ count = 0 clamps to 1 in goto_file"] = function()
   local st = canvas.open(three_sections(), {})
   vim.api.nvim_win_call(st.win, function() vim.fn.winrestview({ topline = 1, lnum = 1 }) end)
 
   put_cursor_in(st, 1, 3)
   motions.goto_file(st, 1, 0)
   H.eq(cursor_section(st), 2, "count 0 moves one section, like count1")
-
-  local s1 = (canvas.section_rows(st, 1))
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = s1 + 1, lnum = s1 + 1 })
-  end)
-  motions.cycle(st, st.win, 1, 0)
-  local top0 = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") - 1 end)
-  H.eq((canvas.locate(st, top0)), 2, "and cycle agrees")
 end
 
 -- A folded file gets exactly ONE ]h stop: its placeholder row. So ]h walks INTO it

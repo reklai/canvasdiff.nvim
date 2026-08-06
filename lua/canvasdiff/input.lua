@@ -43,7 +43,6 @@ return {
   -- target (section index, stop index, or 0-based row) and nil when it did
   -- nothing -- no sections, no stops, or the window isn't showing the canvas.
   motions = {
-    cycle = motions.cycle,
     cycle_hunk = motions.cycle_hunk,
     goto_file = motions.goto_file,
     goto_hunk = motions.goto_hunk,

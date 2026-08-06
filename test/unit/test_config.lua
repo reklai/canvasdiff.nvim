@@ -156,6 +156,26 @@ T["config_ the new nested shape is not mistaken for the old one"] = function()
     end)
 end
 
+-- The file-cycle pair shipped unbound as a migration path from the days
+-- Ctrl+N walked files, and was removed once the plugin went public with
+-- nobody bound to it: a migration path with no travelers is just surface.
+-- An override must be reported, not swallowed.
+T["config_ a removed cycle_file override is reported, not swallowed"] = function()
+  with_setup({ keymaps = { canvas = { cycle_file_next = "<C-j>" } } },
+    function(opts, diagnostics)
+      H.eq(#diagnostics, 1, "exactly one diagnostic")
+      assert(diagnostics[1]:match("keymaps%.canvas%.cycle_file_next"),
+        "must name the removed action, got: " .. diagnostics[1])
+      assert(diagnostics[1]:find("]f", 1, true),
+        "and point at the surviving file motions, got: " .. diagnostics[1])
+      H.eq(opts.keymaps.canvas.next_file, "]f", "the defaults still install")
+    end)
+  with_setup({ keymaps = { canvas = { cycle_file_prev = "<C-k>" } } },
+    function(_, diagnostics)
+      H.eq(#diagnostics, 1, "the prev twin is reported too")
+    end)
+end
+
 -- Regression guard for the cycle -> two-verbs move. A `stage_cycle` override
 -- merges cleanly into an unused corner of the context table and simply never
 -- installs, so without a report the user's binding vanishes without a trace.

@@ -8,7 +8,6 @@ local render = require("canvasdiff.canvas").format
 local runtime = require("canvasdiff.runtime")
 local source = require("canvasdiff.source")
 local virt = runtime.virtualizer
-local motions = require("canvasdiff.input").motions
 
 local T = {}
 
@@ -668,44 +667,6 @@ T["sidebar_win select survives a dead canvas window"] = function()
   local ok, err = pcall(sidebar.select, lease)
   H.eq(ok, true, "select must not throw on a dead canvas window: " .. tostring(err))
   sidebar.close(lease)
-end
-
-T["sidebar_cycle moves canvas by sections and wraps"] = function()
-  local st, lease = open_with_sidebar()
-  local sbuf = sidebar_buf(lease)
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = 1, lnum = 1 })
-  end)
-
-  motions.cycle(st, st.win, 1)
-  sidebar.sync(lease)
-  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
-  H.eq(top, (canvas.section_rows(st, 2)) + 1, "moved to section 2")
-  H.eq(active_row(sbuf), 9, "sidebar followed")
-
-  motions.cycle(st, st.win, 1)
-  sidebar.sync(lease)
-  motions.cycle(st, st.win, 1) -- wraps past the last section
-  sidebar.sync(lease)
-  top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
-  H.eq(top, (canvas.section_rows(st, 1)) + 1, "wrapped to section 1")
-
-  motions.cycle(st, st.win, -1) -- wraps backwards
-  sidebar.sync(lease)
-  top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
-  H.eq(top, (canvas.section_rows(st, 3)) + 1, "wrapped to last section")
-  sidebar.close(lease)
-end
-
-T["sidebar_cycle works without a sidebar open"] = function()
-  local secs = { big_section("a/one.txt", "a"), big_section("b/two.txt", "b") }
-  local st = canvas.open(secs, {})
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = 1, lnum = 1 })
-  end)
-  motions.cycle(st, st.win, 1)
-  local top = vim.api.nvim_win_call(st.win, function() return vim.fn.line("w0") end)
-  H.eq(top, (canvas.section_rows(st, 2)) + 1)
 end
 
 T["sidebar_integration reconcile refreshes the tree"] = function()
@@ -1399,55 +1360,6 @@ T["sidebar_fold hunk rows carry the dim group, and a deletion the ghost"] = func
   done(st, lease)
 end
 
-T["sidebar_fold cycle stops on folded sections too, and still wraps"] = function()
-  local st = canvas.open({
-    big_section("a/one.txt", "a"),
-    big_section("a/two.txt", "b"),
-    big_section("b/three.txt", "c"),
-    big_section("c/four.txt", "d"),
-  }, {})
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = 1, lnum = 1 })
-  end)
-  st.folded = { ["a/"] = true }
-  canvas.resync_visibility(st)
-
-  local function top_section()
-    return (canvas.locate(st, canvas_top0(st)))
-  end
-  -- Park on the last section, so one step forward has to wrap onto a FOLDED one.
-  local s4 = (canvas.section_rows(st, 4))
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = s4 + 1, lnum = s4 + 1 })
-  end)
-
-  motions.cycle(st, st.win, 1)
-  H.eq(top_section(), 1, "wraps onto the folded a/one.txt rather than past it")
-  motions.cycle(st, st.win, 1)
-  H.eq(top_section(), 2, "and onto the second folded one")
-  motions.cycle(st, st.win, -1)
-  H.eq(top_section(), 1, "backwards lands on folded sections too")
-
-  st.folded = {}
-  canvas.resync_visibility(st)
-  done(st)
-end
-
-T["sidebar_fold cycle honors a count"] = function()
-  local st = canvas.open({
-    big_section("a/one.txt", "a"),
-    big_section("b/two.txt", "b"),
-    big_section("c/three.txt", "c"),
-    big_section("d/four.txt", "d"),
-  }, {})
-  vim.api.nvim_win_call(st.win, function()
-    vim.fn.winrestview({ topline = 1, lnum = 1 })
-  end)
-  motions.cycle(st, st.win, 1, 2)
-  H.eq((canvas.locate(st, canvas_top0(st))), 3,
-    "a count of 2 on the file cycle moves two sections")
-  done(st)
-end
 
 --- A two-file review opened through the App, so a test presses the INSTALLED
 --- keymap rather than calling the motion behind it. `opts` is merged over the
@@ -1532,27 +1444,6 @@ T["sidebar_cycle Ctrl+N walks hunk stops and the sidebar follows"] = function()
 
     press("2<C-p>")
     H.eq(canvas_top0(st), a_hunks[#a_hunks - 1], "a typed count still applies to the press")
-  end)
-end
-
--- The file axis Ctrl+N used to walk is one config line away, and that line has
--- to install a working map: an action with no handler in App silently maps
--- nothing at all, which would look exactly like the option not existing.
-T["sidebar_cycle a bound cycle_file_next still scrolls whole files"] = function()
-  with_review({ keymaps = { canvas = { cycle_file_next = "<C-y>" } } }, function(st)
-    local mapped = false
-    for _, m in ipairs(vim.api.nvim_buf_get_keymap(st.buf, "n")) do
-      if H.norm_lhs(m.lhs) == H.norm_lhs("<C-y>") then
-        mapped = true
-      end
-    end
-    assert(mapped, "binding the action must install a canvas map")
-
-    press("<C-y>")
-    H.eq(canvas_top0(st), (canvas.section_rows(st, 2)),
-      "the restored action scrolls to the next FILE, exactly as Ctrl+N used to")
-    press("<C-y>")
-    H.eq(canvas_top0(st), (canvas.section_rows(st, 1)), "and wraps, as it always did")
   end)
 end
 

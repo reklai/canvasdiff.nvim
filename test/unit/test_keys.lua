@@ -31,7 +31,7 @@ T["input_ facade exports exactly the supported key and motion operations"] = fun
 
   local motion_names = vim.tbl_keys(input.motions)
   table.sort(motion_names)
-  H.eq(motion_names, { "cycle", "cycle_hunk", "goto_file", "goto_hunk", "hunk_stops" })
+  H.eq(motion_names, { "cycle_hunk", "goto_file", "goto_hunk", "hunk_stops" })
   for _, name in ipairs(motion_names) do
     H.eq(type(input.motions[name]), "function",
       "input.motions." .. name .. " is callable")
@@ -904,16 +904,13 @@ end
 
 -- The one binding in this feature whose MEANING changed: Ctrl+N / Ctrl+P keep
 -- their keys and their scroll-and-wrap mechanics, but their stops are hunks
--- now. The file axis they used to walk survives as its own pair of actions,
--- shipped unbound so nobody silently gains a key -- one config line restores
--- the previous behaviour on whatever key the user prefers.
-T["keys_cycle Ctrl+N describes hunk stops and file cycling ships unbound"] = function()
+-- now. The file axis they used to walk was retired entirely (see
+-- REMOVED_ACTIONS in config: it shipped unbound as a migration path and
+-- gathered no travelers); ]f/[f are the file motions.
+T["keys_cycle Ctrl+N describes hunk stops"] = function()
   local km = defaults()
   H.eq(find(keys.resolved("canvas", km), "cycle_next"), { "<C-n>" })
   H.eq(find(keys.resolved("canvas", km), "cycle_prev"), { "<C-p>" })
-  H.eq(find(keys.resolved("canvas", km), "cycle_file_next"), {},
-    "the file-cycle action exists but installs no map until a user binds one")
-  H.eq(find(keys.resolved("canvas", km), "cycle_file_prev"), {})
 
   local desc = {}
   for _, m in ipairs(keys.resolved("canvas", km)) do desc[m.action] = m.desc end
@@ -923,20 +920,6 @@ T["keys_cycle Ctrl+N describes hunk stops and file cycling ships unbound"] = fun
     assert(desc[action]:find("folded", 1, true),
       action .. " must say what a folded file counts as, got: " .. desc[action])
   end
-
-  km.canvas.cycle_file_next = "<C-j>"
-  km.canvas.cycle_file_prev = "<C-k>"
-  local restored = keys.resolved("canvas", km)
-  H.eq(find(restored, "cycle_file_next"), { "<C-j>" },
-    "one config line brings the previous behaviour back")
-  H.eq(find(restored, "cycle_file_prev"), { "<C-k>" })
-  for _, m in ipairs(restored) do desc[m.action] = m.desc end
-  for _, action in ipairs({ "cycle_file_next", "cycle_file_prev" }) do
-    assert(desc[action]:find("file", 1, true),
-      action .. " must describe the file axis, got: " .. desc[action])
-  end
-  H.eq(keys.collisions("canvas", km), {},
-    "the restoring keys are the user's to choose and contest nothing by default")
 end
 
 T["keys_stage defaults to s and unstage to u on canvas and sidebar, both configurable"] = function()

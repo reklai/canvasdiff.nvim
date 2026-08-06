@@ -52,30 +52,6 @@ function M.goto_file(state, dir, count, win)
   return target
 end
 
---- Scroll one explicit Canvas window by sections, wrapping at both ends.
---- This is a Canvas motion even when no sidebar lease exists; the App may
---- separately ask an acquired sidebar lease to follow the resulting view.
-function M.cycle(state, win, dir, count)
-  win = win or state.win
-  if #state.sections == 0 or not canvas_showing(state, win) then
-    return
-  end
-  local top0 = vim.api.nvim_win_call(win, function()
-    return vim.fn.line("w0") - 1
-  end)
-  local i = (canvas.locate(state, top0)) or 1
-  local target = M.step(state, i, dir, count or vim.v.count1, true)
-  if not target then
-    return
-  end
-
-  local start0 = (canvas.section_rows(state, target))
-  vim.api.nvim_win_call(win, function()
-    vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
-  end)
-  return target
-end
-
 --- Every row a hunk motion stops on, ascending, 0-based. One home for the stop
 --- list, shared by `]h`/`[h` and by Ctrl+N/Ctrl+P -- the two differ in what they
 --- do at the ends, not in where they may land.

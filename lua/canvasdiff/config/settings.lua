@@ -126,11 +126,6 @@ M.defaults = {
       prev_hunk  = "[h",
       cycle_next = "<C-n>",
       cycle_prev = "<C-p>",
-      -- The file-at-a-time scrolling the two keys above used to do. Unbound:
-      -- `{}` means disabled, so no map installs until a user asks for one --
-      -- `cycle_file_next = "<C-n>"` puts the old behaviour back on the old key.
-      cycle_file_next = {},
-      cycle_file_prev = {},
       -- Re-collects and splices in what changed, so the same TEXT stays under your
       -- cursor. Inert to take: `ra` is replace-char, which nomodifiable makes E21.
       --
@@ -281,6 +276,10 @@ local LEGACY_ACTIONS = {
 -- above. Adding the next removal is one line here.
 local REMOVED_ACTIONS = {
   stage_cycle = 'bind "stage" and/or "unstage" instead',
+  -- Shipped unbound as a migration path from the days Ctrl+N walked files;
+  -- removed before anyone travelled it. The file axis lives on ]f/[f.
+  cycle_file_next = 'use "next_file" (default ]f) to move by file',
+  cycle_file_prev = 'use "prev_file" (default [f) to move by file',
 }
 
 --- One message per override of a removed action in any keymap context, or nil.

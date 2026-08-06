@@ -206,20 +206,21 @@ T["cheatsheet_model hunk-aware canvas staging keeps stage out of Global"] = func
   H.eq({ seen["Canvas"], seen["Sidebar"] }, { true, true })
 end
 
--- The file-cycle actions ship unbound, so the overlay must not advertise a
--- key nobody can press -- but binding one has to make it discoverable, or the
--- "one config line restores it" promise leaves no trace in the UI.
-T["cheatsheet_model the unbound file-cycle actions appear only once bound"] = function()
+-- The overlay must not advertise a key nobody can press: an action whose
+-- binding list is empty has no row, and giving it keys back restores the
+-- row. No shipped default is unbound today, so the test manufactures the
+-- state by disabling one -- the property has to hold for user config, not
+-- just for whatever the defaults happen to be.
+T["cheatsheet_model an unbound action appears only once bound"] = function()
   local km = defaults()
+  km.canvas.refresh = {}
   local where = placement(cheatsheet.model(km))
-  H.eq(where.cycle_next, "Canvas", "the reaimed hunk cycle is still listed")
-  H.eq(where.cycle_file_next, nil, "an unbound action has no row at all")
-  H.eq(where.cycle_file_prev, nil)
+  H.eq(where.cycle_next, "Canvas", "bound actions are listed")
+  H.eq(where.refresh, nil, "an unbound action has no row at all")
 
-  km.canvas.cycle_file_next = "<C-j>"
+  km.canvas.refresh = "R"
   local bound = placement(cheatsheet.model(km))
-  H.eq(bound.cycle_file_next, "Canvas", "binding it makes it discoverable")
-  H.eq(bound.cycle_file_prev, nil, "its unbound twin stays hidden")
+  H.eq(bound.refresh, "Canvas", "binding it makes it discoverable")
 end
 
 T["cheatsheet_model reflects overridden keys, not defaults"] = function()

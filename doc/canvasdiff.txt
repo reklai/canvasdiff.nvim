@@ -308,21 +308,6 @@ On the canvas~
                             close the review
     <leader>lh              Show keybind cheatsheet
 
-Two canvas actions ship with no key at all:
-
-    cycle_file_next         Scroll to the next file's diff (wraps)
-    cycle_file_prev         Scroll to the previous file's diff (wraps)
-
-To bind file-at-a-time cycling to CTRL-N/P instead: >lua
-
-    require("canvasdiff").setup({
-      keymaps = { canvas = {
-        cycle_next = {}, cycle_prev = {},           -- free the keys
-        cycle_file_next = "<C-n>",                  -- and take them
-        cycle_file_prev = "<C-p>",
-      } },
-    })
-<
 Two actions claiming one key in one context resolve to whichever map installs
 last, so disable or move the hunk-cycle actions before reusing their keys.
 
@@ -419,8 +404,6 @@ default. >lua
           cycle_next = "<C-n>",
           cycle_prev = "<C-p>",
           -- File-at-a-time cycling ships disabled: no map exists until set.
-          cycle_file_next = {},
-          cycle_file_prev = {},
           lens_next  = "<Tab>",
           lens_prev  = "<S-Tab>",
           sidebar    = "o",

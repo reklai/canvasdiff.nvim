@@ -999,12 +999,6 @@ local function canvas_actions(app, surface, st, cfg)
     cycle_prev = owned_action(surface, generation, function(owner, win)
       if motions.cycle_hunk(st, win, -1) then after_motion(owner, win) end
     end),
-    cycle_file_next = owned_action(surface, generation, function(owner, win)
-      if motions.cycle(st, win, 1) then after_motion(owner, win) end
-    end),
-    cycle_file_prev = owned_action(surface, generation, function(owner, win)
-      if motions.cycle(st, win, -1) then after_motion(owner, win) end
-    end),
     next_file  = owned_action(surface, generation, function(owner, win)
       if motions.goto_file(st, 1, nil, win) then after_motion(owner, win) end
     end),

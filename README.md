@@ -289,8 +289,6 @@ require("canvasdiff").setup({
       prev_hunk = "[h",
       cycle_next = "<C-n>",
       cycle_prev = "<C-p>",
-      cycle_file_next = {},
-      cycle_file_prev = {},
       refresh = "r",
       stage = "s",
       unstage = "u",
@@ -451,8 +449,7 @@ stash, detached-HEAD, or deletion operations.
 | Sidebar | `s`/`u`, `q`, `<leader>lh` | Stage/unstage; close sidebar; show help. |
 | Real file | Ctrl+Space | Return to the canvas. |
 
-`cycle_file_next` and `cycle_file_prev` are available but unbound. CanvasDiff
-never replaces an existing global mapping; collisions are reported.
+CanvasDiff never replaces an existing global mapping; collisions are reported.
 
 ### Sessions and large reviews
 
