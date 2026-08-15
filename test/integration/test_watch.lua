@@ -335,6 +335,38 @@ T["watch_trigger BufWritePost reconciles after debounce"] = function()
   H.eq(watch.stop(lease), true)
 end
 
+T["watch_trigger poll catches external writes in unwatched nested directories"] = function()
+  -- Linux fs_event is non-recursive, and directory watches exist only for the
+  -- repo root, .git, and parents of files already displayed. A previously
+  -- CLEAN nested file changed externally -- a formatter, a build -- while
+  -- Neovim keeps focus therefore reaches no watcher at all; the status poll
+  -- is what notices it.
+  local root = H.git_fixture({
+    committed = {
+      ["b.txt"] = bigtext(80, "b"),
+      ["nested/deep/c.txt"] = "clean\n",
+    },
+    worktree = {
+      ["b.txt"] = bigtext(80, "b"):gsub("b line 40", "b line 40 changed"),
+    },
+  })
+  local st = open_state(root)
+  local lease = watch.start(st, { debounce_ms = 20, poll_ms = 40 })
+
+  write_file(root, "nested/deep/c.txt", "clean\nEXTERNAL\n")
+
+  local ok = vim.wait(4000, function()
+    for _, sec in ipairs(st.sections) do
+      if sec.path == "nested/deep/c.txt" then
+        return true
+      end
+    end
+    return false
+  end, 10)
+  H.eq(ok, true, "the poll noticed a change no fs watcher covers")
+  H.eq(watch.stop(lease), true)
+end
+
 T["watch_trigger fs_event catches external writes at repo root"] = function()
   local root = fixture()
   local st = open_state(root)
@@ -675,7 +707,7 @@ T["watch_lease concurrent owners and stale callbacks remain isolated"] = functio
     roots[1], roots[2] = fixture(), fixture()
     states[1], states[2] = open_state(roots[1]), open_state(roots[2])
 
-    local lease_a = watch.start(states[1], { debounce_ms = 1 }, {
+    local lease_a = watch.start(states[1], { debounce_ms = 1, poll_ms = false }, {
       alive = function() return true end,
     })
     leases[#leases + 1] = lease_a
@@ -690,7 +722,7 @@ T["watch_lease concurrent owners and stale callbacks remain isolated"] = functio
     H.eq(#scheduled, 1, "A's main-loop reconcile is queued")
 
     local b_changes = 0
-    local lease_b = watch.start(states[2], { debounce_ms = 1 }, {
+    local lease_b = watch.start(states[2], { debounce_ms = 1, poll_ms = false }, {
       alive = function() return true end,
       on_change = function(state, result)
         H.eq(state, states[2])
@@ -775,7 +807,7 @@ T["watch_lease concurrent owners and stale callbacks remain isolated"] = functio
     -- Break teardown deliberately: a C handle method starts independent D
     -- while C is only part-way through stop(). C must already have detached
     -- its exact augroup, and its resumed cleanup must not touch D.
-    local lease_c = watch.start(states[1], { debounce_ms = 1 }, {
+    local lease_c = watch.start(states[1], { debounce_ms = 1, poll_ms = false }, {
       alive = function() return true end,
     })
     leases[#leases + 1] = lease_c
@@ -783,7 +815,7 @@ T["watch_lease concurrent owners and stale callbacks remain isolated"] = functio
     local timer_c = timers[#timers]
     local lease_d
     timer_c.on_stop = function()
-      lease_d = watch.start(states[2], { debounce_ms = 1 }, {
+      lease_d = watch.start(states[2], { debounce_ms = 1, poll_ms = false }, {
         alive = function() return true end,
       })
       leases[#leases + 1] = lease_d

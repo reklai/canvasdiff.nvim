@@ -229,6 +229,16 @@ function M.read_worktree(root, rel_path, status)
   end
 
   local abs_path = vim.fs.joinpath(root, rel_path)
+  -- Git's content for a symlink is the link PAYLOAD -- the path string itself,
+  -- stored as a 120000 blob -- so the payload is what diffs against the
+  -- committed side and what staging must write back. A regular read here would
+  -- follow the link to the target's bytes instead; so would a loaded buffer at
+  -- this path, which shows the target's lines. Dangling and directory links
+  -- still carry a payload, so readlink covers them too.
+  local lstat = vim.uv.fs_lstat(abs_path)
+  if lstat and lstat.type == "link" then
+    return vim.uv.fs_readlink(abs_path) or ""
+  end
   local buf = find_loaded(abs_path)
   if buf then
     return text(buf)

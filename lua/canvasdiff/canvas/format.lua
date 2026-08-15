@@ -140,6 +140,10 @@ function R.section_line(section, index)
     local counts
     if section.rename_only then
       counts = "  (renamed)"
+    elseif section.mode_only then
+      -- "(+0 −0)" on a chmod-only change would read as "nothing changed";
+      -- the mode is the whole change, so say so.
+      counts = "  (mode changed)"
     elseif section.binary then
       counts = "  (binary)"
     else
@@ -256,6 +260,9 @@ end
 function R.summary(section)
   if section.rename_only then
     return "(renamed)"
+  end
+  if section.mode_only then
+    return "(mode changed)"
   end
   if section.binary then
     return "(binary)"

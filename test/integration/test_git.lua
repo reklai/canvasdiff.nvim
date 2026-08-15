@@ -147,6 +147,7 @@ return {
       "show",
       "show_head",
       "stage",
+      "status_poll",
       "switch_branch",
       "track_branch",
       "tracking_branch_name",
@@ -1906,5 +1907,165 @@ return {
     vim.api.nvim_buf_delete(buf, { force = true })
     vim.fn.delete(root, "rf")
     assert(ok, err)
+  end,
+  -- A fixed lens's git-show failures used to be swallowed into an empty side,
+  -- rendering an M file as a whole-file addition. The plan's mode columns say
+  -- which sides must exist, so a failed read of one of those is transactional.
+  ["git: fixed-lens collection fails loudly when an old side that must exist cannot be read"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "one\n" },
+      worktree = { ["a.txt"] = "two\n" },
+    })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, "show") then
+          return { code = 128, stdout = nil, stderr = "fatal: injected corrupt index\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local files, files_err = source.files(root, lens.get("all"))
+      H.eq(files, nil, "a failed old-side read must not fabricate an empty side")
+      assert(files_err and files_err:find("injected corrupt index", 1, true),
+        tostring(files_err))
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  ["git: staged-lens collection fails loudly when the index side cannot be read"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "one\n" },
+      worktree = { ["a.txt"] = "two\n" },
+    })
+    sh(root, { "git", "add", "--", "a.txt" })
+    local real_run = system.run
+    local ok, err = xpcall(function()
+      system.run = function(cmd, opts)
+        if vim.tbl_contains(cmd, ":0:a.txt") then
+          return { code = 128, stdout = nil, stderr = "fatal: injected index read failure\n" }
+        end
+        return real_run(cmd, opts)
+      end
+      local files, files_err = source.files(root, lens.get("staged"))
+      H.eq(files, nil, "a failed index-side read must not fabricate an empty side")
+      assert(files_err and files_err:find("injected index read failure", 1, true),
+        tostring(files_err))
+    end, debug.traceback)
+    system.run = real_run
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  -- Git stores a symlink as a 120000 blob whose content is the link PAYLOAD --
+  -- the path string itself. Reading through the link would compare that payload
+  -- against the target file's bytes, and staging would then write those bytes
+  -- back under the symlink mode: a corrupted index entry.
+  ["git: a symlink's worktree side is its payload, not the target's bytes"] = function()
+    local root = H.git_fixture({
+      committed = { ["target.txt"] = "target bytes\n", ["other.txt"] = "other bytes\n" },
+    })
+    sh(root, { "ln", "-s", "target.txt", "link" })
+    sh(root, { "git", "add", "-A" })
+    sh(root, { "git", "commit", "-m", "add link" })
+    sh(root, { "ln", "-sfn", "other.txt", "link" })
+
+    H.eq(source.worktree_text(root, "link"), "other.txt")
+    local files = assert(source.files(root, "HEAD"))
+    local by = {}
+    for _, f in ipairs(files) do by[f.path] = f end
+    H.eq(by.link.old_text, "target.txt")
+    H.eq(by.link.new_text, "other.txt")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: a dangling symlink's worktree side is still its payload"] = function()
+    local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+    sh(root, { "ln", "-s", "does-not-exist.txt", "link" })
+    H.eq(source.worktree_text(root, "link"), "does-not-exist.txt")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: hunk staging a retargeted symlink stages what git add would"] = function()
+    local root = H.git_fixture({
+      committed = { ["target.txt"] = "target bytes\n", ["other.txt"] = "other bytes\n" },
+    })
+    sh(root, { "ln", "-s", "target.txt", "link" })
+    sh(root, { "git", "add", "-A" })
+    sh(root, { "git", "commit", "-m", "add link" })
+    sh(root, { "ln", "-sfn", "other.txt", "link" })
+
+    assert(source.set_index_blob(root, "link", source.worktree_text(root, "link")))
+    H.eq(index_mode(root, "link"), "120000")
+    H.eq(sh(root, { "git", "cat-file", "blob", ":0:link" }), "other.txt")
+    vim.fn.delete(root, "rf")
+  end,
+  -- A change git reports can have byte-identical sides -- chmod-only, or an
+  -- empty file appearing/disappearing. Each lens must keep such a file exactly
+  -- when ITS pair changed, and keep dropping it when only the other half did.
+  ["git: a chmod-only change is a section in the lenses whose pair it changes"] = function()
+    local root = H.git_fixture({ committed = { ["x.sh"] = "#!/bin/sh\n" } })
+    sh(root, { "chmod", "+x", "x.sh" })
+
+    local unstaged = assert(source.sections(root, lens.get("unstaged"), 3))
+    H.eq(#unstaged, 1, "the worktree's mode differs from the index")
+    H.eq({ unstaged[1].path, unstaged[1].mode_only, #unstaged[1].entries },
+      { "x.sh", true, 1 })
+    local all = assert(source.sections(root, lens.get("all"), 3))
+    H.eq(#all, 1, "the worktree's mode differs from HEAD")
+    H.eq(assert(source.sections(root, lens.get("staged"), 3)), {},
+      "nothing is staged, so the staged lens stays empty")
+
+    sh(root, { "git", "add", "--", "x.sh" })
+    H.eq(#assert(source.sections(root, lens.get("staged"), 3)), 1,
+      "once staged, the mode change moves to the staged lens")
+    H.eq(assert(source.sections(root, lens.get("unstaged"), 3)), {},
+      "and leaves the unstaged lens")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: an empty untracked file is a section in the unstaged and all lenses"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n" },
+      worktree = { ["empty.txt"] = "" },
+    })
+    local unstaged = assert(source.sections(root, lens.get("unstaged"), 3))
+    H.eq(#unstaged, 1)
+    H.eq({ unstaged[1].path, unstaged[1].status, #unstaged[1].entries },
+      { "empty.txt", "?", 1 })
+    H.eq(#assert(source.sections(root, lens.get("all"), 3)), 1)
+    H.eq(assert(source.sections(root, lens.get("staged"), 3)), {},
+      "an untracked file has no staged half")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: an empty staged addition is a section in the staged and all lenses"] = function()
+    local root = H.git_fixture({
+      committed = { ["a.txt"] = "a\n" },
+      worktree = { ["empty.txt"] = "" },
+    })
+    sh(root, { "git", "add", "--", "empty.txt" })
+    local staged = assert(source.sections(root, lens.get("staged"), 3))
+    H.eq(#staged, 1)
+    H.eq({ staged[1].path, staged[1].status }, { "empty.txt", "A" })
+    H.eq(#assert(source.sections(root, lens.get("all"), 3)), 1)
+    H.eq(assert(source.sections(root, lens.get("unstaged"), 3)), {},
+      "index and worktree agree, so no unstaged half")
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: a chmod-only commit is a section in a range lens"] = function()
+    local root = H.git_fixture({ committed = { ["x.sh"] = "#!/bin/sh\n" } })
+    sh(root, { "chmod", "+x", "x.sh" })
+    sh(root, { "git", "add", "--", "x.sh" })
+    sh(root, { "git", "commit", "-m", "chmod" })
+
+    local sections = assert(source.sections(
+      root, lens.range("HEAD~1", "HEAD", ".."), 3))
+    H.eq(#sections, 1, "the advertised whole diff includes the mode change")
+    H.eq({ sections[1].path, sections[1].mode_only }, { "x.sh", true })
+    vim.fn.delete(root, "rf")
+  end,
+  ["git: staging an untracked symlink's content records git's symlink mode"] = function()
+    local root = H.git_fixture({ committed = { ["a.txt"] = "a\n" } })
+    sh(root, { "ln", "-s", "a.txt", "newlink" })
+    assert(source.set_index_blob(root, "newlink", source.worktree_text(root, "newlink")))
+    H.eq(index_mode(root, "newlink"), "120000")
+    H.eq(sh(root, { "git", "cat-file", "blob", ":0:newlink" }), "a.txt")
+    vim.fn.delete(root, "rf")
   end,
 }

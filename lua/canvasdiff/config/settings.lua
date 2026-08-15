@@ -222,6 +222,11 @@ M.defaults = {
   watch = {
     enabled = true,
     debounce_ms = 200,
+    -- Cadence of the background `git status` drift poll that catches external
+    -- changes the non-recursive directory watches cannot see (a formatter
+    -- touching a clean nested file while Neovim keeps focus). false or 0
+    -- disables it, leaving fs events, saves, and FocusGained.
+    poll_ms = 3000,
   },
   scrollbar = {
     enabled = true,

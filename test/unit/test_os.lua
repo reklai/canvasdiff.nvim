@@ -11,6 +11,7 @@ T["os_ facade exports exactly the raw effect operations"] = function()
     "new_timer",
     "read_file",
     "run",
+    "run_async",
     "write_file",
   })
   for _, name in ipairs(names) do

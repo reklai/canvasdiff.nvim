@@ -85,7 +85,7 @@ end
 ---   both           -> you staged it and then changed it again
 ---
 --- @param root string
---- @return { path: string, old_path: string?, status: string, staged: string?, unstaged: string? }[]|nil
+--- @return { path: string, old_path: string?, status: string, staged: string?, unstaged: string?, mode_head: string?, mode_index: string?, mode_worktree: string? }[]|nil
 --- @return string|nil
 function M.changed_files(root)
   local res = run(root, { "status", "--porcelain=v2", "-z", "--untracked-files=all" })
@@ -105,8 +105,12 @@ function M.changed_files(root)
     local kind = tok:sub(1, 1)
 
     if kind == "1" then
-      -- "1 XY sub mH mI mW hH hI path"
-      local xy, sub, path = tok:match("^1 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ (.*)$")
+      -- "1 XY sub mH mI mW hH hI path". The three mode columns are the fact
+      -- that separates a chmod-only change (equal blobs, different modes) or
+      -- an empty-file add/delete (mode vs 000000) from an unchanged pair, so
+      -- they ride along rather than being discarded with the hashes.
+      local xy, sub, m_head, m_index, m_worktree, path =
+        tok:match("^1 (%S+) (%S+) (%S+) (%S+) (%S+) %S+ %S+ (.*)$")
       if not (xy and sub and path) then
         return nil, "malformed git status porcelain-v2 ordinary record"
       end
@@ -115,12 +119,14 @@ function M.changed_files(root)
         files[#files + 1] = {
           path = path, status = ordinary_status(xy),
           staged = staged, unstaged = unstaged,
+          mode_head = m_head, mode_index = m_index, mode_worktree = m_worktree,
         }
       end
       i = i + 1
     elseif kind == "2" then
       -- "2 XY sub mH mI mW hH hI Xscore newpath" NUL "origpath"
-      local xy, sub, newpath = tok:match("^2 (%S+) (%S+) %S+ %S+ %S+ %S+ %S+ %S+ (.*)$")
+      local xy, sub, m_head, m_index, m_worktree, newpath =
+        tok:match("^2 (%S+) (%S+) (%S+) (%S+) (%S+) %S+ %S+ %S+ (.*)$")
       local oldpath = tokens[i + 1]
       -- consume the origpath token unconditionally so it never leaks into
       -- the next iteration as a bogus record.
@@ -133,6 +139,7 @@ function M.changed_files(root)
         files[#files + 1] = {
           path = newpath, old_path = oldpath, status = "R",
           staged = staged, unstaged = unstaged,
+          mode_head = m_head, mode_index = m_index, mode_worktree = m_worktree,
         }
       end
     elseif kind == "?" then
@@ -154,6 +161,26 @@ function M.changed_files(root)
 
   table.sort(files, function(a, b) return a.path < b.path end)
   return files
+end
+
+--- The raw porcelain-v2 status snapshot, asynchronously: `on_done` receives
+--- the bytes on the event loop (a fast context), or nil when the command
+--- fails. Deliberately unparsed -- its one consumer compares snapshots for
+--- drift, and byte equality of the same command's output is exactly that
+--- question. Same argv as `changed_files`, so anything that would change a
+--- collection changes this snapshot too.
+function M.status_poll(root, on_done)
+  local cmd = {
+    "git", "-C", root,
+    "status", "--porcelain=v2", "-z", "--untracked-files=all",
+  }
+  system.run_async(cmd, { text = false }, function(res)
+    if res and res.code == 0 and res.stdout ~= nil then
+      on_done(res.stdout)
+    else
+      on_done(nil)
+    end
+  end)
 end
 
 local function mutation_paths(file)
@@ -459,15 +486,17 @@ end
 
 --- Files whose tracked worktree result differs from `oid`.
 ---
---- `--name-status -z` makes every status and path its own NUL-delimited field:
---- ordinary records are STATUS, PATH; rename/copy records are Rnnn/Cnnn,
---- OLD_PATH, NEW_PATH. No path is whitespace-split or trimmed.
+--- `--raw -z` emits one metadata field per record -- ":old_mode new_mode
+--- old_sha new_sha STATUS" -- followed by one NUL-delimited path (two for
+--- rename/copy: OLD_PATH, NEW_PATH). No path is whitespace-split or trimmed.
+--- The mode pair is why --raw rather than --name-status: a chmod-only commit
+--- has equal blobs, and the modes are the only record that it changed at all.
 --- @param root string
 --- When `new_oid` is present, both sides are committed and the worktree is
 --- ignored. With one oid the historical oid-to-worktree behavior is retained.
 --- @param oid string canonical old-side commit id
 --- @param new_oid string? canonical new-side commit id
---- @return { path: string, old_path: string, status: string, score: integer? }[]|nil
+--- @return { path: string, old_path: string, status: string, score: integer?, old_mode: string, new_mode: string }[]|nil
 --- @return string|nil
 function M.diff_files(root, oid, new_oid)
   if type(oid) ~= "string" or oid == "" then
@@ -480,7 +509,7 @@ function M.diff_files(root, oid, new_oid)
     "diff",
     "--no-ext-diff",
     "--ignore-submodules=all",
-    "--name-status",
+    "--raw",
     "-z",
     "--find-renames",
     "--diff-filter=ACDMRT",
@@ -499,35 +528,43 @@ function M.diff_files(root, oid, new_oid)
   local files = {}
   local i = 1
   while i <= #tokens do
-    local raw_status = tokens[i]
+    local old_mode, new_mode, raw_status =
+      tokens[i]:match("^:(%d+) (%d+) %S+ %S+ ([A-Z]%d*)$")
     i = i + 1
+    if not raw_status then
+      return nil, ("unexpected git diff --raw record '%s'"):format(tokens[i - 1])
+    end
 
     local status = raw_status:sub(1, 1)
     if raw_status:match("^[RC]%d+$") then
       local old_path, new_path = tokens[i], tokens[i + 1]
       if old_path == nil or new_path == nil or old_path == "" or new_path == "" then
-        return nil, "malformed git diff --name-status -z rename/copy record"
+        return nil, "malformed git diff --raw -z rename/copy record"
       end
       files[#files + 1] = {
         path = new_path,
         old_path = old_path,
         status = status,
         score = tonumber(raw_status:sub(2)),
+        old_mode = old_mode,
+        new_mode = new_mode,
       }
       i = i + 2
     elseif raw_status:match("^[ADMT]$") then
       local path = tokens[i]
       if path == nil or path == "" then
-        return nil, "malformed git diff --name-status -z ordinary record"
+        return nil, "malformed git diff --raw -z ordinary record"
       end
       files[#files + 1] = {
         path = path,
         old_path = path,
         status = status,
+        old_mode = old_mode,
+        new_mode = new_mode,
       }
       i = i + 1
     else
-      return nil, ("unexpected git diff --name-status status '%s'"):format(raw_status)
+      return nil, ("unexpected git diff --raw status '%s'"):format(raw_status)
     end
   end
 
@@ -587,17 +624,26 @@ function M.set_index_blob(root, path, content)
   local mode = entry.stdout:match("^(%d+)")
   if not mode then
     local stat = vim.uv.fs_lstat(vim.fs.joinpath(root, path))
-    local executable = stat ~= nil
-      and stat.type == "file"
-      and bit.band(stat.mode, tonumber("100", 8)) ~= 0
-    mode = executable and "100755" or "100644"
+    if stat and stat.type == "link" then
+      -- Git records a symlink as mode 120000 with the payload as its blob;
+      -- 100644 here would commit a regular file where the worktree has a link.
+      mode = "120000"
+    else
+      local executable = stat ~= nil
+        and stat.type == "file"
+        and bit.band(stat.mode, tonumber("100", 8)) ~= 0
+      mode = executable and "100755" or "100644"
+    end
   end
 
   -- `--path` applies the attributes of that path, so the blob is the one
-  -- `git add` would have written for it.
-  local hashed = run(root, {
-    "hash-object", "-w", "--stdin", "--path", path,
-  }, content)
+  -- `git add` would have written for it. Except for a symlink: git never runs
+  -- text/eol filters over a link payload, so hash it raw.
+  local hash_args = { "hash-object", "-w", "--stdin" }
+  if mode ~= "120000" then
+    vim.list_extend(hash_args, { "--path", path })
+  end
+  local hashed = run(root, hash_args, content)
   if hashed.code ~= 0 or hashed.stdout == nil then
     return nil, command_error("git hash-object", hashed)
   end

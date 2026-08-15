@@ -312,7 +312,7 @@ require("canvasdiff").setup({
 
   sidebar = { enabled = true, width = 32 },
   highlight = { enabled = true, margin = 100, debounce_ms = 30 },
-  watch = { enabled = true, debounce_ms = 200 },
+  watch = { enabled = true, debounce_ms = 200, poll_ms = 3000 },
   scrollbar = { enabled = true },
   statuscolumn = { enabled = true },
   virt = {

@@ -81,8 +81,11 @@ function W.stop(lease)
   lease.disposed = true
 
   local timer = lease.timer
+  local poll_timer = lease.poll_timer
   local aug = lease.aug
   lease.timer = nil
+  lease.poll_timer = nil
+  lease.poll_baseline = nil
   lease.aug = nil
   lease.last_error = nil
 
@@ -92,6 +95,7 @@ function W.stop(lease)
     pcall(vim.api.nvim_del_augroup_by_id, aug)
   end
   close_handle(timer)
+  close_handle(poll_timer)
   close_fs_handles(lease)
 
   -- A queued closure retains the lease until it drains. Drop its potentially
@@ -188,6 +192,7 @@ function W.reconcile(state, callbacks)
 end
 
 local refresh_fs_watches
+local refresh_poll_baseline
 
 local function lease_callbacks(lease)
   return {
@@ -273,6 +278,7 @@ local function mark_dirty(lease)
       -- Rebuild coverage only after a successful truth pass. On an invalid or
       -- deleted ref, the prior watcher set remains intact for recovery.
       refresh_fs_watches(lease)
+      refresh_poll_baseline(lease)
     end
   end)
   if not is_active(lease) then
@@ -321,6 +327,80 @@ local function watch_dir(lease, path, filter)
   lease.fs_handles[#lease.fs_handles + 1] = handle
 end
 
+--- One in-flight status probe for this exact lease. The raw porcelain bytes
+--- reach `on_snapshot` on the main loop; a failed probe delivers nothing at
+--- all, so transient git trouble never masquerades as drift.
+local function poll_status(lease, on_snapshot)
+  local enabled = type(lease.poll_ms) == "number" and lease.poll_ms > 0
+  if not enabled or not is_active(lease) or lease.poll_inflight then
+    return
+  end
+  local root = lease.state and lease.state.root
+  if not root then
+    return
+  end
+  lease.poll_inflight = true
+  source.status_poll(root, vim.schedule_wrap(function(raw)
+    lease.poll_inflight = false
+    if raw == nil or not is_active(lease) then
+      return
+    end
+    on_snapshot(raw)
+  end))
+end
+
+--- Re-anchor the drift baseline to the repository's CURRENT status bytes,
+--- once a successful reconcile has made the canvas agree with them.
+refresh_poll_baseline = function(lease)
+  poll_status(lease, function(raw)
+    lease.poll_baseline = raw
+  end)
+end
+
+--- Compare one fresh status snapshot against the baseline. This is what
+--- notices a change no fs watcher covers: on Linux the directory watches are
+--- non-recursive and exist only for the root, .git, and parents of files
+--- already displayed, so an external edit to a previously CLEAN nested file
+--- while Neovim keeps focus reaches no watcher -- but it does add a porcelain
+--- record. The baseline deliberately stays put on drift: only a successful
+--- reconcile re-anchors it, so a failing reconcile keeps being retried at the
+--- poll cadence (its error stays deduplicated by on_error).
+local function poll_tick(lease)
+  poll_status(lease, function(raw)
+    if lease.poll_baseline == nil then
+      lease.poll_baseline = raw
+    elseif raw ~= lease.poll_baseline then
+      mark_dirty(lease)
+    end
+  end)
+end
+
+local function start_poll(lease)
+  local interval = lease.poll_ms
+  if type(interval) ~= "number" or interval <= 0 then
+    return
+  end
+  local timer = system.new_timer()
+  if not timer then
+    return
+  end
+  if not is_active(lease) then
+    close_handle(timer)
+    return
+  end
+  lease.poll_timer = timer
+  pcall(function()
+    timer:start(interval, interval, function()
+      if not is_active(lease) then
+        return
+      end
+      vim.schedule(function()
+        poll_tick(lease)
+      end)
+    end)
+  end)
+end
+
 --- Rebuild fs_event coverage for this exact lease: repo root, .git (excluding
 --- lock churn), and parent directories of currently changed files.
 refresh_fs_watches = function(lease)
@@ -353,13 +433,24 @@ end
 function W.start(state, opts, callbacks)
   next_id = next_id + 1
 
+  -- Drift-poll cadence; false or 0 disables the poll and leaves only the
+  -- fs/autocmd producers.
+  local poll_ms = 3000
+  if opts and opts.poll_ms ~= nil then
+    poll_ms = opts.poll_ms
+  end
+
   local lease = {
     id = next_id,
     group_name = ("canvasdiff.watch.%d"):format(next_id),
     state = state,
     callbacks = callbacks or {},
     debounce_ms = (opts and opts.debounce_ms) or 200,
+    poll_ms = poll_ms,
     timer = nil,
+    poll_timer = nil,
+    poll_baseline = nil,
+    poll_inflight = false,
     fs_handles = {},
     aug = nil,
     last_error = nil,
@@ -406,6 +497,8 @@ function W.start(state, opts, callbacks)
       end,
     })
     refresh_fs_watches(lease)
+    start_poll(lease)
+    refresh_poll_baseline(lease)
     if not is_active(lease) then
       error("watch owner became inactive during start", 0)
     end

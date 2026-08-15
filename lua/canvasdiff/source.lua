@@ -47,6 +47,9 @@ return {
   show = repository.show,
   show_head = repository.show_head,
   stage = repository.stage,
+  -- Raw status bytes delivered asynchronously to `on_done` (nil on failure),
+  -- for drift polling; never errors.
+  status_poll = repository.status_poll,
   -- Both may answer `true, err`: git reported a failure but the end state
   -- verifies (HEAD landed on the requested ref), so the caller can treat it
   -- as done while still surfacing the message.

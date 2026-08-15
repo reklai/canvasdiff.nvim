@@ -9,6 +9,16 @@ local P = {}
 -- legitimate job passes its own `timeout`.
 local DEFAULT_TIMEOUT_MS = 60000
 
+local function annotate_timeout(result, timeout)
+  if result and result.code == 124 and result.signal == 15 then
+    local reason = ("timed out after %dms"):format(timeout)
+    local stderr = result.stderr
+    result.stderr = (stderr and stderr ~= "")
+      and (stderr .. "\n" .. reason) or reason
+  end
+  return result
+end
+
 --- Run one argv-vector process synchronously and return its completed
 --- result. On timeout vim.system TERMs the child and reports code 124 (the
 --- GNU timeout convention); the reason is appended to stderr so every
@@ -17,14 +27,20 @@ local DEFAULT_TIMEOUT_MS = 60000
 function P.run(command, opts)
   local bounded = vim.tbl_extend(
     "keep", opts or {}, { timeout = DEFAULT_TIMEOUT_MS })
-  local result = vim.system(command, bounded):wait()
-  if result and result.code == 124 and result.signal == 15 then
-    local reason = ("timed out after %dms"):format(bounded.timeout)
-    local stderr = result.stderr
-    result.stderr = (stderr and stderr ~= "")
-      and (stderr .. "\n" .. reason) or reason
-  end
-  return result
+  return annotate_timeout(
+    vim.system(command, bounded):wait(), bounded.timeout)
+end
+
+--- The same bounded process, without blocking the editor: `on_exit` receives
+--- the completed result on the event loop (a fast context -- the caller
+--- schedules before touching the API). For work that recurs in the
+--- background, where even a fast child would be repeated jank if awaited.
+function P.run_async(command, opts, on_exit)
+  local bounded = vim.tbl_extend(
+    "keep", opts or {}, { timeout = DEFAULT_TIMEOUT_MS })
+  return vim.system(command, bounded, function(result)
+    on_exit(annotate_timeout(result, bounded.timeout))
+  end)
 end
 
 return P

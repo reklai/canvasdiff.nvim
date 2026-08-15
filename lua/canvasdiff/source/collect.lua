@@ -24,9 +24,16 @@ local function fixed_paths(l, file)
   local path = file.path
   local old_path = path
   local status = file.status
+  -- Porcelain's "?" records carry no mode columns: the file exists nowhere
+  -- but the worktree. Both committed sides are absent, and the worktree
+  -- side's own mode is read later, beside its content.
+  local absent = file.status == "?" and "000000" or nil
+  local old_mode, new_mode
 
   if lens.same(l, lens.get("staged")) then
     status = file.staged or status
+    old_mode = file.mode_head or absent
+    new_mode = file.mode_index or absent
     if file.staged == "R" then
       old_path = file.old_path or path
     elseif file.unstaged == "R" and file.old_path then
@@ -35,15 +42,19 @@ local function fixed_paths(l, file)
     end
   elseif lens.same(l, lens.get("unstaged")) then
     status = file.unstaged or status
+    old_mode = file.mode_index or absent
+    new_mode = file.mode_worktree
     if file.unstaged == "R" then
       old_path = file.old_path or path
     end
   else
     -- The all lens sees the complete HEAD -> worktree identity change.
     old_path = file.old_path or path
+    old_mode = file.mode_head or absent
+    new_mode = file.mode_worktree
   end
 
-  return path, old_path, status
+  return path, old_path, status, old_mode, new_mode
 end
 
 --- All changed files with both sides of the current lens, ready for diff.build.
@@ -142,6 +153,10 @@ local function plan_files(root, spec)
           -- turns a D worktree side into "" without touching the filesystem.
           if existing.status == "D" then
             existing.status = "M"
+            -- The diff said the tracked worktree side was gone; the untracked
+            -- recreation is invisible to it. Its real mode is read with its
+            -- content.
+            existing.new_mode = nil
           end
           existing.unstaged = "?"
         else
@@ -151,6 +166,7 @@ local function plan_files(root, spec)
             status = "?",
             staged = nil,
             unstaged = "?",
+            old_mode = "000000",
           }
           changed[#changed + 1] = existing
           by_path[status.path] = existing
@@ -167,13 +183,15 @@ local function plan_files(root, spec)
 
   local planned = {}
   for _, f in ipairs(changed) do
-    local path, old_path, status
+    local path, old_path, status, old_mode, new_mode
     if is_branch or is_range then
       path = f.path
       old_path = f.old_path or path
       status = f.status
+      old_mode = f.old_mode
+      new_mode = f.new_mode
     else
-      path, old_path, status = fixed_paths(l, f)
+      path, old_path, status, old_mode, new_mode = fixed_paths(l, f)
     end
     planned[#planned + 1] = {
       path = path,
@@ -185,6 +203,11 @@ local function plan_files(root, spec)
       -- independently of the lens you happen to be looking through.
       staged = f.staged,
       unstaged = f.unstaged,
+      -- The lens pair's modes, "000000" for an absent side, nil when only the
+      -- worktree can answer. What lets an equal-blob record (chmod-only, an
+      -- empty file appearing) stay a change instead of vanishing.
+      old_mode = old_mode,
+      new_mode = new_mode,
     }
   end
   -- fixed_paths can remap an unstaged-rename destination back to the index
@@ -194,13 +217,40 @@ local function plan_files(root, spec)
   return planned, nil, l, old_rev
 end
 
+--- The worktree-side mode of one path, in git's own index-mode vocabulary,
+--- read only for entries whose plan could not know it (untracked files).
+local function worktree_mode(root, rel_path)
+  local stat = vim.uv.fs_lstat(vim.fs.joinpath(root, rel_path))
+  if not stat then
+    return "000000"
+  end
+  if stat.type == "link" then
+    return "120000"
+  end
+  local executable = stat.type == "file"
+    and bit.band(stat.mode, tonumber("100", 8)) ~= 0
+  return executable and "100755" or "100644"
+end
+
+local ABSENT_MODE = "000000"
+
+--- Whether the plan says this side EXISTS in its rev, so a nil read of it is
+--- a command failure rather than expected absence. A nil mode means the plan
+--- could not know (a caller without porcelain facts), which keeps the
+--- historical forgiving read.
+local function side_must_exist(mode)
+  return mode ~= nil and mode ~= ABSENT_MODE
+end
+
 --- Read one planned file's two sides.
 --- @return table|nil file
 --- @return string|nil err
-local function read_file(root, l, entry, is_branch, is_range)
+local function read_file(root, l, entry, is_range)
+  if entry.new_mode == nil and l.new == "worktree" then
+    entry.new_mode = worktree_mode(root, entry.path)
+  end
   local old_text, old_err = repository.show(root, entry.old_rev, entry.old_path)
-  if old_text == nil and (is_branch or is_range)
-      and entry.status ~= "A" and entry.status ~= "?" then
+  if old_text == nil and side_must_exist(entry.old_mode) then
     return nil, ("cannot read old side %s:%s for %s change: %s")
       :format(entry.old_rev, entry.old_path, entry.status,
         old_err or "unknown git error")
@@ -208,13 +258,13 @@ local function read_file(root, l, entry, is_branch, is_range)
   local new_text, new_err
   if is_range then
     new_text, new_err = repository.show(root, entry.new_rev, entry.path)
-    if new_text == nil and entry.status ~= "D" then
-      return nil, ("cannot read new side %s:%s for %s change: %s")
-        :format(entry.new_rev, entry.path, entry.status,
-          new_err or "unknown git error")
-    end
   else
-    new_text = M.new_side(root, l, entry.path, entry.status)
+    new_text, new_err = M.new_side(root, l, entry.path, entry.status)
+  end
+  if new_text == nil and side_must_exist(entry.new_mode) then
+    return nil, ("cannot read new side %s:%s for %s change: %s")
+      :format(entry.new_rev or l.new, entry.path, entry.status,
+        new_err or "unknown git error")
   end
   return {
     path = entry.path,
@@ -224,6 +274,8 @@ local function read_file(root, l, entry, is_branch, is_range)
     status = entry.status,
     staged = entry.staged,
     unstaged = entry.unstaged,
+    old_mode = entry.old_mode,
+    new_mode = entry.new_mode,
     old_text = old_text or "",
     new_text = new_text or "",
   }
@@ -244,7 +296,6 @@ function M.file_stream(root, spec)
   if not planned then
     return nil, err
   end
-  local is_branch = lens.is_branch(l)
   local is_range = lens.is_range(l)
   local index = 0
   return function()
@@ -253,7 +304,7 @@ function M.file_stream(root, spec)
     if not entry then
       return nil
     end
-    return read_file(root, l, entry, is_branch, is_range)
+    return read_file(root, l, entry, is_range)
   end
 end
 
@@ -354,11 +405,15 @@ end
 --- because `status` only describes the worktree -- a "D" for a file deleted in the
 --- worktree says nothing about whether the index still holds content for it, so the
 --- index branch must ask git rather than short-circuit on status.
+---
+--- An index read returns nil and the git error rather than "": the caller
+--- knows from the plan's modes whether that nil is expected absence or a
+--- command failure that must abort the collection.
 function M.new_side(root, l, path, status)
   if l.new == "worktree" then
     return buffer.read_worktree(root, path, status)
   end
-  return repository.show(root, l.new, path) or ""
+  return repository.show(root, l.new, path)
 end
 
 return M

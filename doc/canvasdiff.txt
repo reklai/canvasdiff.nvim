@@ -433,7 +433,7 @@ default. >lua
       session      = { enabled = true },
       paged        = { enabled = true, min_rows = 20000 },
       highlight    = { enabled = true, margin = 100, debounce_ms = 30 },
-      watch        = { enabled = true, debounce_ms = 200 },
+      watch        = { enabled = true, debounce_ms = 200, poll_ms = 3000 },
       virt         = {
         enabled      = true,
         max_files    = 200,

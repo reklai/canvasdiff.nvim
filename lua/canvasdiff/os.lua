@@ -16,6 +16,9 @@ return {
   -- applies unless the caller passes one, and a timed-out run reports
   -- code 124 with the reason appended to stderr.
   run = process.run,
+  -- The same bounded process without blocking; the completed result reaches
+  -- `on_exit` on the event loop, in a fast context.
+  run_async = process.run_async,
   -- Creates the parent directory, then writes. Failures stay EXCEPTIONS so
   -- the owning domain decides whether persistence failure is fatal.
   write_file = fs.write_file,

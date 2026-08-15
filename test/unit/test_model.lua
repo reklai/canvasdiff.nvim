@@ -120,6 +120,36 @@ return {
   ["model: unchanged is nil"] = function()
     H.eq(model.build_section("s.txt", "x\n", "x\n", "M"), nil)
   end,
+  -- Byte equality alone cannot decide "did this lens's pair change": a
+  -- chmod-only change and an empty-file add/delete both have equal texts and
+  -- are still real, stageable changes git reports. The mode pair is the extra
+  -- fact that separates them from a genuinely unchanged pair -- and equal
+  -- modes must KEEP dropping the section, because that drop is what keeps a
+  -- staged-only file invisible in the unstaged lens.
+  ["model: equal text with differing modes keeps a header-only section"] = function()
+    local s = model.build_section("s.txt", "x\n", "x\n", "M", 3,
+      { old_mode = "100644", new_mode = "100755", unstaged = "M" })
+    H.eq({ s.mode_only, s.adds, s.dels, s.nhunks, #s.entries },
+      { true, 0, 0, 0, 1 })
+    H.eq(s.entries[1].kind, "file_hdr")
+    H.eq(render.section_lines(s), { "▎ s.txt  (mode changed) ○" })
+    H.eq(render.placeholder(s), "▸ s.txt  (mode changed) ○")
+    H.eq(model.build_section("s.txt", "x\n", "x\n", "M", 3,
+      { old_mode = "100644", new_mode = "100644" }), nil,
+      "equal modes still mean no change in this pair")
+  end,
+  ["model: an empty added file keeps a section when its old side is absent"] = function()
+    local s = model.build_section("empty.txt", "", "", "?", 3,
+      { old_mode = "000000", new_mode = "100644", unstaged = "?" })
+    H.eq({ s.mode_only, s.adds, s.dels, s.nhunks, #s.entries },
+      { nil, 0, 0, 0, 1 }, "an absent side is an add/delete, not a chmod")
+    H.eq(render.section_lines(s), { "▎ empty.txt  (+0 −0) ○" })
+  end,
+  ["model: an empty deleted file keeps a section when its new side is absent"] = function()
+    local s = model.build_section("empty.txt", "", "", "D", 3,
+      { old_mode = "100644", new_mode = "000000", unstaged = "D" })
+    H.eq({ s.mode_only, #s.entries }, { nil, 1 })
+  end,
   ["model: pure rename is one metadata-rich escaped header row"] = function()
     local old_path = "old\tline\nslash\\name.txt"
     local new_path = "new\tline\nslash\\name.txt"

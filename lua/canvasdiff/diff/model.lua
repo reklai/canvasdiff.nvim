@@ -120,15 +120,31 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
   -- Identity is itself a reviewable change. Git reports a pure rename with
   -- byte-identical blobs, so algorithm.hunks quite correctly returns nothing;
   -- retain it as one header row instead of mistaking "no text delta" for "no
-  -- change". This deliberately precedes the binary branch: an unchanged binary
+  -- change". The same holds for a mode delta: a chmod-only change and an
+  -- empty file appearing or disappearing (mode against 000000) are equal-blob
+  -- changes git reports and staging can act on. Equal text WITH equal modes
+  -- must keep returning nil -- that drop is what keeps a file whose change
+  -- lives entirely in the other half of the index invisible through this
+  -- lens. This deliberately precedes the binary branch: an unchanged binary
   -- rename is safe to show because no blob content ever enters a buffer row.
   if old == new then
-    if not renamed then
+    local old_mode = metadata and metadata.old_mode
+    local new_mode = metadata and metadata.new_mode
+    local mode_delta = old_mode ~= nil and new_mode ~= nil
+      and old_mode ~= new_mode
+    if not renamed and not mode_delta then
       return nil
     end
+    -- "mode changed" is only the story when both sides EXIST: with one side
+    -- 000000 this is an add or delete of an empty file, and the ordinary
+    -- (+0 −0) counts tell that truth already.
+    local mode_only = mode_delta
+      and old_mode ~= "000000" and new_mode ~= "000000"
+      or nil
     return with_metadata({
       binary = binary or nil,
-      rename_only = true,
+      rename_only = renamed or nil,
+      mode_only = mode_only,
       adds = 0, dels = 0, nhunks = 0, hunks = {},
       entries = {
         { kind = "file_hdr", content = path,
