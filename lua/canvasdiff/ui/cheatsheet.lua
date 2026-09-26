@@ -287,7 +287,7 @@ function M.toggle()
 
   for _, lhs in ipairs(close_keys(km)) do
     vim.keymap.set("n", lhs, M.close,
-      { buffer = buf, silent = true, noremap = true, desc = "Close the cheatsheet" })
+      { buf = buf, silent = true, noremap = true, desc = "Close the cheatsheet" })
   end
 
   state.win, state.buf = win, buf

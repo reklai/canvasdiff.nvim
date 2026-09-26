@@ -15,7 +15,13 @@ T["health_ checkhealth surfaces the floor, git, and swallowed config typos"] = f
     },
   })
   vim.cmd("checkhealth canvasdiff")
-  local lines = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+  -- Neovim 0.13 runs the checks in an async task and fills the report buffer
+  -- afterwards; the run locks the buffer once it is done writing (0.12 does
+  -- the same, only synchronously). Read only after that lock lands.
+  local buf = vim.api.nvim_get_current_buf()
+  assert(vim.wait(10000, function() return not vim.bo[buf].modifiable end),
+    "checkhealth never finished writing its report")
+  local lines = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
   vim.cmd("bwipeout!")
   config.setup({})
 

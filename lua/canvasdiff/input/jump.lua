@@ -180,7 +180,7 @@ function M.enter(store, state, opts)
         on_return()
       end
     end, {
-      buffer = buf, silent = true, noremap = true,
+      buf = buf, silent = true, noremap = true,
       desc = "Return to the CanvasDiff canvas at the same spot",
     })
   end

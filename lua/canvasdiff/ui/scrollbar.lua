@@ -381,7 +381,7 @@ local function install_mouse(lease)
   for lhs, handler in pairs(handlers) do
     if not taken[norm_lhs(lhs)] then
       vim.keymap.set("n", lhs, handler, {
-        buffer = buf,
+        buf = buf,
         expr = true,
         desc = "CanvasDiff: minimap scrollbar drag / track jump",
       })

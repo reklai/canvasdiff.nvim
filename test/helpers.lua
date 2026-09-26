@@ -33,9 +33,16 @@ function H.close_windows(...)
   end
 end
 
+--- Every directory H.tmpdir handed out, so the runner can sweep them when the
+--- process ends. Tests never delete their own fixtures (a review may still be
+--- watching one when the test returns), and a full run leaves forty-odd
+--- fixture repositories behind otherwise.
+H.tmpdirs = {}
+
 function H.tmpdir()
   local dir = vim.fs.joinpath(vim.uv.os_tmpdir(), "canvasdiff_test_" .. vim.uv.hrtime())
   vim.fn.mkdir(dir, "p")
+  H.tmpdirs[#H.tmpdirs + 1] = dir
   return dir
 end
 

@@ -1021,7 +1021,7 @@ local function set_canvas_keymaps(app, surface, st)
     local fn = acts[m.action]
     if fn then
       vim.keymap.set("n", m.lhs, fn,
-        { buffer = st.buf, silent = true, noremap = true, desc = m.desc })
+        { buf = st.buf, silent = true, noremap = true, desc = m.desc })
     end
   end
 end

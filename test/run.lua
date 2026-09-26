@@ -110,6 +110,12 @@ for _, file in ipairs(files) do
   end
 end
 print(("%d/%d passed"):format(total - failed, total))
+-- Sweep the fixtures and the redirected state dir: only what THIS process
+-- created, never a glob over the temp dir, so concurrent runs stay apart.
+for _, dir in ipairs(require("helpers").tmpdirs) do
+  vim.fn.delete(dir, "rf")
+end
+vim.fn.delete(state_dir, "rf")
 -- "0/0 passed" is how a typo'd FILTER or an empty discovery looks; a run that
 -- verified nothing must never report green.
 if total == 0 then

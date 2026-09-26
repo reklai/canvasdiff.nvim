@@ -1240,7 +1240,7 @@ local function create_view(lease, tab, host_win, observed)
       local callback = actions[mapping.action]
       if callback then
         vim.keymap.set("n", mapping.lhs, callback, {
-          buffer = buf,
+          buf = buf,
           silent = true,
           noremap = true,
           desc = mapping.desc,

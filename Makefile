@@ -2,10 +2,14 @@
 	bench-eager bench-paged bench-chaos bench-regression bench-acceptance \
 	bench-live-scale verify
 
+# NVIM is the binary every lane runs under; point it at a nightly build to
+# check the plugin against Neovim before an update lands on PATH.
+NVIM ?= nvim
+
 # FILTER is a Lua pattern matched against test NAMES; SUITE selects one intent
 # directory under test/. They compose: `make test SUITE=fault FILTER='^hl_'`.
 test:
-	nvim --headless --clean -l test/run.lua "$(FILTER)" "$(SUITE)"
+	$(NVIM) --headless --clean -l test/run.lua "$(FILTER)" "$(SUITE)"
 
 unit:
 	$(MAKE) test SUITE=unit
@@ -25,7 +29,7 @@ architecture:
 # somewhere else; it must still resolve outside the repository.
 
 OUT ?= /tmp/canvasdiff
-NVIM_BENCH = nvim --headless --clean -n -i NONE
+NVIM_BENCH = $(NVIM) --headless --clean -n -i NONE
 
 # The frozen small-canvas baseline: what an ordinary review costs today.
 bench-eager:
