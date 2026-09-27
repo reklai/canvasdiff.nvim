@@ -3,6 +3,9 @@
 # needs nothing beyond Neovim and git. `stable` is the tested floor's channel
 # (0.12); `nightly` is the early-warning line — the float/winbar geometry this
 # plugin measures has drifted across Neovim versions before.
+#
+# Tests that judge wall-clock deadlines skip themselves here (they read $CI
+# and report SKIP): a shared runner's speed is not evidence about the plugin.
 name: test
 on:
   push:

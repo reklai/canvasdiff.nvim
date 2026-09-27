@@ -87,7 +87,9 @@ end
 
 local files = discover_tests(test_root)
 
-local total, failed = 0, 0
+-- A test opts out of a run by RETURNING "skip: <reason>". It is reported as
+-- SKIP and counted apart, so a run never claims a pass for work it did not do.
+local total, failed, skipped = 0, 0, 0
 for _, file in ipairs(files) do
   local chunk = assert(loadfile(file))
   local cases = chunk()
@@ -98,18 +100,23 @@ for _, file in ipairs(files) do
   table.sort(names)
   for _, name in ipairs(names) do
     if not pattern or name:find(pattern) then
-      total = total + 1
       local ok, err = pcall(cases[name])
-      if ok then
+      if ok and type(err) == "string" and err:find("^skip: ") then
+        skipped = skipped + 1
+        print("SKIP " .. name .. " (" .. err:sub(7) .. ")")
+      elseif ok then
+        total = total + 1
         print("PASS " .. name)
       else
+        total = total + 1
         failed = failed + 1
         print("FAIL " .. name .. ": " .. tostring(err))
       end
     end
   end
 end
-print(("%d/%d passed"):format(total - failed, total))
+print(("%d/%d passed"):format(total - failed, total)
+  .. (skipped > 0 and (", %d skipped"):format(skipped) or ""))
 -- Sweep the fixtures and the redirected state dir: only what THIS process
 -- created, never a glob over the temp dir, so concurrent runs stay apart.
 for _, dir in ipairs(require("helpers").tmpdirs) do
