@@ -877,4 +877,50 @@ T["paged_ the cursor column and visual selection are the skeleton's, not the tex
     assert(ok, failure)
   end
 
+-- Closing a review puts each of its windows back on what it showed before.
+-- A paged canvas used to break that: Surface disposal deleted the skeleton
+-- buffer while the windows still showed it, and deleting a shown buffer
+-- closes its windows -- so `q` on a large review closed the split it lived in
+-- (or the whole tab, when it was the tab's only window). The skeleton must
+-- still be reclaimed once nothing shows it.
+T["paged_ closing a review restores its window and still reclaims the skeleton"] = function()
+  local root = H.git_fixture({
+    committed = { ["a.txt"] = "x\n", ["notes.txt"] = "n\n" },
+    worktree = { ["a.txt"] = "y\n" },
+  })
+  local old_cwd = vim.fn.getcwd()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local ok, err = xpcall(function()
+    fm.setup({
+      watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false }, paged = { min_rows = 1 },
+    })
+    vim.cmd("edit notes.txt")
+    vim.cmd("vsplit")
+    local win = vim.api.nvim_get_current_win()
+    local notes = vim.api.nvim_get_current_buf()
+    local st = assert(fm.open())
+    assert(st.paged, "the fixture must open on the paged canvas")
+    local skeleton = st.buf
+    fm.close()
+    assert(vim.api.nvim_win_is_valid(win), "close must not take the window with it")
+    H.eq(#vim.api.nvim_tabpage_list_wins(0), 2)
+    H.eq(vim.api.nvim_win_get_buf(win), notes, "the window shows what it showed before")
+    assert(vim.wait(500, function()
+      return not vim.api.nvim_buf_is_valid(skeleton)
+    end, 5), "the skeleton buffer is reclaimed once nothing shows it")
+  end, debug.traceback)
+  pcall(fm.close)
+  fm.setup({})
+  vim.cmd("tabclose!")
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 return T

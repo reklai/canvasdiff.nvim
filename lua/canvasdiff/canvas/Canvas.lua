@@ -548,7 +548,10 @@ end
 --- dropped: closures that captured the list, or a Surface whose state reaches
 --- it, can outlive the review inside a compiled LuaJIT trace, and only an
 --- emptied list stops them pinning every entry of a closed review.
-function M.dispose(state)
+---
+--- `opts.keep_buffer` leaves a paged canvas's skeleton buffer alive (see
+--- Paged.dispose): the owner deletes it once no window shows it.
+function M.dispose(state, opts)
   if not state then
     return true
   end
@@ -556,7 +559,7 @@ function M.dispose(state)
   if state.paged then
     local built = state.paged
     state.paged = nil
-    result = paged.dispose(built)
+    result = paged.dispose(built, opts)
   end
   local sections = state.sections
   state.sections = {}

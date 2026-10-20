@@ -467,18 +467,22 @@ function Surface:dispose(reason)
   -- replacement for those windows first.
   -- The store and its projection, before the buffer they live on. A paged
   -- canvas owns both; an eager one owns neither, and `canvas.dispose` is
-  -- harmless on it. Disposing the projection also deletes the skeleton
-  -- buffer, which is why this runs before the deferred buffer reclamation
-  -- below rather than after it.
+  -- harmless on it. The paged skeleton buffer is KEPT here and reclaimed
+  -- below with the eager one: deleting it now, while the host windows still
+  -- show it, closed those windows -- closing a large review took its window
+  -- (or its whole tab) with it instead of putting back what was there.
+  local canvas_buf = self.state and self.state.buf or nil
+  local paged_buf = self.state and self.state.paged ~= nil
   attempt("canvas.dispose", function()
-    canvas.dispose(self.state)
+    canvas.dispose(self.state, { keep_buffer = true })
   end)
 
-  local canvas_buf = self.state and self.state.buf or nil
   if canvas_buf then
     vim.schedule(function()
+      -- Buffer numbers are never reused, so a valid number is still the
+      -- skeleton this review owned; an eager buffer is checked by name.
       if not (vim.api.nvim_buf_is_valid(canvas_buf)
-          and canvas.is_canvas_buf(canvas_buf)) then
+          and (paged_buf or canvas.is_canvas_buf(canvas_buf))) then
         return
       end
       for _, win in ipairs(vim.api.nvim_list_wins()) do

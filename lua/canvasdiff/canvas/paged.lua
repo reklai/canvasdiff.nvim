@@ -738,7 +738,11 @@ function Paged.locate(paged, row0)
 end
 
 --- Release the projection and forget the store.
-function Paged.dispose(paged)
+--- `opts.keep_buffer` detaches the projection but leaves its skeleton buffer
+--- for the caller to delete: deleting a buffer closes every window showing
+--- it, so an owner that still has to put those windows back on something
+--- else must delete it afterwards.
+function Paged.dispose(paged, opts)
   if not paged then
     return true
   end
@@ -761,7 +765,7 @@ function Paged.dispose(paged)
   paged.collapsed = nil
   paged.state = nil
   if projection then
-    return projection:dispose(true)
+    return projection:dispose(not (opts and opts.keep_buffer))
   end
   return true
 end

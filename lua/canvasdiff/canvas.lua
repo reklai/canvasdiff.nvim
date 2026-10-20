@@ -60,7 +60,10 @@ return {
   logical = Canvas.logical,
   -- Releases a paged canvas's store and projection, and on either kind empties
   -- the section list in place, so nothing that captured it keeps the closed
-  -- review's model alive. Answers the projection's dispose result, else true.
+  -- review's model alive. A paged canvas's buffer is deleted with it unless
+  -- `opts.keep_buffer` -- deleting a buffer closes the windows showing it, so
+  -- an owner that restores those windows deletes it afterwards. Answers the
+  -- projection's dispose result, else true.
   dispose = Canvas.dispose,
   -- A fresh state every call -- buffer created, shown in the current window,
   -- sections rendered. Nothing survives close/open except what
