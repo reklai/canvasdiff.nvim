@@ -76,7 +76,9 @@ return {
   -- skeleton buffer hidden and `win` nil, for `show` to publish or `dispose`
   -- (plus deleting `buf`) to abandon. `opts.pace` is the os.sliced checkpoint,
   -- offered while rows are paged; a cancellation it raises is contained by
-  -- the store and reported as an ordinary build failure.
+  -- the store and reported as an ordinary build failure. `opts.collapsed`
+  -- (path -> intent) and `opts.folded` (directory set) seed the fold state it
+  -- is built in, so hidden sections are paged as their placeholder only.
   build_paged = Canvas.build_paged,
   -- The page-backed store a Projection renders. `paginate_stream` is the
   -- ingestion entry point: it never materializes every logical row first, and

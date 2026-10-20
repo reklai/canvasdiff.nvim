@@ -502,6 +502,13 @@ end
 --- build that is abandoned instead goes to `M.dispose`. `opts.pace` is the
 --- slicing checkpoint, offered while the rows are paged. `state.win` is nil
 --- until shown.
+---
+--- `opts.collapsed` (path -> intent) and `opts.folded` (directory set) seed
+--- the fold state the canvas is BUILT in, copied: a section hidden by them
+--- is paged as its one placeholder row and its rows never at all. That is
+--- how a reopened review applies its saved folds -- building a folded
+--- million-row section and then collapsing it cost a full page-in plus a
+--- ~130 ms skeleton shrink, for rows nobody was going to see.
 function M.build_paged(sections, opts)
   opts = opts or {}
   appearance.ensure()
@@ -512,8 +519,8 @@ function M.build_paged(sections, opts)
     sections = {},
     anchor_ids = {},
     hl_ids = {},
-    collapsed = {},
-    folded = {},
+    collapsed = vim.deepcopy(opts.collapsed or {}),
+    folded = vim.deepcopy(opts.folded or {}),
     rendered_hidden = {},
     folded_seen = {},
   }

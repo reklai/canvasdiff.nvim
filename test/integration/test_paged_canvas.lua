@@ -1003,4 +1003,62 @@ T["paged_ folding a directory records what was seen, as the eager canvas does"] 
   end)
 end
 
+-- A reopen applies its saved folds to the BUILD: the hidden section is
+-- paged as its placeholder, and the session restore that follows finds
+-- nothing to splice. Building it expanded and then collapsing it paid a full
+-- page-in plus a skeleton shrink (~130 ms at a million rows) for rows nobody
+-- was going to see.
+T["paged_ a reopen builds saved folds in place instead of collapsing after"] = function()
+  local root = H.git_fixture({
+    committed = { ["big.txt"] = "x\n", ["b.txt"] = "1\n" },
+    worktree = { ["big.txt"] = ("row\n"):rep(500), ["b.txt"] = "2\n" },
+  })
+  local old_cwd = vim.fn.getcwd()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local Paged = require("canvasdiff.canvas.paged")
+  local real_collapse = Paged.set_collapsed
+  local ok, err = xpcall(function()
+    fm.setup({
+      watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = true }, paged = { min_rows = 1 },
+    })
+    local st = assert(fm.open())
+    local idx
+    for i, section in ipairs(st.sections) do
+      if section.path == "big.txt" then idx = i end
+    end
+    canvas.set_collapsed(st, idx, true, "user", st.win)
+    fm.close()
+
+    local changed = 0
+    Paged.set_collapsed = function(...)
+      local result, result_err = real_collapse(...)
+      if result then changed = changed + 1 end
+      return result, result_err
+    end
+    local again = assert(fm.open())
+    Paged.set_collapsed = real_collapse
+    H.eq(again.collapsed["big.txt"], "user", "the saved collapse is restored")
+    H.eq(changed, 0, "and no collapse had to be spliced to get there")
+    local small
+    for _, section in ipairs(again.sections) do
+      if section.path == "b.txt" then small = section end
+    end
+    H.eq(canvas.logical(again).row_count(), 1 + #small.entries,
+      "big.txt is its one placeholder row; b.txt is expanded")
+  end, debug.traceback)
+  Paged.set_collapsed = real_collapse
+  pcall(fm.close)
+  fm.setup({})
+  vim.cmd("tabclose!")
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 return T

@@ -1235,11 +1235,37 @@ end
 --- arrives here as an ordinary build failure, and only this call, outside
 --- that boundary, lets it unwind the open instead of falling back to the
 --- eager canvas.
-local function prepare_canvas(sections, pace)
+--- `sess` is the saved session the open will restore. Its collapses and
+--- folds are applied to the build itself, so a section it hides is never
+--- paged; session.restore then finds them already in place and splices
+--- nothing. Pruned exactly as the restore prunes, and only the user's own
+--- intent ("user"), which is all a session saves.
+local function saved_folds(sections, sess)
+  if type(sess) ~= "table" then
+    return nil, nil
+  end
+  local collapsed, folds = {}, {}
+  for _, path in ipairs(type(sess.collapsed) == "table" and sess.collapsed or {}) do
+    if type(path) == "string" then
+      collapsed[path] = "user"
+    end
+  end
+  for _, dir in ipairs(type(sess.folds) == "table" and sess.folds or {}) do
+    if type(dir) == "string" then
+      folds[dir] = true
+    end
+  end
+  return collapsed, fold.prune(sections, folds)
+end
+
+local function prepare_canvas(sections, pace, sess)
   if not wants_paged(sections) then
     return {}
   end
-  local state, err = canvas.build_paged(sections, { pace = pace })
+  local collapsed, folded = saved_folds(sections, sess)
+  local state, err = canvas.build_paged(sections, {
+    pace = pace, collapsed = collapsed, folded = folded,
+  })
   if pace then
     local ok, pace_err = pcall(pace, 0)
     if not ok then
@@ -1457,7 +1483,7 @@ local function commit_open(app, plan, sections, prepared, opts)
     return nil, STALE_COMPARE
   end
 
-  local st = open_canvas(sections, prepared or prepare_canvas(sections))
+  local st = open_canvas(sections, prepared or prepare_canvas(sections, nil, sess))
   if opts._guard and not opts._guard(st.buf) then
     discard_unpublished_canvas(st, win, prev_buf)
     return nil, STALE_COMPARE
@@ -1960,7 +1986,7 @@ local function open_incremental(app, plan, opts)
     if not sections then
       return nil, err
     end
-    return sections, prepare_canvas(sections, pace)
+    return sections, prepare_canvas(sections, pace, plan.sess)
   end, {
     budget_ms = opts._slice_ms,
     after_units = opts._incremental_rows or INCREMENTAL_ROWS,
