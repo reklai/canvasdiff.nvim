@@ -482,6 +482,15 @@ Toggling again, closing, or opening another review cancels it, and so does
 moving to another window before it is ready -- the review is never put into
 a window you have left. Smaller reviews open at once, exactly as before.
 
+The same applies once a large review is open. Switching lens (<Tab>,
+`:CanvasDiff all|unstaged|staged`), refreshing (`r`, `:CanvasDiff refresh`),
+staging from the canvas or sidebar, and the automatic refresh after a save
+all read Git in the background; the review stays usable meanwhile and
+updates when the new view is ready. A newer lens switch replaces a pending
+one, and a save during a refresh is picked up by one more refresh as soon
+as the current one lands. The Lua functions (|canvasdiff.set_lens()| and
+friends) still return only once the review has changed.
+
                           *canvasdiff-highlights* *canvasdiff-highlight-diff*
 Highlights~
 

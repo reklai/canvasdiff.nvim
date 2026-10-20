@@ -695,11 +695,24 @@ function App:setup(opts)
   return options
 end
 
--- A typed command is a person at the keyboard, so the opening verbs build a
--- large review in time slices rather than freezing the editor (App:open).
+-- What every interactive entry point -- a key, a sidebar verb, a typed
+-- command -- passes: build or re-collect a large review in time slices
+-- rather than freezing the editor (App:open, pivot_sliced). Read-only, so
+-- one shared table is safe; nothing downstream writes to its opts.
+local INTERACTIVE = setmetatable({}, {
+  __index = { async = true },
+  __newindex = function() error("INTERACTIVE options are read-only", 2) end,
+})
+
+-- How a typed command passes INTERACTIVE to the operation it planned. The
+-- opening verbs take options first; the lens verb after its lens.
 local INTERACTIVE_ARGUMENT = {
-  open = function() return { async = true } end,
-  toggle = function() return { async = true } end,
+  open = function(app, operation) return operation(app, INTERACTIVE) end,
+  toggle = function(app, operation) return operation(app, INTERACTIVE) end,
+  refresh = function(app, operation) return operation(app, INTERACTIVE) end,
+  set_lens = function(app, operation, argument)
+    return operation(app, argument, INTERACTIVE)
+  end,
 }
 
 --- Run one `:CanvasDiff` invocation.
@@ -725,7 +738,11 @@ function App:command(fargs)
     assert(type(operation) == "function",
       "command planned an operation this owner does not have: " .. outcome.call)
     local interactive = INTERACTIVE_ARGUMENT[outcome.call]
-    operation(self, outcome.argument or (interactive and interactive()))
+    if interactive then
+      interactive(self, operation, outcome.argument)
+    else
+      operation(self, outcome.argument)
+    end
   end
   return outcome
 end
@@ -985,20 +1002,32 @@ local function canvas_actions(app, surface, st, cfg)
       app:back_out_or_close(surface)
     end),
     help       = owned_action(surface, generation, function() ui.cheatsheet.toggle() end),
-    refresh    = owned_action(surface, generation, function() app:refresh() end),
+    -- Keys are a person at the keyboard: the verbs that re-collect do it in
+    -- time slices on a large review (pivot_sliced), never freezing it.
+    refresh    = owned_action(surface, generation, function()
+      app:refresh(INTERACTIVE)
+    end),
     -- The unshifted verbs resolve their scope from the cursor at press time
     -- (hunk row -> that hunk, anything else -> the file); the capitals are
     -- the from-anywhere file verbs.
-    stage      = owned_action(surface, generation,
-      function(_, win) app:stage_hunk("stage", surface, generation, win) end),
-    unstage    = owned_action(surface, generation,
-      function(_, win) app:stage_hunk("unstage", surface, generation, win) end),
-    stage_file = owned_action(surface, generation,
-      function() app:stage(nil, surface, generation) end),
-    unstage_file = owned_action(surface, generation,
-      function() app:unstage(nil, surface, generation) end),
-    lens_next  = owned_action(surface, generation, function() app:cycle_lens(1) end),
-    lens_prev  = owned_action(surface, generation, function() app:cycle_lens(-1) end),
+    stage      = owned_action(surface, generation, function(_, win)
+      app:stage_hunk("stage", surface, generation, win, nil, INTERACTIVE)
+    end),
+    unstage    = owned_action(surface, generation, function(_, win)
+      app:stage_hunk("unstage", surface, generation, win, nil, INTERACTIVE)
+    end),
+    stage_file = owned_action(surface, generation, function()
+      app:stage_file("stage", nil, surface, generation, INTERACTIVE)
+    end),
+    unstage_file = owned_action(surface, generation, function()
+      app:stage_file("unstage", nil, surface, generation, INTERACTIVE)
+    end),
+    lens_next  = owned_action(surface, generation, function()
+      app:cycle_lens(1, INTERACTIVE)
+    end),
+    lens_prev  = owned_action(surface, generation, function()
+      app:cycle_lens(-1, INTERACTIVE)
+    end),
     sidebar    = owned_action(surface, generation, function() app:toggle_sidebar() end),
     -- Ctrl+N / Ctrl+P walk HUNKS; the file axis they used to walk is the pair
     -- below, unbound until a user asks for it.
@@ -1129,9 +1158,10 @@ local function open_sidebar(app, surface, st)
       surface:guard(generation, function()
         if hunk then
           changed = app:stage_hunk(direction, surface, generation, nil,
-            { path = path, hunk = hunk }) or false
+            { path = path, hunk = hunk }, INTERACTIVE) or false
         else
-          changed = app:stage_file(direction, path, surface, generation) or false
+          changed = app:stage_file(
+            direction, path, surface, generation, INTERACTIVE) or false
         end
       end)
       return changed
@@ -1473,6 +1503,13 @@ local function commit_open(app, plan, sections, prepared, opts)
       -- catches the paths that never reach App:close (e.g. a `:q`-killed
       -- canvas going straight through WinClosed -> dispose("last_window")).
       ui.cheatsheet.close()
+      -- A re-collection still in flight belongs to this review; finishing it
+      -- would only be discarded by its guard.
+      local pending = owner.pending_pivot
+      owner.pending_pivot = nil
+      if pending then
+        pending:cancel()
+      end
       -- Unregisters by exact identity, so a late callback from an older
       -- review can never evict its replacement from the index.
       forget(app, owner)
@@ -2454,6 +2491,67 @@ pivot = function(surface, target_lens, guard, collected, publish)
   return ok, finish_err, full and true or false
 end
 
+-- What a sliced pivot answers while its sections are still being collected.
+local PENDING_PIVOT = "the review is still being collected"
+
+--- `pivot`, with the collection run in time slices (os.sliced) when it is
+--- large -- the same content-decided INCREMENTAL_ROWS rule as an incremental
+--- open, so a small review pivots inside the call exactly as `pivot` does.
+--- Collection is the half of a pivot that touches nothing on screen, so the
+--- review stays fully usable while it runs; the reconcile that follows is
+--- the existing synchronous `pivot`, guards and rollback included.
+---
+--- The outcome arrives exactly once, by one of two routes: completed inside
+--- the call, it is pivot's own return value; otherwise the call answers nil
+--- and PENDING_PIVOT and `done(ok, err)` receives it later. A caller's
+--- continuation therefore runs once whichever route was taken. A newer
+--- sliced pivot on the same review, or its disposal, cancels this one's
+--- collection (STALE_COMPARE to `done`).
+local function pivot_sliced(surface, target_lens, guard, publish, done)
+  local st = surface.state
+  local collected_lens = target_lens or lens.of(st)
+  local previous = surface.pending_pivot
+  surface.pending_pivot = nil
+  if previous then
+    previous:cancel()
+  end
+  local returned, answered, answer_ok, answer_err = false, false, nil, nil
+  local handle
+  local function answer(ok, err)
+    answered, answer_ok, answer_err = true, ok, err
+    if returned and done then
+      done(ok, err)
+    end
+  end
+  handle = system.sliced(function(pace)
+    return source.sections(
+      st.root, collected_lens, config.options.context, st.sections, pace)
+  end, { after_units = INCREMENTAL_ROWS }, function(ok, desired, collect_err)
+    if surface.pending_pivot == handle then
+      surface.pending_pivot = nil
+    end
+    if not ok then
+      if system.slice_cancelled(desired) then
+        return answer(nil, STALE_COMPARE)
+      end
+      return answer(nil, "collection failed: " .. tostring(desired))
+    end
+    if not desired then
+      return answer(nil, collect_err)
+    end
+    if guard and not guard() then
+      return answer(nil, STALE_COMPARE)
+    end
+    return answer(pivot(surface, target_lens, guard, desired, publish))
+  end)
+  returned = true
+  if answered then
+    return answer_ok, answer_err
+  end
+  surface.pending_pivot = handle
+  return nil, PENDING_PIVOT
+end
+
 --- Re-collect and splice in whatever changed: the manual version of the pass
 --- `watch` runs on save and focus, for when you don't trust what is on screen.
 ---
@@ -2472,7 +2570,11 @@ end
 --- strictly worse on every axis, and deleted. Don't add it back without measuring:
 --- test_e2e's "refresh cannot repair a divergent buffer, close+open can" pins both
 --- halves of that result.
-function App:refresh()
+---
+--- `opts.async` collects a large review in time slices (pivot_sliced): the
+--- call then answers nil and PENDING_PIVOT and the canvas updates when the
+--- collection lands.
+function App:refresh(opts)
   local surface = active_surface(self)
   if not surface then
     return
@@ -2484,15 +2586,26 @@ function App:refresh()
       and surface:guard(generation)
       and surface.model_epoch == model_epoch
   end
-  local ok, err = pivot(surface, lens.of(surface.state), guard)
-  if not ok then
-    if err == STALE_COMPARE then
-      return nil
+  local function settle(ok, err)
+    if not ok then
+      if err == STALE_COMPARE then
+        return nil
+      end
+      ui.warn(err)
+      return nil, err
     end
-    ui.warn(err)
-    return nil, err
+    return true
   end
-  return true
+  local ok, err
+  if opts and opts.async then
+    ok, err = pivot_sliced(surface, lens.of(surface.state), guard, nil, settle)
+    if err == PENDING_PIVOT then
+      return nil, err
+    end
+  else
+    ok, err = pivot(surface, lens.of(surface.state), guard)
+  end
+  return settle(ok, err)
 end
 
 local function section_by_exact_path(st, path)
@@ -2637,7 +2750,9 @@ end
 --- surface, a worktree lens, and one press-scoped transaction whose guard
 --- every later step re-checks. Both the file verb and the hunk verb start
 --- here, so neither can grow a private notion of ownership.
-local function begin_stage(app, owned_surface, generation)
+--- `opts.async` makes the refresh after Git runs collect in slices (see
+--- finish_stage).
+local function begin_stage(app, owned_surface, generation, opts)
   local surface = owned_surface or active_surface(app)
   if not (surface and surface:is_alive()) then
     local err = "no live diff canvas"
@@ -2667,7 +2782,10 @@ local function begin_stage(app, owned_surface, generation)
     ui.warn(err)
     return nil, err
   end
-  return { surface = surface, st = st, lens = current_lens, guard = guard }
+  return {
+    surface = surface, st = st, lens = current_lens, guard = guard,
+    async = opts and opts.async or nil,
+  }
 end
 
 --- The press-time XY truth for one cached section: git status re-read under
@@ -2727,34 +2845,42 @@ local function finish_stage(tx, file, positions, target_lens, success)
     return stage_refresh_failure("the owning review changed during status refresh")
   end
   local remains = post_mutation_file(files, file)
-  if not remains then
-    local reconciled, reconcile_err = pivot(surface, tx.lens, guard)
+  local during = remains and "the owning review changed during reconcile"
+    or "the owning review changed during clean reconcile"
+  local after = remains and "the owning review changed after reconcile"
+    or "the owning review changed after clean reconcile"
+  local function settle(reconciled, reconcile_err)
     if not reconciled then
       if reconcile_err == STALE_COMPARE then
-        reconcile_err = "the owning review changed during clean reconcile"
+        reconcile_err = during
       end
       return stage_refresh_failure(reconcile_err)
     end
     if not guard() then
-      return stage_refresh_failure("the owning review changed after clean reconcile")
+      return stage_refresh_failure(after)
     end
-    ui.notify(file.path .. " is clean")
+    if not remains then
+      ui.notify(file.path .. " is clean")
+      return true
+    end
+    restore_file_positions(st, positions)
+    ui.notify(success)
     return true
   end
-
-  local reconciled, reconcile_err = pivot(surface, target_lens, guard)
-  if not reconciled then
-    if reconcile_err == STALE_COMPARE then
-      reconcile_err = "the owning review changed during reconcile"
+  local target = remains and target_lens or tx.lens
+  -- An interactive stage re-collects in slices: Git already ran, so the
+  -- canvas catching up a loop turn later is the only visible difference,
+  -- and on a million-row review it is the difference between a keypress and
+  -- a freeze.
+  if tx.async then
+    local reconciled, reconcile_err =
+      pivot_sliced(surface, target, guard, nil, settle)
+    if reconcile_err == PENDING_PIVOT then
+      return nil, reconcile_err
     end
-    return stage_refresh_failure(reconcile_err)
+    return settle(reconciled, reconcile_err)
   end
-  if not guard() then
-    return stage_refresh_failure("the owning review changed after reconcile")
-  end
-  restore_file_positions(st, positions)
-  ui.notify(success)
-  return true
+  return settle(pivot(surface, target, guard))
 end
 
 --- The displayed hunk's new-side span, in the b-side line numbers
@@ -2813,10 +2939,10 @@ end
 --- and every failure after it says explicitly that the index already changed.
 --- `path`/`owned_surface`/`generation` are owner-only routing arguments used
 --- by the sidebar callback; the public root calls this with no arguments.
-function App:stage_file(direction, path, owned_surface, generation)
+function App:stage_file(direction, path, owned_surface, generation, opts)
   assert(direction == "stage" or direction == "unstage",
     "stage_file: direction must be 'stage' or 'unstage', got " .. tostring(direction))
-  local tx, tx_err = begin_stage(self, owned_surface, generation)
+  local tx, tx_err = begin_stage(self, owned_surface, generation, opts)
   if not tx then
     return nil, tx_err
   end
@@ -2899,7 +3025,7 @@ end
 --- through to the file verb FOR THAT PATH: the sidebar row that named a hunk
 --- the model no longer has still meant that file, and staging whatever the
 --- canvas cursor happens to sit on would be a different file entirely.
-function App:stage_hunk(direction, owned_surface, generation, win, target)
+function App:stage_hunk(direction, owned_surface, generation, win, target, opts)
   assert(direction == "stage" or direction == "unstage",
     "stage_hunk: direction must be 'stage' or 'unstage', got " .. tostring(direction))
   local surface = owned_surface or active_surface(self)
@@ -2923,7 +3049,7 @@ function App:stage_hunk(direction, owned_surface, generation, win, target)
   end
   local named = target and target.path or nil
   if not (ctx and ctx.scope == "hunk") then
-    return self:stage_file(direction, named, owned_surface, generation)
+    return self:stage_file(direction, named, owned_surface, generation, opts)
   end
   local section = st.sections[ctx.section]
   -- A rename's index identity is two paths; writing one blob would stage
@@ -2941,10 +3067,10 @@ function App:stage_hunk(direction, owned_surface, generation, win, target)
     -- user pressed was the narrow one: without this the only tell that the
     -- granularity changed is which of two success messages arrives.
     ui.notify("that hunk cannot be taken on its own — taking the whole file instead")
-    return self:stage_file(direction, named, owned_surface, generation)
+    return self:stage_file(direction, named, owned_surface, generation, opts)
   end
 
-  local tx, tx_err = begin_stage(self, owned_surface, generation)
+  local tx, tx_err = begin_stage(self, owned_surface, generation, opts)
   if not tx then
     return nil, tx_err
   end
@@ -3080,7 +3206,8 @@ end
 --- `:CanvasDiff unstaged` must always land unstaged. A toggle in a mapping is a coin
 --- flip. Opening rather than warning is likewise the only sensible reading of a
 --- command that names a state.
-function App:set_lens(l)
+function App:set_lens(l, opts)
+  local async = opts and opts.async or nil
   if not lens.valid(l) then
     local err = "not a lens"
     ui.warn(err)
@@ -3088,7 +3215,7 @@ function App:set_lens(l)
   end
   local surface = active_surface(self)
   if not (surface and surface:is_showing()) then
-    local opened, err = self:open({ lens = l })
+    local opened, err = self:open({ lens = l, async = async })
     if not opened then
       return nil, err
     end
@@ -3105,16 +3232,27 @@ function App:set_lens(l)
     return true
   end
 
-  local ok, err = pivot(surface, l, guard)
-  if not ok then
-    if err == STALE_COMPARE then
-      return nil
+  local function settle(ok, err)
+    if not ok then
+      if err == STALE_COMPARE then
+        return nil
+      end
+      ui.warn(err)
+      return nil, err
     end
-    ui.warn(err)
-    return nil, err
+    ui.notify("showing " .. l.label)
+    return true
   end
-  ui.notify("showing " .. l.label)
-  return true
+  local ok, err
+  if async then
+    ok, err = pivot_sliced(surface, l, guard, nil, settle)
+    if err == PENDING_PIVOT then
+      return nil, err
+    end
+  else
+    ok, err = pivot(surface, l, guard)
+  end
+  return settle(ok, err)
 end
 
 local function set_owned_lens(app, surface, l, guard, on_commit, publish)
@@ -3174,7 +3312,7 @@ end
 --- This is what the `base` keymap runs, and it is the gesture the canvas is built
 --- around -- one key to ask "what am I actually looking at" from three angles.
 --- Warns rather than opening: a keypress on no canvas is a mistake, not a request.
-function App:cycle_lens(delta)
+function App:cycle_lens(delta, opts)
   local surface = active_surface(self)
   if not (surface and surface:is_showing()) then
     ui.warn("no live diff canvas")
@@ -3201,7 +3339,9 @@ function App:cycle_lens(delta)
       return
     end
   end
-  return self:set_lens(lens.step(current, delta or 1))
+  -- Only the plain step is passed `opts`: leaving a comparison above reads
+  -- set_lens's error synchronously to decide whether to forget the exit.
+  return self:set_lens(lens.step(current, delta or 1), opts)
 end
 
 --- The canvas q: back out of the thing you are in. A comparison stacked on a
