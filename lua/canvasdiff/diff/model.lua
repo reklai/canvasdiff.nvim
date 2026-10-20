@@ -238,9 +238,22 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
           return
         end
       end
-      local e = {
-        kind = kind, content = content, new_lnum = new_lnum, old_lnum = old_lnum, hunk_idx = gi,
-      }
+      -- One constructor per shape, naming only the keys that can be non-nil.
+      -- LuaJIT sizes a table from its constructor's key list whatever the
+      -- values are, so the five-key form gives an add row (old_lnum always
+      -- nil) an 8-slot hash; four keys fit in 4 slots. Measured on Neovim's
+      -- GC64 LuaJIT: 256 -> 160 bytes per row, which at a million add rows
+      -- is ~96 MB of retained model. Readers see nil either way.
+      local e
+      if old_lnum == nil then
+        e = { kind = kind, content = content, new_lnum = new_lnum, hunk_idx = gi }
+      elseif new_lnum == nil then
+        e = { kind = kind, content = content, old_lnum = old_lnum, hunk_idx = gi }
+      else
+        e = {
+          kind = kind, content = content, new_lnum = new_lnum, old_lnum = old_lnum, hunk_idx = gi,
+        }
+      end
       if pending_del then
         e.ghosts = pending_del
         pending_del = nil

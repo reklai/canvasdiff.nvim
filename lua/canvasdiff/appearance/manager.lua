@@ -16,7 +16,33 @@ local underlay_known = {}
 -- rederives under this name.
 local active_profile = "quiet"
 local VALIDATE_NS = vim.api.nvim_create_namespace("canvasdiff.appearance.validate")
-local native_deep_equal = vim.deep_equal
+
+--- Structural equality over highlight definitions, owned here rather than
+--- captured from `vim.deep_equal`. Neovim 0.12.0's implementation recursed
+--- through the public `vim.deep_equal` field, so a captured copy still called
+--- whatever later replaced that field for every nested table (`cterm`) --
+--- the reentry the capture existed to rule out, and invisible on the 0.12.x
+--- releases that made the recursion private. Definitions are acyclic plain
+--- data, so no cycle bookkeeping is needed.
+local function same_definition(left, right)
+  if left == right then
+    return true
+  end
+  if type(left) ~= "table" or type(right) ~= "table" then
+    return false
+  end
+  for key, value in pairs(left) do
+    if not same_definition(value, right[key]) then
+      return false
+    end
+  end
+  for key in pairs(right) do
+    if left[key] == nil then
+      return false
+    end
+  end
+  return true
+end
 
 -- `default` is a write instruction rather than part of the appearance, while
 -- `force` is only how an authored default replaces its own stale value.
@@ -116,10 +142,10 @@ local function set_default(name, value, recover_cleared)
     -- and losing that pin at the next rederive: unlikely, and invisible at
     -- the moment it happens because the two values are identical. A pin
     -- that differs from the record in any field still wins.
-    if not native_deep_equal(current_shape, authored[name]) then
+    if not same_definition(current_shape, authored[name]) then
       return -- colorscheme or direct user definition owns it
     end
-    if native_deep_equal(current_shape, shape(spec)) then
+    if same_definition(current_shape, shape(spec)) then
       return
     end
     spec.force = true
@@ -141,7 +167,7 @@ local function refresh_underlays()
     if overrides[name] ~= nil then
       local current = readback(name)
       local prior = override_authored[name]
-      if prior == nil or not native_deep_equal(current, prior) then
+      if prior == nil or not same_definition(current, prior) then
         underlays[name] = vim.deepcopy(current)
         underlay_known[name] = true
       end
@@ -197,12 +223,12 @@ function M.setup(raw, profile)
     local prior = override_authored[name]
     local current = readback(name)
     if accepted[name] ~= nil then
-      if prior == nil or not native_deep_equal(current, prior) then
+      if prior == nil or not same_definition(current, prior) then
         underlays[name] = vim.deepcopy(current)
         underlay_known[name] = true
       end
     elseif prior ~= nil then
-      if native_deep_equal(current, prior) and underlay_known[name] then
+      if same_definition(current, prior) and underlay_known[name] then
         local exact = vim.deepcopy(underlays[name])
         exact.force = true
         vim.api.nvim_set_hl(0, name, exact)
