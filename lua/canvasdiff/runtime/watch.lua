@@ -83,6 +83,12 @@ function W.stop(lease)
   local timer = lease.timer
   local poll_timer = lease.poll_timer
   local aug = lease.aug
+  local inflight = lease.inflight
+  lease.inflight = nil
+  lease.rerun = nil
+  if inflight then
+    inflight:cancel()
+  end
   lease.timer = nil
   lease.poll_timer = nil
   lease.poll_baseline = nil
@@ -106,42 +112,54 @@ function W.stop(lease)
   return true
 end
 
---- Synchronously collect truth and reconcile one canvas. This operation has no
---- UI dependencies: its owner receives the result and decides which consumers
---- to refresh.
-local function reconcile(state, callbacks, lease)
-  callbacks = callbacks or {}
-  local publication
+local lease_callbacks
 
-  local function current()
+-- Past this many lines of work a watch pass collects in time slices
+-- (os.sliced) instead of in one call -- the threshold App uses for an
+-- interactive open or pivot, so a review is "large" the same way everywhere.
+-- This is the pass that runs on every save and focus change: without it,
+-- saving a file in a million-row review froze the editor for the whole
+-- re-collection while the user was typing.
+local INCREMENTAL_ROWS = 20000
+
+--- The opening half of a pass: validate the canvas and claim the owner's
+--- publication. Answers a context for `finish_pass`, or false plus what the
+--- pass itself answers (false for a superseded pass, nil and an error for a
+--- failed one).
+local function begin_pass(state, callbacks, lease)
+  callbacks = callbacks or {}
+  local ctx = { callbacks = callbacks, lease = lease }
+
+  function ctx.current()
     if lease and not is_active(lease) then
       return false
     end
     local callback = callbacks.current
-    return not callback or callback(publication) == true
+    return not callback or callback(ctx.publication) == true
   end
 
-  local function fail(err)
+  function ctx.fail(err)
     call(callbacks.on_error, err)
     return nil, err
   end
 
   if not state or not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
-    return fail("no valid canvas state to reconcile")
+    return false, ctx.fail("no valid canvas state to reconcile")
   end
 
   if callbacks.begin then
-    publication = call(callbacks.begin, state)
-    if publication == nil or not current() then
-      return false
+    ctx.publication = call(callbacks.begin, state)
+    if ctx.publication == nil or not ctx.current() then
+      return false, false
     end
   end
-  local collected_lens = lens.of(state)
-  -- The shown sections let every file this change did not touch keep its
-  -- section instead of being diffed again -- the difference between a save
-  -- costing one file and costing the whole review.
-  local desired, err = source.sections(
-    state.root, collected_lens, config.options.context, state.sections)
+  ctx.lens = lens.of(state)
+  return ctx
+end
+
+--- The closing half: publish what was collected, if this pass still counts.
+local function finish_pass(ctx, state, desired, err)
+  local callbacks, current, fail = ctx.callbacks, ctx.current, ctx.fail
   -- Collection is an I/O boundary. The owner may die or explicitly stop this
   -- exact lease, or publish a newer model intent, while source.sections is
   -- running; never commit that stale snapshot into its former canvas.
@@ -157,7 +175,7 @@ local function reconcile(state, callbacks, lease)
   local full
   if callbacks.publish then
     local published, publish_err, published_full =
-      call(callbacks.publish, state, desired, publication)
+      call(callbacks.publish, state, desired, ctx.publication)
     if not current() then
       return false
     end
@@ -190,14 +208,76 @@ local function reconcile(state, callbacks, lease)
   return true, result
 end
 
+--- What a pass collects. The shown sections let every file this change did
+--- not touch keep its section instead of being diffed again -- the
+--- difference between a save costing one file and costing the whole review.
+local function collect(state, ctx, pace)
+  return source.sections(
+    state.root, ctx.lens, config.options.context, state.sections, pace)
+end
+
+--- Synchronously collect truth and reconcile one canvas. This operation has no
+--- UI dependencies: its owner receives the result and decides which consumers
+--- to refresh.
+local function reconcile(state, callbacks, lease)
+  local ctx, exit_ok, exit_err = begin_pass(state, callbacks, lease)
+  if not ctx then
+    return exit_ok, exit_err
+  end
+  local desired, err = collect(state, ctx)
+  return finish_pass(ctx, state, desired, err)
+end
+
+--- The same pass for this exact lease, collecting in slices when the work is
+--- large. `settled(ok, ...)` receives what `reconcile` would have answered --
+--- inside the call when the work was small, on a later loop turn otherwise.
+--- One collection at a time per lease: `lease.inflight` is what mark_dirty
+--- coalesces behind.
+local function polling(lease)
+  return type(lease.poll_ms) == "number" and lease.poll_ms > 0
+end
+
+local function reconcile_sliced(lease, settled)
+  local state = lease.state
+  local ctx, exit_ok, exit_err = begin_pass(state, lease_callbacks(lease), lease)
+  if not ctx then
+    return settled(exit_ok, exit_err)
+  end
+  -- The drift baseline is the repository as it stood BEFORE this pass
+  -- collected, adopted only if the pass succeeds. A change made after this
+  -- point therefore differs from it and the next poll catches it; one made
+  -- between here and the collection is collected too and costs at most one
+  -- redundant pass. Taking it after the pass (as an async probe did) let a
+  -- change in that window become the baseline and never be noticed.
+  local baseline = polling(lease) and source.status_snapshot(state.root) or nil
+  local handle = system.sliced(function(pace)
+    return collect(state, ctx, pace)
+  end, { after_units = INCREMENTAL_ROWS }, function(ok, desired, err)
+    lease.inflight = nil
+    if not ok then
+      if system.slice_cancelled(desired) then
+        return settled(false)
+      end
+      desired, err = nil, "collection failed: " .. tostring(desired)
+    end
+    local ok_pass, result = finish_pass(ctx, state, desired, err)
+    if ok_pass and baseline ~= nil and is_active(lease) then
+      lease.poll_baseline = baseline
+    end
+    return settled(ok_pass, result)
+  end)
+  if handle:pending() then
+    lease.inflight = handle
+  end
+end
+
 function W.reconcile(state, callbacks)
   return reconcile(state, callbacks)
 end
 
 local refresh_fs_watches
-local refresh_poll_baseline
 
-local function lease_callbacks(lease)
+lease_callbacks = function(lease)
   return {
     begin = lease.callbacks.begin and function(state)
       if not is_active(lease) then
@@ -276,13 +356,25 @@ local function mark_dirty(lease)
     if not is_active(lease) then
       return
     end
-    local ok = reconcile(lease.state, lease_callbacks(lease), lease)
-    if ok and is_active(lease) then
-      -- Rebuild coverage only after a successful truth pass. On an invalid or
-      -- deleted ref, the prior watcher set remains intact for recovery.
-      refresh_fs_watches(lease)
-      refresh_poll_baseline(lease)
+    -- A change during an in-flight collection is not lost and does not
+    -- restart it: the pass lands, then runs once more. Restarting would let
+    -- a steady stream of saves starve the refresh of ever completing.
+    if lease.inflight then
+      lease.rerun = true
+      return
     end
+    reconcile_sliced(lease, function(ok)
+      if ok and is_active(lease) then
+        -- Rebuild coverage only after a successful truth pass. On an invalid
+        -- or deleted ref, the prior watcher set remains intact for recovery.
+        -- (The pass itself adopted its drift baseline.)
+        refresh_fs_watches(lease)
+      end
+      if lease.rerun and is_active(lease) then
+        lease.rerun = nil
+        mark_dirty(lease)
+      end
+    end)
   end)
   if not is_active(lease) then
     return
@@ -352,22 +444,15 @@ local function poll_status(lease, on_snapshot)
   end))
 end
 
---- Re-anchor the drift baseline to the repository's CURRENT status bytes,
---- once a successful reconcile has made the canvas agree with them.
-refresh_poll_baseline = function(lease)
-  poll_status(lease, function(raw)
-    lease.poll_baseline = raw
-  end)
-end
-
 --- Compare one fresh status snapshot against the baseline. This is what
 --- notices a change no fs watcher covers: on Linux the directory watches are
 --- non-recursive and exist only for the root, .git, and parents of files
 --- already displayed, so an external edit to a previously CLEAN nested file
 --- while Neovim keeps focus reaches no watcher -- but it does add a porcelain
 --- record. The baseline deliberately stays put on drift: only a successful
---- reconcile re-anchors it, so a failing reconcile keeps being retried at the
---- poll cadence (its error stays deduplicated by on_error).
+--- reconcile re-anchors it (to the snapshot taken before it collected), so a
+--- failing reconcile keeps being retried at the poll cadence (its error stays
+--- deduplicated by on_error).
 local function poll_tick(lease)
   poll_status(lease, function(raw)
     if lease.poll_baseline == nil then
@@ -500,8 +585,12 @@ function W.start(state, opts, callbacks)
       end,
     })
     refresh_fs_watches(lease)
+    -- Synchronous for the reason a pass takes its baseline first: an async
+    -- probe could finish after an external change and adopt it unseen.
+    if polling(lease) then
+      lease.poll_baseline = source.status_snapshot(state.root)
+    end
     start_poll(lease)
-    refresh_poll_baseline(lease)
     if not is_active(lease) then
       error("watch owner became inactive during start", 0)
     end

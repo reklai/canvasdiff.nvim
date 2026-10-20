@@ -206,6 +206,7 @@ return {
       "show_head",
       "stage",
       "status_poll",
+      "status_snapshot",
       "switch_branch",
       "track_branch",
       "tracking_branch_name",
@@ -380,7 +381,9 @@ return {
     assert(ok, err)
     H.eq(root, "/resolved/root")
     H.eq(command, { "git", "-C", "/worktree", "rev-parse", "--show-toplevel" })
-    H.eq(opts, { text = false })
+    -- GIT_OPTIONAL_LOCKS keeps a read from rewriting .git/index, which the
+    -- watch would otherwise see as a change and re-collect for.
+    H.eq(opts, { text = false, env = { GIT_OPTIONAL_LOCKS = "0" } })
   end,
   ["git: root finds toplevel, nil outside"] = function()
     local root = H.git_fixture({ committed = { ["a.txt"] = "x\n" } })

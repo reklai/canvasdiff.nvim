@@ -54,6 +54,9 @@ return {
   -- Raw status bytes delivered asynchronously to `on_done` (nil on failure),
   -- for drift polling; never errors.
   status_poll = repository.status_poll,
+  -- The same bytes synchronously: the string, or nil when Git fails. Never
+  -- errors. For a drift baseline taken at a known point.
+  status_snapshot = repository.status_snapshot,
   -- Both may answer `true, err`: git reported a failure but the end state
   -- verifies (HEAD landed on the requested ref), so the caller can treat it
   -- as done while still surfacing the message.

@@ -12,12 +12,24 @@ local M = {}
 --- safe with raw bytes -- `M.root` strips trailing whitespace (`%s` covers
 --- `\r`), and `changed_files` splits porcelain-v2 `-z` output on NUL. `stdin`
 --- is unaffected by the option and reaches the process byte for byte.
+---
+--- Every Git process runs with GIT_OPTIONAL_LOCKS=0, Git's own switch for
+--- background readers: `git status` then never takes index.lock to write
+--- back refreshed stat data. Without it each collection rewrote .git/index
+--- while a file was "racily clean" (modified within the index's timestamp
+--- granularity), the watch's .git fs watcher saw that write, and the review
+--- re-collected itself again and again until the window closed -- measured
+--- at up to 45 passes after one save, and over 100 once passes ran in time
+--- slices. Only OPTIONAL locks are affected; staging, checkout and every
+--- other write still lock as Git requires.
+local GIT_ENV = { GIT_OPTIONAL_LOCKS = "0" }
+
 local function run(dir, args, stdin)
   local cmd = { "git", "-C", dir }
   for _, a in ipairs(args) do
     cmd[#cmd + 1] = a
   end
-  return system.run(cmd, { text = false, stdin = stdin })
+  return system.run(cmd, { text = false, stdin = stdin, env = GIT_ENV })
 end
 
 local function command_error(what, res)
@@ -169,12 +181,24 @@ end
 --- drift, and byte equality of the same command's output is exactly that
 --- question. Same argv as `changed_files`, so anything that would change a
 --- collection changes this snapshot too.
+--- The same porcelain bytes `status_poll` delivers, read synchronously:
+--- the string, or nil when Git fails. For a drift baseline that must be
+--- taken at a known point -- before a collection -- rather than whenever an
+--- asynchronous probe happens to finish.
+function M.status_snapshot(root)
+  local res = run(root, { "status", "--porcelain=v2", "-z", "--untracked-files=all" })
+  if res.code ~= 0 or res.stdout == nil then
+    return nil
+  end
+  return res.stdout
+end
+
 function M.status_poll(root, on_done)
   local cmd = {
     "git", "-C", root,
     "status", "--porcelain=v2", "-z", "--untracked-files=all",
   }
-  system.run_async(cmd, { text = false }, function(res)
+  system.run_async(cmd, { text = false, env = GIT_ENV }, function(res)
     if res and res.code == 0 and res.stdout ~= nil then
       on_done(res.stdout)
     else

@@ -367,6 +367,45 @@ T["watch_trigger poll catches external writes in unwatched nested directories"] 
   H.eq(watch.stop(lease), true)
 end
 
+-- The drift baseline is taken before a pass collects, never after it: an
+-- async probe that finished after the pass could adopt a change made in that
+-- window as "already seen", and the poll would never report it. Write the
+-- unwatched file the moment a pass lands.
+T["watch_trigger poll catches a write made right as a pass lands"] = function()
+  local root = H.git_fixture({
+    committed = {
+      ["b.txt"] = bigtext(80, "b"),
+      ["nested/deep/c.txt"] = "clean\n",
+    },
+    worktree = {
+      ["b.txt"] = bigtext(80, "b"):gsub("b line 40", "b line 40 changed"),
+    },
+  })
+  local st = open_state(root)
+  local wrote = false
+  local lease = watch.start(st, { debounce_ms = 20, poll_ms = 40 }, {
+    on_change = function()
+      if not wrote then
+        wrote = true
+        write_file(root, "nested/deep/c.txt", "clean\nRIGHT AFTER\n")
+      end
+    end,
+  })
+  write_file(root, "b.txt", (bigtext(80, "b"):gsub("b line 41", "b line 41 changed")))
+  vim.api.nvim_exec_autocmds("FocusGained", {})
+  local ok = vim.wait(4000, function()
+    for _, sec in ipairs(st.sections) do
+      if sec.path == "nested/deep/c.txt" then
+        return true
+      end
+    end
+    return false
+  end, 10)
+  H.eq(wrote, true, "a pass landed")
+  H.eq(ok, true, "the poll noticed the write made as the pass landed")
+  H.eq(watch.stop(lease), true)
+end
+
 T["watch_trigger fs_event catches external writes at repo root"] = function()
   local root = fixture()
   local st = open_state(root)
