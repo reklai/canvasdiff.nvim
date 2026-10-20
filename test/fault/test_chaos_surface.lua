@@ -71,6 +71,21 @@ for _, seed in ipairs(SEEDS) do
   end
 end
 
+-- The same invariants with sliced opens in the mix: builds that publish on a
+-- later loop turn, racing every other action. Seeds of their own, so the
+-- campaigns above are unchanged.
+local SLICED_SEEDS = { 4242, 990001, 1717 }
+for _, seed in ipairs(SLICED_SEEDS) do
+  T[("chaos_surface_ sliced opens keep ownership for seed %d"):format(seed)] = function()
+    local result = Chaos.run({ seed = seed, actions = ACTIONS, sliced = true })
+    local failure = report(result)
+    assert(not failure, failure)
+    H.eq(result.actions, ACTIONS, "every action ran")
+    assert((result.counts.open_sliced or 0) > 0,
+      "the campaign must actually have opened sliced: " .. vim.inspect(result.counts))
+  end
+end
+
 T["chaos_surface_ injected Git and session failures are contained"] = function()
   -- A campaign where nothing hostile ran proves nothing, so the injections
   -- are asserted to have happened rather than assumed.

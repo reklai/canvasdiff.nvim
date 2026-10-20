@@ -406,7 +406,26 @@ ACTIONS.configure_appearance = function(world)
   record(world, "configure_appearance", hex)
 end
 
+--- Let a pending sliced open finish or be cancelled before an action takes
+--- a snapshot it will compare against: a build started from a review's own
+--- window replaces that review when it publishes, as a plain open from
+--- there does, and that replacement is not what the snapshot is about. The
+--- root facade exposes no pending state (callers have no use for it), so the
+--- harness reads its App through `open`'s closure -- a test-only reach-in.
+local function settle_sliced(world)
+  local app
+  for index = 1, 8 do
+    local name, value = debug.getupvalue(world.plugin.open, index)
+    if name == nil then break end
+    if name == "app" then app = value end
+  end
+  assert(app, "the root facade's open no longer closes over its App")
+  assert(vim.wait(5000, function() return app.pending_open == nil end, 1),
+    "a sliced open never settled")
+end
+
 ACTIONS.configure_invalid = function(world)
+  settle_sliced(world)
   local state, win = showing_review(world)
   if not state then
     state = world.plugin.open()
@@ -802,6 +821,38 @@ end
 table.sort(ACTION_NAMES)
 Chaos.action_names = ACTION_NAMES
 
+-- Sliced opens (App:open's incremental path) build across loop turns, so
+-- every other action can land while one is pending: a close, a toggle, a
+-- split or window close, a Git failure, a lens pivot, another open. These
+-- run only in campaigns that ask for them (`opts.sliced`), so the seeds
+-- above keep replaying the exact campaigns they always have.
+local SLICED_ACTIONS = {}
+
+-- `_incremental_rows = 0` and `_slice_ms = 0` make even this small fixture
+-- yield at every per-file checkpoint, which is what maximises interleaving.
+SLICED_ACTIONS.open_sliced = function(world)
+  local state, err = world.plugin.open({
+    async = true, _incremental_rows = 0, _slice_ms = 0,
+  })
+  remember(world, state)
+  record(world, "open_sliced", state and "inline" or tostring(err))
+end
+
+-- Give a pending build loop turns to advance or publish in, as an idle user
+-- would; the per-action vim.wait(1) alone rarely lets one finish.
+SLICED_ACTIONS.pump = function(world)
+  vim.wait(20)
+  record(world, "pump")
+end
+
+local SLICED_ACTION_NAMES = vim.deepcopy(ACTION_NAMES)
+for name, action in pairs(SLICED_ACTIONS) do
+  ACTIONS[name] = action
+  SLICED_ACTION_NAMES[#SLICED_ACTION_NAMES + 1] = name
+end
+table.sort(SLICED_ACTION_NAMES)
+Chaos.sliced_action_names = SLICED_ACTION_NAMES
+
 -- ColorScheme owns process-wide highlights, not merely colors_name. Snapshot
 -- both so named schemes with local tweaks and unnamed palettes restore exactly.
 local function snapshot_colorscheme()
@@ -957,8 +1008,32 @@ function Chaos.run(opts)
     expected_glyph_set = "default",
   }
   vim.api.nvim_set_current_dir(dir)
+  local names = opts.sliced and SLICED_ACTION_NAMES or ACTION_NAMES
+  -- A sliced open publishes on a later loop turn and returns nothing, so
+  -- the harness learns its review where every review is published: the
+  -- canvas facade's show (paged) and open (eager). Wrapped only for sliced
+  -- campaigns, and restored by `restore` whatever happens.
+  local canvas_facade = require("canvasdiff.canvas")
+  local real_show, real_open = canvas_facade.show, canvas_facade.open
+  local published = {}
+  if opts.sliced then
+    canvas_facade.show = function(state, ...)
+      published[#published + 1] = state
+      return real_show(state, ...)
+    end
+    canvas_facade.open = function(...)
+      local state = real_open(...)
+      published[#published + 1] = state
+      return state
+    end
+    local inner_restore = restore
+    restore = function()
+      canvas_facade.show, canvas_facade.open = real_show, real_open
+      return inner_restore()
+    end
+  end
   for step = 1, actions do
-    local name = rng.pick(ACTION_NAMES)
+    local name = rng.pick(names)
     local ok, failure = xpcall(function()
       ACTIONS[name](world)
       if opts.after_action then
@@ -969,6 +1044,14 @@ function Chaos.run(opts)
       -- measure a world where neither has happened yet -- and report an
       -- accumulation that is really just a queue.
       vim.wait(1)
+      -- Published states gain their Surface at commit; remember each once
+      -- it has one (a show of an existing review re-reports a known one).
+      for index = #published, 1, -1 do
+        if published[index].surface then
+          remember(world, published[index])
+          table.remove(published, index)
+        end
+      end
       check(world)
     end, debug.traceback)
     if not ok then
