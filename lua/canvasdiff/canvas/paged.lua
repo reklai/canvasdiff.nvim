@@ -320,6 +320,21 @@ function Paged.set_collapsed(paged, index, collapsed, opts)
   return true
 end
 
+--- Whether two sections render the same rows below their file header: both
+--- sides hash the same and were diffed with the same context, which makes
+--- every entry after the first a function of identical inputs. What can
+--- still differ is the header -- its revs, XY stage marks, rename and status
+--- -- which is exactly what one lens shows differently from another for a
+--- file whose index matches HEAD.
+local function same_body(previous, section)
+  return type(previous) == "table" and type(section) == "table"
+    and previous.old_fingerprint ~= nil
+    and previous.old_fingerprint == section.old_fingerprint
+    and previous.new_fingerprint == section.new_fingerprint
+    and previous.context ~= nil and previous.context == section.context
+    and #previous.entries == #section.entries
+end
+
 --- Replace one section, or delete it when `section` is nil.
 ---
 --- The same splice `set_collapsed` performs, over a different set of rows, and
@@ -338,6 +353,31 @@ function Paged.replace_section(paged, index, section, opts)
   local start0, end0 = Paged.section_rows(paged, index)
   if not start0 then
     return nil, "section has no rows"
+  end
+
+  -- Only the header changed: splice that one row. Switching all <-> unstaged
+  -- over a file whose index matches HEAD -- the common case, every
+  -- unstaged-only edit -- used to re-page the whole section to change its
+  -- header (measured ~400 ms of synchronous splice for a million-row file).
+  local collapsed_for = (opts and opts.collapsed) or function() return false end
+  if section ~= nil and not paged.collapsed[index]
+      and not collapsed_for(section.path)
+      and same_body(paged.sections[index], section) then
+    local spliced, splice_err =
+      paged.list:splice(start0, 1, { render.section_line(section, 1) })
+    if not spliced then
+      return nil, "could not splice the paged canvas: " .. tostring(splice_err)
+    end
+    paged.sections[index] = section
+    if paged.state then
+      paged.state.sections = paged.sections
+    end
+    local refreshed, refresh_err = paged.projection:refresh()
+    if not refreshed then
+      return nil, "could not refresh the projection: " .. tostring(refresh_err)
+    end
+    model.release_text(section)
+    return true
   end
 
   local replacement = {}

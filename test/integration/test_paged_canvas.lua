@@ -1061,4 +1061,64 @@ T["paged_ a reopen builds saved folds in place instead of collapsing after"] = f
   assert(ok, err)
 end
 
+-- Through `all` and `unstaged` a file whose index matches HEAD renders the
+-- same rows; only its header can differ. Switching lens used to re-page the
+-- whole section anyway (~400 ms of synchronous splice for a million-row
+-- file). Only the header row may be spliced, and the result must be exactly
+-- what opening on that lens renders.
+T["paged_ a lens switch over an unchanged body splices only its header"] = function()
+  local rows = {}
+  for i = 1, 3000 do rows[i] = "row " .. i end
+  local root = H.git_fixture({
+    committed = { ["big.txt"] = "x\n", ["s.txt"] = "s1\n" },
+    worktree = { ["big.txt"] = table.concat(rows, "\n") .. "\n", ["s.txt"] = "s2\n" },
+  })
+  vim.system({ "git", "add", "s.txt" }, { cwd = root }):wait()
+  local old_cwd = vim.fn.getcwd()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local PageList = require("canvasdiff.canvas.PageList")
+  local real_splice = PageList.splice
+  local ok, err = xpcall(function()
+    fm.setup({
+      watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false }, paged = { min_rows = 1 },
+    })
+    local unstaged = require("canvasdiff.diff").lens.get("unstaged")
+    local expected_state = assert(fm.open({ lens = unstaged }))
+    local text = canvas.logical(expected_state)
+    local expected = text.rows(0, text.row_count())
+    fm.close()
+
+    -- Named explicitly: App remembers the lens a review closed on, so a bare
+    -- open here would reopen on `unstaged` and the switch below would be a
+    -- no-op that proves nothing.
+    local st = assert(fm.open({ lens = require("canvasdiff.diff").lens.get("all") }))
+    H.eq(require("canvasdiff.diff").lens.of(st).id, "all")
+    local largest = 0
+    PageList.splice = function(self, start0, delete_count, insert_rows)
+      largest = math.max(largest, delete_count, #insert_rows)
+      return real_splice(self, start0, delete_count, insert_rows)
+    end
+    fm.set_lens(unstaged)
+    PageList.splice = real_splice
+    H.eq(require("canvasdiff.diff").lens.of(st).id, "unstaged")
+    assert(largest <= 3, ("the switch spliced %d rows; only headers may change")
+      :format(largest))
+    local after = canvas.logical(st)
+    H.eq(after.rows(0, after.row_count()), expected)
+  end, debug.traceback)
+  PageList.splice = real_splice
+  pcall(fm.close)
+  fm.setup({})
+  vim.cmd("tabclose!")
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
 return T
