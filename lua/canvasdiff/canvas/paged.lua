@@ -123,19 +123,29 @@ function Paged.render(sections, opts)
   local restore = Restore.adapter()
   local section_index, entry_index = 1, 0
   local emitted_empty = false
+  -- Everything the iterator reads goes through `ingest`, which is dropped the
+  -- moment PageList returns. LuaJIT compiles the ingest loop into a trace that
+  -- holds `next_row` as a constant for as long as the trace lives, which is
+  -- unrelated to whether anything still references this canvas. Measured: a
+  -- closure that kept capturing `sections` pinned a closed review's whole
+  -- model until the next trace flush (~300 MB per review at a million rows).
+  local ingest = {
+    sections = sections, collapsed = collapsed_state, stale = stale_for,
+  }
   local function next_row()
-    if #sections == 0 then
+    local source = ingest.sections
+    if #source == 0 then
       if emitted_empty then return nil end
       emitted_empty = true
       return ""
     end
-    local section = sections[section_index]
+    local section = source[section_index]
     if not section then return nil end
     entry_index = entry_index + 1
-    local collapsed = collapsed_state[section_index]
+    local collapsed = ingest.collapsed[section_index]
     local row
     if collapsed then
-      row = render.placeholder(section, stale_for(section) and true or false)
+      row = render.placeholder(section, ingest.stale(section) and true or false)
     else
       row = render.section_line(section, entry_index)
     end
@@ -148,6 +158,7 @@ function Paged.render(sections, opts)
   local list, list_err = PageList.from_iterator(next_row, restore and {
     resident = { restore = restore },
   } or nil)
+  ingest.sections, ingest.collapsed, ingest.stale = nil, nil, nil
   if not list then
     return nil, "could not page the canvas: " .. tostring(list_err)
   end
@@ -742,6 +753,13 @@ function Paged.dispose(paged)
   local projection = paged.projection
   paged.projection = nil
   paged.list = nil
+  -- The decorator closure captures `paged` itself, and a compiled trace can
+  -- keep that closure alive past disposal (see the ingest note in render), so
+  -- the model has to be cut loose here rather than left to unreachability.
+  paged.sections = nil
+  paged.starts = nil
+  paged.collapsed = nil
+  paged.state = nil
   if projection then
     return projection:dispose(true)
   end

@@ -540,18 +540,32 @@ function M.touch(state)
   return true
 end
 
---- Release a paged canvas's store and projection.
+--- Release a canvas's model, and a paged canvas's store and projection.
 ---
---- The eager canvas has nothing to dispose -- its buffer is the state. A paged
---- one owns a projection and a skeleton buffer, and leaving them behind is a
---- leak of exactly the kind the resume contract forbids.
+--- A paged canvas owns a projection and a skeleton buffer, and leaving them
+--- behind is a leak of exactly the kind the resume contract forbids. Both kinds
+--- own their section list, which is emptied IN PLACE rather than merely
+--- dropped: closures that captured the list, or a Surface whose state reaches
+--- it, can outlive the review inside a compiled LuaJIT trace, and only an
+--- emptied list stops them pinning every entry of a closed review.
 function M.dispose(state)
-  if state and state.paged then
+  if not state then
+    return true
+  end
+  local result = true
+  if state.paged then
     local built = state.paged
     state.paged = nil
-    return paged.dispose(built)
+    result = paged.dispose(built)
   end
-  return true
+  local sections = state.sections
+  state.sections = {}
+  if type(sections) == "table" then
+    for index = #sections, 1, -1 do
+      sections[index] = nil
+    end
+  end
+  return result
 end
 
 --- Show an existing canvas state in `win` without rebuilding its model or

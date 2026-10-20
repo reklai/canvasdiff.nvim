@@ -337,6 +337,11 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
       anchor.ghosts_after = pending_del
       pending_del = nil
     end
+    -- `push` is a fresh closure per group, and the loops that call it compile
+    -- into traces that keep it as a constant for the trace's lifetime. This
+    -- capture is every entry the group built, so leaving it set pins a whole
+    -- section's rows after the section itself is gone.
+    hunk_entries = nil
   end
 
   return with_metadata({

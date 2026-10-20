@@ -745,10 +745,15 @@ local function snapshot_list_graph(list)
       capture(rawget(node, "page"))
     end
   end
-  return {
+  local graph = {
     tables = snapshots,
     owner = snapshot_handle_owner(list),
   }
+  -- `capture` is called from a loop LuaJIT may compile, and a trace keeps it
+  -- as a constant: cut its captures so a finished transaction's copy of every
+  -- page is not pinned for the trace's lifetime.
+  snapshots, seen = nil, nil
+  return graph
 end
 
 local function graph_matches_snapshots(list_graph)
@@ -1116,6 +1121,21 @@ local function append_page(state, rows, manifest)
   return true
 end
 
+--- Seal the rows gathered so far into a page: true, or nil and the error, as
+--- `append_page` answers; an empty batch is a no-op. The caller starts a fresh
+--- batch afterwards, because the appended page may keep this one.
+---
+--- Module level rather than a closure inside `build` on purpose: LuaJIT keeps a
+--- closure that a hot loop calls as a trace constant for the trace's lifetime,
+--- and a closure capturing the candidate list would pin every page of a store
+--- long after that store was disposed.
+local function flush_pending(state, pending, manifest)
+  if #pending == 0 then
+    return true
+  end
+  return append_page(state, pending, manifest)
+end
+
 --- Consume a row source into a private candidate. Nothing returns the
 --- candidate before EOF, the final flush, and the invariant check succeed.
 local function build(next_row, limits, seed)
@@ -1138,18 +1158,6 @@ local function build(next_row, limits, seed)
   local row_number = 0
   local manifest = {}
 
-  local function flush()
-    if #pending == 0 then
-      return true
-    end
-    local ok, err = append_page(state, pending, manifest)
-    if not ok then
-      return nil, err
-    end
-    pending = {}
-    pending_bytes = 0
-    return true
-  end
 
   while true do
     local called, row, source_err = pcall(next_row)
@@ -1197,10 +1205,11 @@ local function build(next_row, limits, seed)
     local row_bytes = #row
 
     if row_bytes > limits.max_bytes then
-      local ok, err = flush()
+      local ok, err = flush_pending(state, pending, manifest)
       if not ok then
         return nil, err
       end
+      pending, pending_bytes = {}, 0
       ok, err = append_page(state, { row }, manifest)
       if not ok then
         return nil, err
@@ -1210,24 +1219,26 @@ local function build(next_row, limits, seed)
         #pending >= limits.max_rows
         or pending_bytes + row_bytes > limits.max_bytes
       ) then
-        local ok, err = flush()
+        local ok, err = flush_pending(state, pending, manifest)
         if not ok then
           return nil, err
         end
+        pending, pending_bytes = {}, 0
       end
 
       pending[#pending + 1] = row
       pending_bytes = pending_bytes + row_bytes
       if #pending == limits.max_rows then
-        local ok, err = flush()
+        local ok, err = flush_pending(state, pending, manifest)
         if not ok then
           return nil, err
         end
+        pending, pending_bytes = {}, 0
       end
     end
   end
 
-  local ok, flush_err = flush()
+  local ok, flush_err = flush_pending(state, pending, manifest)
   if not ok then
     return nil, flush_err
   end
@@ -1290,6 +1301,9 @@ function PageList.create(rows, opts)
     end
     return rawget(snapshot, index)
   end, limits)
+  -- The row closure above can outlive this call as a trace constant; dropping
+  -- its capture keeps a compiled loop from pinning a copy of every row.
+  snapshot = nil
   if not layout then
     return nil, build_err
   end

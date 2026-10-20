@@ -58,8 +58,9 @@ return {
   -- identical in shape for eager and paged canvases. Readers must ask this,
   -- never the buffer: a paged buffer holds only blank skeleton lines.
   logical = Canvas.logical,
-  -- Releases a paged canvas's store and projection; true (a no-op) on an
-  -- eager one, whose buffer is the state.
+  -- Releases a paged canvas's store and projection, and on either kind empties
+  -- the section list in place, so nothing that captured it keeps the closed
+  -- review's model alive. Answers the projection's dispose result, else true.
   dispose = Canvas.dispose,
   -- A fresh state every call -- buffer created, shown in the current window,
   -- sections rendered. Nothing survives close/open except what
