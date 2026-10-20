@@ -87,6 +87,33 @@ end
 
 local files = discover_tests(test_root)
 
+-- Deprecation is drift that arrives before breakage: core announces a removal
+-- through vim.deprecate one or more releases ahead, and for core features it
+-- stays SILENT until the hard-deprecation release. Intercepting the call
+-- itself turns a nightly run into the early warning -- the suite fails on the
+-- first release that deprecates something this repository still calls,
+-- rather than on the one that deletes it. Only callers inside this checkout
+-- count; Neovim's own runtime deprecating its internals is not our drift.
+local deprecations = {}
+local real_deprecate = vim.deprecate
+vim.deprecate = function(name, alternative, version, plugin, backtrace)
+  for level = 2, 40 do
+    local info = debug.getinfo(level, "Sl")
+    if not info then
+      break
+    end
+    local source = info.source or ""
+    if source:sub(1, 1) == "@" and vim.startswith(source:sub(2), root .. "/") then
+      local key = ("%s -> %s (removal %s) at %s:%d"):format(
+        tostring(name), tostring(alternative), tostring(version),
+        source:sub(#root + 3), info.currentline)
+      deprecations[key] = true
+      break
+    end
+  end
+  return real_deprecate(name, alternative, version, plugin, backtrace)
+end
+
 -- A test opts out of a run by RETURNING "skip: <reason>". It is reported as
 -- SKIP and counted apart, so a run never claims a pass for work it did not do.
 local total, failed, skipped = 0, 0, 0
@@ -115,8 +142,19 @@ for _, file in ipairs(files) do
     end
   end
 end
+vim.deprecate = real_deprecate
+local deprecated = vim.tbl_keys(deprecations)
+table.sort(deprecated)
+for _, line in ipairs(deprecated) do
+  print("DEPRECATED " .. line)
+end
 print(("%d/%d passed"):format(total - failed, total)
   .. (skipped > 0 and (", %d skipped"):format(skipped) or ""))
+if #deprecated > 0 then
+  print(("%d deprecated call site(s) on Neovim %s -- the run fails until they move")
+    :format(#deprecated, tostring(vim.version())))
+  failed = failed + 1
+end
 -- Sweep the fixtures and the redirected state dir: only what THIS process
 -- created, never a glob over the temp dir, so concurrent runs stay apart.
 for _, dir in ipairs(require("helpers").tmpdirs) do

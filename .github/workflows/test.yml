@@ -1,8 +1,12 @@
 # The whole suite (unit, integration, e2e, fault, performance, architecture)
 # runs headlessly; fixtures configure their own git identity, so the runner
-# needs nothing beyond Neovim and git. `stable` is the tested floor's channel
-# (0.12); `nightly` is the early-warning line — the float/winbar geometry this
-# plugin measures has drifted across Neovim versions before.
+# needs nothing beyond Neovim and git. `v0.12.0` is the floor plugin/ and
+# :checkhealth assert -- pinned, because `stable` moves and a floor that is
+# never run is a claim, not a test (0.12.0's vim.deep_equal recursed through
+# its public field; 0.12.5's does not, so stable alone hid it). `nightly` is the
+# early-warning line: the suite fails on any vim.deprecate this repository
+# reaches and on any deprecated or vanished nvim_* API it names, a release
+# before removal.
 #
 # Tests that judge wall-clock deadlines skip themselves here (they read $CI
 # and report SKIP): a shared runner's speed is not evidence about the plugin.
@@ -16,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        neovim: [stable, nightly]
+        neovim: [v0.12.0, stable, nightly]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

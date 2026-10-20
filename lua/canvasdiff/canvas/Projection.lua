@@ -27,7 +27,13 @@ local SET_OPTION = API.nvim_set_option_value
 local GET_OPTION = API.nvim_get_option_value
 local WIN_IS_VALID = API.nvim_win_is_valid
 local WIN_GET_BUF = API.nvim_win_get_buf
+-- nvim__redraw is PRIVATE API (the double underscore): it is absent from
+-- api_info(), and no deprecation cycle covers it, so a Neovim that renames or
+-- reshapes it gives no warning. It stays the first choice because it
+-- invalidates only this buffer's windows; `:redraw!` is the public fallback
+-- that keeps the canvas correct, at whole-screen cost, when it is gone.
 local REDRAW = API.nvim__redraw
+local COMMAND = API.nvim_command
 local WINDOW_LAST_LINE = vim.fn.line
 
 local PAGE_LIST_VALIDATE = PageList.validate
@@ -337,8 +343,14 @@ local function projection_redraw(state)
     valid = false,
   })
   if not called then
-    return nil, "projection redraw failed: "
-      .. safe_diagnostic(redraw_err)
+    -- The text of every row lives in decorations, so a skipped repaint shows
+    -- stale rows rather than merely late ones: fall back, never give up.
+    local repainted, fallback_err = PCALL(COMMAND, "redraw!")
+    if not repainted then
+      return nil, "projection redraw failed: "
+        .. safe_diagnostic(redraw_err)
+        .. "; :redraw! fallback failed: " .. safe_diagnostic(fallback_err)
+    end
   end
   return true
 end
