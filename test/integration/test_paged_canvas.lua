@@ -923,4 +923,84 @@ T["paged_ closing a review restores its window and still reclaims the skeleton"]
   assert(ok, err)
 end
 
+--- Open a review on the paged canvas from a fresh tab; run `fn(fm, st)`.
+local function with_paged_review(spec, fn)
+  local root = H.git_fixture(spec)
+  local old_cwd = vim.fn.getcwd()
+  vim.cmd("tabnew")
+  vim.api.nvim_set_current_dir(root)
+  package.loaded["canvasdiff"] = nil
+  local fm = require("canvasdiff")
+  local ok, err = xpcall(function()
+    fm.setup({
+      watch = { enabled = false }, sidebar = { enabled = false },
+      scrollbar = { enabled = false }, statuscolumn = { enabled = false },
+      highlight = { enabled = false }, virt = { enabled = false },
+      session = { enabled = false }, paged = { min_rows = 1 },
+    })
+    local st = assert(fm.open())
+    assert(st.paged, "the fixture must open on the paged canvas")
+    fn(fm, st)
+  end, debug.traceback)
+  pcall(fm.close)
+  fm.setup({})
+  vim.cmd("tabclose!")
+  vim.api.nvim_set_current_dir(old_cwd)
+  vim.fn.delete(root, "rf")
+  assert(ok, err)
+end
+
+-- session.restore resyncs every section, and so does any directory fold. A
+-- section already in the form it should be in must cost nothing: the paged
+-- canvas used to re-page every expanded section on each resync, which made
+-- reopening a million-row review spend 683 ms re-splicing what it had just
+-- built.
+T["paged_ a resync over sections already in their form splices nothing"] = function()
+  with_paged_review({
+    committed = { ["dir/a.txt"] = "x\n", ["b.txt"] = "1\n" },
+    worktree = { ["dir/a.txt"] = "y\n", ["b.txt"] = "2\n" },
+  }, function(_, st)
+    local Paged = require("canvasdiff.canvas.paged")
+    local real_replace, real_collapse = Paged.replace_section, Paged.set_collapsed
+    local splices = {}
+    Paged.replace_section = function(...)
+      splices[#splices + 1] = "replace"
+      return real_replace(...)
+    end
+    Paged.set_collapsed = function(...)
+      splices[#splices + 1] = "collapse"
+      return real_collapse(...)
+    end
+    local ok, err = pcall(canvas.resync_visibility, st)
+    st.folded = { ["dir/"] = true }
+    local folded_ok, folded_err = pcall(canvas.resync_visibility, st)
+    Paged.replace_section, Paged.set_collapsed = real_replace, real_collapse
+    assert(ok, err)
+    assert(folded_ok, folded_err)
+    H.eq(splices, { "collapse" },
+      "only the section the fold actually hides is spliced, once")
+  end)
+end
+
+-- The "changed since you folded it" mark needs a record of what the file
+-- looked like when it went away. The paged canvas returned before making
+-- that record, so on a large review a folded file could never show as
+-- changed. It must keep the same books as the eager canvas.
+T["paged_ folding a directory records what was seen, as the eager canvas does"] = function()
+  with_paged_review({
+    committed = { ["dir/a.txt"] = "x\n", ["b.txt"] = "1\n" },
+    worktree = { ["dir/a.txt"] = "y\n", ["b.txt"] = "2\n" },
+  }, function(_, st)
+    st.folded = { ["dir/"] = true }
+    canvas.resync_visibility(st)
+    local seen = st.folded_seen["dir/a.txt"]
+    assert(seen, "a folded file records what it looked like")
+    H.eq(seen.fp, require("canvasdiff.diff").fingerprint(st.sections[2]))
+    H.eq(st.folded_seen["b.txt"], nil, "a file still on screen records nothing")
+    st.folded = {}
+    canvas.resync_visibility(st)
+    H.eq(st.folded_seen["dir/a.txt"], nil, "unfolding forgets it: seen again")
+  end)
+end
+
 return T

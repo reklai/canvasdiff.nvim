@@ -916,24 +916,15 @@ local function resplice(state, i, preferred_win)
   local sec = state.sections[i]
   if not sec then return end
 
-  -- A paged canvas re-renders one section by splicing its store, and needs no
-  -- view correction: rows above the splice keep their numbers, so the viewport
-  -- is already where it was.
-  if state.paged then
-    local hidden = fold.hidden(state, sec.path)
-    if state.paged.collapsed[i] ~= hidden then
-      paged.set_collapsed(state.paged, i, hidden, paged_opts(state))
-    else
-      paged.replace_section(state.paged, i, sec, paged_opts(state))
-    end
-    state.rendered_hidden[sec.path] = hidden
-    return
-  end
-
-  local start_row, end_row_exclusive = M.section_rows(state, i)
-  if not (start_row and end_row_exclusive) then return end
-
   local collapsed = fold.hidden(state, sec.path)
+
+  -- An eager section whose anchors no longer resolve is left entirely alone,
+  -- bookkeeping included; a paged canvas has no anchors to go stale.
+  local start_row, end_row_exclusive
+  if not state.paged then
+    start_row, end_row_exclusive = M.section_rows(state, i)
+    if not (start_row and end_row_exclusive) then return end
+  end
 
   -- Remember what this looked like as it went away, so fold.stale can tell later
   -- that it moved on. BEFORE the early-out below, deliberately: a section the
@@ -951,6 +942,29 @@ local function resplice(state, i, preferred_win)
     end
   else
     state.folded_seen[sec.path] = nil -- back on screen: you have seen it now
+  end
+
+  -- A paged canvas re-renders one section by splicing its store, and needs no
+  -- view correction: rows above the splice keep their numbers, so the viewport
+  -- is already where it was. It shares the bookkeeping above -- returning
+  -- before it meant a folded directory on a large review never recorded what
+  -- you saw, so its files could never show as changed since.
+  --
+  -- And the same no-op rule as the eager form check below: an expanded
+  -- section already in the store is left alone. Re-splicing it re-paged the
+  -- whole section, which made every session.restore -- a resync over every
+  -- section -- re-page the entire review: measured 683 ms of the reopen of a
+  -- million-row review, all of it in the synchronous publish. A collapsed
+  -- one is still re-spliced: one placeholder row, which also refreshes its
+  -- stale mark.
+  if state.paged then
+    if state.paged.collapsed[i] ~= collapsed then
+      paged.set_collapsed(state.paged, i, collapsed, paged_opts(state))
+    elseif collapsed then
+      paged.replace_section(state.paged, i, sec, paged_opts(state))
+    end
+    state.rendered_hidden[sec.path] = collapsed
+    return
   end
 
   -- Already in the desired form -- answered WITHOUT building the lines, because
