@@ -52,7 +52,8 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
 - All, unstaged, staged, and read-only revision-range lenses.
 - Hunk/file staging, persistent folds, a file-and-hunk sidebar, pinned context,
   and a draggable minimap.
-- Automatic virtualization and a page-backed canvas for very large reviews.
+- Automatic virtualization and a page-backed canvas for very large reviews,
+  which open without freezing the editor while they build.
 
 ## Requirements
 

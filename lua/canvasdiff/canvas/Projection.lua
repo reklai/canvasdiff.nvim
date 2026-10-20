@@ -137,7 +137,10 @@ local function configure_buffer(buffer)
   end
 end
 
-local function populate_skeleton(buffer, logical_rows, chunk_rows)
+--- `pace` is the time-slicing checkpoint of an initial build only (see
+--- Projection.create); a resync never gets one. Whatever it raises is
+--- contained by create, which deletes the half-built buffer.
+local function populate_skeleton(buffer, logical_rows, chunk_rows, pace)
   local physical_rows = MAX(1, logical_rows)
   local full_chunk = blank_rows(MIN(chunk_rows, physical_rows))
   SET_LINES(buffer, 0, -1, false, full_chunk)
@@ -148,6 +151,9 @@ local function populate_skeleton(buffer, logical_rows, chunk_rows)
     local rows = count == #full_chunk and full_chunk or blank_rows(count)
     SET_LINES(buffer, -1, -1, false, rows)
     inserted = inserted + count
+    if pace then
+      pace(count)
+    end
   end
 end
 
@@ -791,10 +797,15 @@ local function projection_options(opts)
   if decorate ~= nil and TYPE(decorate) ~= "function" then
     return nil, "projection decorate must be a function"
   end
+  local pace = RAWGET(opts, "pace")
+  if pace ~= nil and TYPE(pace) ~= "function" then
+    return nil, "projection pace must be a function"
+  end
   return {
     overscan_rows = overscan_rows,
     skeleton_chunk_rows = chunk_rows,
     decorate = decorate,
+    pace = pace,
   }
 end
 
@@ -822,10 +833,13 @@ function Projection.create(text, opts)
   local configured, configure_err = PCALL(function()
     configure_buffer(buffer)
     BUF_SET_NAME(buffer, "canvasdiff://projection/" .. buffer)
+    -- A million blank rows are ~40 ms of set_lines; `pace` lets a
+    -- time-sliced build spread them. The buffer is not shown anywhere yet.
     populate_skeleton(
       buffer,
       logical_rows,
-      options.skeleton_chunk_rows
+      options.skeleton_chunk_rows,
+      options.pace
     )
     SET_OPTION("modifiable", false, { buf = buffer })
     install_provider()

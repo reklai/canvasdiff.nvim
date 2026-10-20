@@ -131,8 +131,23 @@ function Paged.render(sections, opts)
   -- model until the next trace flush (~300 MB per review at a million rows).
   local ingest = {
     sections = sections, collapsed = collapsed_state, stale = stale_for,
+    pace = opts.pace,
   }
+  -- Rendering every row's text is the largest single cost of opening a
+  -- million-row review (measured ~290 ms of ~585), so it is where a
+  -- time-sliced open most needs checkpoints. Offered before the projection
+  -- exists, so a cancelled build has no buffer to clean up.
+  local PACE_ROWS = 1024
+  local since_pace = 0
   local function next_row()
+    local pace = ingest.pace
+    if pace then
+      since_pace = since_pace + 1
+      if since_pace == PACE_ROWS then
+        since_pace = 0
+        pace(PACE_ROWS)
+      end
+    end
     local source = ingest.sections
     if #source == 0 then
       if emitted_empty then return nil end
@@ -158,7 +173,7 @@ function Paged.render(sections, opts)
   local list, list_err = PageList.from_iterator(next_row, restore and {
     resident = { restore = restore },
   } or nil)
-  ingest.sections, ingest.collapsed, ingest.stale = nil, nil, nil
+  ingest.sections, ingest.collapsed, ingest.stale, ingest.pace = nil, nil, nil, nil
   if not list then
     return nil, "could not page the canvas: " .. tostring(list_err)
   end
@@ -187,6 +202,7 @@ function Paged.render(sections, opts)
 
   local projection, projection_err = Projection.create(list, {
     decorate = decorate,
+    pace = opts.pace,
   })
   if not projection then
     return nil, "could not project the canvas: " .. tostring(projection_err)

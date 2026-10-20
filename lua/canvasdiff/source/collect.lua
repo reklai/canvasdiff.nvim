@@ -350,10 +350,14 @@ end
 --- @param root string
 --- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
+---
+--- `pace`, when given, is the time-slicing checkpoint (os.sliced): offered
+--- once per file and handed to the model build. It never changes the result.
 --- @param previous table[]|nil
+--- @param pace fun(units: integer|nil)|nil
 --- @return fun(): table|nil, string|nil next_section
 --- @return string|nil err
-function M.section_stream(root, spec, context, previous)
+function M.section_stream(root, spec, context, previous, pace)
   local next_file, err = M.file_stream(root, spec)
   if not next_file then
     return nil, err
@@ -377,6 +381,9 @@ function M.section_stream(root, spec, context, previous)
       if not file then
         return nil
       end
+      if pace then
+        pace(0)
+      end
       file.old_fingerprint = model.text_fingerprint(file.old_text)
       file.new_fingerprint = model.text_fingerprint(file.new_text)
       local kept = reusable[file.path]
@@ -384,7 +391,7 @@ function M.section_stream(root, spec, context, previous)
         return kept
       end
       local section = model.build_section(
-        file.path, file.old_text, file.new_text, file.status, context, file)
+        file.path, file.old_text, file.new_text, file.status, context, file, pace)
       if section then
         return section
       end
@@ -402,10 +409,11 @@ end
 --- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
 --- @param previous table[]|nil
+--- @param pace fun(units: integer|nil)|nil
 --- @return table[]|nil sections
 --- @return string|nil err
-function M.sections(root, spec, context, previous)
-  local next_section, err = M.section_stream(root, spec, context, previous)
+function M.sections(root, spec, context, previous, pace)
+  local next_section, err = M.section_stream(root, spec, context, previous, pace)
   if not next_section then
     return nil, err
   end

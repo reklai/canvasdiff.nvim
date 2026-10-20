@@ -15,13 +15,13 @@ T["paged_fallback a failed paged build opens eagerly and says so"] = function()
   })
   local old_cwd = vim.fn.getcwd()
   vim.api.nvim_set_current_dir(root)
-  local real_open_paged = canvas.open_paged
+  local real_build_paged = canvas.build_paged
   local real_notify = vim.notify
   local messages = {}
   vim.notify = function(msg, level)
     messages[#messages + 1] = { msg = tostring(msg), level = level }
   end
-  canvas.open_paged = function()
+  canvas.build_paged = function()
     return nil, "injected store refusal"
   end
 
@@ -50,7 +50,7 @@ T["paged_fallback a failed paged build opens eagerly and says so"] = function()
 
   pcall(function() fm.close() end)
   fm.setup({})
-  canvas.open_paged = real_open_paged
+  canvas.build_paged = real_build_paged
   vim.notify = real_notify
   vim.api.nvim_set_current_dir(old_cwd)
   vim.fn.delete(root, "rf")

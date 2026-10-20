@@ -489,20 +489,26 @@ function M.open(sections, opts)
   return state
 end
 
---- Open a PAGE-BACKED review in the current window.
+--- Build a PAGE-BACKED review without showing it anywhere.
 ---
 --- Same state shape as `M.open`, so every reader -- sidebar, status column,
 --- scrollbar, motions, session -- keeps working: what changes is that the text
 --- lives in a store and the buffer is a blank skeleton with one row per
 --- logical row. `anchor_ids` and `hl_ids` stay empty because a paged canvas
 --- has nothing to anchor: its starts array is authoritative.
-function M.open_paged(sections, opts)
+---
+--- Split from showing so the expensive part can run in time slices while the
+--- user's window keeps its buffer: nothing is visible until `M.show`, and a
+--- build that is abandoned instead goes to `M.dispose`. `opts.pace` is the
+--- slicing checkpoint, offered while the rows are paged. `state.win` is nil
+--- until shown.
+function M.build_paged(sections, opts)
   opts = opts or {}
   appearance.ensure()
 
   local state = {
     buf = nil,
-    win = vim.api.nvim_get_current_win(),
+    win = nil,
     sections = {},
     anchor_ids = {},
     hl_ids = {},
@@ -512,7 +518,9 @@ function M.open_paged(sections, opts)
     folded_seen = {},
   }
 
-  local built, err = paged.render(sections, paged_opts(state))
+  local render_opts = paged_opts(state)
+  render_opts.pace = opts.pace
+  local built, err = paged.render(sections, render_opts)
   if not built then
     return nil, err
   end
@@ -523,9 +531,16 @@ function M.open_paged(sections, opts)
   for _, section in ipairs(sections) do
     state.rendered_hidden[section.path] = fold.hidden(state, section.path)
   end
+  return state
+end
 
-  vim.api.nvim_win_set_buf(state.win, state.buf)
-  apply_win_opts(state.win)
+--- Open a PAGE-BACKED review in the current window: `build_paged`, shown.
+function M.open_paged(sections, opts)
+  local state, err = M.build_paged(sections, opts)
+  if not state then
+    return nil, err
+  end
+  M.show(state, vim.api.nvim_get_current_win())
   return state
 end
 

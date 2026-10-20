@@ -43,7 +43,8 @@ return {
   -- file_stream/files with each file already built into a section. An
   -- optional 4th argument, the sections already shown, lets a file whose
   -- sides hash to what one of them was built from yield that same object
-  -- rather than be diffed again.
+  -- rather than be diffed again. An optional 5th, `pace`, is the os.sliced
+  -- checkpoint: offered per file and per built row, never changing the result.
   section_stream = collect.section_stream,
   sections = collect.sections,
   set_index_blob = repository.set_index_blob,

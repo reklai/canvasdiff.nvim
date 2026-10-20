@@ -25,6 +25,7 @@ local fold = diff.fold
 local lens = diff.lens
 local viewport = diff.anchor
 local Surface = require("canvasdiff.Surface")
+local system = require("canvasdiff.os")
 
 -- Capture the trusted Neovim global-map operations at module load. From this
 -- point onward the final authenticate/delete pair does not pass through
@@ -694,6 +695,13 @@ function App:setup(opts)
   return options
 end
 
+-- A typed command is a person at the keyboard, so the opening verbs build a
+-- large review in time slices rather than freezing the editor (App:open).
+local INTERACTIVE_ARGUMENT = {
+  open = function() return { async = true } end,
+  toggle = function() return { async = true } end,
+}
+
 --- Run one `:CanvasDiff` invocation.
 ---
 --- The grammar and its outcome are pure input-domain data; executing the
@@ -716,7 +724,8 @@ function App:command(fargs)
     local operation = self[outcome.call]
     assert(type(operation) == "function",
       "command planned an operation this owner does not have: " .. outcome.call)
-    operation(self, outcome.argument)
+    local interactive = INTERACTIVE_ARGUMENT[outcome.call]
+    operation(self, outcome.argument or (interactive and interactive()))
   end
   return outcome
 end
@@ -1151,13 +1160,103 @@ end
 --- `opts.base` ("HEAD" | "index") overrides both the saved session's base and
 --- the configured default, so a command naming a state can open straight into
 --- it rather than opening and then re-rendering.
-function App:open(opts)
-  opts = opts or {}
+--- Whether the review needs the page-backed canvas.
+---
+--- Below the threshold the eager canvas is cheaper AND simpler: its text is
+--- the buffer, so search, yank and every plugin that reads buffer lines work
+--- with no help from us. Above it the eager canvas is not viable at all --
+--- both its text and its one-extmark-per-highlighted-row scale with the
+--- review -- so the paged canvas takes over.
+---
+--- The row count is exact rather than estimated: a section's entries ARE its
+--- rendered rows, so this costs a walk over the model and no rendering.
+local function wants_paged(sections)
+  local settings = config.options.paged or {}
+  if settings.enabled == false then
+    return false
+  end
+  local rows = 0
+  for _, section in ipairs(sections) do
+    rows = rows + #(section.entries or {})
+  end
+  return rows >= (settings.min_rows or 20000)
+end
+
+local function discard_unpublished_canvas(st, win, restore_buf)
+  if not st then
+    return
+  end
+  if vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_buf_is_valid(restore_buf)
+      and vim.api.nvim_win_get_buf(win) == st.buf then
+    pcall(vim.api.nvim_win_set_buf, win, restore_buf)
+  end
+  canvas.dispose(st)
+  if st.buf and vim.api.nvim_buf_is_valid(st.buf) then
+    pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
+  end
+end
+
+--- Build the hidden paged canvas the review needs, if it needs one:
+--- `{ state }` built, `{ err }` when the store refused, `{}` for eager.
+---
+--- The checkpoint after the build is load-bearing: the store contains
+--- anything its row iterator throws, so a cancellation raised while paging
+--- arrives here as an ordinary build failure, and only this call, outside
+--- that boundary, lets it unwind the open instead of falling back to the
+--- eager canvas.
+local function prepare_canvas(sections, pace)
+  if not wants_paged(sections) then
+    return {}
+  end
+  local state, err = canvas.build_paged(sections, { pace = pace })
+  if pace then
+    local ok, pace_err = pcall(pace, 0)
+    if not ok then
+      if state then
+        canvas.dispose(state)
+        if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+          pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
+        end
+      end
+      error(pace_err, 0)
+    end
+  end
+  if state then
+    return { state = state }
+  end
+  return { err = err or "unknown reason" }
+end
+
+--- Put the review's canvas in the current window: the prepared paged one, or
+--- the eager one. A paged canvas that cannot be built is a reason to fall
+--- back, not a reason to fail the review: the eager one still renders it
+--- correctly, just expensively. Loudly, though -- the fallback pays that eager
+--- cost on a review sized for paging, and a silent one would make every field
+--- failure of the paged store look like nothing happened.
+local function open_canvas(sections, prepared)
+  if prepared.state then
+    canvas.show(prepared.state, vim.api.nvim_get_current_win())
+    return prepared.state
+  end
+  if prepared.err then
+    ui.warn(("paged canvas unavailable (%s); using the eager canvas")
+      :format(prepared.err))
+  end
+  return canvas.open(sections, {})
+end
+
+--- Resolve what an open targets: the window and buffer it starts from, the
+--- repository, the saved session and the lens. Cheap and synchronous, so an
+--- incremental open has fixed all of this before its first slice.
+--- @return table|nil plan { win, prev_buf, root, sess, lens, lens_remembered }
+--- @return string|nil err nil when there is nothing to report
+local function plan_open(app, opts)
   -- Invoked from this Surface's own fixed sidebar: redirect only to a Canvas
   -- view in the same tab. An unrelated/stale sidebar-shaped window must not
   -- influence this App.
   local current = vim.api.nvim_get_current_win()
-  local active = active_surface(self)
+  local active = active_surface(app)
   local side = active and active.controllers.sidebar
   if side and sidebar.is_sidebar_win(side, current) then
     local canvas_win = canvas_window_in_tab(
@@ -1165,7 +1264,7 @@ function App:open(opts)
     if canvas_win then
       vim.api.nvim_set_current_win(canvas_win)
     else
-      return
+      return nil
     end
   end
 
@@ -1198,7 +1297,7 @@ function App:open(opts)
   -- instance, which has no memory.
   local sess = opts._session
     or (config.options.session.enabled and session.load(root) or nil)
-  local remembered = lens.normalize(self.last_lens_by_root[root])
+  local remembered = lens.normalize(app.last_lens_by_root[root])
   local l = opts.lens
     or (opts.base and lens.from_base(opts.base))
     or remembered
@@ -1220,66 +1319,34 @@ function App:open(opts)
       or (sess ~= nil and (lens.valid(sess.lens) or sess.base ~= nil)))
     or false
 
-  -- Transaction boundary: collection and model construction finish before
---- Choose the canvas the review actually needs.
----
---- Below the threshold the eager canvas is cheaper AND simpler: its text is
---- the buffer, so search, yank and every plugin that reads buffer lines work
---- with no help from us. Above it the eager canvas is not viable at all --
---- both its text and its one-extmark-per-highlighted-row scale with the
---- review -- so the paged canvas takes over.
----
---- The row count is exact rather than estimated: a section's entries ARE its
---- rendered rows, so this costs a walk over the model and no rendering.
-local function open_canvas(sections)
-  local settings = config.options.paged or {}
-  if settings.enabled == false then
-    return canvas.open(sections, {})
-  end
-  local rows = 0
-  for _, section in ipairs(sections) do
-    rows = rows + #(section.entries or {})
-  end
-  if rows < (settings.min_rows or 20000) then
-    return canvas.open(sections, {})
-  end
-  -- A paged canvas that cannot be built is a reason to fall back, not a
-  -- reason to fail the review: the eager one still renders it correctly, just
-  -- expensively. Loudly, though -- the fallback pays that eager cost on a
-  -- review sized for paging, and a silent one would make every field failure
-  -- of the paged store look like nothing happened.
-  local state, paged_err = canvas.open_paged(sections, {})
-  if state then
-    return state
-  end
-  ui.warn(("paged canvas unavailable (%s); using the eager canvas")
-    :format(paged_err or "unknown reason"))
-  return canvas.open(sections, {})
+  return {
+    win = win,
+    prev_buf = prev_buf,
+    root = root,
+    sess = sess,
+    lens = l,
+    lens_remembered = lens_remembered,
+  }
 end
 
-local function discard_unpublished_canvas(st, win, restore_buf)
-  if not st then
-    return
-  end
-  if vim.api.nvim_win_is_valid(win)
-      and vim.api.nvim_buf_is_valid(restore_buf)
-      and vim.api.nvim_win_get_buf(win) == st.buf then
-    pcall(vim.api.nvim_win_set_buf, win, restore_buf)
-  end
-  canvas.dispose(st)
-  if st.buf and vim.api.nvim_buf_is_valid(st.buf) then
-    pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
-  end
-end
-
-  -- canvas.open changes the current window or this App's state. In
-  -- particular, an invalid/deleted branch ref is an error, not an empty old
-  -- side and not an empty canvas.
-  local sections, collect_err = source.sections(root, l, config.options.context)
+--- Collect and build the review's model, before anything a user can see
+--- changes. Transaction boundary: this finishes before canvas.open changes
+--- the current window or this App's state -- in particular, an invalid or
+--- deleted branch ref is an error, not an empty old side and not an empty
+--- canvas. A recalled lens that no longer resolves falls back to the default
+--- one, which is written back into `plan.lens`.
+---
+--- `pace` is the os.sliced checkpoint of an incremental open; nil runs it in
+--- one call.
+--- @return table[]|nil sections
+--- @return string|table|nil err a warned message, or STALE_COMPARE
+local function collect_open(plan, opts, pace)
+  local root, l = plan.root, plan.lens
+  local sections, collect_err = source.sections(root, l, config.options.context, nil, pace)
   if opts._guard and not opts._guard() then
     return nil, STALE_COMPARE
   end
-  if not sections and lens_remembered then
+  if not sections and plan.lens_remembered then
     local fallback = lens.from_base(config.options.base)
     if not lens.same(fallback, l) then
       -- Re-collect BEFORE announcing the fallback: "showing X" is a promise,
@@ -1288,14 +1355,14 @@ end
       local saved_err = collect_err
       local fallback_sections
       fallback_sections, collect_err =
-        source.sections(root, fallback, config.options.context)
+        source.sections(root, fallback, config.options.context, nil, pace)
       if opts._guard and not opts._guard() then
         return nil, STALE_COMPARE
       end
       if fallback_sections then
         ui.warn(("remembered comparison %s no longer resolves — showing %s (%s)")
           :format(l.label, fallback.label, saved_err))
-        l = fallback
+        plan.lens = fallback
         sections = fallback_sections
       end
     end
@@ -1305,6 +1372,16 @@ end
     return nil, collect_err
   end
 
+  return sections
+end
+
+--- Publish a collected review: retire what it replaces, show its canvas and
+--- wire every controller. Synchronous -- this is the moment the user sees the
+--- review, and nothing here scales with its rows. `prepared` is what
+--- prepare_canvas built ahead of time, or nil to build it here.
+local function commit_open(app, plan, sections, prepared, opts)
+  local win, prev_buf, root, sess, l =
+    plan.win, plan.prev_buf, plan.root, plan.sess, plan.lens
   -- Collection is transactional: only a valid replacement may retire a review.
   --
   -- Deliberately the review owning THIS window, not the active one: opening
@@ -1317,16 +1394,16 @@ end
   -- This sweep is a teardown path like any other, so it records the last-lens
   -- memory too: the queued recheck will find the surface disposed and no-op,
   -- meaning its own recording never runs for a review swept here.
-  for _, surface in ipairs(live_surfaces(self)) do
+  for _, surface in ipairs(live_surfaces(app)) do
     if #surface:canvas_windows() == 0 and #surface:host_windows() == 0 then
       if surface.state.root then
-        self.last_lens_by_root[surface.state.root] = lens.of(surface.state)
+        app.last_lens_by_root[surface.state.root] = lens.of(surface.state)
       end
       surface:dispose("last_window")
     end
   end
 
-  local previous = surface_for_window(self, win)
+  local previous = surface_for_window(app, win)
   local replacement = opts._replacement
   local ownership = replacement and replacement.ownership
     or (previous and previous:handoff() or nil)
@@ -1346,10 +1423,11 @@ end
     end
   end
   if opts._guard and not opts._guard() then
+    discard_unpublished_canvas(prepared and prepared.state, win, prev_buf)
     return nil, STALE_COMPARE
   end
 
-  local st = open_canvas(sections)
+  local st = open_canvas(sections, prepared or prepare_canvas(sections))
   if opts._guard and not opts._guard(st.buf) then
     discard_unpublished_canvas(st, win, prev_buf)
     return nil, STALE_COMPARE
@@ -1365,7 +1443,7 @@ end
     -- would answer that root's next reopen. Same-root this is harmless: the
     -- successor's own teardown overwrites it.
     if previous.state and previous.state.root then
-      self.last_lens_by_root[previous.state.root] = lens.of(previous.state)
+      app.last_lens_by_root[previous.state.root] = lens.of(previous.state)
     end
     previous:dispose("replaced")
   end
@@ -1397,7 +1475,7 @@ end
       ui.cheatsheet.close()
       -- Unregisters by exact identity, so a late callback from an older
       -- review can never evict its replacement from the index.
-      forget(self, owner)
+      forget(app, owner)
     end,
   }, ownership)
   if opts._guard and not opts._guard(st.buf) then
@@ -1409,8 +1487,8 @@ end
     surface:abort("stale_compare")
     return nil, STALE_COMPARE
   end
-  self.surfaces[st.buf] = surface
-  self.opened[#self.opened + 1] = surface
+  app.surfaces[st.buf] = surface
+  app.opened[#app.opened + 1] = surface
 
   -- Move every inherited host that was showing the retired canvas onto this
   -- one. `canvas.show` rebinds the primary as a side effect, so the window the
@@ -1447,7 +1525,7 @@ end
     show_empty_message(st)
   end
 
-  set_canvas_keymaps(self, surface, st)
+  set_canvas_keymaps(app, surface, st)
 
   -- Treesitter highlighting is deliberately NOT attached to a paged canvas.
   --
@@ -1551,7 +1629,7 @@ end
   end
 
   if config.options.sidebar.enabled then
-    open_sidebar(self, surface, st)
+    open_sidebar(app, surface, st)
   end
 
   if config.options.scrollbar.enabled then
@@ -1757,7 +1835,7 @@ end
             -- would leave an OLDER explicit-close record answering the
             -- next reopen.
             if owner.state.root then
-              self.last_lens_by_root[owner.state.root] = lens.of(owner.state)
+              app.last_lens_by_root[owner.state.root] = lens.of(owner.state)
             end
             owner:dispose("last_window")
           else
@@ -1805,6 +1883,114 @@ end
   end
   surface:capture_view(st.win)
   return st
+end
+
+-- Past this many lines of work -- lines split, rows built, rows paged -- an
+-- interactive open stops running in one call and continues in time slices
+-- (os.sliced), so a million-row review never freezes the editor while it
+-- builds. Content-decided, not time-decided: a review below it opens inside
+-- the call exactly as a plain open does, one above it always finishes on a
+-- later loop turn. Set at the paged canvas's own default threshold, the size
+-- where open cost starts to be felt. Measured on a 1M-row review: the longest
+-- event-loop stall during the open went from 590 ms to 47 ms (git process
+-- round-trips and one 20 MB sha256, the calls a slice cannot split).
+local INCREMENTAL_ROWS = 20000
+
+-- What an incremental open answers while its review is still building.
+local PENDING_OPEN = "the review is still being built"
+
+--- Abandon the in-flight incremental open, if there is one. Its completion
+--- callback then finds itself superseded and discards whatever it built.
+--- @return boolean cancelled
+local function cancel_pending_open(app)
+  local pending = app.pending_open
+  app.pending_open = nil
+  if pending and pending.handle then
+    pending.handle:cancel()
+  end
+  return pending ~= nil
+end
+
+--- The incremental half of App:open: collect and prepare in slices, then
+--- commit on the main loop if this request is still the one that counts and
+--- the user is still where they asked from.
+local function open_incremental(app, plan, opts)
+  local request = { plan = plan }
+  app.pending_open = request
+  local result, result_err
+  request.handle = system.sliced(function(pace)
+    local sections, err = collect_open(plan, opts, pace)
+    if not sections then
+      return nil, err
+    end
+    return sections, prepare_canvas(sections, pace)
+  end, {
+    budget_ms = opts._slice_ms,
+    after_units = opts._incremental_rows or INCREMENTAL_ROWS,
+  }, function(ok, sections, prepared)
+    local current = app.pending_open == request
+    if current then
+      app.pending_open = nil
+    end
+    if not ok then
+      result_err = system.slice_cancelled(sections) and PENDING_OPEN or sections
+      if not system.slice_cancelled(sections) then
+        ui.err("open failed: " .. tostring(sections))
+      end
+      return
+    end
+    if not sections then
+      result_err = prepared
+      return
+    end
+    local win = plan.win
+    if not current or not vim.api.nvim_win_is_valid(win)
+        or vim.api.nvim_get_current_win() ~= win then
+      discard_unpublished_canvas(prepared.state, win, plan.prev_buf)
+      if current then
+        -- Publishing into a window the user has left would move them, and
+        -- publishing anywhere else would be a review they never asked for.
+        ui.notify("open cancelled: focus left the window it was opened from")
+      end
+      result_err = PENDING_OPEN
+      return
+    end
+    -- The window may have switched buffer while the review built; closing
+    -- the review returns to what it shows NOW.
+    plan.prev_buf = vim.api.nvim_win_get_buf(win)
+    result, result_err = commit_open(app, plan, sections, prepared, opts)
+  end)
+  if request.handle:pending() then
+    ui.notify("building a large review... (toggle again to cancel)")
+    return nil, PENDING_OPEN
+  end
+  return result, result_err
+end
+
+--- Open the review for the current window.
+---
+--- `opts.async` lets a large review (past INCREMENTAL_ROWS) build in time
+--- slices: the call then answers `nil, PENDING_OPEN` and the canvas appears
+--- when the build completes, unless a newer open, a close or a toggle cancels
+--- it first, or focus has left the window by then. Smaller reviews, and every
+--- call without `async`, open inside the call. Any open supersedes an
+--- in-flight one.
+function App:open(opts)
+  opts = opts or {}
+  cancel_pending_open(self)
+  local plan, err = plan_open(self, opts)
+  if not plan then
+    return nil, err
+  end
+  if opts.async then
+    return open_incremental(self, plan, opts)
+  end
+  local sections
+  sections, err = collect_open(plan, opts)
+  if not sections then
+    return nil, err
+  end
+  return commit_open(self, plan, sections, nil, opts)
 end
 
 --- Is `buf` something we could sensibly leave a window sitting on?
@@ -1858,6 +2044,9 @@ end
 --- window's prior local option; final disposal also restores every touched
 --- host before this method swaps its buffer.
 function App:close()
+  -- A review still building is part of what "close" means to the user, and
+  -- one left running would appear after they dismissed it.
+  cancel_pending_open(self)
   -- The overlay never survives the canvas (spec R4). toggle() closes through
   -- here too, so one hook covers both paths.
   ui.cheatsheet.close()
@@ -1943,7 +2132,15 @@ end
 --- Being focused inside our own sidebar counts as "the canvas is open": close
 --- it, or just close the sidebar if the canvas it was attached to is already
 --- gone. Never errors.
-function App:toggle()
+---
+--- A review still building counts as open too: toggling again cancels it,
+--- which is what a second press means while nothing is on screen yet.
+--- `opts.async` is passed to the open (see App:open).
+function App:toggle(opts)
+  if cancel_pending_open(self) then
+    ui.notify("open cancelled")
+    return nil
+  end
   local surface = active_surface(self)
   local tab = vim.api.nvim_get_current_tabpage()
   local showing = surface and canvas_window_in_tab(surface, tab) ~= nil
@@ -1976,7 +2173,7 @@ function App:toggle()
   else
     -- Hand back what was opened, the way `open` does. A caller that toggles
     -- has no other way to learn whether it opened or closed a review.
-    return self:open()
+    return self:open({ async = opts and opts.async or nil })
   end
 end
 

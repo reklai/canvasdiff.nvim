@@ -472,6 +472,16 @@ You will notice three differences on such a review:
 Set `paged = { enabled = false }` to always use the ordinary canvas, at the
 cost of memory on very large reviews. Below the threshold nothing changes.
 
+                                                     *canvasdiff-incremental*
+Opening a review of more than 20,000 rows from `:CanvasDiff` (with or without
+`open`/`toggle`) or |canvasdiff.toggle()| does not freeze the editor while it
+is built: Git is read and the canvas is built in short slices, with keys and
+redraws handled in between, and a "building a large review" message is shown.
+The canvas appears in the window you opened it from when it is ready.
+Toggling again, closing, or opening another review cancels it, and so does
+moving to another window before it is ready -- the review is never put into
+a window you have left. Smaller reviews open at once, exactly as before.
+
                           *canvasdiff-highlights* *canvasdiff-highlight-diff*
 Highlights~
 
@@ -653,13 +663,20 @@ canvasdiff.setup({opts})                                *canvasdiff.setup()*
         never called.
 
 canvasdiff.open({opts})                                  *canvasdiff.open()*
-        Open a review in the current window's repository.
+        Open a review in the current window's repository. Returns the review
+        state, or nil and a message. With `{ async = true }` a large review
+        builds without freezing the editor (|canvasdiff-incremental|): the
+        call then returns nil and a "still being built" message, and the
+        review appears when it is ready. Without it the call returns only
+        once the review is open.
 
 canvasdiff.close()                                      *canvasdiff.close()*
         Close the review that owns the current window, saving its position.
 
 canvasdiff.toggle()                                    *canvasdiff.toggle()*
-        Open, or close if already open.
+        Open, or close if already open. Opens with `{ async = true }`, so a
+        large review builds without freezing the editor, and toggling again
+        while it builds cancels it (|canvasdiff-incremental|).
 
 canvasdiff.sidebar()                                  *canvasdiff.sidebar()*
         Toggle the file-tree sidebar of the showing review. Independent of

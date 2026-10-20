@@ -22,7 +22,9 @@ return {
   build = model.build,
   -- One section table, or nil when old and new sides are identical and the
   -- file was not renamed. Binary and rename-only files still get a (bodyless)
-  -- section. Never errors.
+  -- section. An optional 7th argument `pace(rows)` is called from the build
+  -- loops as a time-slicing checkpoint and never changes the result. Never
+  -- errors itself; whatever `pace` raises (a cancellation) propagates.
   build_section = model.build_section,
   -- (section, path, status, context, metadata) -> true when building those
   -- inputs would reproduce `section` exactly, so it can be kept instead of

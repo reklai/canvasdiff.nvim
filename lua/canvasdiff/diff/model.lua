@@ -5,14 +5,40 @@ local M = {}
 
 local DEFAULT_CONTEXT = 3
 
-local function split_lines(text)
+-- How often the build loops offer `pace` a checkpoint, in rows. Large enough
+-- that the call is noise next to the rows between calls, small enough that a
+-- slice overruns its budget by well under a millisecond at ~0.5 us a row.
+local PACE_ROWS = 1024
+
+local find, sub = string.find, string.sub
+
+--- Lines of `text`, a final newline not starting an extra empty one.
+---
+--- A plain find loop rather than vim.split: identical output, but it can
+--- offer `pace` a checkpoint part-way through a million-line side, and it
+--- skips gsplit's per-line iterator and vararg plumbing.
+local function split_lines(text, pace)
   text = text or ""
   if text == "" then
     return {}
   end
-  local lines = vim.split(text, "\n", { plain = true })
-  if text:sub(-1) == "\n" then
-    lines[#lines] = nil
+  local lines, count, start = {}, 0, 1
+  while true do
+    local stop = find(text, "\n", start, true)
+    if not stop then
+      break
+    end
+    count = count + 1
+    lines[count] = sub(text, start, stop - 1)
+    start = stop + 1
+    if pace and count % PACE_ROWS == 0 then
+      -- Lines split are work like rows built: a side of a million lines
+      -- costs its split whether or not many of them become rows.
+      pace(PACE_ROWS)
+    end
+  end
+  if start <= #text then
+    lines[count + 1] = sub(text, start)
   end
   return lines
 end
@@ -122,7 +148,7 @@ end
 ---
 --- The optional sixth argument carries source identity without making the pure
 --- diff inputs positional: `{ old_path, old_rev, staged, unstaged }`.
-local function build_section(path, old_text, new_text, status, context, metadata)
+local function build_section(path, old_text, new_text, status, context, metadata, pace)
   context = context or DEFAULT_CONTEXT
   local old = old_text or ""
   local new = new_text or ""
@@ -174,8 +200,8 @@ local function build_section(path, old_text, new_text, status, context, metadata
     return binary_section(path, old, new, status, metadata)
   end
 
-  local old_lines = split_lines(old)
-  local new_lines = split_lines(new)
+  local old_lines = split_lines(old, pace)
+  local new_lines = split_lines(new, pace)
   local raw_hunks = algorithm.hunks(old, new)
 
   -- Ghosting deletions needs something real for them to hang off, and a file with no
@@ -199,6 +225,7 @@ local function build_section(path, old_text, new_text, status, context, metadata
   local adds, dels = 0, 0
   local hunks = {}
   local groups = group_hunks(raw_hunks, context)
+  local paced = 0
   local offset = 0 -- new_lnum - old_lnum, valid for unchanged lines up to this point
 
   for gi, group in ipairs(groups) do
@@ -237,6 +264,14 @@ local function build_section(path, old_text, new_text, status, context, metadata
       -- Per-hunk facts are gathered HERE rather than at the call sites because a
       -- ghosted deletion returns below without ever becoming an entry: this is
       -- the last point at which every changed line, row or not, passes through.
+      -- Which is also why the build's checkpoint lives here.
+      if pace then
+        paced = paced + 1
+        if paced == PACE_ROWS then
+          paced = 0
+          pace(PACE_ROWS)
+        end
+      end
       if kind == "add" then
         hunk_adds = hunk_adds + 1
         add_label = add_label or content
@@ -377,9 +412,13 @@ local function build_section(path, old_text, new_text, status, context, metadata
   }, path, old, new, status, metadata)
 end
 
-function M.build_section(path, old_text, new_text, status, context, metadata)
+--- `pace`, when given, is called with the rows built since its last call --
+--- the checkpoint a time-sliced caller yields from (see os.sliced). It never
+--- changes the section built.
+function M.build_section(path, old_text, new_text, status, context, metadata, pace)
   context = context or DEFAULT_CONTEXT
-  local section = build_section(path, old_text, new_text, status, context, metadata)
+  local section = build_section(
+    path, old_text, new_text, status, context, metadata, pace)
   if section then
     section.context = context
   end

@@ -1,6 +1,7 @@
 local clock = require("canvasdiff.os.clock")
 local fs = require("canvasdiff.os.fs")
 local process = require("canvasdiff.os.process")
+local slice = require("canvasdiff.os.slice")
 
 -- Raw operating-system effects enter through this exact surface. Higher-level
 -- Git, session, and watch semantics stay with their owning domains.
@@ -19,6 +20,15 @@ return {
   -- The same bounded process without blocking; the completed result reaches
   -- `on_exit` on the event loop, in a fast context.
   run_async = process.run_async,
+  -- Cooperative time slicing: `sliced(work, opts, on_done)` runs work(pace)
+  -- in a coroutine that yields between main-loop turns once it has reported
+  -- `after_units` of work and spent its slice budget; small work completes
+  -- inside the call. on_done(ok, ...) runs exactly once on the main loop --
+  -- false with an error `slice_cancelled` recognises after handle:cancel(),
+  -- false with a traceback when the work raised. Returns
+  -- { pending(), cancel() }.
+  sliced = slice.run,
+  slice_cancelled = slice.cancelled,
   -- Creates the parent directory, then writes. Failures stay EXCEPTIONS so
   -- the owning domain decides whether persistence failure is fatal.
   write_file = fs.write_file,

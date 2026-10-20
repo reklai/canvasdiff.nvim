@@ -20,7 +20,11 @@ return {
   --- Open (or focus) the review canvas for the current window's repository.
   --- `opts.base` ("HEAD"|"index") overrides the saved session's base.
   --- Returns the review state, or nil plus a user-facing message when there
-  --- is no repository or the collection failed.
+  --- is no repository or the collection failed. With `opts.async`, a review
+  --- of more than 20,000 rows builds in time slices instead of freezing the
+  --- editor: the call answers nil plus a "still being built" message and the
+  --- canvas appears when it is ready (cancelled by close(), toggle(), another
+  --- open, or by leaving the window first).
   open = function(opts)
     return app:open(opts)
   end,
@@ -29,9 +33,11 @@ return {
     return app:close()
   end,
   --- close() if a canvas (or our sidebar) is showing in this tabpage,
-  --- open() otherwise. Never errors.
+  --- open({ async = true }) otherwise: a large review builds without freezing
+  --- the editor, and toggling again while it builds cancels it. Returns what
+  --- open returned (nil while a large review is still building). Never errors.
   toggle = function()
-    return app:toggle()
+    return app:toggle({ async = true })
   end,
   --- Toggle the file-tree sidebar of the showing review. Warns instead of
   --- opening a review when none is showing.

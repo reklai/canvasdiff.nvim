@@ -33,7 +33,7 @@ end
 
 --- Opens, re-lenses and closes one review, tracking its model weakly. Kept a
 --- separate function so no test local still holds the state once it returns.
-local function review_once(fm, diff, tracked)
+local function review_once(fm, diff, tracked, sliced)
   local real_build = diff.build_section
   diff.build_section = function(...)
     local section = real_build(...)
@@ -48,7 +48,26 @@ local function review_once(fm, diff, tracked)
     return section
   end
   local ok, err = pcall(function()
-    local state = fm.open({ lens = diff.lens.get("all") })
+    local state
+    if sliced then
+      -- A sliced open adds the slicer's coroutine, pacer and step closures
+      -- to the hot paths; none of them may hold the model either.
+      local canvas = require("canvasdiff.canvas")
+      local real_show = canvas.show
+      canvas.show = function(shown, ...)
+        state = shown
+        return real_show(shown, ...)
+      end
+      local returned = fm.open({
+        lens = diff.lens.get("all"), async = true,
+        _incremental_rows = 1, _slice_ms = 0,
+      })
+      local done = vim.wait(5000, function() return state ~= nil end, 1)
+      canvas.show = real_show
+      assert(returned == nil and done, "the open must have been sliced")
+    else
+      state = fm.open({ lens = diff.lens.get("all") })
+    end
     assert(state and state.paged, "the fixture must open on the paged canvas")
     tracked[state.paged.list] = "page list"
     fm.set_lens(diff.lens.get("unstaged"))
@@ -59,7 +78,7 @@ local function review_once(fm, diff, tracked)
   assert(ok, err)
 end
 
-T["retention a closed paged review leaves no model pinned by compiled traces"] = function()
+local function retention_case(sliced)
   local root = H.git_fixture({
     committed = {
       ["big.txt"] = numbered("old", ROWS),
@@ -86,8 +105,8 @@ T["retention a closed paged review leaves no model pinned by compiled traces"] =
     fm.setup({ paged = { min_rows = 1 }, virt = { enabled = false } })
     -- Twice: the second pass runs over loops the first already compiled,
     -- which is exactly when a trace holds the previous review's closures.
-    review_once(fm, diff, tracked)
-    review_once(fm, diff, tracked)
+    review_once(fm, diff, tracked, sliced)
+    review_once(fm, diff, tracked, sliced)
     -- The canvas buffer is reclaimed on the next event-loop turn.
     vim.wait(50)
     collectgarbage()
@@ -109,6 +128,14 @@ T["retention a closed paged review leaves no model pinned by compiled traces"] =
   vim.api.nvim_set_current_dir(old_cwd)
   vim.fn.delete(root, "rf")
   assert(ok, err)
+end
+
+T["retention a closed paged review leaves no model pinned by compiled traces"] = function()
+  retention_case(false)
+end
+
+T["retention a sliced open leaves no model pinned once closed"] = function()
+  retention_case(true)
 end
 
 return T
