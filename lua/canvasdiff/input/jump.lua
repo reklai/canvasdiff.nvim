@@ -144,11 +144,18 @@ function M.enter(store, state, opts)
     -- finding the live section again. A rename's old source is separate.
     path = section.path,
     status = section.status,
+    -- Every build input the section carries besides its text, so the return
+    -- rebuilds the same section collection would -- modes included, or a
+    -- mode-only change would read as nothing after a round trip -- and can
+    -- recognise when nothing changed at all.
     metadata = {
       old_path = section.old_path or section.path,
       old_rev = section.old_rev or lens.of(state).old,
+      new_rev = section.new_rev,
       staged = section.staged,
       unstaged = section.unstaged,
+      old_mode = section.old_mode,
+      new_mode = section.new_mode,
     },
     view = view,
     anchor = viewport.capture_from_entries(entries, top_offset),
@@ -293,8 +300,20 @@ function M.back(store, opts)
   -- collector uses rather than a private io.open: one boundary owns "what does
   -- this file look like right now", buffer or disk.
   local content = source.worktree_text(state.root, ex.path)
-  local new_section = model.build_section(
-    ex.path, old or "", content, ex.status, config.options.context, metadata)
+  -- Content-addressed reuse, as a refresh does: when both sides hash to what
+  -- the shown section was built from, it IS the rebuild. A save during the
+  -- excursion has usually refreshed the section already, and rebuilding the
+  -- same text again cost a full re-diff and re-page -- measured ~690 ms of
+  -- stall returning from a million-line file.
+  local inputs = vim.tbl_extend("force", {}, metadata, {
+    old_fingerprint = model.text_fingerprint(old or ""),
+    new_fingerprint = model.text_fingerprint(content),
+  })
+  local shown = state.sections[idx]
+  local unchanged = model.built_from(
+    shown, ex.path, ex.status, config.options.context, inputs)
+  local new_section = unchanged and shown or model.build_section(
+    ex.path, old or "", content, ex.status, config.options.context, inputs)
 
   -- All fallible preflight work succeeded. Only now consume the excursion and
   -- remove its return mappings.
@@ -310,7 +329,9 @@ function M.back(store, opts)
   state.win = win
   vim.api.nvim_win_set_buf(win, state.buf)
 
-  canvas.replace_section(state, idx, new_section)
+  if not unchanged then
+    canvas.replace_section(state, idx, new_section)
+  end
 
   local view = ex.view
   if new_section ~= nil then

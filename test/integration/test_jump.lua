@@ -59,7 +59,89 @@ local function lines(prefix, n)
   return table.concat(out, "\n") .. "\n"
 end
 
+--- A canvas over sections collected exactly as App collects them, so they
+--- carry every build input (revs, modes, context) a return can compare.
+local function open_collected(spec)
+  local root = H.git_fixture(spec)
+  local sections = assert(source.sections(root, lens.get("all"), 3))
+  local st = canvas.open(sections, {})
+  st.root = root
+  st.lens = lens.get("all")
+  store = jump.store()
+  return root, st
+end
+
+local function cursor_to(st, text)
+  for i, l in ipairs(vim.api.nvim_buf_get_lines(st.buf, 0, -1, false)) do
+    if l == text then
+      vim.api.nvim_win_set_cursor(st.win, { i, 0 })
+      return i
+    end
+  end
+  error("canvas has no row " .. text)
+end
+
 return {
+  -- Returning rebuilds the section so unsaved edits show -- but when nothing
+  -- changed (or a save already refreshed it) that rebuild is the section
+  -- already shown. Measured on a million-line file: ~690 ms of re-diff and
+  -- re-page for a return that changed nothing.
+  ["jump: back with nothing changed keeps the section and splices nothing"] = function()
+    local root, st = open_collected({
+      committed = { ["a.txt"] = "a1\na2\n" },
+      worktree = { ["a.txt"] = "a1\nA2\n" },
+    })
+    local shown = st.sections[1]
+    local real_replace = canvas.replace_section
+    local replaced = 0
+    canvas.replace_section = function(...)
+      replaced = replaced + 1
+      return real_replace(...)
+    end
+    local ok, err = pcall(function()
+      cursor_to(st, "+A2")
+      enter(st)
+      assert(back())
+      H.eq(replaced, 0, "an unchanged file is not spliced")
+      assert(rawequal(st.sections[1], shown), "the shown section is kept")
+
+      cursor_to(st, "+A2")
+      enter(st)
+      vim.api.nvim_buf_set_lines(0, 1, 2, false, { "A2 edited" })
+      assert(back())
+      H.eq(replaced, 1, "an edit still rebuilds")
+      cursor_to(st, "+A2 edited")
+    end)
+    canvas.replace_section = real_replace
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
+  -- The return rebuilds from the excursion's record of the section, which
+  -- used to omit the side modes: an executable-bit change silently dropped
+  -- out of the section after any round trip through the file.
+  ["jump: back keeps the section's modes"] = function()
+    local root = H.git_fixture({ committed = { ["run.sh"] = "echo 1\n" } })
+    local path = vim.fs.joinpath(root, "run.sh")
+    local f = assert(io.open(path, "w"))
+    f:write("echo 2\n")
+    f:close()
+    assert(vim.uv.fs_chmod(path, tonumber("755", 8)))
+    local sections = assert(source.sections(root, lens.get("all"), 3))
+    H.eq({ sections[1].old_mode, sections[1].new_mode }, { "100644", "100755" })
+    local st = canvas.open(sections, {})
+    st.root = root
+    st.lens = lens.get("all")
+    store = jump.store()
+    local ok, err = pcall(function()
+      cursor_to(st, "+echo 2")
+      enter(st)
+      vim.api.nvim_buf_set_lines(0, 0, 1, false, { "echo 3" })
+      assert(back())
+      H.eq({ st.sections[1].old_mode, st.sections[1].new_mode }, { "100644", "100755" })
+    end)
+    vim.fn.delete(root, "rf")
+    assert(ok, err)
+  end,
   ["jump: enter lands on the corresponding file line"] = function()
     local root, st = setup_repo()
     -- put cursor on the "+A2" line of a.txt (find it)
