@@ -137,8 +137,11 @@ local function reconcile(state, callbacks, lease)
     end
   end
   local collected_lens = lens.of(state)
+  -- The shown sections let every file this change did not touch keep its
+  -- section instead of being diffed again -- the difference between a save
+  -- costing one file and costing the whole review.
   local desired, err = source.sections(
-    state.root, collected_lens, config.options.context)
+    state.root, collected_lens, config.options.context, state.sections)
   -- Collection is an I/O boundary. The owner may die or explicitly stop this
   -- exact lease, or publish a newer model intent, while source.sections is
   -- running; never commit that stale snapshot into its former canvas.

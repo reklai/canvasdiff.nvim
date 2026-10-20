@@ -40,7 +40,10 @@ return {
   -- The repository toplevel for a directory, or a bare nil (no message).
   root = repository.root,
   -- The streaming and eager section collectors, same contracts as
-  -- file_stream/files with each file already built into a section.
+  -- file_stream/files with each file already built into a section. An
+  -- optional 4th argument, the sections already shown, lets a file whose
+  -- sides hash to what one of them was built from yield that same object
+  -- rather than be diffed again.
   section_stream = collect.section_stream,
   sections = collect.sections,
   set_index_blob = repository.set_index_blob,

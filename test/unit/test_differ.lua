@@ -107,6 +107,7 @@ return {
       "anchor",
       "build",
       "build_section",
+      "built_from",
       "fingerprint",
       "fold",
       "hunks",
@@ -115,7 +116,49 @@ return {
       "release_text",
       "stage",
       "staged_then_changed",
+      "text_fingerprint",
     })
+  end,
+  -- Reuse skips a diff, so a false "same" would show a stale file. Every
+  -- input a section is a function of must be able to veto it on its own.
+  ["differ: built_from matches only the exact inputs a section was built from"] = function()
+    local function inputs(old_text, new_text)
+      return {
+        old_path = "a.txt", old_rev = "HEAD", staged = "M", unstaged = nil,
+        old_mode = "100644", new_mode = "100644",
+        old_fingerprint = differ.text_fingerprint(old_text),
+        new_fingerprint = differ.text_fingerprint(new_text),
+      }
+    end
+    local meta = inputs("o\n", "n\n")
+    local section = differ.build_section("a.txt", "o\n", "n\n", "M", 3, meta)
+    assert(differ.built_from(section, "a.txt", "M", 3, inputs("o\n", "n\n")),
+      "identical inputs reproduce the section")
+    local vetoes = {
+      { "new side", "a.txt", "M", 3, inputs("o\n", "N\n") },
+      { "old side", "a.txt", "M", 3, inputs("O\n", "n\n") },
+      { "path", "b.txt", "M", 3, inputs("o\n", "n\n") },
+      { "status", "a.txt", "A", 3, inputs("o\n", "n\n") },
+      { "context", "a.txt", "M", 5, inputs("o\n", "n\n") },
+    }
+    for field, value in pairs({
+      old_path = "z.txt", old_rev = "index", new_rev = "abc", staged = vim.NIL,
+      unstaged = "M", old_mode = "100755", new_mode = "000000",
+    }) do
+      local changed = inputs("o\n", "n\n")
+      changed[field] = value ~= vim.NIL and value or nil
+      vetoes[#vetoes + 1] = { field, "a.txt", "M", 3, changed }
+    end
+    for _, case in ipairs(vetoes) do
+      assert(not differ.built_from(section, case[2], case[3], case[4], case[5]),
+        "a different " .. case[1] .. " must force a rebuild")
+    end
+    local unhashed = inputs("o\n", "n\n")
+    unhashed.new_fingerprint = nil
+    assert(not differ.built_from(section, "a.txt", "M", 3, unhashed),
+      "without both digests nothing is reusable")
+    H.eq(differ.build_section("a.txt", "o\n", "n\n", "M", nil, meta).context, 3,
+      "a defaulted context is recorded as the context actually used")
   end,
   ["differ: simple change"] = function()
     local h = differ.hunks("a\nb\nc\n", "a\nX\nc\n")

@@ -24,6 +24,14 @@ return {
   -- file was not renamed. Binary and rename-only files still get a (bodyless)
   -- section. Never errors.
   build_section = model.build_section,
+  -- (section, path, status, context, metadata) -> true when building those
+  -- inputs would reproduce `section` exactly, so it can be kept instead of
+  -- diffed again. `metadata` must carry old_fingerprint/new_fingerprint (from
+  -- `text_fingerprint`); without them, or for a non-table, false. Pure.
+  built_from = model.built_from,
+  -- The sha256 hex digest every section fingerprint is made of. Persisted in
+  -- session files, so it must never change silently. Never errors.
+  text_fingerprint = model.text_fingerprint,
   -- Digest of the section's NEW side only, so pivoting the comparison's old
   -- side never reads as "the file changed" (fold.stale's input).
   fingerprint = model.fingerprint,

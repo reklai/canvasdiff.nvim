@@ -2114,7 +2114,9 @@ pivot = function(surface, target_lens, guard, collected, publish)
   local next_lens = target_lens or lens.of(st)
   local desired, err = collected, nil
   if desired == nil then
-    desired, err = source.sections(st.root, next_lens, config.options.context)
+    -- The shown sections let every unchanged file skip its diff.
+    desired, err = source.sections(
+      st.root, next_lens, config.options.context, st.sections)
   end
   if guard and not guard() then
     return nil, STALE_COMPARE

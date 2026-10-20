@@ -80,11 +80,18 @@ local function with_metadata(section, path, old_text, new_text, status, metadata
   section.renamed = section.old_path ~= path
   section.old_text = old_text or ""
   section.new_text = new_text or ""
+  -- The pair's modes are build inputs (an equal-text mode delta is a change),
+  -- kept so `built_from` can tell a rebuild would come out the same.
+  section.old_mode = metadata.old_mode
+  section.new_mode = metadata.new_mode
   -- Computed while the text is in hand, so a section that later releases its
   -- sides can still answer "did this file change" -- a 64-byte answer instead
-  -- of a retained copy of the file.
-  section.old_fingerprint = vim.fn.sha256(section.old_text)
-  section.new_fingerprint = vim.fn.sha256(section.new_text)
+  -- of a retained copy of the file. A caller that already hashed the sides
+  -- (collect, deciding whether to build at all) hands the digests in.
+  section.old_fingerprint = metadata.old_fingerprint
+    or M.text_fingerprint(section.old_text)
+  section.new_fingerprint = metadata.new_fingerprint
+    or M.text_fingerprint(section.new_text)
   return section
 end
 
@@ -105,11 +112,17 @@ local function binary_section(path, old_text, new_text, status, metadata)
   }, path, old_text, new_text, status, metadata)
 end
 
+--- The digest every section fingerprint is made of. One definition, because
+--- fingerprints are persisted in session files and compared across builds.
+function M.text_fingerprint(text)
+  return vim.fn.sha256(text or "")
+end
+
 --- Build one section.
 ---
 --- The optional sixth argument carries source identity without making the pure
 --- diff inputs positional: `{ old_path, old_rev, staged, unstaged }`.
-function M.build_section(path, old_text, new_text, status, context, metadata)
+local function build_section(path, old_text, new_text, status, context, metadata)
   context = context or DEFAULT_CONTEXT
   local old = old_text or ""
   local new = new_text or ""
@@ -364,6 +377,42 @@ function M.build_section(path, old_text, new_text, status, context, metadata)
   }, path, old, new, status, metadata)
 end
 
+function M.build_section(path, old_text, new_text, status, context, metadata)
+  context = context or DEFAULT_CONTEXT
+  local section = build_section(path, old_text, new_text, status, context, metadata)
+  if section then
+    section.context = context
+  end
+  return section
+end
+
+--- True when building a section from these inputs would reproduce `section`:
+--- same path, status, identity metadata, context, modes and the digests of
+--- both sides. A section is a pure function of exactly those, so a caller
+--- holding a match can keep it instead of diffing the file again -- which at
+--- a million changed lines is most of what a refresh costs.
+---
+--- `metadata` must carry `old_fingerprint` and `new_fingerprint` (from
+--- `text_fingerprint`); without them nothing is ever reusable.
+function M.built_from(section, path, status, context, metadata)
+  if type(section) ~= "table" or type(metadata) ~= "table"
+      or metadata.old_fingerprint == nil or metadata.new_fingerprint == nil then
+    return false
+  end
+  return section.path == path
+    and section.status == status
+    and section.context == (context or DEFAULT_CONTEXT)
+    and section.old_path == (metadata.old_path or path)
+    and section.old_rev == metadata.old_rev
+    and section.new_rev == metadata.new_rev
+    and section.staged == metadata.staged
+    and section.unstaged == metadata.unstaged
+    and section.old_mode == metadata.old_mode
+    and section.new_mode == metadata.new_mode
+    and section.old_fingerprint == metadata.old_fingerprint
+    and section.new_fingerprint == metadata.new_fingerprint
+end
+
 --- Identity of a section's CONTENT, for "has this changed since I last looked at
 --- it" comparisons (fold.stale). Cheap to store per path and stable across
 --- rebuilds of the same content.
@@ -377,7 +426,7 @@ function M.fingerprint(section)
   if section and section.new_fingerprint then
     return section.new_fingerprint
   end
-  return vim.fn.sha256(section and section.new_text or "")
+  return M.text_fingerprint(section and section.new_text or "")
 end
 
 --- Release a section's retained copies of both file sides.

@@ -122,6 +122,64 @@ local function numbered(n)
 end
 
 return {
+  -- A refresh re-collects every changed file, and at a million rows the
+  -- untouched file's diff was most of its cost. The shown sections let an
+  -- unchanged file keep its exact section object; reconcile then sees nothing
+  -- to splice. An edited file -- including one edited only in a loaded,
+  -- unsaved buffer -- must still be rebuilt, which is what makes the reuse
+  -- content-addressed rather than a cache that can go stale.
+  ["source_ refresh rebuilds only the files whose sides changed"] = function()
+    with_git_fixture({
+      committed = { ["a.txt"] = "a1\n", ["b.txt"] = "b1\n", ["c.txt"] = "c1\n" },
+      worktree = { ["a.txt"] = "a2\n", ["b.txt"] = "b2\n", ["c.txt"] = "c2\n" },
+    }, function(root)
+      -- Reconcile keeps an equal section whether or not it was rebuilt, so
+      -- object identity cannot tell the two apart; the builds themselves can.
+      local diff = require("canvasdiff.diff")
+      local real_build = diff.build_section
+      local built = {}
+      diff.build_section = function(path, ...)
+        built[#built + 1] = path
+        return real_build(path, ...)
+      end
+      local ok, err = pcall(in_canvas, root, function(fm)
+        local st = assert(fm.open())
+        local before = {}
+        for _, section in ipairs(st.sections) do
+          before[section.path] = section
+        end
+
+        write(root, "b.txt", "b3\n")
+        built = {}
+        fm.refresh()
+        H.eq(built, { "b.txt" }, "only the edited file is diffed again")
+        local after = {}
+        for _, section in ipairs(st.sections) do
+          after[section.path] = section
+        end
+        assert(after["a.txt"] == before["a.txt"], "untouched a.txt keeps its section")
+        assert(after["c.txt"] == before["c.txt"], "untouched c.txt keeps its section")
+        H.eq(after["b.txt"].entries[#after["b.txt"].entries].content, "b3")
+
+        -- An unsaved buffer edit changes the worktree side git cannot see.
+        vim.cmd("tabnew " .. vim.fn.fnameescape(vim.fs.joinpath(root, "c.txt")))
+        local edit_buf = vim.api.nvim_get_current_buf()
+        vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, { "c-unsaved" })
+        vim.cmd("tabprevious")
+        built = {}
+        fm.refresh()
+        H.eq(built, { "c.txt" }, "an unsaved edit forces a rebuild too")
+        local edited
+        for _, section in ipairs(st.sections) do
+          if section.path == "c.txt" then edited = section end
+        end
+        H.eq(edited.entries[#edited.entries].content, "c-unsaved")
+        vim.api.nvim_buf_delete(edit_buf, { force = true })
+      end)
+      diff.build_section = real_build
+      assert(ok, err)
+    end)
+  end,
   ["source_ facade exports exactly repository and collection operations"] = function()
     local names = vim.tbl_keys(source)
     table.sort(names)

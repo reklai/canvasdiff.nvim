@@ -339,15 +339,34 @@ end
 --- The ingestion boundary: only one file's two sides are resident while its
 --- section is built, so a caller that consumes sections as they arrive never
 --- holds the whole changeset's text at once. `sections` is the eager consumer.
+---
+--- `previous` is the section list the caller is already showing, if any. A
+--- file whose two sides hash to what one of those sections was built from,
+--- under identical metadata, yields that same section object instead of being
+--- diffed again: a save in one file of a million-row review then re-diffs that
+--- file, not the million rows beside it. Reuse is content-addressed -- the
+--- sides are still read and hashed every time -- so it cannot serve a stale
+--- section; it only skips the diff and model build.
 --- @param root string
 --- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
+--- @param previous table[]|nil
 --- @return fun(): table|nil, string|nil next_section
 --- @return string|nil err
-function M.section_stream(root, spec, context)
+function M.section_stream(root, spec, context, previous)
   local next_file, err = M.file_stream(root, spec)
   if not next_file then
     return nil, err
+  end
+  -- Indexed up front: the caller's list may be replaced or emptied by
+  -- reentrant code while git runs, and sections themselves are immutable.
+  local reusable = {}
+  if type(previous) == "table" then
+    for _, section in ipairs(previous) do
+      if type(section) == "table" and section.path then
+        reusable[section.path] = section
+      end
+    end
   end
   return function()
     while true do
@@ -357,6 +376,12 @@ function M.section_stream(root, spec, context)
       end
       if not file then
         return nil
+      end
+      file.old_fingerprint = model.text_fingerprint(file.old_text)
+      file.new_fingerprint = model.text_fingerprint(file.new_text)
+      local kept = reusable[file.path]
+      if kept and model.built_from(kept, file.path, file.status, context, file) then
+        return kept
       end
       local section = model.build_section(
         file.path, file.old_text, file.new_text, file.status, context, file)
@@ -371,13 +396,16 @@ end
 --- canvas. Open, manual pivots, and file-watch reconciliation all go through
 --- this boundary so a failed ref lookup is distinguishable from a valid empty
 --- diff before any buffer, lens, view, or UI state is touched.
+--- `previous` lets unchanged files keep the section already shown; see
+--- `section_stream`.
 --- @param root string
 --- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
+--- @param previous table[]|nil
 --- @return table[]|nil sections
 --- @return string|nil err
-function M.sections(root, spec, context)
-  local next_section, err = M.section_stream(root, spec, context)
+function M.sections(root, spec, context, previous)
+  local next_section, err = M.section_stream(root, spec, context, previous)
   if not next_section then
     return nil, err
   end
