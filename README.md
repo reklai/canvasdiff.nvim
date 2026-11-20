@@ -56,6 +56,7 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
   file-and-hunk sidebar, pinned context, and a draggable minimap.
 - A checkpoint lens: mark the review as seen, then see only what changed
   since -- for when an agent or a formatter rewrites files between passes.
+- The review's hunks as a quickfix list, to step through them across files.
 - Automatic virtualization and a page-backed canvas for very large reviews,
   which open without freezing the editor while they build.
 
@@ -454,7 +455,8 @@ with `git update-ref -d`).
 The jump runs both ways. `:CanvasDiff here` shows the review at the file line
 under the cursor, opening it if needed, and Ctrl+Space keeps working after you
 leave the file you jumped into: it follows you into other files in that
-window.
+window. `:CanvasDiff quickfix` lists every hunk at its file line, so `:cnext`
+steps through them across files without returning to the canvas.
 
 ### Commands
 
@@ -466,6 +468,7 @@ window.
 :CanvasDiff here
 :CanvasDiff refresh
 :CanvasDiff sidebar
+:CanvasDiff quickfix
 :CanvasDiff compare
 :CanvasDiff checkout
 :CanvasDiff track

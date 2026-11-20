@@ -60,6 +60,11 @@ return {
     user_folded = fold.user_folded,
     user_folded_set = fold.user_folded_set,
   },
+  -- One { hunk, lnum, label, adds, dels } per hunk of a section, `lnum` a
+  -- new-side line that exists and names the hunk (its first written line, or
+  -- for a pure deletion the line its removed text hangs on). Empty when the
+  -- section has no new side to number. Pure.
+  hunk_targets = model.hunk_targets,
   -- Raw index quads { old_start, old_count, new_start, new_count } from the
   -- histogram diff; always a list, empty when the sides match.
   hunks = algorithm.hunks,

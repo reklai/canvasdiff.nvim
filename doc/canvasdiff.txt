@@ -287,6 +287,14 @@ mean OPPOSITE things.
                         flag governs auto-open only. Warns when no review is
                         showing rather than opening one.
 
+:CanvasDiff quickfix    Put every hunk of the open review in the quickfix
+                        list, one entry per hunk at its line in the real
+                        file, so `:cnext` walks hunks across files without
+                        a trip back to the canvas. Folded files are
+                        included. Needs a worktree lens (the staged lens
+                        and ranges number lines in other texts) and does
+                        not open the quickfix window.
+
 :CanvasDiff compare     Choose a base and comparison ref with two
                         `vim.ui.select` prompts. Does not checkout or fetch.
 
@@ -791,6 +799,11 @@ canvasdiff.here()                                        *canvasdiff.here()*
         Show the review at the file line under the cursor; what
         `:CanvasDiff here` runs. Returns the review state, or nil and a
         message.
+
+canvasdiff.quickfix()                                *canvasdiff.quickfix()*
+        Put every hunk of the open review in the quickfix list. Returns the
+        number of entries, or nil and a message when no review is open or
+        the lens has no worktree side.
 
 canvasdiff.checkpoint()                            *canvasdiff.checkpoint()*
         Take a checkpoint and show CHECKPOINT → WORKTREE

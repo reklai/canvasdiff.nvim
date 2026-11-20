@@ -53,6 +53,14 @@ return {
   sidebar = function()
     return app:toggle_sidebar()
   end,
+  --- Put every hunk of the live review in the quickfix list, one entry per
+  --- hunk at its line in the real file, so `:cnext` walks hunks across files
+  --- without returning to the canvas. Needs a worktree lens; does not open
+  --- the quickfix window. Returns the number of entries, or nil plus a
+  --- message when there is no review or the lens has no worktree side.
+  quickfix = function()
+    return app:quickfix()
+  end,
   --- Re-collect the diff and splice changes in place, keeping the same text
   --- under the cursor. For a buffer/state divergence, close() + open() is
   --- the recovery path, not this.

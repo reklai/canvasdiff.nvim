@@ -482,6 +482,15 @@ The canvas empties on the press, and that is the design rather than a side
 effect: an empty review is the confirmation that everything on it was marked
 seen, and whatever appears afterwards is by construction new.
 
+## Hunks as a quickfix list
+
+A sweep of small fixes paid one round trip per hunk. `:CanvasDiff quickfix`
+hands the review's hunks to the list Neovim already knows how to walk, so
+`:cnext` moves hunk to hunk across files, and Neovim itself keeps each
+entry's line current as its buffer is edited. It maps nothing in real files,
+which is the rule the return key is the single exception to, and it does not
+open the quickfix window: the list is the feature, the layout is the user's.
+
 ## Refresh, and why there is no rebuild key
 
 What `r` guarantees is *what stays fixed*, not "it doesn't scroll". Add three lines to

@@ -110,6 +110,7 @@ return {
       "built_from",
       "fingerprint",
       "fold",
+      "hunk_targets",
       "hunks",
       "is_binary",
       "lens",

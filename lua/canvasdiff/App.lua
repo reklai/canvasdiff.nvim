@@ -2398,6 +2398,64 @@ function App:here(opts)
   return st
 end
 
+--- Put every hunk of the live review in the quickfix list, one entry per
+--- hunk at its line in the real file.
+---
+--- The review's hunks as a list Neovim already knows how to walk: `:cnext`
+--- (or `]q`) steps hunk to hunk ACROSS files without coming back to the canvas
+--- between them, which is the round trip a sweep of small fixes otherwise
+--- pays per hunk. Neovim keeps each entry's line current as its buffer is
+--- edited, so the list stays usable while the fixes go in.
+---
+--- Folded files are included -- a fold sets a file aside on the canvas, it
+--- does not say its hunks are done. Needs a lens whose new side is the
+--- worktree, because that is the text the line numbers count into; the staged
+--- lens and a READ-ONLY range decline, as Enter does and for the same reason.
+--- The quickfix window is not opened: the list is the feature, the layout is
+--- the user's.
+--- @return integer|nil count entries written, or nil plus a message
+function App:quickfix()
+  local surface = active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  local st = surface.state
+  local l = lens.of(st)
+  if not lens.editable(l) then
+    local err = lens.is_range(l)
+      and "READ-ONLY comparison — its hunks are not lines of your files (press Tab)"
+      or "the staged view numbers lines in the index, not in your files (press Tab)"
+    ui.warn(err)
+    return nil, err
+  end
+  local items = {}
+  for _, section in ipairs(st.sections or {}) do
+    local filename = vim.fs.joinpath(st.root, section.path)
+    for _, target in ipairs(diff.hunk_targets(section)) do
+      local label = (target.label:gsub("^%s+", ""))
+      items[#items + 1] = {
+        filename = filename,
+        lnum = target.lnum,
+        col = 1,
+        text = ("(+%d -%d) %s"):format(target.adds, target.dels, label),
+      }
+    end
+  end
+  vim.fn.setqflist({}, " ", {
+    title = "CanvasDiff " .. (l.label or l.id),
+    items = items,
+  })
+  if #items == 0 then
+    ui.notify("no hunks to list")
+  else
+    ui.notify(("%d hunk%s in the quickfix list — :cnext steps through them")
+      :format(#items, #items == 1 and "" or "s"))
+  end
+  return #items
+end
+
 --- Toggle the file-tree sidebar of the showing review.
 ---
 --- Both directions reuse the sidebar's one lifecycle: OFF is the exact

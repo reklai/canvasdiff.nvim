@@ -505,4 +505,45 @@ function M.build(files, context)
   return sections
 end
 
+--- Where each of a section's hunks is in the file: one record per hunk, in
+--- hunk order, { hunk, lnum, label, adds, dels }.
+---
+--- `lnum` is a new-side line a reader can be sent to: the first line the hunk
+--- writes; for a hunk that only deletes, the surviving line its removed lines
+--- are drawn against (the ghost carrier), else the line its cut sits after;
+--- and never less than 1, so a cut at the very top of a file still names a
+--- line that exists. Empty for a section with no hunks or no new side to
+--- number -- a binary file, a pure rename, a wholly deleted file.
+--- Pure; never errors.
+function M.hunk_targets(section)
+  local out = {}
+  local hunks = section and section.hunks or {}
+  if #hunks == 0 or section.binary then
+    return out
+  end
+  local carrier, first = {}, {}
+  for _, entry in ipairs(section.entries or {}) do
+    local gi = entry.hunk_idx
+    if gi and entry.new_lnum then
+      first[gi] = first[gi] or entry.new_lnum
+      if (entry.ghosts or entry.ghosts_after) and not carrier[gi] then
+        carrier[gi] = entry.new_lnum
+      end
+    end
+  end
+  for gi, hunk in ipairs(hunks) do
+    local lnum = hunk.new_lo or carrier[gi] or hunk.seam or first[gi]
+    if lnum then
+      out[#out + 1] = {
+        hunk = gi,
+        lnum = math.max(1, lnum),
+        label = hunk.label or "",
+        adds = hunk.adds or 0,
+        dels = hunk.dels or 0,
+      }
+    end
+  end
+  return out
+end
+
 return M
