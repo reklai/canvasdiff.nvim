@@ -191,6 +191,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "command_complete",
     "compare",
     "cycle_lens",
+    "here",
     "jump_back",
     "open",
     "refresh",

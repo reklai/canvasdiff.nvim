@@ -78,6 +78,37 @@ function V.resolve(anchor, entries)
   return 1
 end
 
+--- The entry showing file line `lnum`, or the shown line nearest to it.
+---
+--- The reverse of a jump: a canvas row names a file line through its
+--- `new_lnum`, and this names the row for a file line. Every content row of a
+--- section with a result side carries a distinct `new_lnum`, so an exact hit is
+--- unambiguous and needs no content check -- provided the entries were built
+--- from the text `lnum` counts into, which is the caller's side of the deal.
+---
+--- A line outside every hunk's context is not on the canvas at all. The
+--- nearest shown line stands in for it, which is the edge of the closest hunk;
+--- an equal distance goes to the earlier one, the hunk the reader has passed.
+--- @param entries table[] a section's line entries (1-indexed)
+--- @param lnum integer 1-based line of the section's new side
+--- @return integer|nil index nil when no entry maps to a file line at all
+--- @return boolean exact whether that entry IS line `lnum`
+function V.nearest(entries, lnum)
+  local best_idx, best_dist
+  for i, e in ipairs(entries) do
+    if e.new_lnum ~= nil then
+      local dist = math.abs(e.new_lnum - lnum)
+      if dist == 0 then
+        return i, true
+      end
+      if best_idx == nil or dist < best_dist then
+        best_idx, best_dist = i, dist
+      end
+    end
+  end
+  return best_idx, false
+end
+
 --- Capture a semantic anchor for the topmost visible line of a section.
 --- entries = a section's line entries (1-indexed)
 --- top_offset = 1-based index into entries of the topmost visible line

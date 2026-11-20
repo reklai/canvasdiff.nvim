@@ -107,8 +107,8 @@ end
 
 T["cmd_complete filters by prefix and offers every word"] = function()
   H.eq(cmd.complete("", {}), {
-    "open", "close", "toggle", "refresh", "sidebar", "compare", "checkout",
-    "track", "all", "unstaged", "staged",
+    "open", "close", "toggle", "here", "refresh", "sidebar", "compare",
+    "checkout", "track", "all", "unstaged", "staged",
   })
   H.eq(cmd.complete("c", {}), { "close", "compare", "checkout" })
   H.eq(cmd.complete("t", {}), { "toggle", "track" })

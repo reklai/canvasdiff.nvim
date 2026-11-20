@@ -32,8 +32,9 @@ Two things are worth knowing before you start:
 
 - Worktree-backed lenses (`all`, `unstaged`, and a bare ref) have an editable
   new side. Press <CR> to jump into that file, edit it, then press CTRL-Space
-  to return. The `staged` lens reads the index and commit ranges read commits,
-  so those views are read-only and decline the jump.
+  to return -- to the line you are on by then, not the one you left from. The
+  `staged` lens reads the index and commit ranges read commits, so those
+  views are read-only and decline the jump.
 - Reviews are independent. Two repositories open at once own separate
   canvases, separate sidebars, and separate sessions; closing one never
   disturbs the other.
@@ -76,8 +77,8 @@ there:
     s               stage the hunk under the cursor
     u               unstage the hunk under the cursor
     S  /  U         stage / unstage this whole file
-    <CR>            jump to this line in the real file
-    CTRL-Space      (in the real file) come back to the canvas
+    <CR>            jump to this line (and column) in the real file
+    CTRL-Space      (in the real file) come back, on the line you are on
     q               close the review
 
 To change defaults, call `setup()` once: >lua
@@ -236,7 +237,18 @@ mean OPPOSITE things.
 
 :CanvasDiff close       Close the review, saving your position.
 
-:CanvasDiff toggle      Same as `:CanvasDiff` with no argument.
+:CanvasDiff toggle      Same as `:CanvasDiff` with no argument. From a file
+                        you jumped into, opening is the return: unsaved
+                        edits are spliced in and the canvas lands on the
+                        line you are on (|canvasdiff-jump-back|).
+
+:CanvasDiff here        Show the review at the file line under the cursor:
+                        the reverse of <CR> on a canvas row. Opens the
+                        review if none is live, focuses it if it is already
+                        on screen, and returns from a jump if one is out. A
+                        line outside every hunk lands on the nearest shown
+                        line of the same file; a file with no changes shows
+                        the review unmoved and says so. Never changes a fold.
 
 :CanvasDiff refresh     Re-collect from Git and splice in what changed, so the
                         same TEXT stays under your cursor.
@@ -291,7 +303,7 @@ never checks out, fetches, or writes refs.
 
 On the canvas~
                                                         *canvasdiff-canvas-maps*
-    <CR>, <2-LeftMouse>     Jump to this line in the real file
+    <CR>, <2-LeftMouse>     Jump to this line and column in the real file
     za, c                   Collapse or expand this file
     ]f  /  [f               Next / previous file
     ]h  /  [h               Next / previous hunk
@@ -362,16 +374,35 @@ work from anywhere.
 
 In a file you jumped to~
                                                           *canvasdiff-jump-back*
-    CTRL-Space              Return to the canvas
+    CTRL-Space              Return to the canvas, on the line you are on
 
-This one mapping is set on the real file's buffer only for the duration of the
-jump, and removed afterwards. Everything else in that buffer -- macros,
-operators, your own mappings -- keeps working, because it is a buffer you are
-actually editing.
+The return is the mirror of the jump. <CR> opens the file line and column
+under the canvas cursor; CTRL-Space puts the canvas cursor on the file line
+and column you are on when you press it. Fix something forty lines from
+where you landed and you come back to the fix. Three cases:
+
+- Pressed on the very line the jump landed on, unedited: nothing was pointed
+  at, so the canvas comes back exactly as you left it -- same row (a hunk
+  header, if that is what you pressed <CR> on), same scroll position.
+- Pressed on a line outside every hunk's context: that line has no row, so
+  the nearest shown line of the same file stands in.
+- Pressed in a file with no changes, or outside the repository: the canvas
+  comes back where you left it.
+
+The mapping follows you. It is set on the buffer the jump opened, and on
+every ordinary file buffer you then enter in that window -- `gd` into
+another file and CTRL-Space still returns, landing on that file's section if
+the review has one. A buffer that already maps the key locally keeps its own
+mapping. All of them are removed when you return or the review closes.
+Everything else in those buffers -- macros, operators, your own mappings --
+keeps working, because they are buffers you are actually editing.
+
+`:CanvasDiff toggle` and `:CanvasDiff here` from such a file are the same
+return, into the window you are in.
 
 There is deliberately no second key for it. If your terminal does not transmit
-CTRL-Space, the jump loop has no exit, and a loud failure is better than a
-subtly half-working one. To bind your own: >lua
+CTRL-Space, the jump loop has no key out -- only the commands above -- and a
+loud failure is better than a subtly half-working one. To bind your own: >lua
 
     require("canvasdiff").setup({
       keymaps = { file = { back = "<C-g>" } },
@@ -687,6 +718,11 @@ canvasdiff.toggle()                                    *canvasdiff.toggle()*
         large review builds without freezing the editor, and toggling again
         while it builds cancels it (|canvasdiff-incremental|).
 
+canvasdiff.here()                                        *canvasdiff.here()*
+        Show the review at the file line under the cursor; what
+        `:CanvasDiff here` runs. Returns the review state, or nil and a
+        message.
+
 canvasdiff.sidebar()                                  *canvasdiff.sidebar()*
         Toggle the file-tree sidebar of the showing review. Independent of
         `sidebar.enabled`, which governs auto-open only. Warns when no
@@ -742,8 +778,10 @@ canvasdiff.toggle_base()                           *canvasdiff.toggle_base()*
         Set or toggle the base revision.
 
 canvasdiff.jump_back({opts})                        *canvasdiff.jump_back()*
-        Return to the canvas from a file you jumped into. `opts.win` selects
-        the window when it is not the current one.
+        Return to the canvas from a file you jumped into, landing on the
+        file line under the cursor of the current window
+        (|canvasdiff-jump-back|). `opts.win` selects the window the canvas
+        comes back into when it is not the one the jump left from.
 
 ==============================================================================
 11. TROUBLESHOOTING                                *canvasdiff-troubleshooting*

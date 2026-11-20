@@ -4,7 +4,7 @@ Your whole **Git Diff** (changeset) as one buffer you can work inside.
 
 CanvasDiff renders every changed file into one scrollable canvas. Press Enter
 on any line to open the real file with your LSP, Tree-sitter, autocmds, and
-unsaved edits intact; edit it, then jump back to the same place in the review.
+unsaved edits intact; edit it, then jump back to the line you are on.
 
 CanvasDiff is **pre-alpha**. Its behavior is tested, but the public surface may
 still change before the first stable release.
@@ -47,7 +47,9 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
 ## Features
 
 - One canvas for every changed file, with Tree-sitter highlighting.
-- Exact jumps into real files and back, including unsaved buffer content.
+- Exact jumps into real files and back, line and column, both ways: Enter
+  opens the line under the canvas cursor, and the return lands on the line
+  you got to. Unsaved buffer content counts.
 - Live refresh on saves, focus changes, and external changes.
 - All, unstaged, staged, and read-only revision-range lenses.
 - Hunk/file staging, persistent folds, a file-and-hunk sidebar, pinned context,
@@ -139,7 +141,7 @@ sidebar mappings stay buffer-local and are installed when those buffers open.
 2. Move through the canvas with normal motions, `]h`/`[h` for hunks, and
    `]f`/`[f` for files.
 3. Press Enter to open the real file at the selected line.
-4. Edit, then press Ctrl+Space to return to the same review position.
+4. Edit, then press Ctrl+Space to return, on the line you are on.
 5. Press Tab to cycle all → unstaged → staged, and `q` to close.
 
 ## Configuration recipes
@@ -412,6 +414,13 @@ Tab and Shift+Tab cycle these lenses:
 
 Committed ranges such as `main..topic` and `main...topic` are read-only.
 
+### From a file to the review
+
+The jump runs both ways. `:CanvasDiff here` shows the review at the file line
+under the cursor, opening it if needed, and Ctrl+Space keeps working after you
+leave the file you jumped into: it follows you into other files in that
+window.
+
 ### Commands
 
 ```vim
@@ -419,6 +428,7 @@ Committed ranges such as `main..topic` and `main...topic` are read-only.
 :CanvasDiff open
 :CanvasDiff close
 :CanvasDiff toggle
+:CanvasDiff here
 :CanvasDiff refresh
 :CanvasDiff sidebar
 :CanvasDiff compare
@@ -448,7 +458,7 @@ stash, detached-HEAD, or deletion operations.
 | Canvas | `q`, `<leader>lh` | Close/back out; show the cheatsheet. |
 | Sidebar | Enter/`za`/`c`/double-click | Select a file/hunk or fold a directory. |
 | Sidebar | `s`/`u`, `q`, `<leader>lh` | Stage/unstage; close sidebar; show help. |
-| Real file | Ctrl+Space | Return to the canvas. |
+| Real file | Ctrl+Space | Return to the canvas, on the line you are on. |
 
 CanvasDiff never replaces an existing global mapping; collisions are reported.
 

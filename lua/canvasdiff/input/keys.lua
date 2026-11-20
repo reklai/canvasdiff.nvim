@@ -30,7 +30,7 @@ K.specs = {
   { ctx = "canvas", action = "cycle_prev", group = "Navigate", desc = "Scroll to the previous hunk (wraps; a folded file is one stop)" },
 
   { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (never changes its fold)" },
-  { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas at the same spot" },
+  { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas, on the line you are on" },
 
   { ctx = "canvas", action = "collapse",   group = "View",     desc = "Fold or unfold this file (unfolds the directory when that is what hides it)" },
   { ctx = "canvas", action = "lens_next",  group = "View",     desc = "Next lens: all / unstaged / staged (exits a READ-ONLY range)" },

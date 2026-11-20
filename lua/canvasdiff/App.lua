@@ -709,6 +709,7 @@ local INTERACTIVE = setmetatable({}, {
 local INTERACTIVE_ARGUMENT = {
   open = function(app, operation) return operation(app, INTERACTIVE) end,
   toggle = function(app, operation) return operation(app, INTERACTIVE) end,
+  here = function(app, operation) return operation(app, INTERACTIVE) end,
   refresh = function(app, operation) return operation(app, INTERACTIVE) end,
   set_lens = function(app, operation, argument)
     return operation(app, argument, INTERACTIVE)
@@ -925,6 +926,79 @@ local function reveal(surface, st, i, path, win)
   sync_after_collapse(surface, st)
   ui.notify("unfolded " .. table.concat(dirs, ", "))
   return dirs
+end
+
+--- Put the canvas cursor of `win` on the row standing for a file position
+--- (what jump.whereabouts answered): the reverse of Enter, with no excursion.
+---
+--- The line keeps the screen row it had in the file window, so the text under
+--- the eye stays under the eye when the canvas replaces the file. Folds are
+--- left alone -- a folded file answers with its placeholder -- for the reason
+--- Enter leaves them alone: this verb goes somewhere, it does not reshape.
+---
+--- @return boolean landed false when that file has no section in the review
+local function show_line(surface, st, win, where)
+  if not (where and canvas_showing(st, win)) then
+    return false
+  end
+  local spot = jump.locate(st, where)
+  if not spot then
+    return false
+  end
+  local height = vim.api.nvim_win_get_height(win)
+  vim.api.nvim_win_call(win, function()
+    local view = vim.fn.winsaveview()
+    view.lnum = spot.row
+    view.col = spot.col
+    view.coladd = 0
+    view.curswant = spot.col
+    view.topline = math.max(
+      1, spot.row - math.min(where.screen_row or 1, height) + 1)
+    vim.fn.winrestview(view)
+  end)
+  local side = surface.controllers.sidebar
+  if side then
+    sidebar.sync(side, win)
+  end
+  set_winbar(st, nil, win)
+  surface:capture_view(win)
+  return true
+end
+
+--- Say that the file being revealed is not in the review, in the file's own
+--- short name. Shown rather than swallowed: the canvas appearing somewhere
+--- unrelated with no word would read as the lookup having gone wrong.
+local function report_unshown(where)
+  ui.notify(("%s has no changes in this review")
+    :format(vim.fn.fnamemodify(where.name, ":~:.")))
+end
+
+--- Return from `surface`'s excursion into `win`, when one is out.
+---
+--- For the verbs that bring the canvas to the window you are IN (toggle,
+--- here) rather than back to the window the jump left from: showing the
+--- canvas while its excursion is still out used to leave the section stale
+--- against unsaved edits and the return key live on a file whose review was
+--- already on screen. A refusal is not presented -- the caller falls back to
+--- plainly showing the canvas, which is what it did before this existed.
+--- @return boolean returned
+local function return_into(surface, win)
+  local store = surface.excursion
+  if not (store and store.excursion) then
+    return false
+  end
+  local landing = vim.api.nvim_win_get_buf(win)
+  if not jump.back(store, { win = win }).ok then
+    return false
+  end
+  surface:adopt_window(win, landing)
+  surface:capture_view(win)
+  set_winbar(surface.state, nil, win)
+  local side = surface.controllers.sidebar
+  if side then
+    sidebar.reconcile(side)
+  end
+  return true
 end
 
 --- Open the file under the cursor as a real buffer. Shared by the jump keymap and
@@ -1929,6 +2003,15 @@ local function commit_open(app, plan, sections, prepared, opts)
     sync_after_collapse(surface, st)
   end
 
+  -- "Show me this line" outranks "where I last was": the caller named a
+  -- place, and the saved position is only ever a default. After the restore,
+  -- so restored folds are already in place and a folded file answers with its
+  -- placeholder; before the virtualizer, for the reason the restore is.
+  local reveal_at = opts._reveal
+  if reveal_at and not show_line(surface, st, st.win, reveal_at) then
+    report_unshown(reveal_at)
+  end
+
   if config.options.virt.enabled then
     -- Attach applies immediately. Its owner callback is already generation-
     -- fenced even though the lease is not published on Surface until attach
@@ -2223,6 +2306,11 @@ function App:toggle(opts)
     self:close()
   elseif surface then
     local win = vim.api.nvim_get_current_win()
+    -- An excursion out of this review: bringing the canvas back IS the
+    -- return, edits spliced and the cursor on the line you were on.
+    if return_into(surface, win) then
+      return
+    end
     local landing = vim.api.nvim_win_get_buf(win)
     if canvas.show(surface.state, win) then
       surface:adopt_window(win, landing)
@@ -2238,6 +2326,64 @@ function App:toggle(opts)
     -- has no other way to learn whether it opened or closed a review.
     return self:open({ async = opts and opts.async or nil })
   end
+end
+
+--- Show the review at the file line under the cursor: the reverse of Enter.
+---
+--- Enter answers "open the file line this row shows"; this answers "show the
+--- row for the file line I am on", from any file of the repository and with
+--- or without an excursion out. It opens the review when none is live, shows
+--- it in this window when it is live but off screen, focuses its window when
+--- it is already on screen in this tabpage, and -- when an excursion is out --
+--- is the return, unsaved edits spliced first.
+---
+--- A line outside every hunk's context lands on the nearest shown line of the
+--- same file. A file with no changes has no row: the review is still shown,
+--- where it was, and a message says why it did not move. Never changes a fold.
+---
+--- `opts.async` is App:open's, used only when this has to open a review.
+--- @return table|nil state the review's state, or nil plus a message
+function App:here(opts)
+  opts = opts or {}
+  local win = vim.api.nvim_get_current_win()
+  local where = jump.whereabouts(win)
+  local surface = active_surface(self)
+  if not surface then
+    return self:open({ async = opts.async, _reveal = where })
+  end
+
+  local st = surface.state
+  local side = surface.controllers.sidebar
+  if canvas_showing(st, win) or (side and sidebar.is_sidebar_win(side, win)) then
+    -- Already inside the review: there is no file line to be on.
+    return st
+  end
+  if return_into(surface, win) then
+    return st
+  end
+
+  local host = canvas_window_in_tab(surface, vim.api.nvim_get_current_tabpage())
+  if host then
+    vim.api.nvim_set_current_win(host)
+  else
+    local landing = vim.api.nvim_win_get_buf(win)
+    if not canvas.show(st, win) then
+      local err = "could not show the review in this window"
+      ui.warn(err)
+      return nil, err
+    end
+    surface:adopt_window(win, landing)
+    surface:capture_view(win)
+    set_winbar(st, nil, win)
+    if side then
+      sidebar.reconcile(side)
+    end
+    host = win
+  end
+  if where and not show_line(surface, st, host, where) then
+    report_unshown(where)
+  end
+  return st
 end
 
 --- Toggle the file-tree sidebar of the showing review.

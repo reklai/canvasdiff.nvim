@@ -39,7 +39,9 @@ T["input_ facade exports exactly the supported key and motion operations"] = fun
 
   local jump_names = vim.tbl_keys(input.jump)
   table.sort(jump_names)
-  H.eq(jump_names, { "back", "cancel", "enter", "last_buf", "store" })
+  H.eq(jump_names, {
+    "back", "cancel", "enter", "last_buf", "locate", "store", "whereabouts",
+  })
   for _, name in ipairs(jump_names) do
     H.eq(type(input.jump[name]), "function",
       "input.jump." .. name .. " is callable")

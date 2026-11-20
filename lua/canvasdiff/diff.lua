@@ -12,9 +12,13 @@ return {
   -- Semantic viewport anchors. `capture_from_entries` returns
   -- { new_lnum, content, screen_offset }; `resolve` answers the best-matching
   -- 1-based entry index, falling back to 1 -- nil only for empty entries.
-  -- Both pure, neither errors.
+  -- `nearest` is the reverse of a jump: (entries, new-side line) -> the index
+  -- of the entry showing that line plus `true`, else the nearest shown line
+  -- plus `false`, else nil when no entry maps to a file line (a binary or
+  -- wholly deleted file). All pure, none errors.
   anchor = {
     capture_from_entries = anchor.capture_from_entries,
+    nearest = anchor.nearest,
     resolve = anchor.resolve,
   },
   -- Path-sorted section list from file records; a file with no reviewable

@@ -48,6 +48,42 @@ return {
     -- entry; the second hunk_hdr is nearest (its following entry is 50).
     H.eq(V.resolve({ new_lnum = 48, content = "vanished line" }, es), 3)
   end,
+  -- The reverse of a jump: a file line names its row outright, with no
+  -- content rung, because every content row carries a distinct new_lnum.
+  ["viewport: nearest names the row showing a file line"] = function()
+    local es = {
+      { content = "f", kind = "file_hdr" },
+      { content = "@@", kind = "hunk_hdr" },
+      { new_lnum = 10, content = "same", kind = "ctx" },
+      { new_lnum = 11, content = "same", kind = "add" },
+      { new_lnum = 12, content = "same", kind = "ctx" },
+    }
+    H.eq({ V.nearest(es, 11) }, { 4, true })
+  end,
+  ["viewport: nearest stands in the closest shown line for one off the canvas"] = function()
+    local es = {
+      { content = "f", kind = "file_hdr" },
+      { content = "@@", kind = "hunk_hdr" },
+      { new_lnum = 10, content = "a", kind = "ctx" },
+      { new_lnum = 11, content = "b", kind = "add" },
+      { content = "@@", kind = "hunk_hdr" },
+      { new_lnum = 40, content = "c", kind = "add" },
+      { new_lnum = 41, content = "d", kind = "ctx" },
+    }
+    H.eq({ V.nearest(es, 1) }, { 3, false }, "above the first hunk")
+    H.eq({ V.nearest(es, 35) }, { 6, false }, "nearer the second hunk")
+    H.eq({ V.nearest(es, 500) }, { 7, false }, "below the last hunk")
+    -- 11 and 40 are both 14.5 +- .5 away from 25/26; the tie itself:
+    es[6].new_lnum = 39
+    H.eq({ V.nearest(es, 25) }, { 4, false }, "an equal distance goes to the earlier hunk")
+  end,
+  ["viewport: nearest answers nil when no row maps to a file line"] = function()
+    H.eq({ V.nearest({}, 3) }, { nil, false })
+    H.eq({ V.nearest({
+      { content = "f", kind = "file_hdr" },
+      { content = "gone", kind = "del" },
+    }, 3) }, { nil, false })
+  end,
   ["viewport: capture prefers ctx below top"] = function()
     local es = {
       { new_lnum = nil, content = "+new", kind = "add" },

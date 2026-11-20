@@ -353,9 +353,10 @@ of the same action. It costs jumplist-forward on the canvas (in a terminal
 `<Tab>` and `<C-i>` are the same byte), which is a fair trade: you navigate the
 canvas by file and hunk, not by jumplist.
 
-**Ctrl+Space is the only way back** from a jump, deliberately — no second key. It
+**Ctrl+Space is the only KEY back** from a jump, deliberately — no second key. It
 sends byte `0x00`, which most terminals do transmit. If yours doesn't, the jump loop
-has no exit, so test it before relying on it:
+has no key out (`:CanvasDiff here` and the toggle still return), so test it before
+relying on it:
 `:nnoremap <C-Space> <Cmd>echo "ok"<CR>`. Alt+Enter is not a default because tiling
 compositors commonly intercept it, and `q` is not one *here* even though it closes the
 canvas — this is a real file you are editing, so macros and every other normal-mode key
@@ -375,6 +376,42 @@ toggle feels broken. A separate prefix costs nothing and avoids that entirely.
 real buffer, leaving the fold exactly as it was — so coming back with Ctrl+Space
 lands you on the placeholder again. Two verbs, no exceptions: Enter goes to a file,
 `za` folds one.
+
+## The jump runs both ways
+
+Enter was always exact: the row under the cursor opens that file line. The
+return was not. It restored the canvas to where it had been *left*, so the
+loop the plugin is built around — notice, jump, fix, come back — came back
+to the place the problem was noticed from rather than to the fix. The return
+is now the same lookup run backwards: the file line under the cursor names
+its canvas row through the same `new_lnum` that made Enter exact, and the
+column travels with it in both directions.
+
+Three decisions keep that from being a surprise.
+
+**Unmoved means untouched.** A return from the very line the jump landed on,
+unedited, restores the canvas exactly as it was left — same row, same
+topline. That row need not be a row *of* that line: Enter on a hunk header
+opens the line below it, and coming back to that line's row instead of the
+header would move a cursor the user never moved.
+
+**A line with no row lands on the nearest one.** Lines outside every hunk's
+context are not on the canvas. The nearest shown line of the same file stands
+in, which is the edge of the closest hunk — never another file, and never the
+top of the review.
+
+**The key follows the window.** The return mapping used to live on the one
+buffer the jump opened, so `gd` into another file left the loop's only exit
+behind. It now follows the excursion into every ordinary file buffer entered
+in the excursion's own window. The window scope is what lets two reviews each
+have an excursion out without one answering for the other; a buffer that
+already maps the key locally keeps its own, because the mapping is removed
+with `keymap.del`, which cannot put back what it replaced.
+
+`:CanvasDiff here` is the same lookup with no excursion at all — "show me this
+line in the review" from any file. It, the toggle and the return all read
+folds the way Enter does: they go somewhere, they do not reshape. A folded
+file answers with its placeholder.
 
 ## Refresh, and why there is no rebuild key
 

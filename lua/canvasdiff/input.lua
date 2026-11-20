@@ -23,12 +23,28 @@ return {
   -- present, never thrown -- and `back` declines WITHOUT consuming the
   -- excursion, so the keypress stays retryable. `cancel` answers false when
   -- there was nothing to consume; `last_buf` a still-valid buffer or nil.
+  --
+  -- The jump runs both ways and lands on the line either way: `enter` opens
+  -- the file line (and column) under the canvas cursor, `back` puts the canvas
+  -- cursor on the file line under the cursor of the window it is called from.
+  -- While an excursion is out its return key follows the user into every
+  -- ordinary file buffer entered in the excursion's window; `back` and
+  -- `cancel` take all of those mappings off again.
+  --
+  -- The same reverse lookup without an excursion: `whereabouts(win?)` answers
+  -- { buf, name, lnum, col, text, screen_row } for a window on an ordinary
+  -- named file buffer and nil otherwise; `locate(state, where)` answers the
+  -- canvas position { index, path, row, col, exact } standing for it, or nil
+  -- when that file has no section in the review. Both are read-only and
+  -- neither errors.
   jump = {
     back = jump.back,
     cancel = jump.cancel,
     enter = jump.enter,
     last_buf = jump.last_buf,
+    locate = jump.locate,
     store = jump.store,
+    whereabouts = jump.whereabouts,
   },
   -- Pure lookups over the binding specs and a config keymaps table; every
   -- function returns fresh tables and never errors. `list` normalizes one

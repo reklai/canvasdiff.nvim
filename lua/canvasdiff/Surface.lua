@@ -457,8 +457,11 @@ function Surface:dispose(reason)
     attempt("clear_winbar", function() clear_winbar(self) end)
   end
 
-  -- The way back belonged to this review. Releasing it here keeps a disposed
-  -- Surface from retaining a file buffer and a whole canvas state graph.
+  -- The way back belonged to this review. Cancelling it takes its return key
+  -- off every buffer the excursion followed the user into and deletes the
+  -- group that was adding them; releasing the store keeps a disposed Surface
+  -- from retaining a file buffer and a whole canvas state graph.
+  attempt("excursion.cancel", function() jump.cancel(self.excursion) end)
   self.excursion = nil
 
   -- So did the canvas buffer. Reclaim it once the event loop turns: the

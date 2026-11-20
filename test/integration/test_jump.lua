@@ -12,6 +12,17 @@ local lens = model.lens
 -- instead of shimming vim.notify.
 local store
 
+--- A fresh store for a fresh fixture, retiring the previous fixture's the way
+--- a disposed Surface does. A test that leaves its excursion out would
+--- otherwise keep following into the next fixture's buffers -- in the same
+--- window, since every fixture opens in the current one.
+local function fresh_store()
+  if store then
+    jump.cancel(store)
+  end
+  store = jump.store()
+end
+
 local function enter(st, opts)
   return jump.enter(store, st, opts)
 end
@@ -39,7 +50,7 @@ local function open_fixture(spec)
   end
   local st = canvas.open(model.build(files), {})
   st.root = root
-  store = jump.store()
+  fresh_store()
   return root, st
 end
 
@@ -67,7 +78,7 @@ local function open_collected(spec)
   local st = canvas.open(sections, {})
   st.root = root
   st.lens = lens.get("all")
-  store = jump.store()
+  fresh_store()
   return root, st
 end
 
@@ -131,7 +142,7 @@ return {
     local st = canvas.open(sections, {})
     st.root = root
     st.lens = lens.get("all")
-    store = jump.store()
+    fresh_store()
     local ok, err = pcall(function()
       cursor_to(st, "+echo 2")
       enter(st)
@@ -440,6 +451,180 @@ return {
       end
     end
     assert(ok, err)
+  end,
+  -- The return is the mirror of the jump. It used to restore the canvas to
+  -- where it was LEFT, so a fix made forty lines from where the jump landed
+  -- came back to the place it was noticed from rather than to the fix.
+  ["jump: back lands on the file line the cursor is on, column included"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 60) },
+      worktree = { ["a.txt"] = lines("l", 60):gsub("l10\n", "L10\n"):gsub("l50\n", "L50 changed\n") },
+    })
+    cursor_to(st, "+L10")
+    enter(st)
+    H.eq(vim.api.nvim_win_get_cursor(0), { 10, 0 })
+    vim.api.nvim_win_set_cursor(0, { 50, 4 })
+    assert(back())
+    local row = vim.api.nvim_win_get_cursor(st.win)
+    H.eq(vim.api.nvim_buf_get_lines(st.buf, row[1] - 1, row[1], false)[1], "+L50 changed")
+    H.eq(row[2], 5, "the file column, shifted past the one-byte row prefix")
+  end,
+  ["jump: back follows an edit made away from where the jump landed"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 60) },
+      worktree = { ["a.txt"] = lines("l", 60):gsub("l10\n", "L10\n") },
+    })
+    cursor_to(st, "+L10")
+    enter(st)
+    -- A brand-new hunk, nowhere near the one the jump came from.
+    vim.api.nvim_buf_set_lines(0, 44, 45, false, { "fixed here" })
+    vim.api.nvim_win_set_cursor(0, { 45, 2 })
+    assert(back())
+    local row = vim.api.nvim_win_get_cursor(st.win)
+    H.eq(vim.api.nvim_buf_get_lines(st.buf, row[1] - 1, row[1], false)[1], "+fixed here")
+    H.eq(row[2], 3)
+    local view = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    assert(view.topline <= row[1], "the landing row is on screen")
+  end,
+  -- A line outside every hunk's context has no row. The nearest shown line of
+  -- the same file stands in, so the return never leaves the file you were in.
+  ["jump: back from a line the canvas does not show lands on the nearest hunk"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 80), ["b.txt"] = "b1\nb2\n" },
+      worktree = {
+        ["a.txt"] = lines("l", 80):gsub("l10\n", "L10\n"):gsub("l70\n", "L70\n"),
+        ["b.txt"] = "b1\nB2\n",
+      },
+    })
+    cursor_to(st, "+L10")
+    enter(st)
+    vim.api.nvim_win_set_cursor(0, { 30, 0 })
+    assert(back())
+    local row = vim.api.nvim_win_get_cursor(st.win)[1]
+    H.eq(vim.api.nvim_buf_get_lines(st.buf, row - 1, row, false)[1], " l13",
+      "the last context line of the hunk above is the nearest shown line")
+  end,
+  -- Nothing was pointed at, so nothing moves: the row that was pressed need
+  -- not even be a row of the line it opened.
+  ["jump: back from the untouched landing line returns to the pressed row"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = lines("l", 60) },
+      worktree = { ["a.txt"] = lines("l", 60):gsub("l30\n", "L30\n") },
+    })
+    local header
+    for i, entry in ipairs(st.sections[1].entries) do
+      if entry.kind == "hunk_hdr" then header = i end
+    end
+    vim.api.nvim_win_set_cursor(st.win, { header, 0 })
+    local before = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    enter(st)
+    H.eq(vim.api.nvim_win_get_cursor(0)[1], 27, "a header opens the line below it")
+    assert(back())
+    local after = vim.api.nvim_win_call(st.win, vim.fn.winsaveview)
+    H.eq({ after.lnum, after.topline }, { before.lnum, before.topline })
+  end,
+  ["jump: enter carries the canvas column into the file"] = function()
+    local _, st = open_fixture({
+      committed = { ["a.txt"] = "alpha beta\n" },
+      worktree = { ["a.txt"] = "alpha gamma\n" },
+    })
+    local row = cursor_to(st, "+alpha gamma")
+    vim.api.nvim_win_set_cursor(st.win, { row, 7 }) -- on the `g`, past the `+`
+    enter(st)
+    H.eq(vim.api.nvim_win_get_cursor(0), { 1, 6 })
+    assert(back())
+    H.eq(vim.api.nvim_win_get_cursor(st.win), { row, 7 }, "and the round trip is exact")
+  end,
+  -- `gd` out of the jumped-to file used to strand the return key on a buffer
+  -- no longer on screen. It follows now, and lands on wherever you got to.
+  ["jump: the return key follows into another file and lands on its line"] = function()
+    local root, st = open_fixture({
+      committed = { ["a.txt"] = "a1\na2\n", ["b.txt"] = lines("b", 40) },
+      worktree = { ["a.txt"] = "a1\nA2\n", ["b.txt"] = lines("b", 40):gsub("b30\n", "B30\n") },
+    })
+    st.lens = lens.get("all")
+    local returned = 0
+    cursor_to(st, "+A2")
+    enter(st, { on_return = function() returned = returned + 1 end })
+    local first = vim.api.nvim_get_current_buf()
+
+    vim.cmd.edit(vim.fs.joinpath(root, "b.txt"))
+    local second = vim.api.nvim_get_current_buf()
+    local map = vim.fn.maparg("<C-Space>", "n", false, true)
+    H.eq(map.buffer, 1, "the buffer wandered into carries the return key")
+    vim.api.nvim_feedkeys(vim.keycode("<C-Space>"), "x", false)
+    H.eq(returned, 1, "and pressing it there is the same return")
+
+    -- An unsaved edit in the SECOND file: its line numbers are the buffer's.
+    vim.api.nvim_buf_set_lines(second, 0, 0, false, { "inserted" })
+    vim.api.nvim_win_set_cursor(0, { 31, 0 })
+    assert(back())
+    local row = vim.api.nvim_win_get_cursor(st.win)[1]
+    H.eq(vim.api.nvim_buf_get_lines(st.buf, row - 1, row, false)[1], "+B30")
+    for _, buf in ipairs({ first, second }) do
+      H.eq(vim.api.nvim_buf_call(buf, function()
+        return vim.fn.maparg("<C-Space>", "n", false, true).buffer
+      end), nil, "a consumed excursion leaves no return key behind")
+    end
+    H.eq(#vim.api.nvim_get_autocmds({ event = "BufEnter", buffer = second }), 0)
+  end,
+  -- A file the review does not show has no row. The return still works from
+  -- it -- that is the whole point of following -- and goes back to where the
+  -- excursion left.
+  ["jump: returning from a file outside the review goes back to where it left"] = function()
+    local root, st = open_fixture({
+      committed = { ["a.txt"] = "a1\na2\n", ["same.txt"] = "s1\ns2\ns3\n" },
+      worktree = { ["a.txt"] = "a1\nA2\n", ["same.txt"] = "s1\ns2\ns3\n" },
+    })
+    st.lens = lens.get("all")
+    local pressed = cursor_to(st, "+A2")
+    enter(st)
+    vim.cmd.edit(vim.fs.joinpath(root, "same.txt"))
+    vim.api.nvim_win_set_cursor(0, { 3, 0 })
+    H.eq(vim.fn.maparg("<C-Space>", "n", false, true).buffer, 1)
+    assert(back())
+    H.eq(vim.api.nvim_win_get_cursor(st.win)[1], pressed)
+  end,
+  -- The return is removed with keymap.del, which cannot restore what it
+  -- replaced -- so a buffer's own mapping on that key is never taken over.
+  ["jump: following never takes a key a buffer already maps"] = function()
+    local root, st = open_fixture({
+      committed = { ["a.txt"] = "a1\na2\n", ["b.txt"] = "b1\nb2\n" },
+      worktree = { ["a.txt"] = "a1\nA2\n", ["b.txt"] = "b1\nB2\n" },
+    })
+    local other = vim.fn.bufadd(vim.fs.joinpath(root, "b.txt"))
+    vim.fn.bufload(other)
+    vim.keymap.set("n", "<C-Space>", "<Cmd>let g:canvasdiff_own_map = 1<CR>",
+      { buffer = other })
+    cursor_to(st, "+A2")
+    enter(st)
+    vim.api.nvim_set_current_buf(other)
+    H.eq(vim.fn.maparg("<C-Space>", "n", false, true).rhs,
+      "<Cmd>let g:canvasdiff_own_map = 1<CR>")
+    assert(jump.cancel(store))
+    H.eq(vim.fn.maparg("<C-Space>", "n", false, true).rhs,
+      "<Cmd>let g:canvasdiff_own_map = 1<CR>", "and cancelling leaves it alone")
+    vim.keymap.del("n", "<C-Space>", { buffer = other })
+  end,
+  ["jump: cancelling takes the return key off every followed buffer"] = function()
+    local root, st = open_fixture({
+      committed = { ["a.txt"] = "a1\na2\n", ["b.txt"] = "b1\nb2\n" },
+      worktree = { ["a.txt"] = "a1\nA2\n", ["b.txt"] = "b1\nB2\n" },
+    })
+    cursor_to(st, "+A2")
+    enter(st)
+    local first = vim.api.nvim_get_current_buf()
+    vim.cmd.edit(vim.fs.joinpath(root, "b.txt"))
+    local second = vim.api.nvim_get_current_buf()
+    assert(jump.cancel(store))
+    for _, buf in ipairs({ first, second }) do
+      H.eq(vim.api.nvim_buf_call(buf, function()
+        return vim.fn.maparg("<C-Space>", "n", false, true).buffer
+      end), nil)
+    end
+    -- And nothing keeps adding it: the follow group went with the excursion.
+    vim.cmd.edit(vim.fs.joinpath(root, "a.txt"))
+    H.eq(vim.fn.maparg("<C-Space>", "n", false, true).buffer, nil)
   end,
   ["jump: back with all changes reverted deletes section"] = function()
     local root, st = setup_repo()

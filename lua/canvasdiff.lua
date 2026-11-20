@@ -39,6 +39,15 @@ return {
   toggle = function()
     return app:toggle({ async = true })
   end,
+  --- Show the review at the file line under the cursor -- the reverse of
+  --- pressing Enter on a canvas row. Opens the review when none is live (a
+  --- large one in time slices, as toggle() does), returns from an excursion
+  --- when one is out, and lands on the nearest shown line when the line itself
+  --- is outside every hunk. A file with no changes shows the review unmoved
+  --- and says so. Returns the review state, or nil plus a message.
+  here = function()
+    return app:here({ async = true })
+  end,
   --- Toggle the file-tree sidebar of the showing review. Warns instead of
   --- opening a review when none is showing.
   sidebar = function()
