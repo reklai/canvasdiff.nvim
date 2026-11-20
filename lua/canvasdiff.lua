@@ -70,6 +70,20 @@ return {
   cycle_lens = function(delta)
     return app:cycle_lens(delta)
   end,
+  --- Mark the whole worktree as seen and show only what changes from here:
+  --- records it (untracked files and unsaved buffers included) as a commit
+  --- under the private ref refs/worktree/canvasdiff/checkpoint, then points
+  --- the canvas at CHECKPOINT → WORKTREE, opening it when none is showing.
+  --- Never writes the index, the worktree, or a branch. Returns the
+  --- checkpoint's object id, or nil plus a message.
+  checkpoint = function()
+    return app:checkpoint()
+  end,
+  --- Point the canvas at CHECKPOINT → WORKTREE without taking a new
+  --- checkpoint. Warns and returns nil when none has been taken.
+  since = function()
+    return app:since()
+  end,
   --- Compare the worktree against `ref` (e.g. "main", "origin/main"). The
   --- new side stays the editable worktree.
   set_branch = function(ref)

@@ -24,12 +24,19 @@ local M = {}
 --- other write still lock as Git requires.
 local GIT_ENV = { GIT_OPTIONAL_LOCKS = "0" }
 
-local function run(dir, args, stdin)
+--- `index_file` points the one command at an alternate index
+--- (GIT_INDEX_FILE), which is how a snapshot is built without the real index
+--- ever being read for writing or written at all.
+local function run(dir, args, stdin, index_file)
   local cmd = { "git", "-C", dir }
   for _, a in ipairs(args) do
     cmd[#cmd + 1] = a
   end
-  return system.run(cmd, { text = false, stdin = stdin, env = GIT_ENV })
+  local env = GIT_ENV
+  if index_file then
+    env = { GIT_OPTIONAL_LOCKS = "0", GIT_INDEX_FILE = index_file }
+  end
+  return system.run(cmd, { text = false, stdin = stdin, env = env })
 end
 
 local function command_error(what, res)
@@ -638,10 +645,10 @@ end
 --- @param content string
 --- @return true|nil
 --- @return string|nil
-function M.set_index_blob(root, path, content)
+function M.set_index_blob(root, path, content, index_file)
   local entry = run(root, {
     "--literal-pathspecs", "ls-files", "--stage", "--", path,
-  })
+  }, nil, index_file)
   if entry.code ~= 0 or entry.stdout == nil then
     return nil, command_error("git ls-files --stage", entry)
   end
@@ -667,7 +674,7 @@ function M.set_index_blob(root, path, content)
   if mode ~= "120000" then
     vim.list_extend(hash_args, { "--path", path })
   end
-  local hashed = run(root, hash_args, content)
+  local hashed = run(root, hash_args, content, index_file)
   if hashed.code ~= 0 or hashed.stdout == nil then
     return nil, command_error("git hash-object", hashed)
   end
@@ -679,11 +686,103 @@ function M.set_index_blob(root, path, content)
   local updated = run(root, {
     "update-index", "--add", "--cacheinfo",
     ("%s,%s,%s"):format(mode, oid, path),
-  })
+  }, nil, index_file)
   if updated.code ~= 0 then
     return nil, command_error("git update-index", updated)
   end
   return true
+end
+
+--- Record the worktree as it is right now as a commit, and point `ref` at it.
+---
+--- What `git stash create` would be if it also took untracked files and left
+--- nothing behind but the object: a throwaway index seeded from the real one
+--- (so only what differs is hashed) takes `git add -A`, then each `overlays`
+--- entry -- { path, text }, a loaded buffer's unsaved bytes -- on top, and its
+--- tree becomes a commit whose parent is HEAD when there is one.
+---
+--- The real index and the worktree are never written: every command that
+--- writes an index is pointed at the throwaway one, and that file is deleted
+--- on every exit. What the repository gains is objects and one ref -- and
+--- `ref` is the caller's, meant to be a private one (refs/worktree/..., which
+--- is per-worktree and outside every branch listing).
+---
+--- Ignored files are not in the snapshot, by `git add`'s own rule.
+--- @param root string
+--- @param ref string full ref name to move
+--- @param overlays { path: string, text: string }[]|nil
+--- @return string|nil commit the new commit's object id
+--- @return string|nil err nothing was moved when this is set
+function M.snapshot(root, ref, overlays)
+  if type(ref) ~= "string" or not ref:match("^refs/") then
+    return nil, "snapshot needs a full ref name"
+  end
+  local index_file = vim.fn.tempname()
+  local function done(commit, err)
+    pcall(vim.uv.fs_unlink, index_file)
+    pcall(vim.uv.fs_unlink, index_file .. ".lock")
+    return commit, err
+  end
+
+  local located = run(root, { "rev-parse", "--git-path", "index" })
+  if located.code ~= 0 or located.stdout == nil then
+    return done(nil, command_error("git rev-parse --git-path", located))
+  end
+  local real_index = located.stdout:gsub("%s+$", "")
+  if not real_index:match("^/") and not real_index:match("^%a:[/\\]") then
+    real_index = vim.fs.joinpath(root, real_index)
+  end
+  -- No index yet (a repository with nothing ever added) is not a failure: the
+  -- throwaway index simply starts empty.
+  if vim.uv.fs_stat(real_index) then
+    local copied, copy_err = vim.uv.fs_copyfile(real_index, index_file)
+    if not copied then
+      return done(nil, "could not seed a snapshot index: " .. tostring(copy_err))
+    end
+  end
+
+  local added = run(root, { "add", "-A" }, nil, index_file)
+  if added.code ~= 0 then
+    return done(nil, command_error("git add", added))
+  end
+  for _, overlay in ipairs(overlays or {}) do
+    local set, set_err = M.set_index_blob(root, overlay.path, overlay.text, index_file)
+    if not set then
+      return done(nil, set_err)
+    end
+  end
+
+  local wrote = run(root, { "write-tree" }, nil, index_file)
+  local tree = wrote.code == 0 and wrote.stdout
+    and wrote.stdout:gsub("%s+$", "") or ""
+  if not tree:match("^[0-9a-f]+$") then
+    return done(nil, command_error("git write-tree", wrote))
+  end
+
+  -- An identity of its own: commit-tree refuses to run without one, and a
+  -- snapshot must not depend on (or be attributed to) the user's.
+  local commit_args = {
+    "-c", "user.name=canvasdiff", "-c", "user.email=canvasdiff@localhost",
+    "commit-tree", tree, "-m", "canvasdiff checkpoint",
+  }
+  local head = M.resolve_commit(root, "HEAD")
+  if head then
+    vim.list_extend(commit_args, { "-p", head })
+  end
+  local committed = run(root, commit_args)
+  local commit = committed.code == 0 and committed.stdout
+    and committed.stdout:gsub("%s+$", "") or ""
+  if not commit:match("^[0-9a-f]+$") then
+    return done(nil, command_error("git commit-tree", committed))
+  end
+
+  local moved = run(root, {
+    "update-ref", "-m", "canvasdiff: checkpoint", "--end-of-options", ref, commit,
+  })
+  if moved.code ~= 0 then
+    return done(nil, command_error("git update-ref", moved))
+  end
+  return done(commit)
 end
 
 return M

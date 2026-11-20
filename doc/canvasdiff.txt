@@ -30,11 +30,11 @@ useful from OUTSIDE the canvas, or inside your own mapping.
 
 Two things are worth knowing before you start:
 
-- Worktree-backed lenses (`all`, `unstaged`, and a bare ref) have an editable
-  new side. Press <CR> to jump into that file, edit it, then press CTRL-Space
-  to return -- to the line you are on by then, not the one you left from. The
-  `staged` lens reads the index and commit ranges read commits, so those
-  views are read-only and decline the jump.
+- Worktree-backed lenses (`all`, `unstaged`, a bare ref, and the checkpoint
+  lens) have an editable new side. Press <CR> to jump into that file, edit
+  it, then press CTRL-Space to return -- to the line you are on by then, not
+  the one you left from. The `staged` lens reads the index and commit ranges
+  read commits, so those views are read-only and decline the jump.
 - Reviews are independent. Two repositories open at once own separate
   canvases, separate sidebars, and separate sessions; closing one never
   disturbs the other.
@@ -80,6 +80,7 @@ there:
     x               discard the unstaged hunk under the cursor
     <CR>            jump to this line (and column) in the real file
     CTRL-Space      (in the real file) come back, on the line you are on
+    C               checkpoint: mark all of it seen, show only what is new
     q               close the review
 
 To change defaults, call `setup()` once: >lua
@@ -192,6 +193,33 @@ directly: >vim
 A bare revision is also a lens: `:CanvasDiff main` shows your editable
 worktree against `main`.
 
+                                                    *canvasdiff-checkpoint*
+A checkpoint answers "what changed since I last looked". `C` on the canvas
+(or `:CanvasDiff checkpoint`) records the worktree exactly as the review
+shows it -- untracked files and unsaved buffer text included, ignored files
+not -- and switches to the lens that compares against it:
+
+    CHECKPOINT → WORKTREE
+
+The canvas empties on the press, which is the confirmation: everything on it
+has been marked seen. It fills again only with what arrives afterwards, so
+when an agent, a formatter or a rebase rewrites files between two passes,
+the second pass shows the delta instead of the whole changeset. Press `C`
+again to move the checkpoint forward; <Tab> returns to the full review, and
+`:CanvasDiff since` comes back to the delta without moving the checkpoint.
+
+The lens is an ordinary worktree lens: jumps and staging work in it. `x`
+does not -- a discard puts the INDEX back, and this lens is not measured
+against the index (|canvasdiff-discard|).
+
+Taking a checkpoint writes nothing of yours: not the index, not the
+worktree, not a branch. It is stored as a commit under the private ref
+`refs/worktree/canvasdiff/checkpoint`, which Git keeps per worktree and
+outside every branch and tag listing. It does appear in `git log --all`, as
+`refs/stash` does; `git update-ref -d refs/worktree/canvasdiff/checkpoint`
+removes it. A session that reopens onto a removed checkpoint falls back to
+HEAD → WORKTREE and says so.
+
                                                         *canvasdiff-ranges*
 Commit ranges compare committed content and are read-only:
 
@@ -271,6 +299,12 @@ mean OPPOSITE things.
 :CanvasDiff unstaged    Switch to the `unstaged` lens.
 :CanvasDiff staged      Switch to the `staged` lens.
 
+:CanvasDiff checkpoint  Mark everything in the worktree as seen and show
+                        only what changes from here on. Opens the review
+                        if none is showing. See |canvasdiff-checkpoint|.
+:CanvasDiff since       Show what changed since the last checkpoint without
+                        taking a new one. Warns when there is none.
+
 :CanvasDiff {revision}  Compare your worktree against {revision}.
 :CanvasDiff {A..B}      Compare the two commit tips, read-only.
 :CanvasDiff {A...B}     Compare merge-base(A, B) against B, read-only.
@@ -311,6 +345,8 @@ On the canvas~
     CTRL-N  /  CTRL-P       Scroll to the next / previous hunk (wraps;
                             a folded file is one stop)
     <Tab>  /  <S-Tab>       Next / previous lens
+    C                       Checkpoint: mark all of this seen, then show
+                            only what changes from here
     o                       Toggle the sidebar
     r                       Refresh the current diff
     s                       Stage this hunk -- or this file on its header
@@ -390,9 +426,9 @@ screen IS an unstaged change: always in the `unstaged` lens, and in the
 modified the `all` lens measures hunks against HEAD, and putting HEAD's
 lines back would leave the index holding a change the worktree no longer
 has; the key declines and names the unstaged lens. It also declines in the
-staged lens (that is `u`), in a bare-ref lens, in a range, on an untracked
-file (discarding it is deleting it) and on a deleted one (`git restore`
-brings a whole file back).
+staged lens (that is `u`), in a bare-ref or checkpoint lens, in a range, on
+an untracked file (discarding it is deleting it) and on a deleted one
+(`git restore` brings a whole file back).
 
 Two things make a destructive key safe to leave on one letter. The write
 goes through the file's buffer when it is loaded, as ONE change in that
@@ -467,6 +503,7 @@ default. >lua
           -- File-at-a-time cycling ships disabled: no map exists until set.
           lens_next  = "<Tab>",
           lens_prev  = "<S-Tab>",
+          checkpoint = "C",
           sidebar    = "o",
           refresh    = "r",
           stage      = "s",
@@ -754,6 +791,15 @@ canvasdiff.here()                                        *canvasdiff.here()*
         Show the review at the file line under the cursor; what
         `:CanvasDiff here` runs. Returns the review state, or nil and a
         message.
+
+canvasdiff.checkpoint()                            *canvasdiff.checkpoint()*
+        Take a checkpoint and show CHECKPOINT → WORKTREE
+        (|canvasdiff-checkpoint|). Returns the checkpoint commit's object
+        id, or nil and a message.
+
+canvasdiff.since()                                      *canvasdiff.since()*
+        Show CHECKPOINT → WORKTREE without taking a new checkpoint. Warns
+        and returns nil when none has been taken.
 
 canvasdiff.discard({opts})                            *canvasdiff.discard()*
         Discard the unstaged change under the canvas cursor; what `x` runs

@@ -166,6 +166,11 @@ M.defaults = {
       -- jumplist.
       lens_next  = "<Tab>",
       lens_prev  = "<S-Tab>",
+      -- "I have seen all of this": records the worktree as a checkpoint and
+      -- pivots to the lens showing only what changes afterwards. Inert to
+      -- take -- `C` is change-to-end-of-line, refused here with E21 -- and it
+      -- sits beside `c`, the per-file way of setting something aside.
+      checkpoint = "C",
       -- Brings the sidebar back after `q` (in the sidebar) closed it, and
       -- puts it away again. Inert to take, like the rest of the editing
       -- family above: `o` is open-line, which nomodifiable refuses with E21.

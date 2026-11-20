@@ -187,6 +187,7 @@ return {
       "branches",
       "buffer_modified",
       "changed_files",
+      "checkpoint",
       "current_branch",
       "diff_files",
       "file_stream",

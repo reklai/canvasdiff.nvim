@@ -710,6 +710,8 @@ local INTERACTIVE_ARGUMENT = {
   open = function(app, operation) return operation(app, INTERACTIVE) end,
   toggle = function(app, operation) return operation(app, INTERACTIVE) end,
   here = function(app, operation) return operation(app, INTERACTIVE) end,
+  checkpoint = function(app, operation) return operation(app, INTERACTIVE) end,
+  since = function(app, operation) return operation(app, INTERACTIVE) end,
   refresh = function(app, operation) return operation(app, INTERACTIVE) end,
   set_lens = function(app, operation, argument)
     return operation(app, argument, INTERACTIVE)
@@ -1108,6 +1110,9 @@ local function canvas_actions(app, surface, st, cfg)
     end),
     lens_prev  = owned_action(surface, generation, function()
       app:cycle_lens(-1, INTERACTIVE)
+    end),
+    checkpoint = owned_action(surface, generation, function()
+      app:checkpoint(INTERACTIVE)
     end),
     sidebar    = owned_action(surface, generation, function() app:toggle_sidebar() end),
     -- Ctrl+N / Ctrl+P walk HUNKS; the file axis they used to walk is the pair
@@ -3681,6 +3686,82 @@ local function set_owned_lens(app, surface, l, guard, on_commit, publish)
   end
   ui.notify("showing " .. l.label)
   return true
+end
+
+--- The repository a lens verb with no review to ask acts on: the active
+--- review's when there is one, else the cwd's, else the current file's --
+--- the same order App:open resolves it in.
+local function repository_root(surface)
+  if surface and surface.state and surface.state.root then
+    return surface.state.root
+  end
+  local root = source.root(vim.fn.getcwd())
+  if not root then
+    local dir = buf_dir(vim.api.nvim_get_current_buf())
+    root = dir and source.root(dir) or nil
+  end
+  return root
+end
+
+--- Mark everything in the worktree as seen, and show only what changes from
+--- here on.
+---
+--- The stale marker already answers "did this change after I looked" -- but
+--- per file, and only for a file you folded. With something else rewriting
+--- the worktree between passes (an agent, a formatter, a rebase) the question
+--- is the whole review's: what is NEW. A checkpoint is the worktree as the
+--- review shows it right now, unsaved buffers included, recorded as a commit
+--- under a private per-worktree ref; the CHECKPOINT → WORKTREE lens is an
+--- ordinary worktree-vs-ref comparison over it. So the canvas empties on the
+--- press -- that is the confirmation -- and fills again only with what
+--- arrives afterwards. Pressing it again moves the checkpoint forward.
+---
+--- Nothing of the user's is written: not the index, not the worktree, not a
+--- branch. Staging and editing work in the lens as in any worktree lens; the
+--- lens cycle (Tab) leads back to the full review.
+--- @return string|nil commit the checkpoint's object id, or nil plus a message
+function App:checkpoint(opts)
+  local surface = active_surface(self)
+  local root = repository_root(surface)
+  if not root then
+    local err = "not inside a git repository"
+    ui.warn(err)
+    return nil, err
+  end
+  local commit, err = source.checkpoint(root, lens.CHECKPOINT_REF)
+  if not commit then
+    err = "checkpoint failed: " .. tostring(err)
+    ui.warn(err)
+    return nil, err
+  end
+  ui.notify("checkpoint taken — showing only what changes from here")
+  local l = lens.checkpoint()
+  if surface and surface:is_showing() and lens.same(lens.of(surface.state), l) then
+    -- Already looking through it: the lens is the same, its old side moved.
+    self:refresh(opts)
+  else
+    self:set_lens(l, opts)
+  end
+  return commit
+end
+
+--- Show what changed since the last checkpoint, without taking a new one.
+--- Warns, and changes nothing, when no checkpoint has been taken in this
+--- worktree.
+--- @return boolean|nil shown
+function App:since(opts)
+  local root = repository_root(active_surface(self))
+  if not root then
+    local err = "not inside a git repository"
+    ui.warn(err)
+    return nil, err
+  end
+  if not source.resolve_commit(root, lens.CHECKPOINT_REF) then
+    local err = "no checkpoint yet — :CanvasDiff checkpoint takes one once you have read the review"
+    ui.warn(err)
+    return nil, err
+  end
+  return self:set_lens(lens.checkpoint(), opts)
 end
 
 --- Step through the three named lenses: all → unstaged → staged → all.

@@ -186,6 +186,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
   table.sort(names)
   H.eq(names, {
     "checkout",
+    "checkpoint",
     "close",
     "command",
     "command_complete",
@@ -202,6 +203,7 @@ T["root_ facade is cached and exports exactly the supported API"] = function()
     "set_range",
     "setup",
     "sidebar",
+    "since",
     "stage",
     "toggle",
     "toggle_base",

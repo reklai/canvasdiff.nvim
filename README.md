@@ -54,6 +54,8 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
 - All, unstaged, staged, and read-only revision-range lenses.
 - Hunk/file staging and an undoable hunk/file discard, persistent folds, a
   file-and-hunk sidebar, pinned context, and a draggable minimap.
+- A checkpoint lens: mark the review as seen, then see only what changed
+  since -- for when an agent or a formatter rewrites files between passes.
 - Automatic virtualization and a page-backed canvas for very large reviews,
   which open without freezing the editor while they build.
 
@@ -302,6 +304,7 @@ require("canvasdiff").setup({
       discard_file = "X",
       lens_next = "<Tab>",
       lens_prev = "<S-Tab>",
+      checkpoint = "C",
       sidebar = "o",
       close = "q",
       help = "<leader>lh",
@@ -432,6 +435,20 @@ The write goes through the file's buffer when it is loaded, as one undoable
 change: `u` in the file brings the hunk back. The lines it removed also go to
 the unnamed register, as with any `x`.
 
+### Checkpoints: what changed since I last looked
+
+`C` marks everything on the canvas as seen and switches to the
+`CHECKPOINT → WORKTREE` lens, which is empty until something changes. When an
+agent, a formatter, or a rebase rewrites files between two passes, the second
+pass shows only the delta. `C` again moves the checkpoint forward; Tab returns
+to the full review; `:CanvasDiff since` comes back to the delta.
+
+A checkpoint records the worktree as the review shows it, untracked files and
+unsaved buffers included. It never writes your index, worktree, or branches:
+it is a commit under the private per-worktree ref
+`refs/worktree/canvasdiff/checkpoint` (visible to `git log --all`, removable
+with `git update-ref -d`).
+
 ### From a file to the review
 
 The jump runs both ways. `:CanvasDiff here` shows the review at the file line
@@ -455,6 +472,8 @@ window.
 :CanvasDiff all
 :CanvasDiff unstaged
 :CanvasDiff staged
+:CanvasDiff checkpoint
+:CanvasDiff since
 :CanvasDiff main..topic
 :CanvasDiff main...topic
 ```
@@ -474,6 +493,7 @@ stash, detached-HEAD, or deletion operations.
 | Canvas | `za`/`c`, Tab/Shift+Tab, `o` | Fold; cycle lens; toggle sidebar. |
 | Canvas | `r`, `s`/`u`, `S`/`U` | Refresh; stage/unstage hunk or whole file. |
 | Canvas | `x`, `X` | Discard an unstaged hunk; discard a whole file (asks). |
+| Canvas | `C` | Checkpoint: mark all seen, show only what changes next. |
 | Canvas | `q`, `<leader>lh` | Close/back out; show the cheatsheet. |
 | Sidebar | Enter/`za`/`c`/double-click | Select a file/hunk or fold a directory. |
 | Sidebar | `s`/`u`, `q`, `<leader>lh` | Stage/unstage; close sidebar; show help. |

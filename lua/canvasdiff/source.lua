@@ -19,6 +19,11 @@ return {
   -- Porcelain-v2 records sorted by path, each carrying both halves of the XY
   -- status (`staged`/`unstaged`, nil where the column is ".").
   changed_files = repository.changed_files,
+  -- (root, full ref name) -> the object id of a new commit recording the
+  -- worktree as the review shows it (untracked files and unsaved buffer text
+  -- included, ignored files not), with `ref` moved to it. The real index and
+  -- the worktree are never written. `nil, err` with nothing moved on failure.
+  checkpoint = collect.checkpoint,
   -- The full refs/heads ref HEAD is attached to, or a bare nil (no message)
   -- for a detached, unborn, or unreadable HEAD.
   current_branch = repository.current_branch,

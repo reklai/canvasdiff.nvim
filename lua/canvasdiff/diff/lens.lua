@@ -40,6 +40,13 @@ L.named = {
   },
 }
 
+--- Where a review checkpoint lives: a snapshot of the worktree taken when the
+--- user said "I have seen this", so a later review can show only what changed
+--- since. Under refs/worktree/ deliberately -- Git keeps that namespace
+--- per-worktree (a checkpoint is OF a worktree, and two linked worktrees must
+--- not share one) and outside every branch and tag listing.
+L.CHECKPOINT_REF = "refs/worktree/canvasdiff/checkpoint"
+
 --- Order the UI offers them in: everything, then the two halves it splits into.
 L.order = { "all", "unstaged", "staged" }
 
@@ -86,6 +93,10 @@ local function label_for(l)
     return ("READ-ONLY  %s → %s"):format(l.old, l.new)
   end
   if branch_shape(l) then
+    -- The ref name is plumbing; what the user took was a checkpoint.
+    if l.old == L.CHECKPOINT_REF then
+      return "CHECKPOINT → WORKTREE"
+    end
     return ("%s → WORKTREE"):format(l.old)
   end
 end
@@ -140,6 +151,18 @@ function L.branch(ref)
     old = ref,
     new = "worktree",
   })
+end
+
+--- The lens showing what changed since the last checkpoint: an ordinary
+--- worktree-vs-ref lens over CHECKPOINT_REF, so it is editable, collected and
+--- persisted exactly as any other, and differs only in how it is labelled.
+function L.checkpoint()
+  return L.branch(L.CHECKPOINT_REF)
+end
+
+--- True when `l` is the checkpoint lens.
+function L.is_checkpoint(l)
+  return branch_shape(l) and l.old == L.CHECKPOINT_REF
 end
 
 --- True when `l` is one of the arbitrary-ref lenses built by L.branch.

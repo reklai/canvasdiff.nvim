@@ -143,12 +143,13 @@ T["keys_grouped omits disabled actions and empty groups"] = function()
   km.canvas.collapse = false
   km.canvas.lens_next = false
   km.canvas.lens_prev = false
+  km.canvas.checkpoint = false
   km.canvas.sidebar = false
   local groups = keys.grouped({ "canvas" }, km)
   for _, g in ipairs(groups) do
     assert(g.name ~= "View",
-      "View holds collapse, the two lens keys and the sidebar toggle;"
-        .. " disabling all four drops the group")
+      "View holds collapse, the two lens keys, the checkpoint and the"
+        .. " sidebar toggle; disabling all five drops the group")
     for _, item in ipairs(g.items) do
       assert(item.action ~= "collapse", "a disabled action must not be listed")
     end

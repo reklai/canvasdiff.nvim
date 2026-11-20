@@ -193,6 +193,45 @@ function M.modified_in_root(root)
   return paths[1]
 end
 
+local text
+
+--- Every loaded file buffer under `root` holding edits the disk does not:
+--- { path, text } with `path` repository-relative and `text` the buffer's
+--- byte-exact content, sorted by path. Empty when there are none.
+---
+--- The set `read_worktree` would answer differently from a disk read for --
+--- which is exactly what a snapshot of "the worktree as the review shows it"
+--- has to lay over the files on disk.
+--- @param root string
+--- @return { path: string, text: string }[]
+function M.unsaved_in_root(root)
+  local out = {}
+  if type(root) ~= "string" or root == "" then
+    return out
+  end
+  local normalized_root = absolute(root)
+  local real_root = vim.uv.fs_realpath(normalized_root)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf)
+        and repository_file_buffer(buf)
+        and vim.api.nvim_get_option_value("modified", { buf = buf }) then
+      local normalized = absolute(vim.api.nvim_buf_get_name(buf))
+      local real = vim.uv.fs_realpath(normalized)
+      local rel
+      if normalized ~= normalized_root and within(normalized_root, normalized) then
+        rel = vim.fs.relpath(normalized_root, normalized)
+      elseif real_root and real and real ~= real_root and within(real_root, real) then
+        rel = vim.fs.relpath(real_root, real)
+      end
+      if rel then
+        out[#out + 1] = { path = rel, text = text(buf) }
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a.path < b.path end)
+  return out
+end
+
 --- Byte-exact text of a loaded buffer, as it sits on disk.
 ---
 --- `nvim_buf_get_lines` returns bare lines: Neovim strips `\r` on read and
@@ -200,7 +239,7 @@ end
 --- 'endofline'. Reconstructing both preserves the same bytes an unloaded disk
 --- read would return. 'fixendofline' is deliberately ignored because it only
 --- takes effect when the buffer is written.
-local function text(buf)
+text = function(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if #lines == 0 or (#lines == 1 and lines[1] == "") then
     return ""

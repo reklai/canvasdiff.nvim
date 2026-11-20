@@ -108,12 +108,12 @@ end
 T["cmd_complete filters by prefix and offers every word"] = function()
   H.eq(cmd.complete("", {}), {
     "open", "close", "toggle", "here", "refresh", "sidebar", "compare",
-    "checkout", "track", "all", "unstaged", "staged",
+    "checkout", "track", "all", "unstaged", "staged", "checkpoint", "since",
   })
-  H.eq(cmd.complete("c", {}), { "close", "compare", "checkout" })
+  H.eq(cmd.complete("c", {}), { "close", "compare", "checkout", "checkpoint" })
   H.eq(cmd.complete("t", {}), { "toggle", "track" })
   H.eq(cmd.complete("un"), { "unstaged" })
-  H.eq(cmd.complete("s"), { "sidebar", "staged" })
+  H.eq(cmd.complete("s"), { "sidebar", "staged", "since" })
   H.eq(cmd.complete("zzz"), {})
   H.eq(cmd.complete("re"), { "refresh" })
 end

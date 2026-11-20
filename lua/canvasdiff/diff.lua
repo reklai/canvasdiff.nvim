@@ -69,13 +69,20 @@ return {
   -- branch, normalize) return a fresh validated lens table, or nil for input
   -- they refuse -- a session payload is hand-editable, so `valid` gates
   -- everything read back from disk.
+  --
+  -- `checkpoint()` is the worktree-vs-CHECKPOINT_REF lens: a branch lens in
+  -- every respect but its label, over the private per-worktree ref a review
+  -- checkpoint is stored under.
   lens = {
+    CHECKPOINT_REF = lens.CHECKPOINT_REF,
     INDEX_REV = lens.INDEX_REV,
     branch = lens.branch,
+    checkpoint = lens.checkpoint,
     editable = lens.editable,
     from_base = lens.from_base,
     get = lens.get,
     is_branch = lens.is_branch,
+    is_checkpoint = lens.is_checkpoint,
     is_range = lens.is_range,
     normalize = lens.normalize,
     of = lens.of,

@@ -358,6 +358,9 @@ rest — delete-character, refused with E21 — and its meaning carries over
 intact: what `x` removes goes to the unnamed register. `X` is its whole-file
 capital, the way `S` and `U` are.
 
+**`C` checkpoints**, beside `c`, which folds: both say "I am done looking at
+this", one for a file and one for the whole review.
+
 **Ctrl+Space is the only KEY back** from a jump, deliberately — no second key. It
 sends byte `0x00`, which most terminals do transmit. If yours doesn't, the jump loop
 has no key out (`:CanvasDiff here` and the toggle still return), so test it before
@@ -448,6 +451,36 @@ what they asked for. And the lines removed go to the unnamed register — the
 only net an unloaded file has, and the one `x` already implies. The
 whole-file form asks first: a file's worth of work is a different size of
 mistake than a hunk's.
+
+## Checkpoints: what changed since I looked
+
+The stale `●` answers "did this change after I saw it", but only per file and
+only for a file that was folded. Once something else is rewriting the
+worktree between passes — an agent, a formatter, a rebase — the question
+belongs to the whole review: *what is new*.
+
+A checkpoint is the worktree **as the review shows it**, recorded as a commit:
+`git add -A` into a throwaway index seeded from the real one, each loaded
+buffer's unsaved text laid on top, `write-tree`, `commit-tree`. The unsaved
+overlay is the part that is easy to get wrong — a review reads unsaved
+buffers, so a snapshot taken from disk alone would report text that was on
+screen at the press as having changed since. The lens over it is nothing new:
+`CHECKPOINT → WORKTREE` is an ordinary worktree-vs-ref lens with a friendlier
+label, so collection, editing, staging, persistence and the fall-back for a
+ref that no longer resolves are all code that already existed.
+
+It is stored under `refs/worktree/canvasdiff/checkpoint` rather than in the
+session file. A ref keeps the objects from being pruned, gives the lens a
+stable identity that survives a restart, and can be inspected and deleted
+with git alone. `refs/worktree/` is the namespace Git keeps per worktree — a
+checkpoint is *of* a worktree — and it is outside every branch and tag
+listing. The cost is that `git log --all` shows it, as it shows `refs/stash`.
+Nothing of the user's is written: every index-writing command is pointed at
+the throwaway index.
+
+The canvas empties on the press, and that is the design rather than a side
+effect: an empty review is the confirmation that everything on it was marked
+seen, and whatever appears afterwards is by construction new.
 
 ## Refresh, and why there is no rebuild key
 

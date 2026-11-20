@@ -6,6 +6,18 @@ local model = diff
 
 local M = {}
 
+--- Snapshot the worktree AS THE REVIEW SHOWS IT -- files on disk with every
+--- loaded buffer's unsaved text laid over them -- as a commit under `ref`.
+---
+--- The overlay is the point: a review reads unsaved buffers, so a checkpoint
+--- taken from disk alone would report text the user was looking at when they
+--- took it as having changed since.
+--- @return string|nil commit
+--- @return string|nil err
+function M.checkpoint(root, ref)
+  return repository.snapshot(root, ref, buffer.unsaved_in_root(root))
+end
+
 --- The path pair visible through one fixed lens.
 ---
 --- Porcelain's rename record names the worktree destination in `path` and the
