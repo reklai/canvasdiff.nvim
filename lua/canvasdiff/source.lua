@@ -67,4 +67,12 @@ return {
   -- Always a string: a loaded buffer's possibly-unsaved bytes, else the disk
   -- file, and "" for a deleted or unreadable worktree path. Never errors.
   worktree_text = buffer.read_worktree,
+  -- The write side of worktree_text: replace one worktree file's content with
+  -- disk-exact bytes. Through a loaded buffer when there is one -- a single
+  -- undoable change, saved only if the buffer had no unsaved edits -- else
+  -- straight to disk. Answers "saved" | "buffer" | "disk", or `nil, err` with
+  -- nothing changed (a symlink, an unmodifiable buffer, a mac-format buffer);
+  -- "buffer" may carry a second value naming why the save did not happen.
+  -- Never errors.
+  write_worktree = buffer.write_worktree,
 }

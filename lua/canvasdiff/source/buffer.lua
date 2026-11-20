@@ -251,4 +251,108 @@ function M.read_worktree(root, rel_path, status)
   return content
 end
 
+--- Replace a worktree file's whole content with `content` (disk-exact bytes).
+---
+--- The write side of `read_worktree`, and it prefers the same thing: a loaded
+--- buffer on the path. Going through the buffer is what makes the rewrite
+--- UNDOABLE -- it lands as one change in that buffer's undo history, touching
+--- only the lines that differ so marks and extmarks elsewhere survive -- and
+--- it is the only route that cannot overwrite unsaved text, because the text
+--- being rewritten is the buffer's own.
+---
+--- Answers how it landed, or nil and a message with nothing changed:
+---   "saved"   through a buffer that had no unsaved edits, then written, so
+---             disk and buffer agree as they did before
+---   "buffer"  through a buffer that already had unsaved edits (or whose
+---             write failed -- the second return then says why): the rewrite
+---             is in the buffer, and the save stays the user's
+---   "disk"    no buffer was loaded; written straight to the file
+---
+--- Refuses a symlink (its content is the link payload, not a file to rewrite),
+--- a buffer that cannot be modified, and a 'fileformat' other than unix/dos.
+--- A save is an ordinary `:write` of that buffer: its autocommands run and its
+--- own 'fixendofline' decides a missing final newline, as for any save.
+--- @param root string
+--- @param rel_path string
+--- @param content string
+--- @return "saved"|"buffer"|"disk"|nil how
+--- @return string|nil err
+function M.write_worktree(root, rel_path, content)
+  local abs_path = vim.fs.joinpath(root, rel_path)
+  local lstat = vim.uv.fs_lstat(abs_path)
+  if lstat and lstat.type == "link" then
+    return nil, rel_path .. " is a symlink"
+  end
+
+  local buf = find_loaded(abs_path)
+  if not buf then
+    local ok, err = pcall(system.write_file, abs_path, content)
+    if not ok then
+      return nil, tostring(err)
+    end
+    return "disk"
+  end
+
+  local fileformat = vim.api.nvim_get_option_value("fileformat", { buf = buf })
+  if fileformat ~= "unix" and fileformat ~= "dos" then
+    return nil, ("cannot rewrite a %s-format buffer"):format(fileformat)
+  end
+  if not vim.api.nvim_get_option_value("modifiable", { buf = buf }) then
+    return nil, rel_path .. " is open in a buffer that cannot be modified"
+  end
+
+  -- `text` above in reverse: "\n" separates, the terminator survives only as
+  -- an empty last field and becomes 'endofline', and a dos buffer's lines
+  -- drop the "\r" Neovim strips on read.
+  local lines = vim.split(content, "\n", { plain = true })
+  local endofline = lines[#lines] == ""
+  if endofline then
+    table.remove(lines)
+  end
+  if fileformat == "dos" then
+    for i, line in ipairs(lines) do
+      if line:sub(-1) == "\r" then
+        lines[i] = line:sub(1, -2)
+      end
+    end
+  end
+
+  local current = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local head = 0
+  while head < #current and head < #lines
+      and current[head + 1] == lines[head + 1] do
+    head = head + 1
+  end
+  local tail = 0
+  while tail < #current - head and tail < #lines - head
+      and current[#current - tail] == lines[#lines - tail] do
+    tail = tail + 1
+  end
+  local middle = {}
+  for i = head + 1, #lines - tail do
+    middle[#middle + 1] = lines[i]
+  end
+
+  local was_modified = vim.api.nvim_get_option_value("modified", { buf = buf })
+  local ok, err = pcall(
+    vim.api.nvim_buf_set_lines, buf, head, #current - tail, false, middle)
+  if not ok then
+    return nil, tostring(err)
+  end
+  if #lines > 0
+      and vim.api.nvim_get_option_value("endofline", { buf = buf }) ~= endofline then
+    vim.api.nvim_set_option_value("endofline", endofline, { buf = buf })
+  end
+  if was_modified then
+    return "buffer"
+  end
+  local wrote, write_err = pcall(vim.api.nvim_buf_call, buf, function()
+    vim.cmd("silent write")
+  end)
+  if not wrote then
+    return "buffer", tostring(write_err)
+  end
+  return "saved"
+end
+
 return M

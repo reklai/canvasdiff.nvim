@@ -1096,6 +1096,13 @@ local function canvas_actions(app, surface, st, cfg)
     unstage_file = owned_action(surface, generation, function()
       app:stage_file("unstage", nil, surface, generation, INTERACTIVE)
     end),
+    -- The reject to stage's accept; same scope rule, same from-anywhere capital.
+    discard = owned_action(surface, generation, function(_, win)
+      app:discard(surface, generation, win, INTERACTIVE)
+    end),
+    discard_file = owned_action(surface, generation, function(_, win)
+      app:discard(surface, generation, win, { async = true, file = true })
+    end),
     lens_next  = owned_action(surface, generation, function()
       app:cycle_lens(1, INTERACTIVE)
     end),
@@ -3360,6 +3367,203 @@ function App:stage_hunk(direction, owned_surface, generation, win, target, opts)
   -- both sides, and `s s s` down the remaining hunks must stay put.
   return finish_stage(tx, file, positions, tx.lens,
     (direction == "stage" and "staged hunk in " or "unstaged hunk in ") .. path)
+end
+
+--- Ask before a whole file's changes go. Injectable so a test can answer;
+--- a prompt that cannot be shown (no UI attached) counts as "no".
+App.confirm_discard = function(message)
+  local ok, choice = pcall(vim.fn.confirm, message, "&Discard\n&Cancel", 2)
+  return ok and choice == 1
+end
+
+--- Discard the unstaged change under the canvas cursor: put the index's
+--- lines back into the worktree. The reject to staging's accept, and the only
+--- canvas verb that writes the worktree.
+---
+--- Scope follows the staging verbs: a hunk row names that hunk, any other row
+--- (or `opts.file`) the whole file -- which asks first, because a file's worth
+--- of work is a different size of mistake than a hunk's.
+---
+--- It is `git restore`'s meaning and no wider, so the old side written is
+--- always the INDEX:
+---
+--- * the unstaged lens shows exactly that pair, so it always works there;
+--- * the all lens works while the file has nothing staged, which is when HEAD
+---   and the index are the same text. With something staged, the hunk on
+---   screen is measured against HEAD and can fuse a staged change with an
+---   unstaged one -- putting HEAD's lines back would leave the index holding a
+---   change the worktree no longer has. Declined, naming the lens to use;
+---   staging declines there for the same coordinate reason;
+--- * the staged lens has no worktree side (that is `u`), a branch lens would
+---   write another branch's text into a clean file, and a range is read-only.
+---
+--- Never a patch, for the reason staging is not one: both texts are in hand,
+--- so the hunk is spliced by arithmetic and cannot land somewhere else.
+---
+--- What makes a destructive key acceptable: the write goes through the file's
+--- buffer when it is loaded -- one undoable change there -- and the lines it
+--- removed go to the unnamed register, as with any `x`. A file that is not
+--- loaded has only the register. An untracked file and a deleted one are
+--- declined: discarding either is deleting or restoring a whole file, and
+--- neither is a line splice.
+---
+--- @return boolean|nil discarded true, false when there was nothing to do or
+---   the verb declined, nil plus a message on failure
+function App:discard(owned_surface, generation, win, opts)
+  opts = opts or {}
+  local surface = owned_surface or active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  local st = surface.state
+  win = win or vim.api.nvim_get_current_win()
+  local ctx = canvas_showing(st, win)
+    and canvas.context.resolve(st, vim.api.nvim_win_get_cursor(win)[1] - 1)
+    or nil
+  if not ctx then
+    ui.notify("nothing under the cursor to discard")
+    return false
+  end
+
+  local current_lens = lens.of(st)
+  if lens.is_range(current_lens) then
+    ui.notify("READ-ONLY comparison — nothing here can be discarded (press Tab)")
+    return false
+  end
+  if current_lens.new == lens.INDEX_REV then
+    ui.notify("the staged view shows the index — u unstages; discarding writes the worktree")
+    return false
+  end
+  if lens.is_branch(current_lens) then
+    ui.notify("discard puts the index back — use the all or unstaged lens (press Tab)")
+    return false
+  end
+
+  local section = st.sections[ctx.section]
+  if section.binary or section.renamed then
+    ui.notify("discarding needs a text file with one path — use git for this one")
+    return false
+  end
+  local whole = opts.file or ctx.scope ~= "hunk"
+  local span
+  if not whole then
+    span = hunk_span(section, ctx.hunk)
+    if not span then
+      ui.notify("that hunk has no worktree lines of its own — X discards the whole file")
+      return false
+    end
+  end
+
+  local tx, tx_err = begin_stage(self, owned_surface, generation, opts)
+  if not tx then
+    return nil, tx_err
+  end
+  local file, file_err = press_time_file(tx, section)
+  if not file then
+    return nil, file_err
+  end
+  local path = file.path
+  if file.status == "?" then
+    ui.notify(path .. " is untracked — discarding it means deleting the file, which is yours to do")
+    return false
+  end
+  if not file.unstaged then
+    ui.notify("nothing unstaged here — u unstages, then x discards")
+    return false
+  end
+  if file.unstaged == "D" then
+    ui.notify(path .. " was deleted — `git restore` brings a whole file back")
+    return false
+  end
+  if file.staged and current_lens.old ~= lens.INDEX_REV then
+    ui.notify("this file is staged and modified — discard from the unstaged lens (press Tab)")
+    return false
+  end
+
+  local root = st.root
+  local index_text, index_err = source.show(root, lens.INDEX_REV, path)
+  if not index_text then
+    local err = index_err or ("could not read the index side of " .. path)
+    ui.warn(err)
+    return nil, err
+  end
+  local work_text = source.worktree_text(root, path, file.status)
+  local pair = diff.stage.pair_hunks(index_text, work_text)
+  local covered = whole and pair or diff.stage.pick_all(pair, span)
+  if #covered == 0 then
+    ui.notify("nothing to discard here")
+    return false
+  end
+  if whole and not self.confirm_discard(
+      ("Discard all %d unstaged hunk%s in %s?")
+        :format(#covered, #covered == 1 and "" or "s", path)) then
+    return false
+  end
+  if not tx.guard() then
+    local err = "discard was superseded before it wrote"
+    ui.warn(err)
+    return nil, err
+  end
+
+  -- Applied worktree-ward: each covered hunk swaps sides, so the splice
+  -- rewrites worktree lines with their index originals and the index is
+  -- never touched -- unstage's splice, one pair further out.
+  local applied, removed = {}, {}
+  local work_lines = vim.split(work_text, "\n", { plain = true })
+  for i, h in ipairs(covered) do
+    applied[i] = { h[3], h[4], h[1], h[2] }
+    for lnum = h[3], h[3] + h[4] - 1 do
+      removed[#removed + 1] = (work_lines[lnum] or ""):gsub("\r$", "")
+    end
+  end
+  local spliced = diff.stage.splice_many(work_text, index_text, applied)
+
+  local positions = capture_file_positions(surface, st, section)
+  local how, write_err = source.write_worktree(root, path, spliced)
+  if not how then
+    local err = "could not discard: " .. tostring(write_err)
+    ui.warn(err)
+    return nil, err
+  end
+  -- What the key removed, where any `x` leaves what it removed. A hunk that
+  -- only deleted lines removes nothing, and leaves the register alone.
+  if #removed > 0 then
+    pcall(vim.fn.setreg, '"', removed, "l")
+  end
+
+  local said = (whole and "discarded unstaged changes in " or "discarded hunk in ") .. path
+  if how == "buffer" then
+    said = said .. " (in its unsaved buffer — :write puts it on disk)"
+  elseif how == "saved" then
+    said = said .. " (u in the file undoes it)"
+  end
+  local function settle(reconciled, reconcile_err)
+    if not reconciled then
+      if reconcile_err == STALE_COMPARE then
+        reconcile_err = "the owning review changed during reconcile"
+      end
+      local err = "the worktree changed, but canvas refresh failed: "
+        .. tostring(reconcile_err)
+      ui.warn(err)
+      return nil, err
+    end
+    if tx.guard() then
+      restore_file_positions(st, positions)
+    end
+    ui.notify(said)
+    return true
+  end
+  if tx.async then
+    local reconciled, reconcile_err =
+      pivot_sliced(surface, tx.lens, tx.guard, nil, settle)
+    if reconcile_err == PENDING_PIVOT then
+      return nil, reconcile_err
+    end
+    return settle(reconciled, reconcile_err)
+  end
+  return settle(pivot(surface, tx.lens, tx.guard))
 end
 
 --- Stage the file under the canvas cursor (or `path`).

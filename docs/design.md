@@ -353,6 +353,11 @@ of the same action. It costs jumplist-forward on the canvas (in a terminal
 `<Tab>` and `<C-i>` are the same byte), which is a fair trade: you navigate the
 canvas by file and hunk, not by jumplist.
 
+**`x` discards, and it is on a bare letter on purpose.** It is inert like the
+rest — delete-character, refused with E21 — and its meaning carries over
+intact: what `x` removes goes to the unnamed register. `X` is its whole-file
+capital, the way `S` and `U` are.
+
 **Ctrl+Space is the only KEY back** from a jump, deliberately — no second key. It
 sends byte `0x00`, which most terminals do transmit. If yours doesn't, the jump loop
 has no key out (`:CanvasDiff here` and the toggle still return), so test it before
@@ -412,6 +417,37 @@ with `keymap.del`, which cannot put back what it replaced.
 line in the review" from any file. It, the toggle and the return all read
 folds the way Enter does: they go somewhere, they do not reshape. A folded
 file answers with its placeholder.
+
+## Discarding is the same splice, one pair further out
+
+Staging had an accept and no reject: dropping a hunk meant Enter, undoing it
+by hand, and coming back. `x` is the missing verb, and it is unstage's splice
+applied one pair further out — the index's lines written over the worktree's
+— so it inherits everything that makes staging exact: no patch, no context
+matching, nothing that can land somewhere else.
+
+**Its meaning is pinned to `git restore`'s.** The old side written is always
+the index. That is what makes the lens rule fall out instead of being
+invented: the `unstaged` lens shows exactly that pair; the `all` lens shows it
+too while a file has nothing staged, since HEAD and the index are then the
+same text. On a staged-and-modified file the `all` lens measures hunks
+against HEAD, and writing HEAD's lines back would leave the index holding a
+change the worktree no longer has — a file that reads as clean on the canvas
+and still commits the change. So it declines and names the lens, the same
+answer staging gives for the same coordinate reason. An untracked file and a
+deleted one decline as well: discarding either is deleting or restoring a
+whole file, which is not a line splice and not something to hang on one key.
+
+**What makes one bare key acceptable is that it can be taken back.** The
+write goes through the file's buffer when one is loaded, as a single change
+touching only the lines that differ, so it is one `u` in that buffer's own
+undo history. A buffer with no unsaved edits is then saved, so disk and
+buffer agree as they did before the press; a buffer that already had unsaved
+edits is left unsaved, because writing someone's other edits to disk is not
+what they asked for. And the lines removed go to the unnamed register — the
+only net an unloaded file has, and the one `x` already implies. The
+whole-file form asks first: a file's worth of work is a different size of
+mistake than a hunk's.
 
 ## Refresh, and why there is no rebuild key
 

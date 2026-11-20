@@ -52,8 +52,8 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
   you got to. Unsaved buffer content counts.
 - Live refresh on saves, focus changes, and external changes.
 - All, unstaged, staged, and read-only revision-range lenses.
-- Hunk/file staging, persistent folds, a file-and-hunk sidebar, pinned context,
-  and a draggable minimap.
+- Hunk/file staging and an undoable hunk/file discard, persistent folds, a
+  file-and-hunk sidebar, pinned context, and a draggable minimap.
 - Automatic virtualization and a page-backed canvas for very large reviews,
   which open without freezing the editor while they build.
 
@@ -142,7 +142,8 @@ sidebar mappings stay buffer-local and are installed when those buffers open.
    `]f`/`[f` for files.
 3. Press Enter to open the real file at the selected line.
 4. Edit, then press Ctrl+Space to return, on the line you are on.
-5. Press Tab to cycle all → unstaged → staged, and `q` to close.
+5. Press `s` to stage a hunk, or `x` to discard it.
+6. Press Tab to cycle all → unstaged → staged, and `q` to close.
 
 ## Configuration recipes
 
@@ -297,6 +298,8 @@ require("canvasdiff").setup({
       unstage = "u",
       stage_file = "S",
       unstage_file = "U",
+      discard = "x",
+      discard_file = "X",
       lens_next = "<Tab>",
       lens_prev = "<S-Tab>",
       sidebar = "o",
@@ -414,6 +417,21 @@ Tab and Shift+Tab cycle these lenses:
 
 Committed ranges such as `main..topic` and `main...topic` are read-only.
 
+### Discarding
+
+`x` puts the index's lines back into the worktree for the hunk under the
+cursor: the reject to `s`'s accept, and the only canvas key that writes your
+files. On a file header it takes the whole file, as `X` does from anywhere in
+it; the whole-file form asks first.
+
+It means what `git restore` means, so it works in the `unstaged` lens, and in
+the `all` lens for a file with nothing staged. Anywhere the hunk on screen is
+not exactly an unstaged change it declines and says which lens to use.
+
+The write goes through the file's buffer when it is loaded, as one undoable
+change: `u` in the file brings the hunk back. The lines it removed also go to
+the unnamed register, as with any `x`.
+
 ### From a file to the review
 
 The jump runs both ways. `:CanvasDiff here` shows the review at the file line
@@ -455,6 +473,7 @@ stash, detached-HEAD, or deletion operations.
 | Canvas | Ctrl+N/Ctrl+P | Cycle hunks with wrapping. |
 | Canvas | `za`/`c`, Tab/Shift+Tab, `o` | Fold; cycle lens; toggle sidebar. |
 | Canvas | `r`, `s`/`u`, `S`/`U` | Refresh; stage/unstage hunk or whole file. |
+| Canvas | `x`, `X` | Discard an unstaged hunk; discard a whole file (asks). |
 | Canvas | `q`, `<leader>lh` | Close/back out; show the cheatsheet. |
 | Sidebar | Enter/`za`/`c`/double-click | Select a file/hunk or fold a directory. |
 | Sidebar | `s`/`u`, `q`, `<leader>lh` | Stage/unstage; close sidebar; show help. |

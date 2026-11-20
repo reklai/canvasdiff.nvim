@@ -212,6 +212,7 @@ return {
       "tracking_branch_name",
       "unstage",
       "worktree_text",
+      "write_worktree",
     })
     for _, name in ipairs(names) do
       H.eq(type(source[name]), "function", name .. " is callable")

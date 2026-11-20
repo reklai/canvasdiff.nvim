@@ -152,7 +152,8 @@ T["cheatsheet_model the column's own group leads it unheaded"] = function()
     actions[#actions + 1] = row.action
   end
   H.eq(actions,
-    { "refresh", "stage", "unstage", "stage_file", "unstage_file", "close" },
+    { "refresh", "stage", "unstage", "stage_file", "unstage_file",
+      "discard", "discard_file", "close" },
     "the canvas's own verbs, in spec order")
 end
 

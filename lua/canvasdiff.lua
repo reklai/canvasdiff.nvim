@@ -93,6 +93,16 @@ return {
   unstage = function()
     return app:unstage()
   end,
+  --- Discard the unstaged change under the canvas cursor, putting the
+  --- index's lines back into the worktree: a hunk on a hunk row, otherwise
+  --- the whole file (which asks first; `opts.file` forces that scope). Works
+  --- in the unstaged lens, and in the all lens for a file with nothing
+  --- staged. Undoable in the file's buffer when it is loaded, and the removed
+  --- lines go to the unnamed register. Returns true, false when the verb
+  --- declined or had nothing to do, or nil plus a message on failure.
+  discard = function(opts)
+    return app:discard(nil, nil, nil, opts)
+  end,
   --- Return from a jump excursion into the live review's canvas. Returns
   --- true when a review was there to return to; with none, reports in the
   --- user's terms and returns false.

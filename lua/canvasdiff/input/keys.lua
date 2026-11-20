@@ -43,6 +43,8 @@ K.specs = {
   { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this hunk — or this file on its header" },
   { ctx = "canvas", action = "stage_file",   group = "Canvas", desc = "Stage this file's changes (from anywhere in it)" },
   { ctx = "canvas", action = "unstage_file", group = "Canvas", desc = "Unstage this file (from anywhere in it)" },
+  { ctx = "canvas", action = "discard",      group = "Canvas", desc = "Discard this unstaged hunk from the worktree — or this file on its header (asks)" },
+  { ctx = "canvas", action = "discard_file", group = "Canvas", desc = "Discard this file's unstaged changes (from anywhere in it; asks)" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Back out: leave a stacked comparison, else close the canvas" },
 
   { ctx = "sidebar", action = "select",    group = "Sidebar",  desc = "Scroll the canvas here / fold a directory (folds its files on the canvas too)" },

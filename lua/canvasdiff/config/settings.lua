@@ -150,6 +150,13 @@ M.defaults = {
       -- neither key does anything here today.
       stage_file   = "S",
       unstage_file = "U",
+      -- The reject to `s`'s accept: put the index's lines back into the
+      -- worktree, for this hunk (`x`) or this whole file (`X`, which asks).
+      -- Inert to take like the rest of the editing family -- `x` and `X`
+      -- delete a character, which this buffer refuses with E21 -- and the
+      -- meaning carries over: what `x` removes goes to the unnamed register.
+      discard      = "x",
+      discard_file = "X",
       -- Tab forward through the lenses, Shift+Tab back. One physical key for the
       -- whole "what am I looking at" axis, and a slip between the two lands on the
       -- other direction of the same action rather than on something unrelated.

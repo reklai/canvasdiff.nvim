@@ -77,6 +77,7 @@ there:
     s               stage the hunk under the cursor
     u               unstage the hunk under the cursor
     S  /  U         stage / unstage this whole file
+    x               discard the unstaged hunk under the cursor
     <CR>            jump to this line (and column) in the real file
     CTRL-Space      (in the real file) come back, on the line you are on
     q               close the review
@@ -316,6 +317,10 @@ On the canvas~
     u                       Unstage this hunk -- or this file on its header
     S                       Stage this file's changes (from anywhere in it)
     U                       Unstage this file (from anywhere in it)
+    x                       Discard this unstaged hunk from the worktree --
+                            or this file on its header (asks)
+    X                       Discard this file's unstaged changes (from
+                            anywhere in it; asks)
     q                       Back out: leave a stacked comparison, else
                             close the review
     <leader>lh              Show keybind cheatsheet
@@ -371,6 +376,31 @@ b side is the one the verb writes: `u` works only in the staged lens, and
 measured against a text the index does not hold, and rather than guess which
 hunk you meant the verb declines and names a lens to use. `S` and `U` still
 work from anywhere.
+
+                                                        *canvasdiff-discard*
+`x` is the reject to `s`'s accept: it puts the index's lines back into the
+worktree for the hunk under the cursor, and is the only canvas key that
+writes your files. Scope follows the staging keys -- a hunk row names that
+hunk, a file header or folded placeholder the whole file -- and `X` takes
+the whole file from anywhere in it. The whole-file form asks first.
+
+It means what `git restore` means and no more, so it works where the hunk on
+screen IS an unstaged change: always in the `unstaged` lens, and in the
+`all` lens for a file with nothing staged. On a file that is staged and
+modified the `all` lens measures hunks against HEAD, and putting HEAD's
+lines back would leave the index holding a change the worktree no longer
+has; the key declines and names the unstaged lens. It also declines in the
+staged lens (that is `u`), in a bare-ref lens, in a range, on an untracked
+file (discarding it is deleting it) and on a deleted one (`git restore`
+brings a whole file back).
+
+Two things make a destructive key safe to leave on one letter. The write
+goes through the file's buffer when it is loaded, as ONE change in that
+buffer's undo history: `u` in the file brings the hunk back. A buffer with
+no unsaved edits is saved afterwards, by an ordinary `:write`; one that
+already had unsaved edits is left unsaved, and the message says so. And the
+lines the discard removed go to the unnamed register, as with any `x` -- for
+a file that is not loaded, that is the way back.
 
 In a file you jumped to~
                                                           *canvasdiff-jump-back*
@@ -443,6 +473,8 @@ default. >lua
           unstage    = "u",
           stage_file   = "S",
           unstage_file = "U",
+          discard      = "x",
+          discard_file = "X",
           close      = "q",
           help       = "<leader>lh",
         },
@@ -722,6 +754,12 @@ canvasdiff.here()                                        *canvasdiff.here()*
         Show the review at the file line under the cursor; what
         `:CanvasDiff here` runs. Returns the review state, or nil and a
         message.
+
+canvasdiff.discard({opts})                            *canvasdiff.discard()*
+        Discard the unstaged change under the canvas cursor; what `x` runs
+        (|canvasdiff-discard|). `{ file = true }` takes the whole file, as
+        `X` does. Returns true, false when the verb declined or had nothing
+        to do, or nil and a message on failure.
 
 canvasdiff.sidebar()                                  *canvasdiff.sidebar()*
         Toggle the file-tree sidebar of the showing review. Independent of
