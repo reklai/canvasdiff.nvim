@@ -154,6 +154,7 @@ function S.build_entries(sections, folded, aside, stale)
 
     if not hidden then
       local put_away = aside[section.path] or false
+      local deferred = section.deferred or nil
       entries[#entries + 1] = {
         kind = "file",
         path = section.path,
@@ -163,17 +164,18 @@ function S.build_entries(sections, folded, aside, stale)
         adds = section.adds,
         dels = section.dels,
         aside = put_away,
+        deferred = deferred,
         stale = stale[section.path] or false,
         staged = section.staged,
         unstaged = section.unstaged,
         -- The canvas placeholder's own words, not a copy of them: a binary file
         -- says "(binary)" in the tree exactly as it does on the canvas, where
         -- "(0 hunks, +0 −0)" would read as "nothing changed".
-        summary = put_away and render.summary(section) or nil,
+        summary = (put_away or deferred) and render.summary(section) or nil,
       }
-      if not put_away then
-        -- Binary and rename-only sections publish no hunks, so they contribute
-        -- no rows here and stay the single row they have always been.
+      if not put_away and not deferred then
+        -- Binary, rename-only, and deferred sections publish no hunks, so they
+        -- contribute no rows here and stay a single row.
         for gi, hunk in ipairs(section.hunks or {}) do
           entries[#entries + 1] = hunk_entry(section.path, #parts + 1, gi, hunk)
         end
@@ -236,7 +238,7 @@ function S.render_lines(entries, width)
         stage = " " .. stage
       end
       lines[i] = indent
-        .. (e.aside and (render.glyphs.folded .. " ") or "  ")
+        .. ((e.aside or e.deferred) and (render.glyphs.folded .. " ") or "  ")
         .. render.escape_path(e.name)
         .. (
           e.summary and ("  " .. e.summary)

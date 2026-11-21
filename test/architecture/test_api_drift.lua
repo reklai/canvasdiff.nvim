@@ -39,12 +39,9 @@ local function used_api()
 end
 
 -- Private `nvim__*` functions are outside api_info() and outside any
--- deprecation cycle. Each one used must name the fallback that keeps the
--- plugin correct when it changes, so a new dependency on one is a decision
--- rather than an accident.
-local PRIVATE_WITH_FALLBACK = {
-  nvim__redraw = "Projection falls back to :redraw! (test/fault/test_private_api.lua)",
-}
+-- deprecation cycle. Production code uses none; adding one requires an
+-- explicit recorded fallback here.
+local PRIVATE_WITH_FALLBACK = {}
 
 T["architecture_ every nvim_* API production code names exists and is not deprecated"] = function()
   local info = {}

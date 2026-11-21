@@ -50,8 +50,8 @@ T["config_ health reports unknown and removed keys, skipping glyphs and lists"] 
 end
 
 T["config_ setup is optional and defaults are live without it"] = function()
-  H.eq(config.options.keymaps.global.compare, "<leader>lb")
-  H.eq(config.options.keymaps.global.checkout, "<leader>lc")
+  H.eq(config.options.keymaps.global, nil)
+  H.eq(config.options.paged, nil)
   H.eq(config.options.keymaps.canvas.close, "q")
   H.eq(config.options.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
   H.eq(config.options.keymaps.file.back, "<C-Space>")
@@ -106,29 +106,17 @@ end
 T["config_ disabling survives the merge"] = function()
   with_setup({
     keymaps = {
-      global = { compare = false },
       canvas = { close = false },
       sidebar = { close = {} },
     },
   }, function(opts)
-    H.eq(opts.keymaps.global.compare, false)
-    H.eq(opts.keymaps.global.checkout, "<leader>lc",
-      "disabling compare leaves checkout at its default")
     H.eq(opts.keymaps.canvas.close, false)
     H.eq(opts.keymaps.sidebar.close, {})
-  end)
-  with_setup({
-    keymaps = { global = { checkout = false } },
-  }, function(opts)
-    H.eq(opts.keymaps.global.compare, "<leader>lb")
-    H.eq(opts.keymaps.global.checkout, false,
-      "disabling checkout leaves compare at its default")
   end)
 end
 
 T["config_ unrelated contexts are untouched by a partial override"] = function()
   with_setup({ keymaps = { canvas = { help = "g?" } } }, function(opts)
-    H.eq(opts.keymaps.global.compare, "<leader>lb")
     H.eq(opts.keymaps.sidebar.select, { "<CR>", "za", "c", "<2-LeftMouse>" })
     H.eq(opts.keymaps.file.back, "<C-Space>")
   end)
@@ -144,9 +132,19 @@ T["config_ the old flat keymaps shape is reported, not ignored"] = function()
       "must name the offending keys, got: " .. diagnostics[1])
     assert(diagnostics[1]:match("canvas"),
       "and point at the new shape, got: " .. diagnostics[1])
-    assert(diagnostics[1]:match("global"),
-      "and include the global context in the replacement shape, got: " .. diagnostics[1])
   end)
+end
+
+T["config_ removed paged and keymaps.global options are reported and stripped"] = function()
+  with_setup({ paged = { enabled = true }, keymaps = { global = { compare = "<leader>lb" } } },
+    function(opts, diagnostics)
+      H.eq(#diagnostics, 2)
+      H.eq(opts.paged, nil)
+      H.eq(opts.keymaps.global, nil)
+      local report = config.health()
+      H.eq(#report.removed, 2)
+      H.eq(report.unknown, {})
+    end)
 end
 
 T["config_ the new nested shape is not mistaken for the old one"] = function()

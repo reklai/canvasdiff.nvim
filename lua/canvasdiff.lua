@@ -1,13 +1,11 @@
 -- The public Lua API: everything `:h canvasdiff` documents enters here, and
 -- nothing else in lua/canvasdiff/ is public surface (pre-alpha: this table
 -- may still change; the internals definitely will). One process-wide App
--- instance owns every review; requiring this module is what installs the
--- global compare/checkout mappings, which is why lazy-loading setups must
--- own their trigger keys (see README "Lazy-loading correctly").
+-- instance owns every review; CanvasDiff installs no global keymaps, so
+-- lazy-loading setups simply trigger on `:CanvasDiff` or user key specs.
 local App = require("canvasdiff.App")
 
 local app = App.new()
-app:sync_global_keymaps()
 
 return {
   --- Merge `opts` into the configuration (see :h canvasdiff-setup). Entirely
@@ -52,6 +50,11 @@ return {
   --- opening a review when none is showing.
   sidebar = function()
     return app:toggle_sidebar()
+  end,
+  --- Toggle showing only unreviewed and stale files in the live review.
+  --- Warns instead of opening a review when none is showing.
+  toggle_unreviewed = function()
+    return app:toggle_unreviewed()
   end,
   --- Put every hunk of the live review in the quickfix list, one entry per
   --- hunk at its line in the real file, so `:cnext` walks hunks across files
@@ -146,16 +149,6 @@ return {
   --- changes refs or repository state.
   compare = function()
     return app:compare()
-  end,
-  --- Select and switch to one exact local branch. Refuses repositories with
-  --- unsaved buffers; no force, stash, or detached-HEAD paths exist.
-  checkout = function()
-    return app:checkout()
-  end,
-  --- Create a local branch tracking one exact remote-tracking ref, then
-  --- switch to it. Same refusals as checkout().
-  track = function()
-    return app:track()
   end,
   --- Point the canvas at a committed range ("main..topic" or an already
   --- normalized range lens). Committed ranges are read-only.

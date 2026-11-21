@@ -1,6 +1,8 @@
 local buffer = require("canvasdiff.source.buffer")
 local repository = require("canvasdiff.source.repository")
 local diff = require("canvasdiff.diff")
+local auto_collapse = diff.auto_collapse
+local fold = diff.fold
 local lens = diff.lens
 local model = diff
 
@@ -346,6 +348,108 @@ function M.files(root, spec)
   end
 end
 
+--- Count newline-separated lines in `text` without allocating a line table or
+--- running a diff, for checking untracked files against `auto_collapse.max_lines`.
+local function count_lines(text)
+  if type(text) ~= "string" or text == "" then
+    return 0
+  end
+  local n = 0
+  local pos = 1
+  while true do
+    local nl = string.find(text, "\n", pos, true)
+    if not nl then
+      if pos <= #text then
+        n = n + 1
+      end
+      break
+    end
+    n = n + 1
+    pos = nl + 1
+  end
+  return n
+end
+
+local function numstat_for_lens(root, l, old_rev, new_rev)
+  if lens.is_range(l) then
+    return repository.numstat(root, { old_rev = old_rev, new_rev = new_rev })
+  elseif lens.same(l, lens.get("staged")) then
+    return repository.numstat(root, { cached = true })
+  elseif lens.same(l, lens.get("unstaged")) then
+    return repository.numstat(root, {})
+  else
+    return repository.numstat(root, { old_rev = old_rev })
+  end
+end
+
+local function entry_changed_in_lens(l, entry, stat, unsaved)
+  if lens.is_range(l) or lens.is_branch(l) then
+    return true
+  end
+  if lens.same(l, lens.get("staged")) then
+    return entry.staged ~= nil
+  end
+  if lens.same(l, lens.get("unstaged")) then
+    return entry.unstaged ~= nil or unsaved[entry.path] ~= nil
+  end
+  -- `all` lens (HEAD -> worktree): avoid fabricating a deferred section when a
+  -- staged edit was reverted in the worktree back to HEAD (X=M, Y=M, equal
+  -- blobs). If numstat has no record and there is no mode/rename/unsaved delta,
+  -- fall through to the normal read path which drops equal sides.
+  if unsaved[entry.path] ~= nil or entry.status == "?" or stat ~= nil then
+    return true
+  end
+  if entry.old_path ~= entry.path then
+    return true
+  end
+  if entry.old_mode ~= nil and entry.new_mode ~= nil and entry.old_mode ~= entry.new_mode then
+    return true
+  end
+  return false
+end
+
+--- Materialize ONE previously-deferred section on demand by reading both of its
+--- sides and running `diff.build_section`. Returns:
+---   * `section, nil` when the file still differs
+---   * `nil, nil` when the two sides no longer differ
+---   * `nil, err` when a required side could not be read
+--- @param root string
+--- @param spec CanvasDiffLens|string|nil
+--- @param section table
+--- @param context integer|nil
+--- @return table|nil
+--- @return string|nil
+function M.materialize_section(root, spec, section, context)
+  if type(section) ~= "table" or not section.path then
+    return nil, "cannot materialize an invalid section"
+  end
+  local l = type(spec) == "table" and spec or lens.from_base(spec)
+  if not lens.valid(l) then
+    return nil, "invalid lens"
+  end
+  local is_range = lens.is_range(l)
+  local entry = {
+    path = section.path,
+    old_path = section.old_path or section.path,
+    old_rev = section.old_rev or l.old,
+    new_rev = section.new_rev or (is_range and l.new or nil),
+    status = section.status,
+    staged = section.staged,
+    unstaged = section.unstaged,
+    old_mode = section.old_mode,
+    new_mode = section.new_mode,
+  }
+  local file, read_err = read_file(root, l, entry, is_range)
+  if read_err then
+    return nil, read_err
+  end
+  file.old_fingerprint = model.text_fingerprint(file.old_text)
+  file.new_fingerprint = model.text_fingerprint(file.new_text)
+  local built = model.build_section(
+    file.path, file.old_text, file.new_text, file.status, context or section.context, file)
+  return built, nil
+end
+
 --- Stream this lens's sections in path order, one built section at a time.
 ---
 --- The ingestion boundary: only one file's two sides are resident while its
@@ -359,6 +463,15 @@ end
 --- file, not the million rows beside it. Reuse is content-addressed -- the
 --- sides are still read and hashed every time -- so it cannot serve a stale
 --- section; it only skips the diff and model build.
+---
+--- `opts`, when given, enables file-boundary deferral before reading blobs or
+--- running `vim.text.diff`:
+---   * `auto_collapse`: settings table (`enabled`, `max_lines`, `max_bytes`,
+---     `patterns`, `gitattributes`)
+---   * `collapsed`: `{ [path] = "user" | "auto" | "smart" }`
+---   * `folded`: `{ [dir] = true }`
+---   * `unfolded_smart`: `{ [path] = true }` paths the user explicitly expanded
+---   * `section_context`: `{ [path] = integer }` per-section context overrides
 --- @param root string
 --- @param spec CanvasDiffLens|string|nil
 --- @param context integer|nil
@@ -367,13 +480,17 @@ end
 --- once per file and handed to the model build. It never changes the result.
 --- @param previous table[]|nil
 --- @param pace fun(units: integer|nil)|nil
+--- @param opts table|nil
 --- @return fun(): table|nil, string|nil next_section
 --- @return string|nil err
-function M.section_stream(root, spec, context, previous, pace)
-  local next_file, err = M.file_stream(root, spec)
-  if not next_file then
+function M.section_stream(root, spec, context, previous, pace, opts)
+  local planned, err, l, old_rev = plan_files(root, spec)
+  if not planned then
     return nil, err
   end
+  local is_range = lens.is_range(l)
+  opts = type(opts) == "table" and opts or nil
+
   -- Indexed up front: the caller's list may be replaced or emptied by
   -- reentrant code while git runs, and sections themselves are immutable.
   local reusable = {}
@@ -384,29 +501,197 @@ function M.section_stream(root, spec, context, previous, pace)
       end
     end
   end
+
+  local ac_opts = opts and opts.auto_collapse or nil
+  local want_auto = type(ac_opts) == "table" and ac_opts.enabled ~= false
+  local collapsed = opts and opts.collapsed or nil
+  local folded = opts and opts.folded or nil
+  local unfolded_smart = opts and opts.unfolded_smart or nil
+  local section_context = opts and opts.section_context or nil
+  local has_folds = (type(collapsed) == "table" and next(collapsed) ~= nil)
+    or (type(folded) == "table" and next(folded) ~= nil)
+
+  local numstats = {}
+  local attrs = {}
+  local unsaved = {}
+  if (want_auto or has_folds) and #planned > 0 then
+    local new_rev = is_range and planned[1].new_rev or nil
+    numstats = numstat_for_lens(root, l, old_rev, new_rev)
+    if want_auto and ac_opts.gitattributes ~= false then
+      local paths = {}
+      for idx, entry in ipairs(planned) do
+        paths[idx] = entry.path
+      end
+      attrs = repository.check_attributes(root, paths)
+    end
+    if l.new == "worktree" then
+      for _, overlay in ipairs(buffer.unsaved_in_root(root)) do
+        unsaved[overlay.path] = overlay.text
+      end
+    end
+  end
+
+  local is_staged = lens.same(l, lens.get("staged"))
+  local is_unstaged = lens.same(l, lens.get("unstaged"))
+
+  local index = 0
   return function()
     while true do
-      local file, read_err = next_file()
-      if read_err then
-        return nil, read_err
-      end
-      if not file then
+      index = index + 1
+      local entry = planned[index]
+      if not entry then
         return nil
       end
       if pace then
         pace(0)
       end
+
+      -- Skip files that belong solely to the other half of the index before
+      -- touching any blobs when lazy options are active.
+      if opts then
+        if is_staged and entry.staged == nil then
+          goto continue
+        end
+        if is_unstaged and entry.unstaged == nil and unsaved[entry.path] == nil then
+          goto continue
+        end
+      end
+
+      local sec_ctx = (section_context and section_context[entry.path]) or context
+      local kept = reusable[entry.path]
+      local is_user_folded = (collapsed and collapsed[entry.path] == "user")
+        or fold.hides(folded, entry.path)
+
+      if want_auto or is_user_folded then
+        local stat = numstats[entry.path]
+        local stats = {
+          adds = stat and stat.adds or 0,
+          dels = stat and stat.dels or 0,
+          binary = stat and stat.binary or false,
+          bytes = 0,
+        }
+        if l.new == "worktree" and entry.status ~= "D" then
+          local ov = unsaved[entry.path]
+          if ov ~= nil then
+            stats.bytes = #ov
+          else
+            local fs = vim.uv.fs_stat(vim.fs.joinpath(root, entry.path))
+            stats.bytes = fs and fs.size or 0
+          end
+        end
+
+        local auto_reason
+        if want_auto
+            and not (unfolded_smart and unfolded_smart[entry.path])
+            and unsaved[entry.path] == nil then
+          auto_reason = auto_collapse.classify(
+            entry.path, stats, attrs[entry.path], ac_opts)
+        end
+
+        local changed = entry_changed_in_lens(l, entry, stat, unsaved)
+        if changed and auto_reason and not is_user_folded then
+          if entry.new_mode == nil and l.new == "worktree" then
+            entry.new_mode = worktree_mode(root, entry.path)
+          end
+          return model.deferred_section(entry.path, entry.status, stats, {
+            old_path = entry.old_path,
+            old_rev = entry.old_rev,
+            new_rev = entry.new_rev,
+            staged = entry.staged,
+            unstaged = entry.unstaged,
+            old_mode = entry.old_mode,
+            new_mode = entry.new_mode,
+            defer_reason = auto_reason,
+            context = sec_ctx,
+          })
+        end
+
+        -- A user-folded file with no materialized section in memory yet (e.g.
+        -- fresh reopen from a saved session) avoids reading old_side and running
+        -- vim.text.diff, while still computing new_fingerprint so fold.stale
+        -- stays exact across edits behind the fold.
+        if changed and is_user_folded and (kept == nil or kept.deferred) then
+          if entry.new_mode == nil and l.new == "worktree" then
+            entry.new_mode = worktree_mode(root, entry.path)
+          end
+          local new_fp
+          local max_bytes = ac_opts and ac_opts.max_bytes or 0
+          local skip_hash = type(max_bytes) == "number" and max_bytes > 0
+            and stats.bytes > max_bytes
+          if not skip_hash then
+            local new_text
+            if is_range then
+              new_text = repository.show(root, entry.new_rev, entry.path)
+            else
+              new_text = M.new_side(root, l, entry.path, entry.status)
+            end
+            new_fp = model.text_fingerprint(new_text or "")
+            if entry.status == "?" and stats.adds == 0 and new_text and new_text ~= "" then
+              stats.adds = count_lines(new_text)
+            end
+          elseif kept and kept.new_fingerprint then
+            new_fp = kept.new_fingerprint
+          end
+          return model.deferred_section(entry.path, entry.status, stats, {
+            old_path = entry.old_path,
+            old_rev = entry.old_rev,
+            new_rev = entry.new_rev,
+            staged = entry.staged,
+            unstaged = entry.unstaged,
+            old_mode = entry.old_mode,
+            new_mode = entry.new_mode,
+            defer_reason = auto_reason or "folded",
+            new_fingerprint = new_fp,
+            context = sec_ctx,
+          })
+        end
+      end
+
+      local file, read_err = read_file(root, l, entry, is_range)
+      if read_err then
+        return nil, read_err
+      end
+
+      -- Untracked files do not appear in `git diff --numstat`; if their byte
+      -- size stayed under `max_bytes` we still check line count against
+      -- `max_lines` before paying for `vim.text.diff` and entry allocation.
+      if want_auto and entry.status == "?"
+          and not (unfolded_smart and unfolded_smart[entry.path])
+          and unsaved[entry.path] == nil
+          and not is_user_folded then
+        local lines = count_lines(file.new_text)
+        local untracked_reason = auto_collapse.classify(
+          entry.path, { adds = lines, dels = 0, bytes = #file.new_text },
+          attrs[entry.path], ac_opts)
+        if untracked_reason then
+          return model.deferred_section(entry.path, entry.status,
+            { adds = lines, dels = 0, binary = diff.is_binary(file.new_text) }, {
+              old_path = entry.old_path,
+              old_rev = entry.old_rev,
+              new_rev = entry.new_rev,
+              staged = entry.staged,
+              unstaged = entry.unstaged,
+              old_mode = entry.old_mode,
+              new_mode = entry.new_mode,
+              defer_reason = untracked_reason,
+              new_fingerprint = model.text_fingerprint(file.new_text),
+              context = sec_ctx,
+            })
+        end
+      end
+
       file.old_fingerprint = model.text_fingerprint(file.old_text)
       file.new_fingerprint = model.text_fingerprint(file.new_text)
-      local kept = reusable[file.path]
-      if kept and model.built_from(kept, file.path, file.status, context, file) then
+      if kept and not kept.deferred
+          and model.built_from(kept, file.path, file.status, sec_ctx, file) then
         return kept
       end
       local section = model.build_section(
-        file.path, file.old_text, file.new_text, file.status, context, file, pace)
+        file.path, file.old_text, file.new_text, file.status, sec_ctx, file, pace)
       if section then
         return section
       end
+      ::continue::
     end
   end
 end
@@ -422,10 +707,11 @@ end
 --- @param context integer|nil
 --- @param previous table[]|nil
 --- @param pace fun(units: integer|nil)|nil
+--- @param opts table|nil
 --- @return table[]|nil sections
 --- @return string|nil err
-function M.sections(root, spec, context, previous, pace)
-  local next_section, err = M.section_stream(root, spec, context, previous, pace)
+function M.sections(root, spec, context, previous, pace, opts)
+  local next_section, err = M.section_stream(root, spec, context, previous, pace, opts)
   if not next_section then
     return nil, err
   end

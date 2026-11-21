@@ -166,33 +166,6 @@ local function repository_file_buffer(buf)
   return name ~= "" and not name:match("^%a[%w+.-]*://")
 end
 
---- First modified file-backed buffer whose normalized or real path is under root.
---- @param root string
---- @return string|nil
-function M.modified_in_root(root)
-  if type(root) ~= "string" or root == "" then
-    return nil
-  end
-  local normalized_root = absolute(root)
-  local real_root = vim.uv.fs_realpath(normalized_root)
-  local paths = {}
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf)
-        and repository_file_buffer(buf)
-        and vim.api.nvim_get_option_value("modified", { buf = buf }) then
-      local name = vim.api.nvim_buf_get_name(buf)
-      local normalized = absolute(name)
-      local real = vim.uv.fs_realpath(normalized)
-      if within(normalized_root, normalized)
-          or (real_root and real and within(real_root, real)) then
-        paths[#paths + 1] = normalized
-      end
-    end
-  end
-  table.sort(paths)
-  return paths[1]
-end
-
 local text
 
 --- Every loaded file buffer under `root` holding edits the disk does not:
@@ -279,7 +252,10 @@ function M.read_worktree(root, rel_path, status)
     return vim.uv.fs_readlink(abs_path) or ""
   end
   local buf = find_loaded(abs_path)
-  if buf then
+  -- Only override disk when the loaded buffer actually holds unsaved edits; an
+  -- unmodified hidden buffer lags behind external disk writes (formatters,
+  -- AI agents) until `:checktime`, and must match `unsaved_in_root`.
+  if buf and vim.api.nvim_get_option_value("modified", { buf = buf }) then
     return text(buf)
   end
 

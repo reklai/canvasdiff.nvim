@@ -387,6 +387,12 @@ end
 --- to what `shown` was built from. Answers nil and a message when the old side
 --- cannot be read; nothing has been changed in either case.
 local function rebuild(state, shown, path, status, metadata)
+  -- Returning from a peek into an auto-collapsed deferred file that is still
+  -- hidden must not force a full diff of a huge/generated file.
+  if shown and shown.deferred and fold.hidden(state, path)
+      and state.collapsed and state.collapsed[path] == "smart" then
+    return { unchanged = true, section = shown }
+  end
   -- A rename has two independent addresses. Read the old bytes from the source
   -- revision/path the metadata names, never from the live lens ref or the
   -- destination: a branch can move or disappear during an excursion, while its

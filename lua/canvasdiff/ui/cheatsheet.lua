@@ -65,26 +65,18 @@ end
 
 --- Column model for the overlay: `Global | Sidebar | Canvas`.
 ---
---- Explicit `global` actions really are process-wide. A canvas/sidebar row is
---- promoted beside them only when it means the same thing in both places:
---- identical resolved keys AND description. `help` qualifies; `close` shares
---- `q` but not its meaning, so it stays in both context columns. The temporary
---- file-context `back` binding is also displayed here because it applies
---- outside the plugin's own windows, without claiming it is process-wide.
+--- A canvas/sidebar row is promoted into the Global column only when it means
+--- the same thing in both places: identical resolved keys AND description.
+--- `help` qualifies; `close` shares `q` but not its meaning, so it stays in
+--- both context columns. The temporary file-context `back` binding is also
+--- displayed here because it applies outside the plugin's own windows.
 --- Empty columns are omitted.
 function M.model(keymaps)
-  local global, global_order = ctx_actions("global", keymaps)
   local canvas, canvas_order = ctx_actions("canvas", keymaps)
   local side, side_order = ctx_actions("sidebar", keymaps)
   local file, file_order = ctx_actions("file", keymaps)
 
   local shared, global_rows = {}, {}
-  for _, action in ipairs(global_order) do
-    local item = global[action]
-    global_rows[#global_rows + 1] = {
-      keys = item.keys, desc = item.desc, action = action,
-    }
-  end
   for _, action in ipairs(canvas_order) do
     local c, s = canvas[action], side[action]
     if s and vim.deep_equal(c.keys, s.keys) and c.desc == s.desc then

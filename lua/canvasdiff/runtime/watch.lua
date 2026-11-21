@@ -213,7 +213,14 @@ end
 --- difference between a save costing one file and costing the whole review.
 local function collect(state, ctx, pace)
   return source.sections(
-    state.root, ctx.lens, config.options.context, state.sections, pace)
+    state.root, ctx.lens, config.options.context,
+    state.all_sections or state.sections, pace, {
+      auto_collapse = config.options.auto_collapse,
+      collapsed = state.collapsed,
+      folded = state.folded,
+      unfolded_smart = state.unfolded_smart,
+      section_context = state.section_context,
+    })
 end
 
 --- Synchronously collect truth and reconcile one canvas. This operation has no

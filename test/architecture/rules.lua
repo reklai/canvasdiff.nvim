@@ -75,10 +75,6 @@ R.stateful_paths = {
   ["lua/canvasdiff/App.lua"] = true,
   ["lua/canvasdiff/Surface.lua"] = true,
   ["lua/canvasdiff/canvas/Canvas.lua"] = true,
-  ["lua/canvasdiff/canvas/Page.lua"] = true,
-  ["lua/canvasdiff/canvas/PageList.lua"] = true,
-  ["lua/canvasdiff/canvas/Projection.lua"] = true,
-  ["lua/canvasdiff/canvas/Scheduler.lua"] = true,
 }
 
 -- Direct edges only. Transitive reachability does not grant permission to

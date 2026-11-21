@@ -36,9 +36,6 @@ return {
     local names = vim.tbl_keys(canvas)
     table.sort(names)
     H.eq(names, {
-      "build_paged",
-      "compression",
-      "compression_capability",
       "context",
       "dispose",
       "format",
@@ -47,20 +44,13 @@ return {
       "locate",
       "logical",
       "open",
-      "open_paged",
-      "paged",
-      "paginate",
-      "paginate_stream",
-      "project",
       "reconcile_sections",
       "render_all",
       "replace_section",
       "resync_visibility",
-      "schedule",
       "section_rows",
       "set_collapsed",
       "show",
-      "touch",
       "win_showing_canvas",
     })
 

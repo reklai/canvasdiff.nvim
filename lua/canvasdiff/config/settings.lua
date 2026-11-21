@@ -84,11 +84,10 @@ local function capture_highlights(raw)
   return captured
 end
 
--- Keymaps are grouped by the context they live in. `global` is process-wide;
--- the other contexts name the buffer that receives the mapping, because the
--- same key means different things in different places: `q` closes the canvas
--- but only the sidebar when pressed there, and `<Tab>`/`za`/`<CR>` are each
--- claimed twice.
+-- Keymaps are grouped by the context they live in, naming the buffer that
+-- receives the mapping, because the same key means different things in
+-- different places: `q` closes the canvas but only the sidebar when pressed
+-- there, and `<Tab>`/`za`/`<CR>` are each claimed twice.
 -- A flat table would need sidebar_select_alt-style names to disambiguate.
 --
 -- Every value takes a single key or a list of them, so an action can own more
@@ -97,12 +96,6 @@ end
 -- `collapse = "<Tab>"` really does drop `za`. `false` or `{}` disables.
 M.defaults = {
   keymaps = {
-    global = {
-      -- Process-wide defaults. App installs each conservatively: an existing
-      -- user/plugin mapping wins, and setup removes only authenticated ownership.
-      compare = "<leader>lb",
-      checkout = "<leader>lc",
-    },
     canvas = {
       jump       = { "<CR>", "<2-LeftMouse>" },
       -- Vim's own fold key first, plus `c` for collapse -- the action you press
@@ -120,6 +113,22 @@ M.defaults = {
       -- moved the cursor right. That is NOT true of Shift+Tab or `R` below --
       -- those are an ordinary CSI Z and byte 0x52.
       collapse   = { "za", "c" },
+      -- Mark the current file reviewed (folded) and jump straight to the next
+      -- unreviewed or stale file. Inert to take: `R` is Enter-Replace mode,
+      -- refused with E21 on this nomodifiable buffer.
+      review_next = "R",
+      -- Toggle showing only unreviewed and stale files so a large sweep
+      -- shrinks down to what still needs attention.
+      filter_unreviewed = "zf",
+      -- Widen or narrow diff context inline for the current file only.
+      -- Inert to take: `>`/`<` are shift operators, refused with E21 here.
+      expand_context = ">",
+      shrink_context = "<",
+      -- Ghost-deletion escape hatches: yank ghost lines into `"` (`gy`), or
+      -- open a floating word-diff peek of the current hunk with real `-`/`+`
+      -- lines (`K`).
+      yank_deleted = "gy",
+      peek_hunk    = "K",
       next_file  = "]f",
       prev_file  = "[f",
       next_hunk  = "]h",
@@ -253,20 +262,27 @@ M.defaults = {
     margin = 100,
     max_expanded = 20,
   },
+  -- Smart auto-collapse: keep generated files, lockfiles, and oversized diffs
+  -- collapsed and deferred at open time so their blobs are not read or diffed
+  -- until unfolded on demand.
+  auto_collapse = {
+    enabled = true,
+    max_lines = 500,
+    max_bytes = 262144,
+    patterns = {
+      "*lock*",
+      "*.lock",
+      "*.min.js",
+      "*.min.css",
+      "*.map",
+      "*.pb.go",
+      "*_pb2.py",
+      "*.snap",
+    },
+    gitattributes = true,
+  },
   session = {
     enabled = true,
-  },
-  -- The page-backed canvas. Below `min_rows` the eager canvas is cheaper and
-  -- simpler -- its text IS the buffer, so search, yank and every plugin that
-  -- reads buffer lines work with no help from us. Above it the eager canvas
-  -- stops being viable at all, because the text and one extmark per
-  -- highlighted row both scale with the review.
-  --
-  -- The threshold is in canvas ROWS, not files: one enormous file is the case
-  -- that hurts, and a hundred small ones is not.
-  paged = {
-    enabled = true,
-    min_rows = 20000,
   },
 }
 
@@ -326,6 +342,10 @@ local REMOVED_OPTIONS = {
   ["highlight.diff"] = "the canvas now has one rendering; override the"
     .. ' CanvasDiff highlight groups instead -- see README "How diff rows'
     .. ' are coloured"',
+  ["paged"] = "the paged blank-skeleton canvas was removed; large reviews stay"
+    .. " real buffers via lazy collection, auto-collapse, and virt",
+  ["keymaps.global"] = "CanvasDiff no longer installs process-wide mappings;"
+    .. " bind :CanvasDiff commands or require('canvasdiff') in your own config",
 }
 
 --- One message per removed option present in `opts`, or nil.
@@ -419,8 +439,7 @@ function M.setup(opts)
     report(
       "keymaps are now grouped by context; found flat key(s): "
         .. table.concat(legacy, ", ")
-        .. ". Use keymaps = { global = {...}, canvas = {...},"
-        .. " sidebar = {...}, file = { back = ... } }"
+        .. ". Use keymaps = { canvas = {...}, sidebar = {...}, file = { back = ... } }"
         .. " -- see :help canvasdiff-mappings"
     )
   end
@@ -436,11 +455,16 @@ function M.setup(opts)
   if raw_highlights ~= nil then
     M.user_opts.highlights = capture_highlights(raw_highlights)
   end
-  -- Strip the removed key so it never lands in M.options; deepcopy first
+  -- Strip removed keys so they never land in M.options; deepcopy first
   -- because `opts` belongs to the caller.
   if type(merge_opts.highlight) == "table" then
     merge_opts.highlight = vim.deepcopy(merge_opts.highlight)
     merge_opts.highlight.diff = nil
+  end
+  merge_opts.paged = nil
+  if type(merge_opts.keymaps) == "table" and merge_opts.keymaps.global ~= nil then
+    merge_opts.keymaps = vim.deepcopy(merge_opts.keymaps)
+    merge_opts.keymaps.global = nil
   end
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), merge_opts)
   if raw_highlights ~= nil then

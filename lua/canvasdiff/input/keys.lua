@@ -17,11 +17,6 @@ local K = {}
 --- group  section header in the cheatsheet and the helpfile
 --- desc   `desc=` on vim.keymap.set, and the cheatsheet text
 K.specs = {
-  { ctx = "global", action = "compare", group = "Global",
-    desc = "Compare two branches or revisions" },
-  { ctx = "global", action = "checkout", group = "Global",
-    desc = "Checkout a local branch" },
-
   { ctx = "canvas", action = "next_file",  group = "Navigate", desc = "Next file (lands on folded ones too)" },
   { ctx = "canvas", action = "prev_file",  group = "Navigate", desc = "Previous file (lands on folded ones too)" },
   { ctx = "canvas", action = "next_hunk",  group = "Navigate", desc = "Next hunk (a folded file counts as one)" },
@@ -32,7 +27,12 @@ K.specs = {
   { ctx = "canvas", action = "jump",       group = "Jump",     desc = "Open the file under the cursor (never changes its fold)" },
   { ctx = "file",   action = "back",       group = "Jump",     desc = "Return to the canvas, on the line you are on" },
 
-  { ctx = "canvas", action = "collapse",   group = "View",     desc = "Fold or unfold this file (unfolds the directory when that is what hides it)" },
+  { ctx = "canvas", action = "collapse",          group = "View", desc = "Fold or unfold this file (unfolds the directory when that is what hides it)" },
+  { ctx = "canvas", action = "review_next",       group = "View", desc = "Mark this file reviewed (folded) and jump to the next unreviewed or stale file" },
+  { ctx = "canvas", action = "filter_unreviewed", group = "View", desc = "Toggle unreviewed-only filter (hide reviewed files; stale files reappear)" },
+  { ctx = "canvas", action = "expand_context",    group = "View", desc = "Show more context lines around hunks in this file (+5)" },
+  { ctx = "canvas", action = "shrink_context",    group = "View", desc = "Show fewer context lines around hunks in this file (-5)" },
+  { ctx = "canvas", action = "peek_hunk",         group = "View", desc = "Peek current hunk with real -/+ lines and word-level diff highlighting" },
   { ctx = "canvas", action = "lens_next",  group = "View",     desc = "Next lens: all / unstaged / staged (exits a READ-ONLY range)" },
   { ctx = "canvas", action = "lens_prev",  group = "View",     desc = "Previous lens (exits a READ-ONLY range)" },
   { ctx = "canvas", action = "checkpoint", group = "View",     desc = "Checkpoint: mark all of this seen, then show only what changes from here" },
@@ -40,11 +40,12 @@ K.specs = {
 
   { ctx = "canvas", action = "refresh", group = "Canvas",
     desc = "Refresh the current diff" },
-  { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this hunk — or this file on its header" },
-  { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this hunk — or this file on its header" },
+  { ctx = "canvas", action = "yank_deleted", group = "Canvas", desc = "Yank deleted ghost lines at cursor (or in current hunk) into the unnamed register" },
+  { ctx = "canvas", action = "stage",   group = "Canvas",  desc = "Stage this hunk, visual line selection, or file on its header" },
+  { ctx = "canvas", action = "unstage", group = "Canvas",  desc = "Unstage this hunk, visual line selection, or file on its header" },
   { ctx = "canvas", action = "stage_file",   group = "Canvas", desc = "Stage this file's changes (from anywhere in it)" },
   { ctx = "canvas", action = "unstage_file", group = "Canvas", desc = "Unstage this file (from anywhere in it)" },
-  { ctx = "canvas", action = "discard",      group = "Canvas", desc = "Discard this unstaged hunk from the worktree — or this file on its header (asks)" },
+  { ctx = "canvas", action = "discard",      group = "Canvas", desc = "Discard this unstaged hunk, visual line selection, or file on its header (asks)" },
   { ctx = "canvas", action = "discard_file", group = "Canvas", desc = "Discard this file's unstaged changes (from anywhere in it; asks)" },
   { ctx = "canvas", action = "close",      group = "Canvas",   desc = "Back out: leave a stacked comparison, else close the canvas" },
 

@@ -138,6 +138,41 @@ local function binary_section(path, old_text, new_text, status, metadata)
   }, path, old_text, new_text, status, metadata)
 end
 
+--- Lightweight placeholder section for a file whose diff has not been
+--- materialized yet (auto-collapsed generated/large files, or files already
+--- hidden by a fold). Carries numstat counts and source identity without
+--- retaining or diffing file bytes; unfolding materializes the real section.
+function M.deferred_section(path, status, stats, metadata)
+  stats = stats or {}
+  metadata = metadata or {}
+  local old_path = metadata.old_path or path
+  return {
+    path = path,
+    old_path = old_path,
+    old_rev = metadata.old_rev,
+    new_rev = metadata.new_rev,
+    status = status,
+    staged = metadata.staged,
+    unstaged = metadata.unstaged,
+    renamed = old_path ~= path,
+    old_mode = metadata.old_mode,
+    new_mode = metadata.new_mode,
+    deferred = true,
+    defer_reason = metadata.defer_reason,
+    binary = stats.binary or nil,
+    adds = stats.adds or 0,
+    dels = stats.dels or 0,
+    nhunks = nil,
+    hunks = {},
+    entries = {
+      { kind = "file_hdr", content = path, new_lnum = nil, old_lnum = nil, hunk_idx = nil },
+    },
+    old_fingerprint = metadata.old_fingerprint,
+    new_fingerprint = metadata.new_fingerprint,
+    context = metadata.context,
+  }
+end
+
 --- The digest every section fingerprint is made of. One definition, because
 --- fingerprints are persisted in session files and compared across builds.
 function M.text_fingerprint(text)
@@ -541,6 +576,58 @@ function M.hunk_targets(section)
         adds = hunk.adds or 0,
         dels = hunk.dels or 0,
       }
+    end
+  end
+  return out
+end
+
+--- Extract the deleted lines associated with entry `offset` in `section`:
+---   * When the row carries `ghosts` and/or `ghosts_after`, returns those exact
+---     deleted lines in display order.
+---   * When the row is a real `del` entry (wholly-deleted file), returns that
+---     line.
+---   * Otherwise, when the row sits inside a hunk (`hunk_idx ~= nil`), returns
+---     every deleted line belonging to that hunk.
+--- Pure; returns an empty table when no deleted lines exist there.
+function M.deleted_lines_at(section, offset)
+  local entries = section and section.entries
+  local entry = entries and entries[offset]
+  if not entry then
+    return {}
+  end
+  local out = {}
+  if entry.ghosts then
+    for _, g in ipairs(entry.ghosts) do
+      out[#out + 1] = g.content or ""
+    end
+  end
+  if entry.kind == "del" then
+    out[#out + 1] = entry.content or ""
+  end
+  if entry.ghosts_after then
+    for _, g in ipairs(entry.ghosts_after) do
+      out[#out + 1] = g.content or ""
+    end
+  end
+  if #out > 0 or entry.hunk_idx == nil then
+    return out
+  end
+  local target_hunk = entry.hunk_idx
+  for _, e in ipairs(entries) do
+    if e.hunk_idx == target_hunk then
+      if e.ghosts then
+        for _, g in ipairs(e.ghosts) do
+          out[#out + 1] = g.content or ""
+        end
+      end
+      if e.kind == "del" then
+        out[#out + 1] = e.content or ""
+      end
+      if e.ghosts_after then
+        for _, g in ipairs(e.ghosts_after) do
+          out[#out + 1] = g.content or ""
+        end
+      end
     end
   end
   return out

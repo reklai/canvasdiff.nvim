@@ -291,47 +291,6 @@ function Surface:capture_view(win)
   return session.capture(self.state, win)
 end
 
---- Retire this source lifetime for a branch change and return only the
---- ownership and semantic view data a fresh Surface may inherit.
----
---- Disposal happens inside this operation so callers cannot accidentally
---- recollect repository state while the old controllers are still live.
-function Surface:retire_for_ref_change(preferred_win, replacement_lens)
-  if not self:is_alive() then
-    return nil
-  end
-  local graph = self:canvas_snapshot()
-  local capture_order = {}
-  if preferred_win then
-    capture_order[#capture_order + 1] = preferred_win
-  end
-  for _, win in ipairs(graph.canvas) do
-    if win ~= preferred_win then
-      capture_order[#capture_order + 1] = win
-    end
-  end
-  for _, win in ipairs(capture_order) do
-    local _, observed = self:capture_view(win)
-    if observed then
-      break
-    end
-  end
-  local replacement = {
-    canvas_buf = self.canvas_buf,
-    ownership = self:handoff(),
-    displaced = graph.canvas,
-    session = vim.deepcopy(self.state and self.state.session_snapshot or nil),
-  }
-  if replacement_lens and self.state then
-    self.state.lens = vim.deepcopy(replacement_lens)
-    self.state.collapsed = {}
-    self.state.folded = {}
-    self.state.folded_seen = {}
-  end
-  self:dispose("branch_changed")
-  return replacement
-end
-
 --- Run only work captured from this exact live generation.
 function Surface:guard(generation, callback)
   if generation ~= self.generation or not self:is_alive() then
@@ -468,24 +427,15 @@ function Surface:dispose(reason)
   -- explicit-close path restores each host window to its landing buffer AFTER
   -- disposal, and deleting the buffer synchronously would make Neovim pick a
   -- replacement for those windows first.
-  -- The store and its projection, before the buffer they live on. A paged
-  -- canvas owns both; an eager one owns neither, and `canvas.dispose` is
-  -- harmless on it. The paged skeleton buffer is KEPT here and reclaimed
-  -- below with the eager one: deleting it now, while the host windows still
-  -- show it, closed those windows -- closing a large review took its window
-  -- (or its whole tab) with it instead of putting back what was there.
   local canvas_buf = self.state and self.state.buf or nil
-  local paged_buf = self.state and self.state.paged ~= nil
   attempt("canvas.dispose", function()
-    canvas.dispose(self.state, { keep_buffer = true })
+    canvas.dispose(self.state)
   end)
 
   if canvas_buf then
     vim.schedule(function()
-      -- Buffer numbers are never reused, so a valid number is still the
-      -- skeleton this review owned; an eager buffer is checked by name.
       if not (vim.api.nvim_buf_is_valid(canvas_buf)
-          and (paged_buf or canvas.is_canvas_buf(canvas_buf))) then
+          and canvas.is_canvas_buf(canvas_buf)) then
         return
       end
       for _, win in ipairs(vim.api.nvim_list_wins()) do

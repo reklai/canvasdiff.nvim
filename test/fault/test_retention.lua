@@ -53,23 +53,22 @@ local function review_once(fm, diff, tracked, sliced)
       -- A sliced open adds the slicer's coroutine, pacer and step closures
       -- to the hot paths; none of them may hold the model either.
       local canvas = require("canvasdiff.canvas")
-      local real_show = canvas.show
-      canvas.show = function(shown, ...)
-        state = shown
-        return real_show(shown, ...)
+      local real_open = canvas.open
+      canvas.open = function(...)
+        state = real_open(...)
+        return state
       end
       local returned = fm.open({
         lens = diff.lens.get("all"), async = true,
         _incremental_rows = 1, _slice_ms = 0,
       })
       local done = vim.wait(5000, function() return state ~= nil end, 1)
-      canvas.show = real_show
+      canvas.open = real_open
       assert(returned == nil and done, "the open must have been sliced")
     else
       state = fm.open({ lens = diff.lens.get("all") })
     end
-    assert(state and state.paged, "the fixture must open on the paged canvas")
-    tracked[state.paged.list] = "page list"
+    assert(state, "the fixture must open")
     fm.set_lens(diff.lens.get("unstaged"))
     fm.set_lens(diff.lens.get("all"))
     fm.close()
@@ -102,7 +101,7 @@ local function retention_case(sliced)
   local diff = require("canvasdiff.diff")
   local tracked = setmetatable({}, { __mode = "k" })
   local ok, err = xpcall(function()
-    fm.setup({ paged = { min_rows = 1 }, virt = { enabled = false } })
+    fm.setup({ virt = { enabled = false }, auto_collapse = { enabled = false } })
     -- Twice: the second pass runs over loops the first already compiled,
     -- which is exactly when a trace holds the previous review's closures.
     review_once(fm, diff, tracked, sliced)
@@ -130,7 +129,7 @@ local function retention_case(sliced)
   assert(ok, err)
 end
 
-T["retention a closed paged review leaves no model pinned by compiled traces"] = function()
+T["retention a closed review leaves no model pinned by compiled traces"] = function()
   retention_case(false)
 end
 

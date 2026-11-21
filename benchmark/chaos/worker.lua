@@ -15,12 +15,12 @@ local repo_root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(script)))
 local output_path = _G.arg and _G.arg[1] and absolute(_G.arg[1]) or nil
 local seed = tonumber(_G.arg and _G.arg[2])
 local actions = tonumber(_G.arg and _G.arg[3])
-local harness = _G.arg and _G.arg[4] or "engine"
+local harness = _G.arg and _G.arg[4] or "surface"
 
 local result = {
   schema_version = 1,
   benchmark = "canvasdiff.chaos_campaign",
-  profile = "paged-engine-chaos-v1",
+  profile = "surface-chaos-v1",
   seed = seed,
   requested_actions = actions,
   harness = harness,
@@ -57,20 +57,8 @@ local ok, failure = xpcall(function()
   package.path = repo_root .. "/test/?.lua;"
     .. repo_root .. "/test/?/init.lua;" .. package.path
 
-  assert(harness == "engine" or harness == "surface",
-    "harness must be engine or surface")
-  -- The two campaigns test different layers and neither subsumes the other:
-  -- the engine one drives stores and projections, the surface one drives the
-  -- real entry points against a real Git fixture.
-  -- Two static requires, not one computed name: the architecture scan reads
-  -- the dependency graph out of the source, and a require whose argument is an
-  -- expression is a dependency it cannot see.
-  local Chaos
-  if harness == "surface" then
-    Chaos = require("fault.chaos_surface")
-  else
-    Chaos = require("fault.chaos")
-  end
+  assert(harness == "surface", "harness must be surface")
+  local Chaos = require("fault.chaos_surface")
 
   local started = uv.hrtime()
   local campaign = Chaos.run({

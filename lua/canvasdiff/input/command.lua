@@ -23,11 +23,11 @@ C.words = {
   sidebar  = { action = "sidebar" },
   quickfix = { action = "quickfix" },
   compare  = { action = "compare" },
-  checkout = { action = "checkout" },
-  track    = { action = "track" },
   -- The review checkpoint: take one, or look through the one already taken.
   checkpoint = { action = "checkpoint" },
   since      = { action = "since" },
+  -- Review-loop filter: hide reviewed files, keeping only unreviewed + stale.
+  unreviewed = { action = "toggle_unreviewed" },
   -- Lenses. States, not flips: see the public facade's set_lens.
   unstaged = { action = "set_lens", lens = "unstaged" },
   all      = { action = "set_lens", lens = "all" },
@@ -37,8 +37,7 @@ C.words = {
 --- Completion candidates, in the order they should be offered.
 C.candidate_order = {
   "open", "close", "toggle", "here", "refresh", "sidebar", "quickfix",
-  "compare", "checkout", "track", "all", "unstaged", "staged", "checkpoint",
-  "since",
+  "compare", "all", "unstaged", "staged", "checkpoint", "since", "unreviewed",
 }
 
 -- `git diff --staged` (and its `--cached` synonym) means index-vs-HEAD, which the

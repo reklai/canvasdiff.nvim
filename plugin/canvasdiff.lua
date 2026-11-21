@@ -19,12 +19,8 @@ end, {
   -- "*" rather than "?" so arity errors come from us with a real message,
   -- instead of Vim's generic trailing-characters complaint.
   nargs = "*",
-  desc = "CanvasDiff review canvas: :CanvasDiff [open|close|toggle|refresh|sidebar|compare|checkout|track|all|unstaged|staged|range]",
+  desc = "CanvasDiff review canvas: :CanvasDiff [open|close|toggle|here|refresh|sidebar|quickfix|compare|all|unstaged|staged|checkpoint|since|unreviewed|range]",
   complete = function(arglead)
     return require("canvasdiff").command_complete(arglead)
   end,
 })
-
--- Instantiate the root owner now so its conservative default global mapping is
--- available before the first :CanvasDiff command. setup() can rebind/disable it.
-require("canvasdiff")

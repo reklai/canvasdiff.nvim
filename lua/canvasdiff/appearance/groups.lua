@@ -6,6 +6,7 @@ local G = {}
 
 local ORDER = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
+  "CanvasDiffWordAdd", "CanvasDiffWordDel",
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
   "CanvasDiffGutterAdd", "CanvasDiffGutterDel", "CanvasDiffFileBar",
   "CanvasDiffFileHeader", "CanvasDiffHunkHeader", "CanvasDiffBinary",
@@ -253,6 +254,7 @@ function G.definitions(profile)
   -- colour blindness and monochrome terminals, so a strike would duplicate it.
   out.CanvasDiffGhost = { fg = ghost_fg }
   out.CanvasDiffFileBar = { bg = bar }
+  local word_hues = {}
   for kind, pair in pairs({
     add = { "CanvasDiffPrefixAdd", "CanvasDiffGutterAdd" },
     del = { "CanvasDiffPrefixDel", "CanvasDiffGutterDel" },
@@ -262,10 +264,18 @@ function G.definitions(profile)
       link = false,
     })
     local hue = source.fg or HUE_FALLBACK_FG[kind]
+    word_hues[kind] = hue
     for _, name in ipairs(pair) do
       out[name] = { fg = hue, ctermfg = source.ctermfg }
     end
   end
+  -- Intra-line word emphasis for the on-demand hunk peek float: a subtle tint
+  -- blended toward the add/del margin hue so changed tokens pop symmetrically
+  -- on both `-` and `+` lines while text stays legible on dark and light themes.
+  local word_add_bg = tonumber(blend(normal_bg, word_hues.add, 0.25):sub(2), 16)
+  local word_del_bg = tonumber(blend(normal_bg, word_hues.del, 0.25):sub(2), 16)
+  out.CanvasDiffWordAdd = { bg = word_add_bg, bold = true }
+  out.CanvasDiffWordDel = { bg = word_del_bg, bold = true }
   if profile == "classic" then
     -- The traditional whole-row wash, as links so the scheme's own diff
     -- colours flow through live. No collision guard here: if a scheme's
@@ -286,6 +296,8 @@ function G.definitions(profile)
     out.CanvasDiffGutterAdd = { fg = normal.fg or pole }
     out.CanvasDiffPrefixDel = { fg = ghost_fg }
     out.CanvasDiffGutterDel = { fg = ghost_fg }
+    out.CanvasDiffWordAdd = { underline = true, bold = true }
+    out.CanvasDiffWordDel = { underline = true, bold = true }
     out.CanvasDiffScrollAdd = { bg = elevation }
     out.CanvasDiffScrollDel = { bg = elevation }
     out.CanvasDiffScrollChanged = { bg = elevation }

@@ -105,9 +105,12 @@ return {
     table.sort(names)
     H.eq(names, {
       "anchor",
+      "auto_collapse",
       "build",
       "build_section",
       "built_from",
+      "deferred_section",
+      "deleted_lines_at",
       "fingerprint",
       "fold",
       "hunk_targets",
@@ -118,6 +121,7 @@ return {
       "stage",
       "staged_then_changed",
       "text_fingerprint",
+      "word_diff",
     })
   end,
   -- Reuse skips a diff, so a false "same" would show a stale file. Every

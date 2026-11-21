@@ -1,6 +1,5 @@
 .PHONY: test unit integration e2e fault architecture \
-	bench-eager bench-paged bench-chaos bench-regression bench-acceptance \
-	bench-live-scale verify
+	bench-eager bench-chaos bench-regression bench-acceptance verify
 
 # NVIM is the binary every lane runs under; point it at a nightly build to
 # check the plugin against Neovim before an update lands on PATH.
@@ -31,45 +30,30 @@ architecture:
 OUT ?= /tmp/canvasdiff
 NVIM_BENCH = $(NVIM) --headless --clean -n -i NONE
 
-# The frozen small-canvas baseline: what an ordinary review costs today.
+# The small-canvas baseline: what an ordinary review costs today.
 bench-eager:
 	NVIM_LOG_FILE=$(OUT)-eager.log $(NVIM_BENCH) \
 		-l benchmark/run.lua $(OUT)-eager.json 5
 
-# The million-row gate. REPS defaults to the journey's three repetitions.
-REPS ?= 3
-bench-paged:
-	NVIM_LOG_FILE=$(OUT)-paged.log $(NVIM_BENCH) \
-		-l benchmark/paged/run.lua $(OUT)-paged.json $(REPS)
-
-# Phase 7 deliberate breakage. ACTIONS defaults to the journey's 10,000.
-ACTIONS ?= 10000
+# Surface-level deliberate breakage against a real Git fixture.
+ACTIONS ?= 200
 bench-chaos:
 	NVIM_LOG_FILE=$(OUT)-chaos.log $(NVIM_BENCH) \
 		-l benchmark/chaos/run.lua $(OUT)-chaos.json $(ACTIONS)
 
-# Speeding up a million rows must not slow the ordinary review down.
+# Keep ordinary reviews fast against the frozen baseline.
 bench-regression: bench-eager
 	$(NVIM_BENCH) -l benchmark/regression.lua \
 		docs/verification/eager-baseline.json $(OUT)-eager.json 10
 
-# Phase 8: the eight live interactions in a real Git fixture, with the
-# observations recorded as evidence rather than asserted and discarded.
+# Interactive live acceptance in a real Git fixture.
 bench-acceptance:
 	NVIM_LOG_FILE=$(OUT)-acceptance.log $(NVIM_BENCH) \
 		-l benchmark/acceptance/run.lua $(OUT)-acceptance.json
 
-# The expensive real-Git ladder: one isolated worker per requested size.
-LIVE_REPS ?= 1
-bench-live-scale:
-	NVIM_LOG_FILE=$(OUT)-live-scale.log $(NVIM_BENCH) \
-		-l benchmark/live_scale/run.lua $(OUT)-live-scale.json \
-		$(LIVE_REPS) "$(SIZES)" "$(BASELINE)"
-
-# Everything a publication audit has to show, in one command.
+# Full verification suite.
 verify:
 	$(MAKE) test
 	$(MAKE) bench-regression
-	$(MAKE) bench-paged
 	$(MAKE) bench-chaos
 	$(MAKE) bench-acceptance

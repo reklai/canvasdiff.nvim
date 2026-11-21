@@ -256,7 +256,76 @@ end
 T["stage_ the facade exports exactly the splice operations"] = function()
   local names = vim.tbl_keys(stage)
   table.sort(names)
-  H.eq(names, { "pair_hunks", "pick", "pick_all", "splice", "splice_many" })
+  H.eq(names, {
+    "pair_hunks",
+    "pick",
+    "pick_all",
+    "revert_lines",
+    "splice",
+    "splice_lines",
+    "splice_many",
+  })
+end
+
+T["stage_splice_lines stages a subset of added lines without touching siblings"] = function()
+  local a = "one\ntwo\nthree\n"
+  local b = "one\nadd1\nadd2\nadd3\ntwo\nthree\n"
+  local out, changed = stage.splice_lines(a, b, { b_lines = { [3] = true } })
+  H.eq(changed, true)
+  H.eq(out, "one\nadd2\ntwo\nthree\n")
+
+  local noop, changed2 = stage.splice_lines(a, b, { b_lines = { [1] = true } })
+  H.eq(changed2, false)
+  H.eq(noop, a)
+end
+
+T["stage_splice_lines stages ghost deletions and partial replacements accurately"] = function()
+  -- Pure deletion at seam 1 (after line 1)
+  local a_del = "one\ngone1\ngone2\ntwo\n"
+  local b_del = "one\ntwo\n"
+  local out_del, changed_del = stage.splice_lines(a_del, b_del, { seams = { [1] = true } })
+  H.eq(changed_del, true)
+  H.eq(out_del, "one\ntwo\n")
+
+  -- Replacement: selecting seam + first new line replaces old with first new line
+  local a_rep = "keep\nold1\nold2\nend\n"
+  local b_rep = "keep\nnew1\nnew2\nend\n"
+  local out_rep, changed_rep = stage.splice_lines(a_rep, b_rep, {
+    seams = { [1] = true },
+    b_lines = { [2] = true },
+  })
+  H.eq(changed_rep, true)
+  H.eq(out_rep, "keep\nnew1\nend\n")
+end
+
+T["stage_revert_lines unstages or discards a subset of added lines and reports removed lines"] = function()
+  local a = "one\ntwo\n"
+  local b = "one\nadd1\nadd2\nadd3\ntwo\n"
+  local out, removed, changed = stage.revert_lines(a, b, {
+    b_lines = { [2] = true, [4] = true },
+  })
+  H.eq(changed, true)
+  H.eq(out, "one\nadd2\ntwo\n")
+  H.eq(removed, { "add1", "add3" })
+
+  -- Preserves CRLF and strips \r from register lines.
+  local crlf_a = "one\r\ntwo\r\n"
+  local crlf_b = "one\r\nadd1\r\nadd2\r\ntwo\r\n"
+  local crlf_out, crlf_rem, crlf_chg = stage.revert_lines(crlf_a, crlf_b, {
+    b_lines = { [2] = true },
+  })
+  H.eq(crlf_chg, true)
+  H.eq(crlf_out, "one\r\nadd2\r\ntwo\r\n")
+  H.eq(crlf_rem, { "add1" })
+end
+
+T["stage_revert_lines restores a ghost deletion when its seam is selected"] = function()
+  local a = "one\nold1\nold2\ntwo\n"
+  local b = "one\ntwo\n"
+  local out, removed, changed = stage.revert_lines(a, b, { seams = { [1] = true } })
+  H.eq(changed, true)
+  H.eq(out, a)
+  H.eq(removed, {})
 end
 
 T["stage_pick finds a deletion whose seam opens the file"] = function()

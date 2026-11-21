@@ -50,6 +50,7 @@ local function in_review(root, setup, fn)
     watch = { enabled = false }, sidebar = { enabled = false },
     scrollbar = { enabled = false }, statuscolumn = { enabled = false },
     highlight = { enabled = false }, virt = { enabled = false },
+    auto_collapse = { enabled = false },
     session = { enabled = false },
   }, setup or {}))
   local ok, err = xpcall(function() fn(fm, notes) end, debug.traceback)
@@ -91,56 +92,40 @@ T["incremental_open a small review opens inside the call"] = function()
   end)
 end
 
-for _, case in ipairs({
-  { name = "paged", setup = { paged = { min_rows = 1 } } },
-  { name = "eager", setup = { paged = { enabled = false } } },
-}) do
-  T["incremental_open a sliced " .. case.name .. " build shows exactly what a plain open shows"] = function()
-    in_review(fixture(1500), case.setup, function(fm)
-      local plain = assert(fm.open())
-      local expected = logical_text(plain)
-      fm.close()
+T["incremental_open a sliced build shows exactly what a plain open shows"] = function()
+  in_review(fixture(1500), nil, function(fm)
+    local plain = assert(fm.open())
+    local expected = logical_text(plain)
+    fm.close()
 
-      -- The sliced open returns before it has a state, so capture the one
-      -- it publishes where it publishes it: canvas.show for the prepared
-      -- paged canvas, canvas.open for the eager one.
-      local published
-      local real_show, real_open = canvas.show, canvas.open
-      canvas.show = function(state, ...)
-        published = state
-        return real_show(state, ...)
-      end
-      canvas.open = function(...)
-        published = real_open(...)
-        return published
-      end
-      local before = vim.api.nvim_get_current_buf()
-      local st, err = fm.open(FORCE)
-      canvas.show, canvas.open = real_show, real_open
-      H.eq(st, nil, "a large build answers before it is done")
-      assert(type(err) == "string" and err:find("still being built", 1, true), tostring(err))
-      H.eq(vim.api.nvim_get_current_buf(), before,
-        "nothing is published while the review builds")
-      canvas.show, canvas.open = function(state, ...)
-        published = state
-        return real_show(state, ...)
-      end, function(...)
-        published = real_open(...)
-        return published
-      end
-      local shown = pcall(wait_shown)
-      canvas.show, canvas.open = real_show, real_open
-      assert(shown, "the building review never appeared")
-      assert(published, "the sliced open published through neither canvas path")
-      H.eq(published.buf, vim.api.nvim_get_current_buf())
-      H.eq(published.paged ~= nil, case.name == "paged")
-      H.eq(logical_text(published), expected)
-    end)
-  end
+    local published
+    local real_open = canvas.open
+    canvas.open = function(...)
+      published = real_open(...)
+      return published
+    end
+    local before = vim.api.nvim_get_current_buf()
+    local st, err = fm.open(FORCE)
+    canvas.open = real_open
+    H.eq(st, nil, "a large build answers before it is done")
+    assert(type(err) == "string" and err:find("still being built", 1, true), tostring(err))
+    H.eq(vim.api.nvim_get_current_buf(), before,
+      "nothing is published while the review builds")
+    canvas.open = function(...)
+      published = real_open(...)
+      return published
+    end
+    local shown = pcall(wait_shown)
+    canvas.open = real_open
+    assert(shown, "the building review never appeared")
+    assert(published, "the sliced open published through canvas.open")
+    H.eq(published.buf, vim.api.nvim_get_current_buf())
+    H.eq(logical_text(published), expected)
+  end)
 end
 
 T["incremental_open toggling again cancels a building review and leaks nothing"] = function()
-  in_review(fixture(1500), { paged = { min_rows = 1 } }, function(fm, notes)
+  in_review(fixture(1500), nil, function(fm, notes)
     local buffers = settled_buffers()
     local before = vim.api.nvim_get_current_buf()
     H.eq(fm.open(FORCE), nil)
@@ -155,7 +140,7 @@ T["incremental_open toggling again cancels a building review and leaks nothing"]
 end
 
 T["incremental_open close cancels a building review"] = function()
-  in_review(fixture(1500), { paged = { min_rows = 1 } }, function(fm)
+  in_review(fixture(1500), nil, function(fm)
     local buffers = settled_buffers()
     local before = vim.api.nvim_get_current_buf()
     H.eq(fm.open(FORCE), nil)
@@ -167,7 +152,7 @@ T["incremental_open close cancels a building review"] = function()
 end
 
 T["incremental_open a newer open supersedes a building one"] = function()
-  in_review(fixture(1500), { paged = { min_rows = 1 } }, function(fm)
+  in_review(fixture(1500), nil, function(fm)
     H.eq(fm.open(FORCE), nil)
     local st = assert(fm.open({ lens = lens.get("staged") }))
     vim.wait(200)
@@ -179,7 +164,7 @@ T["incremental_open a newer open supersedes a building one"] = function()
 end
 
 T["incremental_open leaving the window cancels the publish"] = function()
-  in_review(fixture(1500), { paged = { min_rows = 1 } }, function(fm, notes)
+  in_review(fixture(1500), nil, function(fm, notes)
     local origin = vim.api.nvim_get_current_win()
     local origin_buf = vim.api.nvim_get_current_buf()
     H.eq(fm.open(FORCE), nil)

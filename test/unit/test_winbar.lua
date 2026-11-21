@@ -11,6 +11,36 @@ T["winbar_ text is the comparison label alone, band-tinted"] = function()
   H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE")
 end
 
+T["winbar_ text shows reviewed, stale, and filter counts once reviewing begins"] = function()
+  local diff = require("canvasdiff.diff")
+  local sec_a = diff.build_section("a.lua", "1\n", "2\n", "M")
+  local sec_b = diff.build_section("b.lua", "1\n", "3\n", "M")
+  local sec_c = diff.build_section("c.lua", "1\n", "4\n", "M")
+  local st = {
+    lens = lens.get("all"),
+    sections = { sec_a, sec_b, sec_c },
+    collapsed = { ["a.lua"] = "user" },
+    folded = {},
+    folded_seen = { ["a.lua"] = { lens = "all", fp = diff.fingerprint(sec_a) } },
+  }
+  H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE  ·  1/3 reviewed")
+
+  -- Smart auto-collapsed files do not count as reviewed.
+  st.collapsed["b.lua"] = "smart"
+  H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE  ·  1/3 reviewed")
+
+  -- A stale file decrements reviewed and adds the stale count.
+  st.folded_seen["a.lua"] = { lens = "all", fp = "older-fingerprint" }
+  H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE  ·  0/3 reviewed  ·  1 stale")
+
+  -- Unreviewed filter badge rides alongside counts from all_sections.
+  st.folded_seen["a.lua"] = { lens = "all", fp = diff.fingerprint(sec_a) }
+  st.all_sections = { sec_a, sec_b, sec_c }
+  st.sections = { sec_b, sec_c }
+  st.filter_unreviewed = true
+  H.eq(winbar.text(st), "%#CanvasDiffWinbar#HEAD → WORKTREE  ·  1/3 reviewed  ·  [unreviewed]")
+end
+
 T["winbar_ text escapes percent signs in refs"] = function()
   local st = { lens = lens.range("a%b", "topic", "..") }
   H.eq(winbar.text(st), "%#CanvasDiffWinbarReadOnly#READ-ONLY  a%%b → topic")

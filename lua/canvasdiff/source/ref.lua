@@ -58,37 +58,4 @@ function M.local_branches(items)
   end)
 end
 
---- Non-symbolic remote-tracking branches in source order.
---- @param items table[]
---- @return table[]
-function M.remote_tracking(items)
-  return filtered_copy(items, function(item)
-    return type(item) == "table"
-      and item.kind == "remote"
-      and not item.remote_default
-      and M.remote_name(item) == nil
-  end)
-end
-
---- The branch path after `<remote>/`, derived only from the full ref.
---- @param item table
---- @return string|nil
---- @return string|nil
-function M.tracking_name(item)
-  if type(item) ~= "table" or item.kind ~= "remote" then
-    return nil, "expected a remote-tracking branch record"
-  end
-  if type(item.ref) ~= "string" then
-    return nil, "remote-tracking branch ref is malformed"
-  end
-  local name = item.ref:match("^refs/remotes/[^/]+/(.+)$")
-  if not name then
-    return nil, "remote-tracking branch ref is malformed"
-  end
-  if item.remote_default or name == "HEAD" then
-    return nil, "symbolic remote default has no tracking branch name"
-  end
-  return name
-end
-
 return M

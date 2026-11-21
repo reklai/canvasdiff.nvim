@@ -53,6 +53,7 @@ local function in_review(rows, fn, setup)
     watch = { enabled = false }, sidebar = { enabled = false },
     scrollbar = { enabled = false }, statuscolumn = { enabled = false },
     highlight = { enabled = false }, virt = { enabled = false },
+    auto_collapse = { enabled = false },
     session = { enabled = false },
   }, setup or {}))
   local ok, err = xpcall(function()

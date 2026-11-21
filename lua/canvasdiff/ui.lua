@@ -1,4 +1,5 @@
 local cheatsheet = require("canvasdiff.ui.cheatsheet")
+local hunk_peek = require("canvasdiff.ui.hunk_peek")
 local syntax = require("canvasdiff.ui.syntax")
 local notifications = require("canvasdiff.ui.notifications")
 local scrollbar = require("canvasdiff.ui.scrollbar")
@@ -16,6 +17,8 @@ return {
   cheatsheet = cheatsheet,
   -- err/notify/warn: prefixed vim.notify wrappers (notify defaults to INFO).
   err = notifications.err,
+  -- The on-demand floating hunk word-diff inspector (`K`).
+  hunk_peek = hunk_peek,
   notify = notifications.notify,
   -- The right-edge minimap of file boundaries and changed stretches.
   scrollbar = scrollbar,

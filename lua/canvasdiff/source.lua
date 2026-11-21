@@ -19,6 +19,9 @@ return {
   -- Porcelain-v2 records sorted by path, each carrying both halves of the XY
   -- status (`staged`/`unstaged`, nil where the column is ".").
   changed_files = repository.changed_files,
+  -- Query `.gitattributes` (`linguist-generated`, `diff`, `binary`) for a list
+  -- of paths in one bounded git call.
+  check_attributes = repository.check_attributes,
   -- (root, full ref name) -> the object id of a new commit recording the
   -- worktree as the review shows it (untracked files and unsaved buffer text
   -- included, ignored files not), with `ref` moved to it. The real index and
@@ -35,12 +38,14 @@ return {
   files = collect.files,
   format_ref = ref.format,
   local_branches = ref.local_branches,
+  -- Materialize one deferred section on demand by reading both of its sides
+  -- and building the full diff section.
+  materialize_section = collect.materialize_section,
   merge_base = repository.merge_base,
-  -- First modified file-backed buffer path under root, or nil. Never errors.
-  modified_buffer_in_root = buffer.modified_in_root,
+  -- Cheap per-path line churn and binary flags from one `git diff --numstat -z`.
+  numstat = repository.numstat,
   -- The remote a symbolic remote-default ref names, or a bare nil.
   remote_name = ref.remote_name,
-  remote_tracking_branches = ref.remote_tracking,
   resolve_commit = repository.resolve_commit,
   -- The repository toplevel for a directory, or a bare nil (no message).
   root = repository.root,
@@ -62,12 +67,6 @@ return {
   -- The same bytes synchronously: the string, or nil when Git fails. Never
   -- errors. For a drift baseline taken at a known point.
   status_snapshot = repository.status_snapshot,
-  -- Both may answer `true, err`: git reported a failure but the end state
-  -- verifies (HEAD landed on the requested ref), so the caller can treat it
-  -- as done while still surfacing the message.
-  switch_branch = repository.switch_branch,
-  track_branch = repository.track_branch,
-  tracking_branch_name = ref.tracking_name,
   unstage = repository.unstage,
   -- Always a string: a loaded buffer's possibly-unsaved bytes, else the disk
   -- file, and "" for a deleted or unreadable worktree path. Never errors.

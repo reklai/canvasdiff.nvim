@@ -366,18 +366,6 @@ function M.branches(root)
   return refs
 end
 
-local function local_branch_name(root, full_ref)
-  if type(full_ref) ~= "string"
-      or not full_ref:match("^refs/heads/.+$") then
-    return nil, "local branch ref must match refs/heads/<name>"
-  end
-  local format = run(root, { "check-ref-format", full_ref })
-  if format.code ~= 0 then
-    return nil, command_error("git check-ref-format", format)
-  end
-  return full_ref:sub(#"refs/heads/" + 1)
-end
-
 local function symbolic_head(root)
   local res = run(root, { "symbolic-ref", "--quiet", "HEAD" })
   if res.code ~= 0 or res.stdout == nil then
@@ -396,97 +384,6 @@ end
 --- @return string|nil
 function M.current_branch(root)
   return symbolic_head(root)
-end
-
-local function validate_remote_ref(full_remote_ref)
-  if type(full_remote_ref) ~= "string"
-      or not full_remote_ref:match("^refs/remotes/[^/]+/.+$") then
-    return nil, "remote branch ref must match refs/remotes/<remote>/<name>"
-  end
-  if full_remote_ref:match("/HEAD$") then
-    return nil, "symbolic remote HEAD cannot be tracked"
-  end
-  return true
-end
-
---- Switch to one validated, existing local branch without remote guessing.
---- @param root string
---- @param full_ref string
---- @return true|nil
---- @return string|nil
-function M.switch_branch(root, full_ref)
-  local name, validation_err = local_branch_name(root, full_ref)
-  if not name then
-    return nil, validation_err
-  end
-  local res = run(root, { "switch", "--no-guess", "--", name })
-  if res.code ~= 0 then
-    local err = command_error("git switch", res)
-    if symbolic_head(root) == full_ref then
-      return true, err
-    end
-    return nil, err
-  end
-  return true
-end
-
---- Create and switch to one validated local branch tracking an exact remote ref.
---- @param root string
---- @param local_name string
---- @param full_remote_ref string
---- @return true|nil
---- @return string|nil
-function M.track_branch(root, local_name, full_remote_ref)
-  local valid_remote, remote_err = validate_remote_ref(full_remote_ref)
-  if not valid_remote then
-    return nil, remote_err
-  end
-
-  if type(local_name) ~= "string" or local_name == "" then
-    return nil, "local branch name must be a non-empty string"
-  end
-  local format = run(root, { "check-ref-format", "--branch", local_name })
-  if format.code ~= 0 then
-    return nil, command_error("git check-ref-format --branch", format)
-  end
-  local checked_name = format.stdout
-    and format.stdout:gsub("[\r\n]+$", "") or nil
-  if checked_name ~= local_name then
-    return nil, "local branch name must not use checkout shorthand"
-  end
-
-  local local_ref = "refs/heads/" .. local_name
-  local collision = run(root, {
-    "show-ref", "--verify", "--quiet", "--", local_ref,
-  })
-  if collision.code == 0 then
-    return nil, ("local branch '%s' already exists; use :CanvasDiff checkout")
-      :format(local_name)
-  end
-  if collision.code ~= 1 then
-    return nil, command_error("git show-ref --verify", collision)
-  end
-
-  local res = run(root, {
-    "switch", "--no-guess", "--track", "-c", local_name, "--", full_remote_ref,
-  })
-  if res.code ~= 0 then
-    local err = command_error("git switch --track", res)
-    local head_matches = symbolic_head(root) == local_ref
-    local local_exists = run(root, {
-      "show-ref", "--verify", "--quiet", "--", local_ref,
-    }).code == 0
-    local upstream = run(root, {
-      "rev-parse", "--symbolic-full-name", "@{upstream}",
-    })
-    local upstream_ref = upstream.code == 0 and upstream.stdout
-      and upstream.stdout:gsub("[\r\n]+$", "") or nil
-    if head_matches and local_exists and upstream_ref == full_remote_ref then
-      return true, err
-    end
-    return nil, err
-  end
-  return true
 end
 
 --- Resolve the common ancestor of two commit-ish refs.
@@ -606,6 +503,122 @@ function M.diff_files(root, oid, new_oid)
     return a.path < b.path
   end)
   return files
+end
+
+--- Per-path line churn and binary flags from one bounded `git diff --numstat -z`
+--- call, without reading blob bytes in Lua.
+---
+--- `mode` selects the pair Git compares:
+---   * `cached = true` -> HEAD vs index (staged lens)
+---   * `old_rev` and `new_rev` -> commit range `old_rev` vs `new_rev`
+---   * `old_rev` only -> `old_rev` vs worktree (all / branch / checkpoint lens)
+---   * neither -> index vs worktree (unstaged lens)
+---
+--- Returns `{ [path] = { adds = n, dels = m, binary = bool, old_path = str? } }`.
+--- On an unborn repository or transient error returns `{}` so collection falls
+--- back gracefully without aborting.
+function M.numstat(root, opts)
+  opts = opts or {}
+  local args = {
+    "diff",
+    "--no-ext-diff",
+    "--ignore-submodules=all",
+    "--numstat",
+    "-z",
+    "--find-renames",
+  }
+  if opts.cached then
+    args[#args + 1] = "--cached"
+  elseif opts.old_rev and opts.new_rev then
+    args[#args + 1] = opts.old_rev
+    args[#args + 1] = opts.new_rev
+  elseif opts.old_rev then
+    args[#args + 1] = opts.old_rev
+  end
+  args[#args + 1] = "--"
+
+  local res = run(root, args)
+  if res.code ~= 0 or not res.stdout or res.stdout == "" then
+    return {}
+  end
+
+  local tokens = nul_tokens(res.stdout)
+  local stats = {}
+  local i = 1
+  while i <= #tokens do
+    local tok = tokens[i]
+    local raw_adds, raw_dels, path = tok:match("^([^\t]+)\t([^\t]+)\t(.*)$")
+    if not raw_adds then
+      i = i + 1
+    else
+      local binary = raw_adds == "-" and raw_dels == "-"
+      local adds = binary and 0 or (tonumber(raw_adds) or 0)
+      local dels = binary and 0 or (tonumber(raw_dels) or 0)
+      if path == "" then
+        -- Rename/copy record under `-z`: empty path followed by old_path, new_path.
+        local old_path = tokens[i + 1]
+        local new_path = tokens[i + 2]
+        i = i + 3
+        if new_path and new_path ~= "" then
+          stats[new_path] = {
+            adds = adds,
+            dels = dels,
+            binary = binary,
+            old_path = old_path,
+          }
+        end
+      else
+        stats[path] = {
+          adds = adds,
+          dels = dels,
+          binary = binary,
+        }
+        i = i + 1
+      end
+    end
+  end
+  return stats
+end
+
+--- Query `.gitattributes` for `paths` in one bounded `git check-attr -z --stdin`
+--- invocation. Returns `{ [path] = { generated = bool, no_diff = bool, binary = bool } }`.
+function M.check_attributes(root, paths)
+  if type(paths) ~= "table" or #paths == 0 then
+    return {}
+  end
+  local stdin = table.concat(paths, "\0") .. "\0"
+  local res = run(root, {
+    "check-attr", "-z", "--stdin", "linguist-generated", "diff", "binary",
+  }, stdin)
+  if res.code ~= 0 or not res.stdout or res.stdout == "" then
+    return {}
+  end
+  local tokens = nul_tokens(res.stdout)
+  local out = {}
+  local i = 1
+  while i + 2 <= #tokens do
+    local path = tokens[i]
+    local attr = tokens[i + 1]
+    local info = tokens[i + 2]
+    i = i + 3
+    if path and path ~= "" then
+      local rec = out[path]
+      if attr == "linguist-generated" and (info == "set" or info == "true") then
+        rec = rec or {}
+        rec.generated = true
+        out[path] = rec
+      elseif attr == "diff" and info == "unset" then
+        rec = rec or {}
+        rec.no_diff = true
+        out[path] = rec
+      elseif attr == "binary" and (info == "set" or info == "true") then
+        rec = rec or {}
+        rec.binary = true
+        out[path] = rec
+      end
+    end
+  end
+  return out
 end
 
 --- @param root string

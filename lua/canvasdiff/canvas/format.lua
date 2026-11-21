@@ -267,6 +267,22 @@ function R.summary(section)
   if section.binary then
     return "(binary)"
   end
+  if section.deferred then
+    local parts = {}
+    if section.defer_reason == "generated" then
+      parts[#parts + 1] = "generated"
+    elseif section.defer_reason == "large" then
+      parts[#parts + 1] = "large"
+    end
+    if (section.adds or 0) > 0 or (section.dels or 0) > 0 then
+      parts[#parts + 1] = ("+%d " .. GLYPHS.minus .. "%d")
+        :format(section.adds or 0, section.dels or 0)
+    end
+    if #parts == 0 then
+      parts[#parts + 1] = "deferred"
+    end
+    return "(" .. table.concat(parts, ", ") .. ")"
+  end
   return ("(%d hunks, +%d " .. GLYPHS.minus .. "%d)")
     :format(section.nhunks or 0, section.adds or 0, section.dels or 0)
 end

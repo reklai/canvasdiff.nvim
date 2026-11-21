@@ -52,11 +52,9 @@ Run `:checkhealth canvasdiff` after installing. Besides the probes above it
 audits your `setup()` table for misspelled or removed options -- those merge
 without complaint and silently do nothing.
 
-Optional, each degrading to a plain canvas rather than an error:
+Optional, degrading to a plain canvas rather than an error:
 
 - Tree-sitter parsers, for syntax highlighting inside the diff.
-- An `lz4` shared library, for compacting very large canvases in memory. Its
-  absence costs memory, never correctness.
 
 ==============================================================================
 3. QUICK START                                          *canvasdiff-quickstart*
@@ -298,11 +296,6 @@ mean OPPOSITE things.
 :CanvasDiff compare     Choose a base and comparison ref with two
                         `vim.ui.select` prompts. Does not checkout or fetch.
 
-:CanvasDiff checkout    Choose and checkout a local branch.
-
-:CanvasDiff track       Choose a remote-tracking ref, then create and switch
-                        to a local branch tracking it. Never fetches.
-
 :CanvasDiff all         Switch to the `all` lens.
 :CanvasDiff unstaged    Switch to the `unstaged` lens.
 :CanvasDiff staged      Switch to the `staged` lens.
@@ -312,6 +305,10 @@ mean OPPOSITE things.
                         if none is showing. See |canvasdiff-checkpoint|.
 :CanvasDiff since       Show what changed since the last checkpoint without
                         taking a new one. Warns when there is none.
+
+:CanvasDiff unreviewed  Toggle showing only unreviewed and stale files on the
+                        live canvas (same as `zf`). Reviewed files stay folded
+                        and reappear automatically if modified behind the fold.
 
 :CanvasDiff {revision}  Compare your worktree against {revision}.
 :CanvasDiff {A..B}      Compare the two commit tips, read-only.
@@ -327,27 +324,23 @@ only git reads, like `heads/sidebar`.
 ==============================================================================
 7. MAPPINGS                                               *canvasdiff-mappings*
 
-Mappings are grouped by context. `global` is process-wide; the other contexts
-name the buffer they apply to. Every one is configurable; see
-|canvasdiff-configuration|.
-
-Global~
-    <leader>lb              Compare two local branches or revisions
-    <leader>lc              Checkout a local branch
-
-These are the two process-wide defaults. They are shown in the cheatsheet's
-Global column. If another mapping already occupies either lhs, CanvasDiff
-preserves that map and reports the collision.
-
-The comparison picker lists local branches only. Its base prompt orders local
-`main`, then `master`, then the remaining branches alphabetically; its second
-prompt puts the checked-out local branch first. Full refs stay internal. It
-never checks out, fetches, or writes refs.
+Mappings are grouped by buffer context. CanvasDiff installs no process-wide
+global mappings; bind `:CanvasDiff` commands or Lua API calls in your own
+configuration. Every mapping is configurable; see |canvasdiff-configuration|.
 
 On the canvas~
                                                         *canvasdiff-canvas-maps*
     <CR>, <2-LeftMouse>     Jump to this line and column in the real file
     za, c                   Collapse or expand this file
+    R                       Mark this file reviewed (folded) and jump to the
+                            next unreviewed or stale file
+    zf                      Toggle unreviewed-only filter (hide reviewed
+                            files; stale files reappear)
+    >  /  <                 Show more / fewer context lines in this file (±5)
+    K                       Peek current hunk with real -/+ lines and
+                            word-level diff highlighting
+    gy                      Yank deleted ghost lines at cursor (or in current
+                            hunk) into the unnamed register
     ]f  /  [f               Next / previous file
     ]h  /  [h               Next / previous hunk
     CTRL-N  /  CTRL-P       Scroll to the next / previous hunk (wraps;
@@ -357,12 +350,14 @@ On the canvas~
                             only what changes from here
     o                       Toggle the sidebar
     r                       Refresh the current diff
-    s                       Stage this hunk -- or this file on its header
-    u                       Unstage this hunk -- or this file on its header
+    s                       Stage this hunk, visual line selection, or file
+                            on its header
+    u                       Unstage this hunk, visual line selection, or file
+                            on its header
     S                       Stage this file's changes (from anywhere in it)
     U                       Unstage this file (from anywhere in it)
-    x                       Discard this unstaged hunk from the worktree --
-                            or this file on its header (asks)
+    x                       Discard this unstaged hunk, visual line selection,
+                            or file on its header (asks)
     X                       Discard this file's unstaged changes (from
                             anywhere in it; asks)
     q                       Back out: leave a stacked comparison, else
@@ -495,14 +490,16 @@ default. >lua
       highlights = {},
 
       keymaps = {
-        global = {
-          compare = "<leader>lb",
-          checkout = "<leader>lc",
-        },
         canvas = {
-          jump       = { "<CR>", "<2-LeftMouse>" },
-          collapse   = { "za", "c" },
-          next_file  = "]f",
+          jump              = { "<CR>", "<2-LeftMouse>" },
+          collapse          = { "za", "c" },
+          review_next       = "R",
+          filter_unreviewed = "zf",
+          expand_context    = ">",
+          shrink_context    = "<",
+          yank_deleted      = "gy",
+          peek_hunk         = "K",
+          next_file         = "]f",
           prev_file  = "[f",
           next_hunk  = "]h",
           prev_hunk  = "[h",
@@ -539,7 +536,6 @@ default. >lua
       scrollbar    = { enabled = true },
       statuscolumn = { enabled = true },
       session      = { enabled = true },
-      paged        = { enabled = true, min_rows = 20000 },
       highlight    = { enabled = true, margin = 100, debounce_ms = 30 },
       watch        = { enabled = true, debounce_ms = 200, poll_ms = 3000 },
       virt         = {
@@ -549,36 +545,19 @@ default. >lua
         margin       = 100,
         max_expanded = 20,
       },
+      auto_collapse = {
+        enabled       = true,
+        max_lines     = 500,
+        max_bytes     = 262144,
+        patterns      = {
+          "*lock*", "*.lock", "*.min.js", "*.min.css",
+          "*.map", "*.pb.go", "*_pb2.py", "*.snap",
+        },
+        gitattributes = true,
+      },
     })
 <
 Every mapping accepts a string or list. `false`, `""`, or `{}` disables it.
-For the global compare and checkout mappings, repeated `setup()` calls
-remove/rebind only maps CanvasDiff still owns by exact callback and metadata
-identity. A foreign collision or later takeover is never overwritten or
-deleted. A canonical compare/checkout collision is rejected before any global
-mapping mutation.
-
-                                                           *canvasdiff-paged*
-Large reviews~
-
-Above `paged.min_rows` canvas rows, CanvasDiff renders the review from a
-page-backed store instead of writing every line into the buffer. The buffer
-then holds one blank line per row and the text is drawn as you scroll, which
-is what makes a review of a million rows open and scroll at all.
-
-You will notice three differences on such a review:
-
-- Syntax highlighting inside hunks is absent. The elevation, the margin
-  hues, file bars and deleted-line ghosts all remain.
-- Other plugins that read the buffer's lines see blank lines, because that is
-  genuinely what is in the buffer.
-- `/` and `y` need CanvasDiff's own search and yank, which read the store.
-- The cursor stays in column 0 and a visual yank copies empty lines, for the
-  same reason. Row addressing is exact -- folds, motions, marks and search
-  positions are all unaffected -- but column addressing is not.
-
-Set `paged = { enabled = false }` to always use the ordinary canvas, at the
-cost of memory on very large reviews. Below the threshold nothing changes.
 
                                                      *canvasdiff-incremental*
 Opening a review of more than 20,000 rows from `:CanvasDiff` (with or without
@@ -670,11 +649,13 @@ group with |nvim_set_hl()| and should not also put the same group in
       bg = "#303446",
     })
 <
-Public groups (27):
+Public groups (29):
 
     CanvasDiffAdd            derived elevation; added rows
     CanvasDiffDel            elevation + dimmed fg; real deletion rows
     CanvasDiffGhost          dimmed fg; ghost deletion lines
+    CanvasDiffWordAdd        derived add word-diff emphasis in hunk peek
+    CanvasDiffWordDel        derived delete word-diff emphasis in hunk peek
     CanvasDiffPrefixAdd      derived add fg; `+` prefix
     CanvasDiffPrefixDel      derived delete fg; `-` prefix
     CanvasDiffGutterAdd      derived add fg; statuscolumn bar
@@ -825,20 +806,16 @@ canvasdiff.sidebar()                                  *canvasdiff.sidebar()*
         `sidebar.enabled`, which governs auto-open only. Warns when no
         review is showing.
 
+canvasdiff.toggle_unreviewed()                *canvasdiff.toggle_unreviewed()*
+        Toggle showing only unreviewed and stale files in the active review
+        (same as `zf` and `:CanvasDiff unreviewed`). Warns when no review is
+        showing.
+
 canvasdiff.refresh()                                  *canvasdiff.refresh()*
         Re-collect from Git and splice in what changed.
 
 canvasdiff.compare()                                  *canvasdiff.compare()*
         Pick two branches/revisions and open their read-only comparison.
-
-canvasdiff.checkout()                                *canvasdiff.checkout()*
-        Pick a local branch and switch to it. Refused while any repository
-        buffer has unsaved changes; offers no force, stash, or detached-HEAD
-        operations.
-
-canvasdiff.track()                                      *canvasdiff.track()*
-        Pick a remote-tracking ref, then create and switch to a local branch
-        tracking it. Never fetches.
 
 canvasdiff.set_lens({lens})                          *canvasdiff.set_lens()*
         Set a canonical lens record. Named strings are NOT accepted. The
@@ -899,20 +876,16 @@ Shifted or modified keys do nothing~
 A configured mapping never appears~
     Check for the flat pre-1.0 keymaps shape, which warns on `setup()`, and
     for a misspelled key -- `canvas.colapse` is accepted by the merge and then
-    never found. For `global.compare` or `global.checkout`, also check
-    CanvasDiff's warning: a pre-existing global map is deliberately preserved.
+    never found.
 
 Syntax highlighting is missing inside the diff~
     No Tree-sitter parser is installed for that filetype. The canvas still
     renders; only the syntax tier is absent.
 
 Large reviews feel slow~
-    Collapse files you have finished with. If a single file is enormous,
-    `virt.max_lines` and `virt.max_files` bound how much is decorated.
-
-Syntax highlighting vanished on one big review~
-    That review crossed `paged.min_rows` and is page-backed. See
-    |canvasdiff-paged|.
+    Collapse files you have finished with. `virt.max_lines` and
+    `virt.max_files` auto-collapse distant sections while keeping visible
+    sections as real buffer text.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

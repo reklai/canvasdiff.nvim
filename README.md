@@ -36,8 +36,8 @@ All · unstaged · staged — same review, different filters.
 ![Lens states](media/04-lenses.png)
 
 **5. Key menus**
-Help cheatsheet, compare picker, and checkout (pickers shown with a
-`vim.ui.select` frontend; plain Neovim uses a numbered prompt).
+Help cheatsheet and compare picker (shown with a `vim.ui.select` frontend;
+plain Neovim uses a numbered prompt).
 
 ![Key menus](media/05-keys.png)
 
@@ -46,19 +46,31 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
 
 ## Features
 
-- One canvas for every changed file, with Tree-sitter highlighting.
-- Exact jumps into real files and back, line and column, both ways: Enter
-  opens the line under the canvas cursor, and the return lands on the line
-  you got to. Unsaved buffer content counts.
-- Live refresh on saves, focus changes, and external changes.
-- All, unstaged, staged, and read-only revision-range lenses.
-- Hunk/file staging and an undoable hunk/file discard, persistent folds, a
-  file-and-hunk sidebar, pinned context, and a draggable minimap.
-- A checkpoint lens: mark the review as seen, then see only what changed
-  since -- for when an agent or a formatter rewrites files between passes.
-- The review's hunks as a quickfix list, to step through them across files.
-- Automatic virtualization and a page-backed canvas for very large reviews,
-  which open without freezing the editor while they build.
+- **One real Neovim buffer for every changed file**, with Tree-sitter
+  highlighting, native `/`, `y`, visual selection, and zero fake scratch
+  overlays.
+- **Exact bidirectional jumps** (`<CR>` / `<C-Space>`), line and column both
+  ways, with your LSP, autocmds, and unsaved buffer edits intact.
+- **Live review & AI-agent checkpoint loop**: live refresh on saves, focus
+  changes, and external edits; persistent reviewed folds with stale-file `●`
+  detection, `R` (mark reviewed & next), `zf` (unreviewed-only filter where
+  stale files automatically resurface), winbar review progress, and `C`
+  checkpoints (`CHECKPOINT → WORKTREE`) to isolate each agent/formatter pass.
+- **Line, hunk, and file staging + undoable discard**: `s`/`u`/`x` act on the
+  hunk under cursor, exact visually selected lines (`V` + `s`/`u`/`x`), or the
+  whole file (`S`/`U`/`X`). Discards route through loaded buffers so `u` in
+  the real file undoes them.
+- **Ghost-deletion escape hatches**: `gy` yanks ghost deletions directly into
+  `"`, `K` opens a floating word-diff peek with real `-`/`+` lines and
+  symmetric intra-line highlighting, and `>`/`<` expand or shrink diff context
+  inline per file.
+- **Smart lazy auto-collapse**: lockfiles, `.gitattributes`
+  `linguist-generated` / `-diff` files, and oversized diffs open collapsed and
+  deferred without reading blobs or running diffs until you unfold them on
+  demand.
+- **Zero global keymap pollution**: CanvasDiff installs no process-wide
+  mappings and never switches Git branches for you — bind `:CanvasDiff`
+  commands or Lua API calls cleanly in your own config.
 
 ## Requirements
 
@@ -67,22 +79,25 @@ Screenshots are shot under `tokyonight-moon` by a deterministic rig; see
 - Linux is the development platform; macOS should work, and Windows is
   currently untested.
 
-Tree-sitter parsers add syntax highlighting but are optional. An `lz4` shared
-library reduces memory use for very large canvases; its absence does not affect
-correctness.
+Tree-sitter parsers add syntax highlighting inside diff hunks but are optional.
 
 ## Installation
 
 ### lazy.nvim and LazyVim
 
-The defaults need no configuration. This eager [lazy.nvim](https://github.com/folke/lazy.nvim)
-spec loads CanvasDiff at startup, so its built-in global compare and checkout
-mappings exist immediately:
+CanvasDiff installs no process-wide global keymaps, so lazy-loading via `cmd`
+and `keys` works cleanly out of the box with zero extra flags:
 
 ```lua
 {
   "reklai/canvasdiff.nvim",
-  lazy = false,
+  cmd = "CanvasDiff",
+  keys = {
+    { "<leader>gd", "<cmd>CanvasDiff<cr>", desc = "CanvasDiff: toggle canvas" },
+    { "<leader>gh", "<cmd>CanvasDiff here<cr>", desc = "CanvasDiff: open at current line" },
+    { "<leader>gc", "<cmd>CanvasDiff checkpoint<cr>", desc = "CanvasDiff: checkpoint" },
+    { "<leader>gb", "<cmd>CanvasDiff compare<cr>", desc = "CanvasDiff: compare branches" },
+  },
   opts = {},
 }
 ```
@@ -96,6 +111,10 @@ passed to `require("canvasdiff").setup()`:
 return {
   {
     "reklai/canvasdiff.nvim",
+    cmd = "CanvasDiff",
+    keys = {
+      { "<leader>gd", "<cmd>CanvasDiff<cr>", desc = "CanvasDiff: toggle canvas" },
+    },
     opts = {
       sidebar = { width = 40 },
       highlights = {
@@ -109,44 +128,21 @@ return {
 After installing, run `:checkhealth canvasdiff`. It checks Neovim and Git and
 audits the setup table for misspelled, removed, or invalid options.
 
-### Lazy-loading correctly
-
-`cmd` and `keys` are load triggers. If you lazy-load CanvasDiff, the startup
-key specs must own every global entry point that should work before the first
-`:CanvasDiff`:
-
-```lua
--- Correct command/key lazy loading: the startup keys cause the load.
-{
-  "reklai/canvasdiff.nvim",
-  cmd = "CanvasDiff",
-  keys = {
-    { "<leader><leader>", function() require("canvasdiff").toggle() end,
-      desc = "CanvasDiff: toggle canvas" },
-    { "<leader>lb", function() require("canvasdiff").compare() end,
-      desc = "CanvasDiff: compare branches" },
-    { "<leader>lc", function() require("canvasdiff").checkout() end,
-      desc = "CanvasDiff: checkout branch" },
-  },
-  opts = { keymaps = { global = { compare = false, checkout = false } } },
-}
-```
-
-The `keys` entries exist at startup and cause the plugin to load. CanvasDiff's
-built-in global compare and checkout mappings are disabled here because a
-mapping installed by the plugin cannot itself trigger a plugin that has not
-loaded, and it would duplicate the startup mappings once loaded. Canvas and
-sidebar mappings stay buffer-local and are installed when those buffers open.
-
 ## Quick start
 
 1. Run `:CanvasDiff` inside a Git worktree.
 2. Move through the canvas with normal motions, `]h`/`[h` for hunks, and
    `]f`/`[f` for files.
-3. Press Enter to open the real file at the selected line.
-4. Edit, then press Ctrl+Space to return, on the line you are on.
-5. Press `s` to stage a hunk, or `x` to discard it.
-6. Press Tab to cycle all → unstaged → staged, and `q` to close.
+3. Press `<CR>` to open the real file at the exact line & column; edit, then
+   press `<C-Space>` to return on the line you are on.
+4. Press `s`/`u`/`x` to stage, unstage, or undoably discard a hunk — or
+   visually select lines (`V`) first for exact line-level staging/discarding.
+5. Press `K` on a hunk for a word-diff peek with real `-`/`+` lines, `gy` to
+   yank deleted ghost lines, and `>`/`<` to expand or shrink file context.
+6. Press `R` to mark a file reviewed and jump to the next unreviewed or stale
+   file, `zf` to filter to unreviewed files only, and `C` to checkpoint before
+   an agent or formatter pass.
+7. Press `<Tab>` to cycle `all → unstaged → staged`, and `q` to close.
 
 ## Configuration recipes
 
@@ -283,13 +279,15 @@ require("canvasdiff").setup({
   highlights = {},
 
   keymaps = {
-    global = {
-      compare = "<leader>lb",
-      checkout = "<leader>lc",
-    },
     canvas = {
       jump = { "<CR>", "<2-LeftMouse>" },
       collapse = { "za", "c" },
+      review_next = "R",
+      filter_unreviewed = "zf",
+      expand_context = ">",
+      shrink_context = "<",
+      yank_deleted = "gy",
+      peek_hunk = "K",
       next_file = "]f",
       prev_file = "[f",
       next_hunk = "]h",
@@ -332,8 +330,17 @@ require("canvasdiff").setup({
     margin = 100,
     max_expanded = 20,
   },
+  auto_collapse = {
+    enabled = true,
+    max_lines = 500,
+    max_bytes = 262144,
+    patterns = {
+      "*lock*", "*.lock", "*.min.js", "*.min.css",
+      "*.map", "*.pb.go", "*_pb2.py", "*.snap",
+    },
+    gitattributes = true,
+  },
   session = { enabled = true },
-  paged = { enabled = true, min_rows = 20000 },
 
   -- Or use glyphs = "ascii".
   glyphs = {
@@ -350,21 +357,24 @@ require("canvasdiff").setup({
 `context` controls diff context. `base` selects the initial worktree
 comparison. `profile` selects the diff-row color vocabulary; unknown names are
 diagnosed and fall back to quiet. `highlight` controls Tree-sitter syntax
-work; `watch` controls live reconciliation. `virt` auto-collapses distant
-sections once either threshold is exceeded; `paged` switches to the
-page-backed canvas at `min_rows` rendered rows. `sidebar`, `scrollbar`,
-`statuscolumn`, and `session` independently enable their named features.
-`glyphs = "ascii"` selects a single-cell ASCII set.
+work; `watch` controls live reconciliation. `auto_collapse` keeps generated
+files, lockfiles, `.gitattributes` `linguist-generated`/`-diff` paths, and
+oversized diffs collapsed and deferred until unfolded on demand; `virt`
+auto-collapses distant sections once either threshold is exceeded. `sidebar`,
+`scrollbar`, `statuscolumn`, and `session` independently enable their named
+features. `glyphs = "ascii"` selects a single-cell ASCII set.
 
 ### Highlight groups
 
-All 27 public groups are stable customization points:
+All 29 public groups are stable customization points:
 
 | Group | Default and use |
 | --- | --- |
 | `CanvasDiffAdd` | Derived neutral elevation for added rows. |
 | `CanvasDiffDel` | Elevated background plus dimmed foreground for real deletion rows. |
 | `CanvasDiffGhost` | Dimmed foreground for ghost deletion lines. |
+| `CanvasDiffWordAdd` | Derived intra-line word emphasis for added tokens in hunk peek. |
+| `CanvasDiffWordDel` | Derived intra-line word emphasis for deleted tokens in hunk peek. |
 | `CanvasDiffPrefixAdd` | Derived add foreground for the `+` prefix. |
 | `CanvasDiffPrefixDel` | Derived delete foreground for the `-` prefix. |
 | `CanvasDiffGutterAdd` | Derived add foreground in the status column. |
@@ -470,39 +480,35 @@ steps through them across files without returning to the canvas.
 :CanvasDiff sidebar
 :CanvasDiff quickfix
 :CanvasDiff compare
-:CanvasDiff checkout
-:CanvasDiff track
 :CanvasDiff all
 :CanvasDiff unstaged
 :CanvasDiff staged
 :CanvasDiff checkpoint
 :CanvasDiff since
+:CanvasDiff unreviewed
 :CanvasDiff main..topic
 :CanvasDiff main...topic
 ```
 
-The empty command toggles the canvas. Commands complete with Tab. Checkout and
-tracking refuse repositories with unsaved buffers and do not expose force,
-stash, detached-HEAD, or deletion operations.
+The empty command toggles the canvas. Commands complete with Tab.
 
 ### Default mappings
 
 | Context | Keys | Action |
 | --- | --- | --- |
-| Global | `<leader>lb`, `<leader>lc` | Compare branches; checkout a local branch. |
 | Canvas | `<CR>`, double-click | Open the selected real file line. |
 | Canvas | `]f`/`[f`, `]h`/`[h` | Next/previous file or hunk; accepts a count. |
 | Canvas | Ctrl+N/Ctrl+P | Cycle hunks with wrapping. |
-| Canvas | `za`/`c`, Tab/Shift+Tab, `o` | Fold; cycle lens; toggle sidebar. |
-| Canvas | `r`, `s`/`u`, `S`/`U` | Refresh; stage/unstage hunk or whole file. |
-| Canvas | `x`, `X` | Discard an unstaged hunk; discard a whole file (asks). |
+| Canvas | `za`/`c`, `R`, `zf` | Fold; mark reviewed & next; toggle unreviewed-only filter. |
+| Canvas | `>`/`<`, `K`, `gy` | Expand/shrink file context; word-diff hunk peek; yank deleted lines. |
+| Canvas | Tab/Shift+Tab, `o` | Cycle lens; toggle sidebar. |
+| Canvas | `r`, `s`/`u`, `S`/`U` | Refresh; stage/unstage hunk, visual line selection, or whole file. |
+| Canvas | `x`, `X` | Discard unstaged hunk/visual lines; discard whole file (asks). |
 | Canvas | `C` | Checkpoint: mark all seen, show only what changes next. |
 | Canvas | `q`, `<leader>lh` | Close/back out; show the cheatsheet. |
 | Sidebar | Enter/`za`/`c`/double-click | Select a file/hunk or fold a directory. |
 | Sidebar | `s`/`u`, `q`, `<leader>lh` | Stage/unstage; close sidebar; show help. |
 | Real file | Ctrl+Space | Return to the canvas, on the line you are on. |
-
-CanvasDiff never replaces an existing global mapping; collisions are reported.
 
 ### Sessions and large reviews
 
@@ -510,23 +516,21 @@ CanvasDiff stores the lens, folds, and content-based position per repository
 under `stdpath("state") .. "/canvasdiff/"`. Disable this with
 `session = { enabled = false }`.
 
-Above `paged.min_rows`, text is drawn from a page-backed store. Tree-sitter
-syntax is omitted there, and plugins reading raw buffer lines see blank rows;
-CanvasDiff motions, folds, search, and row positions remain exact.
+Large reviews stay real Neovim buffers throughout: `auto_collapse` keeps
+lockfiles, generated files, and oversized diffs deferred as 1-row placeholders
+until unfolded on demand, `virt` collapses distant sections on huge changesets,
+and interactive opens/pivots build in time slices so the editor stays responsive.
 
 ## Troubleshooting
 
 - Run `:checkhealth canvasdiff` first. It reports version/Git failures,
   unknown or removed options, and invalid highlight specifications.
-- Also read load/setup notifications. Unknown glyph names, invalid glyph
-  values, and global mapping collisions are reported when configuration and
-  mappings are applied; `:checkhealth` does not repeat those diagnostics.
+- Also read load/setup notifications for unknown glyph names or invalid glyph
+  values.
 - If nothing opens, confirm the current window is inside a Git worktree.
 - If Ctrl+Space does nothing, your terminal may not transmit it; replace
   `keymaps.file.back`.
 - Missing syntax usually means no Tree-sitter parser exists for that filetype.
-- Missing syntax only on a very large review means it crossed
-  `paged.min_rows`.
 - If another scrollbar draws at the right edge, disable either it or
   `scrollbar.enabled`.
 

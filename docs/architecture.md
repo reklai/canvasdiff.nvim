@@ -32,15 +32,15 @@ module named after it — and everything else in that domain is internal.
 | Domain | Facade | Owns |
 | --- | --- | --- |
 | `appearance` | `canvasdiff.appearance` | Highlight names, derived defaults, explicit overrides, colorscheme recovery |
-| `canvas` | `canvasdiff.canvas` | Buffer rendering, page storage, projection, scheduling |
+| `canvas` | `canvasdiff.canvas` | Buffer rendering, anchors, row formatting, section splicing |
 | `config` | `canvasdiff.config` | Defaults, user options, glyphs |
-| `diff` | `canvasdiff.diff` | The model: sections, hunks, anchors, folds, lenses, word diff |
+| `diff` | `canvasdiff.diff` | The model: sections, hunks, anchors, folds, lenses, auto-collapse, line staging, word diff |
 | `input` | `canvasdiff.input` | Command grammar, key resolution, motions, jump excursions |
 | `os` | `canvasdiff.os` | Raw process, filesystem and timer effects |
 | `runtime` | `canvasdiff.runtime` | Watching the repository, virtualizing large canvases |
 | `session` | `canvasdiff.session` | Persisting and restoring a review |
-| `source` | `canvasdiff.source` | Git inspection, changeset collection, worktree reads |
-| `ui` | `canvasdiff.ui` | Highlighting, sidebar, scrollbar, status column, notifications |
+| `source` | `canvasdiff.source` | Git inspection, lazy file-boundary collection, worktree reads |
+| `ui` | `canvasdiff.ui` | Highlighting, sidebar, scrollbar, status column, hunk peek, notifications |
 
 Above the domains sit three named layers:
 
@@ -141,69 +141,29 @@ exactly one lease owns any one window or extmark ID at a time, and a lease that
 loses one releases its own bookkeeping for it rather than restoring over the
 new owner later.
 
-The process-wide compare and checkout keymaps follow the same identity rule.
-Each desired and owned record carries its allowlisted action. Reconciliation
-retains a mapping only when its effective lhs, action, callback, behavior, and
-complete observable Neovim identity still match. Each `App` retains the exact
-Lua callback and the complete stable `nvim_get_keymap()` identity for its own
-global maps, including provenance such as `sid`, `lnum`, `scriptversion`, mode
-bits and buffer scope. Canonical cross-action collisions are rejected before
-mutation; an authenticated same-lhs action change replaces only CanvasDiff's
-own prior callback. `setup()` removes or rebinds a mapping only when the
-captured native getter still reports that callback and identity; the immediately
-following comparison and delete use captured control primitives and native
-functions, leaving no replaceable Lua wrapper between authentication and
-mutation. An occupied lhs, a user/plugin takeover, another App, a
-same-callback reinstall and a module reload are all foreign.
-Configured `<leader>` notation is canonicalized at installation time, so a
-later leader change can retire the old owned sequence without confusing it
-with the newly requested one. Reconciliation prevalidates the complete list,
-including Neovim's 50-byte post-termcode lhs limit, retains authenticated
-candidates across API faults, and coalesces synchronous setup re-entry before
-presenting diagnostics from the committed pass.
-
-Those captured functions have one explicit trust boundary: Neovim's API table
-must still contain its native functions when `canvasdiff.App` initializes
-(including after a deliberate full module reload). Neovim's Lua execution is
-single-threaded, so no mapping takeover can interleave between the captured,
-non-reentrant native get and delete calls. Conversely, Neovim exposes no atomic
-compare-and-delete mapping primitive, and a Lua wrapper installed before module
-initialization can falsify the observation and mutate during deletion.
-CanvasDiff cannot authenticate such a pre-compromised API namespace from Lua;
-capturing the functions after initialization protects against later public
-table replacement, not arbitrary code that crossed this bootstrap boundary.
-
 ## Git comparison and mutation boundaries
 
-Named lenses (`all`, `unstaged`, `staged`) and bare refs can have a worktree or
-index side. `A..B` and `A...B` resolve both sides to commits and are marked
-read-only: two-dot compares tips, while three-dot replaces A with the merge
-base. The interactive comparison picker projects repository metadata to local
-branches only. Branch names are presentation; exact refs/heads/* identities
-build the read-only range lens. Explicit typed ranges retain the broader Git
-revision grammar.
+Named lenses (`all`, `unstaged`, `staged`), bare refs, and the per-worktree
+checkpoint lens (`CHECKPOINT → WORKTREE`) have a worktree or index side.
+`A..B` and `A...B` resolve both sides to commits and are marked read-only:
+two-dot compares tips, while three-dot replaces A with the merge base. The
+interactive comparison picker (`:CanvasDiff compare`) is read-only and never
+mutates refs, branches, or the worktree.
 
-Ref handling has one deliberately narrow boundary:
+Collection is lazy at file boundaries (`source/collect.lua`): one bounded
+`git diff --numstat -z` and one `git check-attr -z --stdin` let generated,
+lock, oversized, and already-folded files start as lightweight deferred
+placeholders without reading their blobs or running `vim.text.diff`. Unfolding
+materializes a section on demand into real Neovim buffer text via the canvas's
+`on_materialize` hook.
 
-```text
-ref metadata → role-based picker → exact full-ref Git operation
-             → invalidated Surface → HEAD → WORKTREE recollection
-```
-
-Comparison is read-only. Checkout offers local branches only; tracking offers
-non-symbolic remote-tracking refs only and creates a local tracking branch
-without fetching. Before either mutation, the modified-buffer guard covers the
-whole repository. Git remains the final authority for saved worktree changes
-that an operation would overwrite. The mutation surface exposes no force,
-stash, detached-HEAD, or deletion path.
-
-Stage cycling is a file mutation, so `App` re-reads porcelain status for the
-exact section identity before choosing a direction. Any unstaged state stages
-the whole file; staged-only state resets that file from HEAD. Repository
-mutations use literal pathspecs and rename-aware paths, while the buffer guard
-rejects staging if any modified loaded buffer resolves to the same filesystem
-identity. Successful mutation reconciles the lens and restores a content
-anchor rather than trusting the pre-mutation row.
+Staging, unstaging, and discarding are pure line splices over blobs
+(`diff/stage.lua`), never patches: `s`/`u`/`x` act on the current hunk in
+normal mode, on exact selected lines in visual mode, or on the whole file on a
+header (`S`/`U`/`X` from anywhere). Repository mutations use literal pathspecs
+and rename-aware paths, and the buffer guard rejects staging when any modified
+loaded buffer aliases the path. Discarding writes through a loaded buffer when
+present so `u` in the real file undoes it cleanly.
 
 ## Tests
 
@@ -217,19 +177,11 @@ failure.
 | `test/e2e/` | A user-visible journey broke |
 | `test/fault/` | An invariant was lost under injected faults, reentrancy or concurrency |
 | `test/architecture/` | A boundary rule above was violated |
-| `test/performance/` | A measured budget regressed |
 
 `FILTER` is a Lua pattern matched against test names; `SUITE` selects a
 directory. A test file must live in exactly one group, and no two groups may
 claim the same filename — otherwise a reported failure does not say which file
 it came from.
-
-The supported branch lifecycle is: discover role-appropriate metadata; select
-an exact full ref; block unsaved repository buffers; checkout a local branch or
-create its local tracking branch; retire the old Surface; then recollect the
-new `HEAD → WORKTREE` review. A visible review restores its semantic position;
-a hidden one remains closed. Collection failure reports the new branch state
-without reviving the retired Surface.
 
 ### Verification workflow
 
@@ -253,29 +205,28 @@ NVIM_LOG_FILE=/tmp/canvasdiff-syntax.log \
 ```
 
 The publication gate runs the full suite plus the small-canvas regression,
-million-row paging, chaos, and live acceptance lanes:
+chaos, and live acceptance lanes:
 
 ```sh
 NVIM_LOG_FILE=/tmp/canvasdiff-verify.log \
   make verify OUT=/tmp/canvasdiff-verify
 ```
 
-Run the full deterministic chaos campaign directly when changing ownership,
-reentrancy, paging, compression, projection, or scheduling:
+Run the deterministic surface chaos campaign directly when changing ownership
+or reentrancy:
 
 ```sh
-make bench-chaos OUT=/tmp/canvasdiff-chaos ACTIONS=10000
+make bench-chaos OUT=/tmp/canvasdiff-chaos ACTIONS=1000
 ```
 
-To replay an exact reported seed, copy its seed, action count, and `engine` or
-`surface` harness into the worker command. The JSON output retains the failing
-action and recent deterministic history:
+To replay an exact reported seed, pass its seed, action count, and `surface`
+harness to the worker:
 
 ```sh
 NVIM_LOG_FILE=/tmp/canvasdiff-chaos-replay.log \
   nvim --headless --clean -n -i NONE \
   -l benchmark/chaos/worker.lua \
-  /tmp/canvasdiff-chaos-replay.json SEED ACTIONS HARNESS
+  /tmp/canvasdiff-chaos-replay.json SEED ACTIONS surface
 ```
 
 ## Where to start
@@ -284,8 +235,8 @@ NVIM_LOG_FILE=/tmp/canvasdiff-chaos-replay.log \
   (grammar and plan), then `App:command` if the operation is new.
 - Adding a mapping: declare its context/action/description in
   `lua/canvasdiff/input/keys.lua`, add its default under the matching
-  `config.settings.keymaps` context, then wire the handler in `App` (global and
-  canvas), `ui.sidebar` (sidebar), or `input.jump` (temporary file buffer).
+  `config.settings.keymaps` context, then wire the handler in `App` (canvas),
+  `ui.sidebar` (sidebar), or `input.jump` (temporary file buffer).
 - Adding a controller: model it on `lua/canvasdiff/ui/scrollbar.lua`, which is
   the smallest complete example of the lease contract, and wire it in
   `App:open` with `claim`/`alive`/`release`.

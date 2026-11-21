@@ -13,16 +13,12 @@
 local uv = vim.uv
 
 local BENCHMARK = "canvasdiff.chaos_campaign"
-local PROFILE = "paged-engine-chaos-v1"
+local PROFILE = "surface-chaos-v1"
 local WORKER_SCHEMA = 1
-local DEFAULT_ACTIONS = 10000
--- The Surface campaign runs real Git per action, so it is measured in
--- hundreds rather than thousands. Ten thousand of these would take hours and
--- test the same seams ten thousand times.
-local DEFAULT_SURFACE_ACTIONS = 200
+local DEFAULT_ACTIONS = 200
 local DEFAULT_SEEDS = { 20260727, 990001, 4242 }
 local MINIMUM_SEEDS = 3
-local MINIMUM_DISTINCT_ACTIONS = 10
+local MINIMUM_DISTINCT_ACTIONS = 6
 local REQUIRED_SURFACE_ACTIONS = {
   "configure_appearance", "configure_invalid", "reset_config",
   "change_colorscheme", "toggle_glyph_set",
@@ -306,8 +302,7 @@ local function judge(payload, harness)
 end
 
 local HARNESSES = {
-  { name = "engine", count = actions },
-  { name = "surface", count = DEFAULT_SURFACE_ACTIONS },
+  { name = "surface", count = actions },
 }
 
 for _, harness in ipairs(HARNESSES) do

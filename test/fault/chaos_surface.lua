@@ -259,7 +259,7 @@ local function check(world)
   -- that exact value until another setup action deliberately replaces it.
   local appearance = require("canvasdiff.appearance")
   local names = appearance.names()
-  assert(#names == 27,
+  assert(#names == 29,
     ("appearance registry changed during chaos: %d groups"):format(#names))
   for _, name in ipairs(names) do
     assert(vim.fn.hlexists(name) == 1, name .. " disappeared during chaos")

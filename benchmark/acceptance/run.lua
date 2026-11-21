@@ -123,12 +123,23 @@ local ok, failure = xpcall(function()
 
   local plugin = require("canvasdiff")
   local canvas = require("canvasdiff.canvas")
-  plugin.setup({ paged = { enabled = true, min_rows = 5000 } })
+  plugin.setup({})
 
-  -- 1. Open a large review and move through it from first row to last.
+  -- 1. Open a review: huge.txt starts smart auto-collapsed & deferred so open
+  -- is instant; then unfold it on demand and page from first row to last.
   local before_open = heap()
   local state = assert(plugin.open(), "the review did not open")
-  assert(state.paged, "a review this size must be page-backed")
+  local huge_index
+  for index, section in ipairs(state.sections) do
+    if section.path == "huge.txt" then huge_index = index end
+  end
+  assert(huge_index and state.sections[huge_index].deferred,
+    "huge.txt should open smart auto-collapsed and deferred")
+  assert(state.collapsed["huge.txt"] == "smart",
+    "huge.txt should carry smart auto-collapse intent")
+  canvas.set_collapsed(state, huge_index, false)
+  assert(not state.sections[huge_index].deferred,
+    "unfolding huge.txt should materialize it on demand")
   local logical = canvas.logical(state)
   local rows = logical.row_count()
   local window = state.win
@@ -141,17 +152,14 @@ local ok, failure = xpcall(function()
     local started = uv.hrtime()
     vim.api.nvim_win_set_cursor(window, { line1, 0 })
     vim.api.nvim_win_call(window, function() vim.cmd("normal! zt") end)
-    assert(state.paged.projection:redraw())
     local elapsed = (uv.hrtime() - started) / 1e6
     if elapsed > worst_step_ms then worst_step_ms = elapsed end
     line1 = line1 + height
     vim.wait(0)
   end
-  observe("1. open a large review and page from first row to last", {
-    paged = true,
+  observe("1. open a review and page from first row to last", {
     logical_rows = rows,
-    skeleton_rows = vim.api.nvim_buf_line_count(state.buf),
-    pages = state.paged.list:page_count(),
+    buffer_rows = vim.api.nvim_buf_line_count(state.buf),
     window_height = height,
     steps = math.ceil(rows / height),
     worst_step_ms = worst_step_ms,
@@ -159,32 +167,26 @@ local ok, failure = xpcall(function()
     heap_delta_bytes = heap() - before_open,
   })
 
-  -- 2. Search across page boundaries, yank a multi-page range, compare bytes
-  --    against the store itself as the oracle.
-  local needle_row = assert(canvas.paged.search(state.paged, "ACCEPTANCE_NEEDLE"),
-    "the needle was not found on a canvas that contains it")
-  local needle_text = assert(logical.row(needle_row))
+  -- 2. Native Neovim search and yank work directly on the real canvas buffer.
   local native = vim.api.nvim_win_call(window, function()
+    vim.api.nvim_win_set_cursor(window, { 1, 0 })
     return vim.fn.search("ACCEPTANCE_NEEDLE", "w")
   end)
+  assert(native > 0, "native search did not find the needle in the real canvas buffer")
+  local needle_row = native - 1
+  local needle_text = assert(logical.row(needle_row))
   local span = math.min(2000, rows)
-  local yanked = assert(canvas.paged.yank(state.paged, 0, span, { register = "z" }))
+  local yanked = assert(logical.export(0, span, { terminal_eol = true }))
   local oracle = table.concat(assert(logical.rows(0, span)), "\n") .. "\n"
-  observe("2. search across page boundaries and yank a multi-page range", {
+  observe("2. native search and range export on the real canvas buffer", {
     needle_row = needle_row,
     needle_text = needle_text,
-    needle_found_by_canvas = needle_text:find("ACCEPTANCE_NEEDLE", 1, true) ~= nil,
-    -- Recorded, not asserted away: Neovim's own search finds nothing, because
-    -- the skeleton buffer really is blank. That is why the canvas has its own.
     native_search_result = native,
-    skeleton_line_at_needle =
-      vim.api.nvim_buf_get_lines(state.buf, needle_row, needle_row + 1, false)[1],
     yanked_rows = span,
     yanked_bytes = #yanked,
     yank_matches_oracle = yanked == oracle,
-    register_type = vim.fn.getregtype("z"),
   })
-  assert(yanked == oracle, "the yank did not match the store")
+  assert(yanked == oracle, "the export did not match the canvas lines")
 
   -- 3. Fold and unfold while watching memory.
   local before_fold = heap()
@@ -194,7 +196,7 @@ local ok, failure = xpcall(function()
   local after_fold = heap()
   canvas.set_collapsed(state, 1, false)
   local restored_rows = canvas.logical(state).row_count()
-  observe("3. fold and unfold a huge file while watching memory", {
+  observe("3. fold and unfold a large file while watching memory", {
     rows_before = before_rows,
     rows_folded = folded_rows,
     rows_restored = restored_rows,
@@ -202,7 +204,6 @@ local ok, failure = xpcall(function()
     heap_before_bytes = before_fold,
     heap_folded_bytes = after_fold,
     heap_delta_bytes = after_fold - before_fold,
-    resident_pages = state.paged.list:resident_stats().pages,
   })
   assert(restored_rows == before_rows, "unfolding did not restore the canvas")
 
@@ -308,11 +309,9 @@ local ok, failure = xpcall(function()
   local session_contained = pcall(function() plugin.close() end)
   session.save = real_save
 
-  local capability = require("canvasdiff.canvas").compression_capability()
   observe("7. kill Git and make the session unwritable", {
     git_failure_contained = git_contained,
     session_failure_contained = session_contained,
-    compression = capability,
   })
   assert(git_contained, "an injected Git failure escaped")
   assert(session_contained, "an injected session failure escaped")
@@ -321,7 +320,6 @@ local ok, failure = xpcall(function()
   local reopened = plugin.open()
   observe("8. reopen the review after closing it", {
     reopened = reopened ~= nil,
-    paged = reopened ~= nil and reopened.paged ~= nil,
     sections = reopened and #reopened.sections or 0,
     rows = reopened and canvas.logical(reopened).row_count() or 0,
   })

@@ -27,20 +27,6 @@ local viewport = diff.anchor
 local Surface = require("canvasdiff.Surface")
 local system = require("canvasdiff.os")
 
--- Capture the trusted Neovim global-map operations at module load. From this
--- point onward the final authenticate/delete pair does not pass through
--- replaceable Lua table fields, which could otherwise publish a foreign
--- takeover between the snapshot and the deletion it delegates.
-local native_get_keymap = vim.api.nvim_get_keymap
-local native_set_keymap = vim.api.nvim_set_keymap
-local native_del_keymap = vim.api.nvim_del_keymap
-local native_ipairs = ipairs
-local native_next = next
-local native_pcall = pcall
-local native_rawget = rawget
-local native_rawequal = rawequal
-local native_type = type
-
 local App = {}
 App.__index = App
 
@@ -48,27 +34,12 @@ local EMPTY_MSG = "-- no changes --"
 local STALE_COMPARE = {}
 local buf_dir
 
-local GLOBAL_ACTION_ORDER = { "compare", "checkout" }
-local GLOBAL_ACTIONS = {
-  compare = function(app) return app:compare() end,
-  checkout = function(app) return app:checkout() end,
-}
-
-function App.new(opts)
-  opts = opts or {}
+function App.new()
   local appearance_diagnostics =
     appearance.setup(config.options.highlights, config.options.profile)
-  for _, message in native_ipairs(appearance_diagnostics) do
+  for _, message in ipairs(appearance_diagnostics) do
     ui.err(message)
   end
-  local effects = opts.global_keymap_effects or {
-    get = native_get_keymap,
-    set = function(mode, lhs, callback, map_opts)
-      map_opts.callback = callback
-      return native_set_keymap(mode, lhs, "", map_opts)
-    end,
-    del = native_del_keymap,
-  }
   -- Reviews are indexed by their own canvas buffer, which is the only identity
   -- that cannot drift: windows move between tabs, a review may have none on
   -- screen for a while, and two reviews of the same repository are legal.
@@ -83,505 +54,7 @@ function App.new(opts)
     -- across instances.
     last_lens_by_root = {},
     compare_request = 0,
-    ref_request = 0,
-    global_maps = {},
-    global_map_epoch = 0,
-    global_map_syncing = false,
-    global_map_pending = false,
-    global_map_effects = effects,
   }, App)
-end
-
---- Canonical raw form used by nvim_get_keymap(). Unlike keytrans(), this keeps
---- a Space leader as an actual space (the API's lhs is `" lb"`, not
---- `"<Space>lb"`). Unlike retaining the configured string, it freezes the
---- current <leader> expansion for reconciliation after mapleader changes.
-local function global_lhs(lhs)
-  return vim.keycode(lhs)
-end
-
-local function current_global_map(app, lhs)
-  local ok, maps = native_pcall(app.global_map_effects.get, "n")
-  if not ok then
-    return nil, tostring(maps)
-  end
-  for _, map in native_ipairs(maps) do
-    -- Control keys use lhsrawalt while printable and termcode sequences use
-    -- lhsraw, so both are part of Neovim's observable canonical identity.
-    if map.lhsraw == lhs or map.lhsrawalt == lhs then
-      return map
-    end
-  end
-end
-
-local function map_flag(value)
-  return value == true or (native_type(value) == "number" and value ~= 0)
-end
-
-local function map_behavior(map)
-  local rhs = map.rhs
-  if rhs == "" then rhs = nil end
-  return {
-    desc = map.desc,
-    rhs = rhs,
-    noremap = map_flag(map.noremap),
-    silent = map_flag(map.silent),
-    nowait = map_flag(map.nowait),
-    expr = map_flag(map.expr),
-    script = map_flag(map.script),
-    replace_keycodes = map_flag(map.replace_keycodes),
-  }
-end
-
-local MAP_FLAG_FIELDS = {
-  abbr = true,
-  expr = true,
-  noremap = true,
-  nowait = true,
-  replace_keycodes = true,
-  script = true,
-  silent = true,
-}
-
---- Complete stable observable identity from nvim_get_keymap(), excluding only
---- callback (compared by rawequal separately). Provenance fields such as
---- sid/lnum/scriptversion are intentional: reinstalling our callback from a
---- different call site is a foreign takeover, even with identical behavior.
-local function map_identity(map)
-  local out = {}
-  local name, value = native_next(map)
-  while name ~= nil do
-    if name ~= "callback" then
-      if MAP_FLAG_FIELDS[name] then
-        out[name] = map_flag(value)
-      elseif (name == "rhs" or name == "lhsrawalt") and value == "" then
-        out[name] = nil
-      else
-        out[name] = value
-      end
-    end
-    name, value = native_next(map, name)
-  end
-  return out
-end
-
-local function map_fields_equal(left, right)
-  local name, value = native_next(left)
-  while name ~= nil do
-    if not native_rawequal(value, native_rawget(right, name)) then
-      return false
-    end
-    name, value = native_next(left, name)
-  end
-  name = native_next(right)
-  while name ~= nil do
-    if native_rawget(left, name) == nil then
-      return false
-    end
-    name = native_next(right, name)
-  end
-  return true
-end
-
-local function expected_record(lhs, request, callback)
-  return {
-    lhs = lhs,
-    action = request.action,
-    -- keytrans's display spelling is accepted by keymap.del for Space,
-    -- control and terminal keycodes, even though it is not suitable for lookup.
-    installed_lhs = vim.fn.keytrans(lhs),
-    callback = callback,
-    expected_behavior = {
-      desc = request.desc,
-      rhs = nil,
-      noremap = true,
-      silent = true,
-      nowait = false,
-      expr = false,
-      script = false,
-      replace_keycodes = false,
-    },
-  }
-end
-
-local function matches_expected_install(record, map)
-  return map
-    and native_rawequal(map.callback, record.callback)
-    and map_fields_equal(map_behavior(map), record.expected_behavior)
-end
-
---- Ownership is deliberately observable, not inferred from lhs or a
---- CanvasDiff-looking description. A user can replace our lhs at any time;
---- exact callback identity plus the complete stable keymap API identity is the
---- authority to remove it on the next setup.
-local function owns_global_map(record, map)
-  return record.identity
-    and map
-    and native_rawequal(map.callback, record.callback)
-    and map_fields_equal(map_identity(map), record.identity)
-end
-
-local function record_from_map(record, map)
-  return {
-    lhs = record.lhs,
-    action = record.action,
-    installed_lhs = map.lhs or record.installed_lhs,
-    callback = record.callback,
-    identity = map_identity(map),
-  }
-end
-
---- Keep the newest candidate for a canonical lhs. A failed setter may leave a
---- tentative record after an older stale record for the same sequence.
-local function compact_candidates(candidates)
-  local reversed, seen = {}, {}
-  for index = #candidates, 1, -1 do
-    local record = candidates[index]
-    if not seen[record.lhs] then
-      seen[record.lhs] = true
-      reversed[#reversed + 1] = record
-    end
-  end
-  local out = {}
-  for index = #reversed, 1, -1 do
-    out[#out + 1] = reversed[index]
-  end
-  return out
-end
-
---- Refresh candidates against observable editor state. If inspection itself
---- fails, retaining the candidate is conservative: it still grants no future
---- mutation authority unless a later successful inspection authenticates it.
-local function refresh_global_ledger(app, candidates)
-  local out = {}
-  for _, record in native_ipairs(compact_candidates(candidates)) do
-    local map, err = current_global_map(app, record.lhs)
-    if err then
-      return compact_candidates(candidates), err
-    end
-    if owns_global_map(record, map) then
-      out[#out + 1] = record_from_map(record, map)
-    end
-  end
-  return out
-end
-
--- Notification memory is not ownership: it grants no delete/replace
--- authority. It only prevents repeated setup calls and root-module reloads
--- from warning about the same still-live foreign callback over and over.
-local warned_collision_callbacks = setmetatable({}, { __mode = "k" })
-local warned_collision_mappings = {}
-
-local function report_global_collision(collision)
-  local request, lhs, occupied =
-    collision.request, collision.lhs, collision.occupied
-  local callback = occupied.callback
-  if native_type(callback) == "function" then
-    if warned_collision_callbacks[callback] then
-      return
-    end
-    warned_collision_callbacks[callback] = true
-  else
-    local signature = table.concat({
-      lhs,
-      tostring(occupied.rhs),
-      tostring(occupied.sid),
-      tostring(occupied.lnum),
-      tostring(occupied.desc),
-    }, "\0")
-    if warned_collision_mappings[signature] then
-      return
-    end
-    warned_collision_mappings[signature] = true
-  end
-  ui.warn(("global mapping %s was not installed because %s is already mapped; "
-    .. "the existing mapping was left unchanged")
-    :format(request.configured_lhs, vim.fn.keytrans(lhs)))
-end
-
-local function validate_global_action(action, raw)
-  if raw == nil or raw == false or raw == "" then
-    return
-  end
-  if native_type(raw) ~= "string" and native_type(raw) ~= "table" then
-    return ("global %s mapping must be a string or list, got %s")
-      :format(action, native_type(raw))
-  end
-  if native_type(raw) == "table" then
-    local max_index, count = 0, 0
-    local index = native_next(raw)
-    while index ~= nil do
-      if native_type(index) ~= "number" or index < 1 or index % 1 ~= 0 then
-        return ("global %s mapping must be a dense list of lhs strings")
-          :format(action)
-      end
-      max_index = math.max(max_index, index)
-      count = count + 1
-      index = native_next(raw, index)
-    end
-    if max_index ~= count then
-      return ("global %s mapping must be a dense list of lhs strings")
-        :format(action)
-    end
-  end
-end
-
-local function desired_global_maps()
-  local global_config = config.options.keymaps.global or {}
-  for _, action in native_ipairs(GLOBAL_ACTION_ORDER) do
-    local err = validate_global_action(action, global_config[action])
-    if err then return nil, nil, err end
-  end
-
-  local ok, resolved = native_pcall(keys.resolved, "global", config.options.keymaps)
-  if not ok then
-    return nil, nil, "could not resolve global mappings: " .. tostring(resolved)
-  end
-  local desired, order = {}, {}
-  for index, mapping in native_ipairs(resolved) do
-    if not GLOBAL_ACTIONS[mapping.action] then
-      return nil, nil, ("unsupported global mapping action %s")
-        :format(tostring(mapping.action))
-    end
-    if native_type(mapping.lhs) ~= "string" then
-      return nil, nil, ("global %s mapping #%d must be a string, got %s")
-        :format(mapping.action, index, native_type(mapping.lhs))
-    end
-    if mapping.lhs == "" then
-      return nil, nil,
-        ("global %s mapping list contains an empty lhs at position %d")
-          :format(mapping.action, index)
-    end
-    local lhs_ok, lhs = native_pcall(global_lhs, mapping.lhs)
-    if not lhs_ok or native_type(lhs) ~= "string" or lhs == "" then
-      return nil, nil, ("invalid global %s lhs %q: %s")
-        :format(mapping.action, mapping.lhs, tostring(lhs))
-    end
-    if #lhs > 50 then
-      return nil, nil,
-        ("global %s lhs %q exceeds Neovim's 50-byte maximum after termcode expansion")
-          :format(mapping.action, mapping.lhs)
-    end
-    if desired[lhs] then
-      return nil, nil,
-        ("global mappings %s %q and %s %q resolve to the same lhs")
-          :format(
-            desired[lhs].action,
-            desired[lhs].configured_lhs,
-            mapping.action,
-            mapping.lhs)
-    end
-    desired[lhs] = {
-      action = mapping.action,
-      configured_lhs = mapping.lhs,
-      desc = mapping.desc,
-    }
-    order[#order + 1] = lhs
-  end
-  return desired, order
-end
-
-local function settle_global_ledger(app, candidates, diagnostic)
-  local ledger, inspect_err = refresh_global_ledger(app, candidates)
-  app.global_maps = ledger
-  if inspect_err then
-    return {
-      {
-        kind = "error",
-        message = "could not verify global mapping ownership: " .. inspect_err,
-      },
-    }
-  end
-  return diagnostic and { diagnostic } or {}
-end
-
---- One non-reentrant reconciliation pass. App:sync_global_keymaps coalesces
---- nested setup calls around it; a partial pass always settles its actual
---- candidates before the newest configuration is attempted.
-local function reconcile_global_keymaps(app)
-  local desired, desired_order, validation_error = desired_global_maps()
-  if validation_error then
-    return {
-      { kind = "error", message = validation_error },
-    }
-  end
-
-  local candidates = {}
-  for _, record in native_ipairs(app.global_maps) do
-    candidates[#candidates + 1] = record
-  end
-
-  local kept = {}
-  for _, record in native_ipairs(app.global_maps) do
-    local map, inspect_err = current_global_map(app, record.lhs)
-    if inspect_err then
-      return settle_global_ledger(app, candidates, {
-        kind = "error",
-        message = "could not inspect global mappings: " .. inspect_err,
-      })
-    end
-    if app.global_map_pending then
-      return settle_global_ledger(app, candidates)
-    end
-    local request = desired[record.lhs]
-    if request
-        and record.action == request.action
-        and owns_global_map(record, map) then
-      kept[record.lhs] = record_from_map(record, map)
-    end
-  end
-
-  local collisions = {}
-  -- Install before deleting prior owned maps: a failed rebind leaves the old
-  -- entry usable and authenticated instead of publishing a half-transition.
-  for _, lhs in native_ipairs(desired_order) do
-    if not kept[lhs] then
-      local request = desired[lhs]
-      local dispatch = GLOBAL_ACTIONS[request.action]
-      local callback = function()
-        return dispatch(app)
-      end
-      -- Finish all replaceable Lua preparation before the final observable
-      -- ownership snapshot that grants authority to the captured native set.
-      local tentative = expected_record(lhs, request, callback)
-      local occupied, inspect_err = current_global_map(app, lhs)
-      if inspect_err then
-        return settle_global_ledger(app, candidates, {
-          kind = "error",
-          message = "could not inspect global mappings: " .. inspect_err,
-        })
-      end
-      if app.global_map_pending then
-        return settle_global_ledger(app, candidates)
-      end
-      local prior_owned
-      for _, record in native_ipairs(app.global_maps) do
-        if record.lhs == lhs and owns_global_map(record, occupied) then
-          prior_owned = record
-          break
-        end
-      end
-
-      if occupied and not prior_owned then
-        collisions[#collisions + 1] = {
-          kind = "collision",
-          request = request,
-          lhs = lhs,
-          occupied = occupied,
-        }
-      else
-        local set_ok, set_err = native_pcall(app.global_map_effects.set,
-          "n", request.configured_lhs, callback, {
-          desc = request.desc,
-          noremap = true,
-          silent = true,
-        })
-        if not set_ok then
-          return settle_global_ledger(app, candidates, {
-            kind = "error",
-            message = ("could not install global mapping %s: %s")
-              :format(request.configured_lhs, tostring(set_err)),
-          })
-        end
-        local installed, verify_err = current_global_map(app, lhs)
-        if verify_err then
-          return settle_global_ledger(app, candidates, {
-            kind = "error",
-            message = ("could not verify installed global mapping %s: %s")
-              :format(request.configured_lhs, verify_err),
-          })
-        end
-        if not matches_expected_install(tentative, installed) then
-          return settle_global_ledger(app, candidates, {
-            kind = "error",
-            message = ("could not authenticate installed global mapping %s")
-              :format(request.configured_lhs),
-          })
-        end
-        candidates[#candidates + 1] = record_from_map(tentative, installed)
-        if app.global_map_pending then
-          return settle_global_ledger(app, candidates)
-        end
-      end
-    end
-  end
-
-  for _, record in native_ipairs(app.global_maps) do
-    if not desired[record.lhs] then
-      local map, inspect_err = current_global_map(app, record.lhs)
-      if inspect_err then
-        return settle_global_ledger(app, candidates, {
-          kind = "error",
-          message = "could not inspect global mappings: " .. inspect_err,
-        })
-      end
-      if app.global_map_pending then
-        return settle_global_ledger(app, candidates)
-      end
-      if owns_global_map(record, map) then
-        local del_ok, del_err = native_pcall(
-          app.global_map_effects.del, "n", record.installed_lhs)
-        if not del_ok then
-          return settle_global_ledger(app, candidates, {
-            kind = "error",
-            message = ("could not remove global mapping %s: %s")
-              :format(record.installed_lhs, tostring(del_err)),
-          })
-        end
-        if app.global_map_pending then
-          return settle_global_ledger(app, candidates)
-        end
-      end
-    end
-  end
-
-  local diagnostics = settle_global_ledger(app, candidates)
-  for _, collision in native_ipairs(collisions) do
-    diagnostics[#diagnostics + 1] = collision
-  end
-  return diagnostics
-end
-
---- Reconcile the process-wide actions for this exact App instance.
----
---- Existing foreign maps always win. Records are per App, so a second instance
---- (including one created by a module reload) sees the first instance's
---- callback as foreign and cannot delete or replace it.
-function App:sync_global_keymaps()
-  self.global_map_epoch = self.global_map_epoch + 1
-  if self.global_map_syncing then
-    self.global_map_pending = true
-    return
-  end
-
-  self.global_map_syncing = true
-  local diagnostics, round
-  repeat
-    self.global_map_pending = false
-    round = self.global_map_epoch
-    local ok, result = native_pcall(reconcile_global_keymaps, self)
-    diagnostics = ok and result or {
-      {
-        kind = "error",
-        message = "global mapping reconciliation failed: " .. tostring(result),
-      },
-    }
-  until not self.global_map_pending and round == self.global_map_epoch
-  self.global_map_syncing = false
-
-  -- Present only the final committed pass. Notifications can run arbitrary
-  -- user code, including setup(); no ownership state is written afterwards.
-  local report_epoch = self.global_map_epoch
-  for _, diagnostic in native_ipairs(diagnostics) do
-    if diagnostic.kind == "collision" then
-      report_global_collision(diagnostic)
-    else
-      ui.err(diagnostic.message)
-    end
-    if self.global_map_epoch ~= report_epoch then
-      break
-    end
-  end
 end
 
 --- Forget a review, whoever disposed it.
@@ -691,7 +164,6 @@ function App:setup(opts)
   for _, message in ipairs(diagnostics or {}) do
     ui.err(message)
   end
-  self:sync_global_keymaps()
   return options
 end
 
@@ -845,9 +317,39 @@ local function canvas_window_in_tab(surface, tab, preferred)
 end
 
 local function show_empty_message(st)
+  local msg = EMPTY_MSG
+  if st and st.filter_unreviewed and st.all_sections and #st.all_sections > 0 then
+    local n = #st.all_sections
+    msg = ("  (all %d file%s reviewed — press zf to show all)")
+      :format(n, n == 1 and "" or "s")
+  end
   vim.api.nvim_set_option_value("modifiable", true, { buf = st.buf })
-  vim.api.nvim_buf_set_lines(st.buf, 0, -1, false, { EMPTY_MSG })
+  vim.api.nvim_buf_set_lines(st.buf, 0, -1, false, { msg })
   vim.api.nvim_set_option_value("modifiable", false, { buf = st.buf })
+end
+
+local function unreviewed_sections(st, sections, l)
+  local out = {}
+  local lens_id = l and l.id or lens.of(st).id
+  for _, sec in ipairs(sections or {}) do
+    if not fold.user_folded(st, sec.path)
+        or fold.stale(st, sec.path, diff.fingerprint(sec), lens_id) then
+      out[#out + 1] = sec
+    end
+  end
+  return out
+end
+
+local function apply_filter_reconcile(surface, st)
+  if not (st and st.filter_unreviewed) then
+    return
+  end
+  local all = st.all_sections or st.sections
+  local visible = unreviewed_sections(st, all, lens.of(st))
+  local full = canvas.reconcile_sections(st, visible)
+  if full and #visible == 0 then
+    show_empty_message(st)
+  end
 end
 
 --- Refresh the other live UI pieces after a direct canvas.set_collapsed
@@ -872,6 +374,8 @@ local function sync_after_collapse(surface, st)
   if pin then
     sticky.update(pin, st)
   end
+  -- Folding/unfolding changes the reviewed count in the top band.
+  refresh_winbars(surface)
 end
 
 --- Set section i's collapse state on behalf of the USER (the <Tab>/za/<CR>
@@ -1046,6 +550,157 @@ local function toggle_collapse_under_cursor(surface, st, win)
     return
   end
   user_set_collapsed(surface, st, i, not st.collapsed[path], win)
+  if st.filter_unreviewed and fold.user_folded(st, path) then
+    apply_filter_reconcile(surface, st)
+    sync_after_collapse(surface, st)
+  end
+end
+
+--- Mark the current file reviewed (user-folded at its current fingerprint) and
+--- jump directly to the next unreviewed or stale file.
+local function review_next_under_cursor(surface, st, win)
+  local i = section_under_cursor(st, win)
+  if not i then
+    return false
+  end
+  local sec = st.sections[i]
+  local path = sec.path
+  local l = lens.of(st)
+  if not fold.user_folded(st, path) then
+    canvas.set_collapsed(st, i, true, "user", win)
+  elseif fold.stale(st, path, diff.fingerprint(sec), l.id) then
+    st.folded_seen = st.folded_seen or {}
+    st.folded_seen[path] = { lens = l.id, fp = diff.fingerprint(sec) }
+    canvas.replace_section(st, i, sec)
+  end
+
+  if st.filter_unreviewed then
+    apply_filter_reconcile(surface, st)
+    if #st.sections > 0 and canvas_showing(st, win) then
+      local next_i = math.min(i, #st.sections)
+      local start0 = (canvas.section_rows(st, next_i))
+      vim.api.nvim_win_call(win, function()
+        vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+      end)
+    end
+    sync_after_collapse(surface, st)
+    if #st.sections == 0 then
+      local total = #(st.all_sections or {})
+      ui.notify(("all %d file%s reviewed"):format(total, total == 1 and "" or "s"))
+    end
+    return true
+  end
+
+  local n = #st.sections
+  local target_i
+  for step = 1, n - 1 do
+    local cand = ((i - 1 + step) % n) + 1
+    local s = st.sections[cand]
+    if not fold.user_folded(st, s.path)
+        or fold.stale(st, s.path, diff.fingerprint(s), l.id) then
+      target_i = cand
+      break
+    end
+  end
+  if target_i and canvas_showing(st, win) then
+    local start0 = (canvas.section_rows(st, target_i))
+    vim.api.nvim_win_call(win, function()
+      vim.fn.winrestview({ topline = start0 + 1, lnum = start0 + 1 })
+    end)
+  end
+  sync_after_collapse(surface, st)
+  if not target_i then
+    ui.notify(("all %d file%s reviewed"):format(n, n == 1 and "" or "s"))
+  end
+  return true
+end
+
+local CONTEXT_STEP = 5
+
+local function yank_deleted_under_cursor(st, win)
+  if not canvas_showing(st, win) then
+    return false
+  end
+  local row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
+  local i, offset = canvas.locate(st, row0)
+  local sec = i and st.sections[i]
+  if not sec then
+    ui.notify("no deleted lines here")
+    return false
+  end
+  if fold.hidden(st, sec.path) then
+    ui.notify("unfold the file to yank deleted lines")
+    return false
+  end
+  local deleted = diff.deleted_lines_at(sec, offset)
+  if #deleted == 0 then
+    ui.notify("no deleted lines here")
+    return false
+  end
+  pcall(vim.fn.setreg, '"', deleted, "l")
+  ui.notify(("yanked %d deleted line%s"):format(#deleted, #deleted == 1 and "" or "s"))
+  return true
+end
+
+local function peek_hunk_under_cursor(st, win)
+  if not canvas_showing(st, win) then
+    return false
+  end
+  local row0 = vim.api.nvim_win_get_cursor(win)[1] - 1
+  local ctx = canvas.context.resolve(st, row0)
+  if not (ctx and ctx.scope == "hunk") then
+    ui.notify("move onto a hunk to inspect word-level diff")
+    return false
+  end
+  local sec = st.sections[ctx.section]
+  if not ui.hunk_peek.toggle(sec, ctx.hunk) then
+    if not ui.hunk_peek.is_open() then
+      return false
+    end
+  end
+  return true
+end
+
+local function adjust_section_context(surface, st, win, delta)
+  local i = section_under_cursor(st, win)
+  local sec = i and st.sections[i]
+  if not sec then
+    return false
+  end
+  if fold.hidden(st, sec.path) or sec.deferred then
+    ui.notify("unfold the file before adjusting context")
+    return false
+  end
+  if sec.binary or sec.rename_only or sec.mode_only then
+    ui.notify("no text diff hunks to expand context for")
+    return false
+  end
+  local base = config.options.context or 3
+  local cur = (st.section_context and st.section_context[sec.path]) or base
+  local next_ctx = math.max(0, cur + delta)
+  if next_ctx == cur then
+    ui.notify("context is already at minimum (0)")
+    return false
+  end
+  local rebuilt, err = source.materialize_section(st.root, lens.of(st), sec, next_ctx)
+  if err then
+    ui.warn(err)
+    return false
+  end
+  if not rebuilt then
+    return false
+  end
+  st.section_context = st.section_context or {}
+  if next_ctx == base then
+    st.section_context[sec.path] = nil
+  else
+    st.section_context[sec.path] = next_ctx
+  end
+  canvas.replace_section(st, i, rebuilt)
+  sync_after_collapse(surface, st)
+  ui.notify(("context for %s: %d line%s")
+    :format(sec.path, next_ctx, next_ctx == 1 and "" or "s"))
+  return true
 end
 
 --- What each canvas action does. Keyed by `keys.specs` action names; an action
@@ -1074,6 +729,19 @@ local function canvas_actions(app, surface, st, cfg)
       function(_, win) open_under_cursor(app, surface, generation, st, cfg, win) end),
     collapse   = owned_action(surface, generation,
       function(_, win) toggle_collapse_under_cursor(surface, st, win) end),
+    review_next = owned_action(surface, generation,
+      function(_, win) review_next_under_cursor(surface, st, win) end),
+    filter_unreviewed = owned_action(surface, generation, function()
+      app:toggle_unreviewed()
+    end),
+    expand_context = owned_action(surface, generation,
+      function(_, win) adjust_section_context(surface, st, win, CONTEXT_STEP) end),
+    shrink_context = owned_action(surface, generation,
+      function(_, win) adjust_section_context(surface, st, win, -CONTEXT_STEP) end),
+    yank_deleted = owned_action(surface, generation,
+      function(_, win) yank_deleted_under_cursor(st, win) end),
+    peek_hunk = owned_action(surface, generation,
+      function(_, win) peek_hunk_under_cursor(st, win) end),
     close      = owned_action(surface, generation, function()
       app:back_out_or_close(surface)
     end),
@@ -1138,14 +806,48 @@ local function canvas_actions(app, surface, st, cfg)
   }
 end
 
+local function visual_range_and_exit()
+  local a = vim.fn.line("v")
+  local b = vim.fn.line(".")
+  local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  vim.api.nvim_feedkeys(esc, "nx", false)
+  return { math.min(a, b), math.max(a, b) }
+end
+
 local function set_canvas_keymaps(app, surface, st)
   local cfg = config.options
+  local generation = surface.generation
   local acts = canvas_actions(app, surface, st, cfg)
+  local visual_acts = {
+    stage = function()
+      local range = visual_range_and_exit()
+      surface:guard(generation, function()
+        app:stage_lines("stage", range, surface, generation, INTERACTIVE)
+      end)
+    end,
+    unstage = function()
+      local range = visual_range_and_exit()
+      surface:guard(generation, function()
+        app:stage_lines("unstage", range, surface, generation, INTERACTIVE)
+      end)
+    end,
+    discard = function()
+      local range = visual_range_and_exit()
+      surface:guard(generation, function()
+        app:discard_lines(range, surface, generation, INTERACTIVE)
+      end)
+    end,
+  }
   for _, m in ipairs(keys.resolved("canvas", cfg.keymaps)) do
     local fn = acts[m.action]
     if fn then
       vim.keymap.set("n", m.lhs, fn,
         { buf = st.buf, silent = true, noremap = true, desc = m.desc })
+    end
+    local vfn = visual_acts[m.action]
+    if vfn then
+      vim.keymap.set("x", m.lhs, vfn,
+        { buf = st.buf, silent = true, noremap = true, desc = m.desc .. " (visual selection)" })
     end
   end
 end
@@ -1272,32 +974,6 @@ end
 --- parent directory -- or hopping projects with a file picker -- otherwise
 --- refuses to open at all, with a message that looks like the plugin is
 --- broken rather than looking in the wrong place.
----
---- `opts.base` ("HEAD" | "index") overrides both the saved session's base and
---- the configured default, so a command naming a state can open straight into
---- it rather than opening and then re-rendering.
---- Whether the review needs the page-backed canvas.
----
---- Below the threshold the eager canvas is cheaper AND simpler: its text is
---- the buffer, so search, yank and every plugin that reads buffer lines work
---- with no help from us. Above it the eager canvas is not viable at all --
---- both its text and its one-extmark-per-highlighted-row scale with the
---- review -- so the paged canvas takes over.
----
---- The row count is exact rather than estimated: a section's entries ARE its
---- rendered rows, so this costs a walk over the model and no rendering.
-local function wants_paged(sections)
-  local settings = config.options.paged or {}
-  if settings.enabled == false then
-    return false
-  end
-  local rows = 0
-  for _, section in ipairs(sections) do
-    rows = rows + #(section.entries or {})
-  end
-  return rows >= (settings.min_rows or 20000)
-end
-
 local function discard_unpublished_canvas(st, win, restore_buf)
   if not st then
     return
@@ -1311,81 +987,6 @@ local function discard_unpublished_canvas(st, win, restore_buf)
   if st.buf and vim.api.nvim_buf_is_valid(st.buf) then
     pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
   end
-end
-
---- Build the hidden paged canvas the review needs, if it needs one:
---- `{ state }` built, `{ err }` when the store refused, `{}` for eager.
----
---- The checkpoint after the build is load-bearing: the store contains
---- anything its row iterator throws, so a cancellation raised while paging
---- arrives here as an ordinary build failure, and only this call, outside
---- that boundary, lets it unwind the open instead of falling back to the
---- eager canvas.
---- `sess` is the saved session the open will restore. Its collapses and
---- folds are applied to the build itself, so a section it hides is never
---- paged; session.restore then finds them already in place and splices
---- nothing. Pruned exactly as the restore prunes, and only the user's own
---- intent ("user"), which is all a session saves.
-local function saved_folds(sections, sess)
-  if type(sess) ~= "table" then
-    return nil, nil
-  end
-  local collapsed, folds = {}, {}
-  for _, path in ipairs(type(sess.collapsed) == "table" and sess.collapsed or {}) do
-    if type(path) == "string" then
-      collapsed[path] = "user"
-    end
-  end
-  for _, dir in ipairs(type(sess.folds) == "table" and sess.folds or {}) do
-    if type(dir) == "string" then
-      folds[dir] = true
-    end
-  end
-  return collapsed, fold.prune(sections, folds)
-end
-
-local function prepare_canvas(sections, pace, sess)
-  if not wants_paged(sections) then
-    return {}
-  end
-  local collapsed, folded = saved_folds(sections, sess)
-  local state, err = canvas.build_paged(sections, {
-    pace = pace, collapsed = collapsed, folded = folded,
-  })
-  if pace then
-    local ok, pace_err = pcall(pace, 0)
-    if not ok then
-      if state then
-        canvas.dispose(state)
-        if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-          pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
-        end
-      end
-      error(pace_err, 0)
-    end
-  end
-  if state then
-    return { state = state }
-  end
-  return { err = err or "unknown reason" }
-end
-
---- Put the review's canvas in the current window: the prepared paged one, or
---- the eager one. A paged canvas that cannot be built is a reason to fall
---- back, not a reason to fail the review: the eager one still renders it
---- correctly, just expensively. Loudly, though -- the fallback pays that eager
---- cost on a review sized for paging, and a silent one would make every field
---- failure of the paged store look like nothing happened.
-local function open_canvas(sections, prepared)
-  if prepared.state then
-    canvas.show(prepared.state, vim.api.nvim_get_current_win())
-    return prepared.state
-  end
-  if prepared.err then
-    ui.warn(("paged canvas unavailable (%s); using the eager canvas")
-      :format(prepared.err))
-  end
-  return canvas.open(sections, {})
 end
 
 --- Resolve what an open targets: the window and buffer it starts from, the
@@ -1471,6 +1072,53 @@ local function plan_open(app, opts)
   }
 end
 
+local function section_context_for(st, path)
+  if st and st.section_context and st.section_context[path] ~= nil then
+    return st.section_context[path]
+  end
+  return config.options.context
+end
+
+local function session_fold_sets(sess)
+  if type(sess) ~= "table" then
+    return nil, nil, nil
+  end
+  local collapsed = {}
+  for _, path in ipairs(sess.collapsed or {}) do
+    collapsed[path] = "user"
+  end
+  local folded = {}
+  for _, dir in ipairs(sess.folds or {}) do
+    folded[dir] = true
+  end
+  local seen = {}
+  for _, entry in ipairs(sess.folded_seen or {}) do
+    if entry.path then
+      seen[entry.path] = { lens = entry.lens, fp = entry.fp }
+    end
+  end
+  return collapsed, folded, seen
+end
+
+local function open_collect_opts(sess)
+  local collapsed, folded = session_fold_sets(sess)
+  return {
+    auto_collapse = config.options.auto_collapse,
+    collapsed = collapsed,
+    folded = folded,
+  }
+end
+
+local function live_collect_opts(st)
+  return {
+    auto_collapse = config.options.auto_collapse,
+    collapsed = st and st.collapsed or nil,
+    folded = st and st.folded or nil,
+    unfolded_smart = st and st.unfolded_smart or nil,
+    section_context = st and st.section_context or nil,
+  }
+end
+
 --- Collect and build the review's model, before anything a user can see
 --- changes. Transaction boundary: this finishes before canvas.open changes
 --- the current window or this App's state -- in particular, an invalid or
@@ -1484,7 +1132,9 @@ end
 --- @return string|table|nil err a warned message, or STALE_COMPARE
 local function collect_open(plan, opts, pace)
   local root, l = plan.root, plan.lens
-  local sections, collect_err = source.sections(root, l, config.options.context, nil, pace)
+  local copts = open_collect_opts(plan.sess)
+  local sections, collect_err = source.sections(
+    root, l, config.options.context, nil, pace, copts)
   if opts._guard and not opts._guard() then
     return nil, STALE_COMPARE
   end
@@ -1496,8 +1146,8 @@ local function collect_open(plan, opts, pace)
       -- fallback fails too, the abort warning below is the only message.
       local saved_err = collect_err
       local fallback_sections
-      fallback_sections, collect_err =
-        source.sections(root, fallback, config.options.context, nil, pace)
+      fallback_sections, collect_err = source.sections(
+        root, fallback, config.options.context, nil, pace, copts)
       if opts._guard and not opts._guard() then
         return nil, STALE_COMPARE
       end
@@ -1518,10 +1168,8 @@ local function collect_open(plan, opts, pace)
 end
 
 --- Publish a collected review: retire what it replaces, show its canvas and
---- wire every controller. Synchronous -- this is the moment the user sees the
---- review, and nothing here scales with its rows. `prepared` is what
---- prepare_canvas built ahead of time, or nil to build it here.
-local function commit_open(app, plan, sections, prepared, opts)
+--- wire every controller.
+local function commit_open(app, plan, sections, opts)
   local win, prev_buf, root, sess, l =
     plan.win, plan.prev_buf, plan.root, plan.sess, plan.lens
   -- Collection is transactional: only a valid replacement may retire a review.
@@ -1565,11 +1213,33 @@ local function commit_open(app, plan, sections, prepared, opts)
     end
   end
   if opts._guard and not opts._guard() then
-    discard_unpublished_canvas(prepared and prepared.state, win, prev_buf)
     return nil, STALE_COMPARE
   end
 
-  local st = open_canvas(sections, prepared or prepare_canvas(sections, nil, sess))
+  local initial_collapsed = {}
+  local initial_folded, initial_seen = nil, nil
+  for _, sec in ipairs(sections) do
+    if sec.deferred and (sec.defer_reason == "generated" or sec.defer_reason == "large") then
+      initial_collapsed[sec.path] = "smart"
+    end
+  end
+  if sess then
+    local sess_collapsed, sess_folded, sess_seen = session_fold_sets(sess)
+    for _, sec in ipairs(sections) do
+      if sess_collapsed and sess_collapsed[sec.path] then
+        initial_collapsed[sec.path] = "user"
+      end
+    end
+    initial_folded = sess_folded
+    initial_seen = sess_seen
+  end
+
+  local st = canvas.open(sections, {
+    lens = l,
+    collapsed = initial_collapsed,
+    folded = initial_folded,
+    folded_seen = initial_seen,
+  })
   if opts._guard and not opts._guard(st.buf) then
     discard_unpublished_canvas(st, win, prev_buf)
     return nil, STALE_COMPARE
@@ -1615,6 +1285,7 @@ local function commit_open(app, plan, sections, prepared, opts)
       -- catches the paths that never reach App:close (e.g. a `:q`-killed
       -- canvas going straight through WinClosed -> dispose("last_window")).
       ui.cheatsheet.close()
+      ui.hunk_peek.close()
       -- A re-collection still in flight belongs to this review; finishing it
       -- would only be discarded by its guard.
       local pending = owner.pending_pivot
@@ -1657,6 +1328,18 @@ local function commit_open(app, plan, sections, prepared, opts)
   -- synchronous model operation; asynchronous controllers such as the
   -- virtualizer report through their exact Surface-owned leases below.
   st.hooks = st.hooks or {}
+  st.hooks.on_materialize = function(_, sec)
+    if not surface:guard(generation) then
+      return nil, "review closed"
+    end
+    local materialized, mat_err = source.materialize_section(
+      st.root, lens.of(st), sec, section_context_for(st, sec.path))
+    if mat_err then
+      ui.warn(mat_err)
+      return nil, mat_err
+    end
+    return materialized, nil
+  end
   st.hooks.on_shape_change = function(_, source_win)
     surface:guard(generation, function()
       sync_after_collapse(surface, st)
@@ -1676,20 +1359,7 @@ local function commit_open(app, plan, sections, prepared, opts)
 
   set_canvas_keymaps(app, surface, st)
 
-  -- Treesitter highlighting is deliberately NOT attached to a paged canvas.
-  --
-  -- It is viewport-bounded, but at SECTION granularity: a section that
-  -- intersects the viewport is highlighted whole. That is right for an eager
-  -- canvas, where a section is a file; on a paged canvas a single 24,000-row
-  -- section produced 8,000 persistent extmarks -- marks that scale with the
-  -- review, which is precisely what the paged canvas exists to prevent.
-  --
-  -- Making it row-granular means driving treesitter from the projection's
-  -- decorator for visible rows only, which is a separate piece of work. Until
-  -- then a large review keeps its diff tints, file bars and ghosts and loses
-  -- syntax colour inside hunks -- a visible loss, chosen over silently
-  -- reintroducing the structure the design forbids.
-  if config.options.highlight.enabled and not st.paged then
+  if config.options.highlight.enabled then
     local syntax_lease = syntax.attach(st, config.options.highlight, {
       claim = function(lease)
         if not surface:guard(generation) or surface.controllers.hl ~= nil then
@@ -1873,9 +1543,6 @@ local function commit_open(app, plan, sections, prepared, opts)
       surface:guard(generation, function(owner)
         owner:canvas_snapshot()
         owner:capture_view(win)
-        -- Activity defers the idle compactor: a user moving through the canvas
-        -- must not be racing a background pass for the same pages.
-        canvas.touch(owner.state)
       end)
     end,
   })
@@ -2069,23 +1736,19 @@ local function cancel_pending_open(app)
   return pending ~= nil
 end
 
---- The incremental half of App:open: collect and prepare in slices, then
---- commit on the main loop if this request is still the one that counts and
---- the user is still where they asked from.
+--- The incremental half of App:open: collect in slices, then commit on the
+--- main loop if this request is still the one that counts and the user is
+--- still where they asked from.
 local function open_incremental(app, plan, opts)
   local request = { plan = plan }
   app.pending_open = request
   local result, result_err
   request.handle = system.sliced(function(pace)
-    local sections, err = collect_open(plan, opts, pace)
-    if not sections then
-      return nil, err
-    end
-    return sections, prepare_canvas(sections, pace, plan.sess)
+    return collect_open(plan, opts, pace)
   end, {
     budget_ms = opts._slice_ms,
     after_units = opts._incremental_rows or INCREMENTAL_ROWS,
-  }, function(ok, sections, prepared)
+  }, function(ok, sections, collect_err)
     local current = app.pending_open == request
     if current then
       app.pending_open = nil
@@ -2098,13 +1761,12 @@ local function open_incremental(app, plan, opts)
       return
     end
     if not sections then
-      result_err = prepared
+      result_err = collect_err
       return
     end
     local win = plan.win
     if not current or not vim.api.nvim_win_is_valid(win)
         or vim.api.nvim_get_current_win() ~= win then
-      discard_unpublished_canvas(prepared.state, win, plan.prev_buf)
       if current then
         -- Publishing into a window the user has left would move them, and
         -- publishing anywhere else would be a review they never asked for.
@@ -2116,7 +1778,7 @@ local function open_incremental(app, plan, opts)
     -- The window may have switched buffer while the review built; closing
     -- the review returns to what it shows NOW.
     plan.prev_buf = vim.api.nvim_win_get_buf(win)
-    result, result_err = commit_open(app, plan, sections, prepared, opts)
+    result, result_err = commit_open(app, plan, sections, opts)
   end)
   if request.handle:pending() then
     ui.notify("building a large review... (toggle again to cancel)")
@@ -2148,7 +1810,7 @@ function App:open(opts)
   if not sections then
     return nil, err
   end
-  return commit_open(self, plan, sections, nil, opts)
+  return commit_open(self, plan, sections, opts)
 end
 
 --- Is `buf` something we could sensibly leave a window sitting on?
@@ -2208,6 +1870,7 @@ function App:close()
   -- The overlay never survives the canvas (spec R4). toggle() closes through
   -- here too, so one hook covers both paths.
   ui.cheatsheet.close()
+  ui.hunk_peek.close()
 
   local surface = active_surface(self)
   if not surface then
@@ -2431,7 +2094,18 @@ function App:quickfix()
     return nil, err
   end
   local items = {}
-  for _, section in ipairs(st.sections or {}) do
+  for idx, section in ipairs(st.sections or {}) do
+    -- User-folded sections may be deferred from a session reopen; materialize
+    -- them on demand so `:CanvasDiff quickfix` still lists every user-folded
+    -- code hunk while skipping auto-collapsed generated/large noise.
+    if section.deferred and section.defer_reason == "folded" and not section.binary then
+      local materialized, mat_err = source.materialize_section(
+        st.root, l, section, section_context_for(st, section.path))
+      if not mat_err and materialized then
+        st.sections[idx] = materialized
+        section = materialized
+      end
+    end
     local filename = vim.fs.joinpath(st.root, section.path)
     for _, target in ipairs(diff.hunk_targets(section)) do
       local label = (target.label:gsub("^%s+", ""))
@@ -2488,6 +2162,52 @@ function App:toggle_sidebar()
   open_sidebar(self, surface, surface.state)
 end
 
+--- Toggle showing only unreviewed and stale files in the active review.
+function App:toggle_unreviewed()
+  local surface = active_surface(self)
+  if not (surface and surface:is_showing()) then
+    ui.warn("no live diff canvas")
+    return false
+  end
+  local st = surface.state
+  if st.filter_unreviewed then
+    local all = st.all_sections or st.sections
+    st.filter_unreviewed = false
+    st.all_sections = nil
+    local full = canvas.reconcile_sections(st, all)
+    if full and #all == 0 then
+      show_empty_message(st)
+    end
+    sync_after_collapse(surface, st)
+    local lease = surface.controllers.virt
+    if lease then
+      virt.apply(lease, config.options.virt)
+    end
+    ui.notify("showing all files")
+    return true
+  end
+
+  local all = {}
+  for idx, sec in ipairs(st.sections or {}) do
+    all[idx] = sec
+  end
+  st.all_sections = all
+  st.filter_unreviewed = true
+  apply_filter_reconcile(surface, st)
+  sync_after_collapse(surface, st)
+  local lease = surface.controllers.virt
+  if lease then
+    virt.apply(lease, config.options.virt)
+  end
+  local remaining = #(st.sections or {})
+  if remaining == 0 and #all > 0 then
+    ui.notify(("all %d file%s reviewed"):format(#all, #all == 1 and "" or "s"))
+  else
+    ui.notify(("showing unreviewed files (%d remaining)"):format(remaining))
+  end
+  return true
+end
+
 --- `:CanvasDiff sidebar` plans the call `sidebar`, matching the facade's
 --- export; the verb itself is named toggle_sidebar, for what it does.
 App.sidebar = App.toggle_sidebar
@@ -2516,14 +2236,25 @@ local function capture_pivot(surface, st)
   for index, section in ipairs(st.sections or {}) do
     sections[index] = section
   end
+  local all_sections
+  if st.all_sections then
+    all_sections = {}
+    for index, section in ipairs(st.all_sections) do
+      all_sections[index] = section
+    end
+  end
   return {
     lens = st.lens,
     base = st.base,
     sections = sections,
+    all_sections = all_sections,
+    filter_unreviewed = st.filter_unreviewed or false,
     collapsed = vim.deepcopy(st.collapsed or {}),
     folded = vim.deepcopy(st.folded or {}),
     folded_seen = vim.deepcopy(st.folded_seen or {}),
     rendered_hidden = vim.deepcopy(st.rendered_hidden or {}),
+    unfolded_smart = vim.deepcopy(st.unfolded_smart or {}),
+    section_context = vim.deepcopy(st.section_context or {}),
     views = views,
   }
 end
@@ -2532,10 +2263,22 @@ local function rollback_pivot(surface, st, snapshot, transaction)
   while true do
     st.lens = snapshot.lens
     st.base = snapshot.base
+    st.filter_unreviewed = snapshot.filter_unreviewed or false
+    if snapshot.all_sections then
+      local all = {}
+      for index, section in ipairs(snapshot.all_sections) do
+        all[index] = section
+      end
+      st.all_sections = all
+    else
+      st.all_sections = nil
+    end
     st.collapsed = vim.deepcopy(snapshot.collapsed)
     st.folded = vim.deepcopy(snapshot.folded)
     st.folded_seen = vim.deepcopy(snapshot.folded_seen)
     st.rendered_hidden = vim.deepcopy(snapshot.rendered_hidden)
+    st.unfolded_smart = vim.deepcopy(snapshot.unfolded_smart or {})
+    st.section_context = vim.deepcopy(snapshot.section_context or {})
     local sections = {}
     for index, section in ipairs(snapshot.sections) do
       sections[index] = section
@@ -2592,7 +2335,8 @@ pivot = function(surface, target_lens, guard, collected, publish)
   if desired == nil then
     -- The shown sections let every unchanged file skip its diff.
     desired, err = source.sections(
-      st.root, next_lens, config.options.context, st.sections)
+      st.root, next_lens, config.options.context,
+      st.all_sections or st.sections, nil, live_collect_opts(st))
   end
   if guard and not guard() then
     return nil, STALE_COMPARE
@@ -2663,12 +2407,20 @@ pivot = function(surface, target_lens, guard, collected, publish)
     st.base = lens.to_base(target_lens)
   end
 
-  local full = canvas.reconcile_sections(st, desired)
+  local visible = desired
+  if st.filter_unreviewed then
+    st.all_sections = desired
+    visible = unreviewed_sections(st, desired, next_lens)
+  else
+    st.all_sections = nil
+  end
+
+  local full = canvas.reconcile_sections(st, visible)
   if stale() then
     return finish(nil, STALE_COMPARE)
   end
 
-  if full and #desired == 0 then
+  if full and #visible == 0 then
     show_empty_message(st)
     if stale() then
       return finish(nil, STALE_COMPARE)
@@ -2767,7 +2519,8 @@ local function pivot_sliced(surface, target_lens, guard, publish, done)
   end
   handle = system.sliced(function(pace)
     return source.sections(
-      st.root, collected_lens, config.options.context, st.sections, pace)
+      st.root, collected_lens, config.options.context,
+      st.all_sections or st.sections, pace, live_collect_opts(st))
   end, { after_units = INCREMENTAL_ROWS }, function(ok, desired, collect_err)
     if surface.pending_pivot == handle then
       surface.pending_pivot = nil
@@ -3629,6 +3382,299 @@ function App:discard(owned_surface, generation, win, opts)
   return settle(pivot(surface, tx.lens, tx.guard))
 end
 
+--- Resolve a 1-based visual line range `{ row1_lo, row1_hi }` on the canvas
+--- into one section's selected b-side lines, ghost-deletion seams, and (for
+--- wholly-deleted files) old-side lines.
+local function selection_from_rows(st, range)
+  if type(range) ~= "table" or not range[1] or not range[2] then
+    return nil, "no visual selection"
+  end
+  local lo = math.min(range[1], range[2])
+  local hi = math.max(range[1], range[2])
+  local sec_lo, off_lo = canvas.locate(st, lo - 1)
+  local sec_hi, off_hi = canvas.locate(st, hi - 1)
+  if not (sec_lo and sec_hi) then
+    return nil, "nothing selected"
+  end
+  if sec_lo ~= sec_hi then
+    return nil, "visual selection must stay within one file"
+  end
+  local section = st.sections[sec_lo]
+  if not section then
+    return nil, "nothing selected"
+  end
+  if fold.hidden(st, section.path) then
+    return nil, "unfold the file before acting on selected lines"
+  end
+  local b_lines, a_lines, seams = {}, {}, {}
+  for offset = off_lo, off_hi do
+    local entry = section.entries[offset]
+    if entry then
+      if entry.kind == "add" and entry.new_lnum then
+        b_lines[entry.new_lnum] = true
+      elseif entry.kind == "del" and entry.old_lnum then
+        a_lines[entry.old_lnum] = true
+      end
+      if entry.ghosts and entry.new_lnum then
+        seams[entry.new_lnum - 1] = true
+      end
+      if entry.ghosts_after then
+        if entry.new_lnum then
+          seams[entry.new_lnum] = true
+        elseif entry.kind == "hunk_hdr" and entry.hunk_idx then
+          local h = section.hunks and section.hunks[entry.hunk_idx]
+          if h and h.seam then
+            seams[h.seam] = true
+          end
+        end
+      end
+    end
+  end
+  return {
+    section_i = sec_lo,
+    section = section,
+    b_lines = b_lines,
+    a_lines = a_lines,
+    seams = seams,
+  }
+end
+
+--- Stage or unstage ONLY the visually selected lines inside one file section.
+--- Shares the exact ownership, lens-side, mixed-file, and unsaved-buffer
+--- guards of `stage_hunk`.
+function App:stage_lines(direction, range, owned_surface, generation, opts)
+  assert(direction == "stage" or direction == "unstage",
+    "stage_lines: direction must be 'stage' or 'unstage', got " .. tostring(direction))
+  local surface = owned_surface or active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  local st = surface.state
+  local sel, sel_err = selection_from_rows(st, range)
+  if not sel then
+    ui.notify(sel_err)
+    return false
+  end
+  local section = sel.section
+  if section.binary or section.renamed then
+    ui.notify("line staging needs a text file — S stages the whole file")
+    return false
+  end
+
+  local tx, tx_err = begin_stage(self, owned_surface, generation, opts)
+  if not tx then
+    return nil, tx_err
+  end
+  local file, file_err = press_time_file(tx, section)
+  if not file then
+    return nil, file_err
+  end
+  if direction == "stage" and not file.unstaged then
+    ui.notify("already staged")
+    return false
+  end
+  if direction == "unstage" and not file.staged then
+    ui.notify("nothing staged here")
+    return false
+  end
+  local index_side = tx.lens.new == lens.INDEX_REV
+  local mixed = file.staged and file.unstaged
+  if mixed and direction == "unstage" and not index_side then
+    ui.notify("this file is staged and modified — unstage lines from the staged lens")
+    return false
+  end
+  if mixed and direction == "stage" and index_side then
+    ui.notify("this file is staged and modified — stage lines from the unstaged or all lens")
+    return false
+  end
+  if direction == "stage" then
+    local clear, alias_err = refuse_modified_alias(st.root, file)
+    if not clear then
+      return nil, alias_err
+    end
+  end
+
+  local root, path = st.root, file.path
+  local a_text, a_err, b_text, b_err
+  if direction == "stage" then
+    if file.status == "?" then
+      a_text = ""
+    else
+      a_text, a_err = source.show(root, ":0", path)
+    end
+    b_text = source.worktree_text(root, path, file.status)
+  else
+    if file.staged == "A" then
+      a_text = ""
+    else
+      a_text, a_err = source.show_head(root, path)
+    end
+    if file.staged == "D" then
+      b_text = ""
+    else
+      b_text, b_err = source.show(root, ":0", path)
+    end
+  end
+  if not (a_text and b_text) then
+    local err = a_err or b_err or "could not read the blobs to splice"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local spliced, changed
+  if direction == "stage" then
+    spliced, changed = diff.stage.splice_lines(a_text, b_text, sel)
+  else
+    spliced, _, changed = diff.stage.revert_lines(a_text, b_text, sel)
+  end
+  if not changed then
+    ui.notify("no changed lines in selection")
+    return false
+  end
+
+  local positions = capture_file_positions(surface, st, section)
+  local written, write_err
+  if direction == "unstage" and file.staged == "A" and spliced == "" then
+    written, write_err = source.unstage(root, file)
+  else
+    written, write_err = source.set_index_blob(root, path, spliced)
+  end
+  if not written then
+    ui.warn(write_err)
+    return nil, write_err
+  end
+  return finish_stage(tx, file, positions, tx.lens,
+    (direction == "stage" and "staged selected lines in " or "unstaged selected lines in ") .. path)
+end
+
+--- Discard ONLY the visually selected unstaged lines inside one file section,
+--- putting index lines back into the worktree (undoable in a loaded buffer,
+--- removed lines placed in the unnamed register).
+function App:discard_lines(range, owned_surface, generation, opts)
+  opts = opts or {}
+  local surface = owned_surface or active_surface(self)
+  if not (surface and surface:is_alive()) then
+    local err = "no live diff canvas"
+    ui.warn(err)
+    return nil, err
+  end
+  local st = surface.state
+  local current_lens = lens.of(st)
+  if lens.is_range(current_lens) then
+    ui.notify("READ-ONLY comparison — nothing here can be discarded (press Tab)")
+    return false
+  end
+  if current_lens.new == lens.INDEX_REV then
+    ui.notify("the staged view shows the index — u unstages; discarding writes the worktree")
+    return false
+  end
+  if lens.is_branch(current_lens) then
+    ui.notify("discard puts the index back — use the all or unstaged lens (press Tab)")
+    return false
+  end
+
+  local sel, sel_err = selection_from_rows(st, range)
+  if not sel then
+    ui.notify(sel_err)
+    return false
+  end
+  local section = sel.section
+  if section.binary or section.renamed then
+    ui.notify("discarding needs a text file with one path — use git for this one")
+    return false
+  end
+
+  local tx, tx_err = begin_stage(self, owned_surface, generation, opts)
+  if not tx then
+    return nil, tx_err
+  end
+  local file, file_err = press_time_file(tx, section)
+  if not file then
+    return nil, file_err
+  end
+  local path = file.path
+  if file.status == "?" then
+    ui.notify(path .. " is untracked — discarding it means deleting the file, which is yours to do")
+    return false
+  end
+  if not file.unstaged then
+    ui.notify("nothing unstaged here — u unstages, then x discards")
+    return false
+  end
+  if file.unstaged == "D" then
+    ui.notify(path .. " was deleted — `git restore` brings a whole file back")
+    return false
+  end
+  if file.staged and current_lens.old ~= lens.INDEX_REV then
+    ui.notify("this file is staged and modified — discard from the unstaged lens (press Tab)")
+    return false
+  end
+
+  local root = st.root
+  local index_text, index_err = source.show(root, lens.INDEX_REV, path)
+  if not index_text then
+    local err = index_err or ("could not read the index side of " .. path)
+    ui.warn(err)
+    return nil, err
+  end
+  local work_text = source.worktree_text(root, path, file.status)
+  local spliced, removed, changed = diff.stage.revert_lines(index_text, work_text, sel)
+  if not changed then
+    ui.notify("no changed lines in selection")
+    return false
+  end
+  if not tx.guard() then
+    local err = "discard was superseded before it wrote"
+    ui.warn(err)
+    return nil, err
+  end
+
+  local positions = capture_file_positions(surface, st, section)
+  local how, write_err = source.write_worktree(root, path, spliced)
+  if not how then
+    local err = "could not discard: " .. tostring(write_err)
+    ui.warn(err)
+    return nil, err
+  end
+  if #removed > 0 then
+    pcall(vim.fn.setreg, '"', removed, "l")
+  end
+
+  local said = "discarded selected lines in " .. path
+  if how == "buffer" then
+    said = said .. " (in its unsaved buffer — :write puts it on disk)"
+  elseif how == "saved" then
+    said = said .. " (u in the file undoes it)"
+  end
+  local function settle(reconciled, reconcile_err)
+    if not reconciled then
+      if reconcile_err == STALE_COMPARE then
+        reconcile_err = "the owning review changed during reconcile"
+      end
+      local err = "the worktree changed, but canvas refresh failed: "
+        .. tostring(reconcile_err)
+      ui.warn(err)
+      return nil, err
+    end
+    if tx.guard() then
+      restore_file_positions(st, positions)
+    end
+    ui.notify(said)
+    return true
+  end
+  if tx.async then
+    local reconciled, reconcile_err =
+      pivot_sliced(surface, tx.lens, tx.guard, nil, settle)
+    if reconcile_err == PENDING_PIVOT then
+      return nil, reconcile_err
+    end
+    return settle(reconciled, reconcile_err)
+  end
+  return settle(pivot(surface, tx.lens, tx.guard))
+end
+
 --- Stage the file under the canvas cursor (or `path`).
 function App:stage(path, owned_surface, generation)
   return self:stage_file("stage", path, owned_surface, generation)
@@ -3972,291 +4018,6 @@ local function format_branch(item)
   return source.format_ref(item)
 end
 
-local function window_cwd(win)
-  if not (win and vim.api.nvim_win_is_valid(win)) then
-    return nil
-  end
-  local tab = vim.api.nvim_win_get_tabpage(win)
-  local ok, cwd = pcall(vim.fn.getcwd,
-    vim.api.nvim_win_get_number(win),
-    vim.api.nvim_tabpage_get_number(tab))
-  return ok and vim.fs.normalize(cwd) or nil
-end
-
-local function ref_origin_alive(app, request)
-  if app.ref_request ~= request.token
-      or not vim.api.nvim_win_is_valid(request.win)
-      or vim.api.nvim_win_get_buf(request.win) ~= request.buf
-      or window_cwd(request.win) ~= request.cwd then
-    return false
-  end
-  local owner = surface_for_window(app, request.win)
-  if not request.surface then
-    return owner == nil
-  end
-  if owner ~= request.surface
-      or request.surface.state.root ~= request.root
-      or not request.surface:guard(request.generation)
-      or request.surface:is_showing() ~= request.visible then
-    return false
-  end
-  if request.origin == "sidebar" then
-    local side = request.surface.controllers.sidebar
-    return side ~= nil
-      and sidebar.is_sidebar_win(side, request.win)
-      and sidebar.canvas_win(side, request.win) == request.host_win
-      and canvas_showing(request.surface.state, request.host_win)
-  end
-  if request.origin == "canvas" then
-    return request.host_win == request.win
-      and canvas_showing(request.surface.state, request.win)
-  end
-  if request.visible then
-    return request.host_win ~= nil
-      and canvas_showing(request.surface.state, request.host_win)
-  end
-  return true
-end
-
-local function begin_ref_request(app, kind)
-  -- Mutation requests and comparisons are distinct monotonic domains, but a
-  -- new mutation invalidates both: no older picker may cross the Git boundary
-  -- after the user has expressed a newer ref intent.
-  app.ref_request = app.ref_request + 1
-  app.compare_request = app.compare_request + 1
-  local request = {
-    token = app.ref_request,
-    kind = kind,
-    win = vim.api.nvim_get_current_win(),
-  }
-  request.buf = vim.api.nvim_win_get_buf(request.win)
-  request.cwd = window_cwd(request.win)
-  request.surface = surface_for_window(app, request.win)
-  request.generation = request.surface and request.surface.generation or nil
-  request.visible = request.surface and request.surface:is_showing() or false
-  if request.surface then
-    local side = request.surface.controllers.sidebar
-    if side and sidebar.is_sidebar_win(side, request.win) then
-      request.origin = "sidebar"
-      request.host_win = sidebar.canvas_win(side, request.win)
-    elseif canvas_showing(request.surface.state, request.win) then
-      request.origin = "canvas"
-      request.host_win = request.win
-    else
-      request.origin = "excursion"
-      request.host_win = request.surface:canvas_windows()[1]
-    end
-    request.root = request.surface.state.root
-  else
-    local dir = buf_dir(request.buf)
-    request.root = dir and source.root(dir) or nil
-    if not request.root then
-      request.root = request.cwd and source.root(request.cwd) or nil
-    end
-  end
-  return request
-end
-
-local function branch_refresh_failure(message)
-  local err = "branch changed, but Canvas refresh failed: " .. tostring(message)
-  ui.warn(err)
-  return nil, err
-end
-
-local function leave_retired_canvas(host, replacement)
-  if not (host and vim.api.nvim_win_is_valid(host)
-      and replacement and replacement.canvas_buf
-      and vim.api.nvim_win_get_buf(host) == replacement.canvas_buf) then
-    return
-  end
-  local landing = replacement.ownership
-    and replacement.ownership.landings
-    and replacement.ownership.landings[host] or nil
-  if landing and vim.api.nvim_buf_is_valid(landing)
-      and vim.api.nvim_buf_is_loaded(landing) then
-    pcall(vim.api.nvim_win_set_buf, host, landing)
-    return
-  end
-  pcall(vim.api.nvim_win_call, host, function() vim.cmd("enew") end)
-end
-
-local function rebuild_after_ref_change(app, request)
-  if not request.surface then
-    return true
-  end
-  if not request.surface:guard(request.generation) then
-    return branch_refresh_failure("originating Canvas is no longer live")
-  end
-
-  -- The ownership operation invalidates the old generation and disposes every
-  -- controller/store before App:open can recollect against the new HEAD.
-  local replacement = request.surface:retire_for_ref_change(
-    request.host_win, lens.get("all"))
-  if not replacement then
-    return branch_refresh_failure("could not retire the originating Canvas")
-  end
-  -- The retire above is a teardown path too, so it must land in the
-  -- last-lens memory -- but NOT as lens.of(the retired state):
-  -- retire_for_ref_change overwrites state.lens with the replacement lens
-  -- BEFORE disposing, so the pre-checkout lens is already gone here. That
-  -- replacement lens is also the correct record: the checkout deliberately
-  -- resets the review to `all` and invalidates the session file, so when the
-  -- reopen below fails (or the review is not visible), a stale memory entry
-  -- would otherwise decide the next open and resurrect the pre-checkout
-  -- comparison over that deliberate reset.
-  if request.root then
-    app.last_lens_by_root[request.root] = lens.get("all")
-  end
-  if not request.visible then
-    return true
-  end
-  local host = request.host_win
-  if not (host and vim.api.nvim_win_is_valid(host)) then
-    return branch_refresh_failure("originating Canvas window is no longer valid")
-  end
-
-  local opened, open_err
-  local called, call_err = pcall(vim.api.nvim_win_call, host, function()
-    opened, open_err = app:open({
-      _root = request.root,
-      _replacement = replacement,
-      _session = replacement.session,
-      lens = lens.get("all"),
-    })
-  end)
-  if not called then
-    leave_retired_canvas(host, replacement)
-    return branch_refresh_failure(call_err)
-  end
-  if not opened then
-    leave_retired_canvas(host, replacement)
-    return branch_refresh_failure(open_err or "could not reopen Canvas")
-  end
-  return true
-end
-
-local function choose_ref(app, kind)
-  local request = begin_ref_request(app, kind)
-  if not ref_origin_alive(app, request) then
-    return
-  end
-  if not request.root then
-    local err = "not inside a git repository"
-    ui.warn(err)
-    return nil, err
-  end
-
-  local branches, inspect_err = source.branches(request.root)
-  if not ref_origin_alive(app, request) then
-    return
-  end
-  if not branches then
-    ui.warn(inspect_err)
-    return nil, inspect_err
-  end
-  local choices = kind == "checkout"
-    and source.local_branches(branches)
-    or source.remote_tracking_branches(branches)
-  if #choices == 0 then
-    local err = kind == "checkout"
-      and "no local branches found"
-      or "no remote-tracking branches found"
-    ui.warn(err)
-    return nil, err
-  end
-
-  local result, result_err
-  vim.ui.select(choices, {
-    prompt = kind == "checkout"
-      and "CanvasDiff switch local branch:"
-      or "CanvasDiff create tracking branch:",
-    kind = kind == "checkout"
-      and "canvasdiff_branch_checkout"
-      or "canvasdiff_branch_track",
-    format_item = format_branch,
-  }, function(selected)
-    if not selected or not ref_origin_alive(app, request) then
-      return
-    end
-    local offered = false
-    for _, item in ipairs(choices) do
-      if item == selected then
-        offered = true
-        break
-      end
-    end
-    if not offered then
-      return
-    end
-    local local_name
-    if kind == "track" then
-      local_name, result_err = source.tracking_branch_name(selected)
-      if not local_name then
-        ui.warn(result_err)
-        return
-      end
-    end
-    if kind == "checkout" then
-      local live_ref = source.current_branch(request.root)
-      if not ref_origin_alive(app, request) then
-        return
-      end
-      if live_ref == selected.ref then
-        result, result_err = true, nil
-        return
-      end
-    end
-    local modified = source.modified_buffer_in_root(request.root)
-    if not ref_origin_alive(app, request) then
-      return
-    end
-    if modified then
-      result_err = "cannot switch branches: modified buffer " .. modified
-      ui.warn(result_err)
-      return
-    end
-    -- Last ownership check before the irreversible Git boundary.
-    if not ref_origin_alive(app, request) then
-      return
-    end
-
-    local changed, mutation_warning
-    if kind == "checkout" then
-      changed, mutation_warning =
-        source.switch_branch(request.root, selected.ref)
-    else
-      changed, mutation_warning = source.track_branch(
-        request.root, local_name, selected.ref)
-    end
-    if not changed then
-      result_err = mutation_warning
-      ui.warn(result_err)
-      return
-    end
-    if mutation_warning then
-      ui.warn(mutation_warning)
-    end
-    session.invalidate(request.root)
-    local rebuilt, rebuild_err = rebuild_after_ref_change(app, request)
-    if not rebuilt then
-      result, result_err = nil, rebuild_err
-      return
-    end
-    result, result_err = true, mutation_warning
-  end)
-  return result, result_err
-end
-
---- Select and switch to one exact local branch.
-function App:checkout()
-  return choose_ref(self, "checkout")
-end
-
---- Create a local branch that tracks one exact remote-tracking ref.
-function App:track()
-  return choose_ref(self, "track")
-end
-
 local function compare_origin_alive(app, request, unpublished_buf)
   if app.compare_request ~= request.token
       or not vim.api.nvim_win_is_valid(request.win) then
@@ -4290,7 +4051,6 @@ end
 function App:compare()
   -- Invalidate before any repository or editor call: injected adapters and UI
   -- callbacks may reenter, and "newer" begins when this request is invoked.
-  self.ref_request = self.ref_request + 1
   self.compare_request = self.compare_request + 1
   local token = self.compare_request
   local win = vim.api.nvim_get_current_win()

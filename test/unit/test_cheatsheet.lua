@@ -45,26 +45,6 @@ T["cheatsheet_model promotes to Global only on identical keys AND desc"] = funct
   H.eq(where.select, "Sidebar")
   H.eq(where.jump, "Canvas")
   H.eq(where.refresh, "Canvas")
-  H.eq(where.compare, "Global")
-  H.eq(where.checkout, "Global")
-end
-
-T["cheatsheet_model labels the process-wide compare and checkout mappings as Global"] = function()
-  local model = cheatsheet.model(defaults())
-  for _, col in ipairs(model) do
-    if col.title == "Global" then
-      local rows = {}
-      for _, row in ipairs(col.sections[1].rows) do
-        rows[row.action] = row
-      end
-      H.eq(rows.compare.keys, { "<leader>lb" })
-      H.eq(rows.compare.desc, "Compare two branches or revisions")
-      H.eq(rows.checkout.keys, { "<leader>lc" })
-      H.eq(rows.checkout.desc, "Checkout a local branch")
-      return
-    end
-  end
-  error("the global compare and checkout actions must be discoverable in cheatsheet metadata")
 end
 
 T["cheatsheet_model close stays per column with its own meaning"] = function()
@@ -152,7 +132,7 @@ T["cheatsheet_model the column's own group leads it unheaded"] = function()
     actions[#actions + 1] = row.action
   end
   H.eq(actions,
-    { "refresh", "stage", "unstage", "stage_file", "unstage_file",
+    { "refresh", "yank_deleted", "stage", "unstage", "stage_file", "unstage_file",
       "discard", "discard_file", "close" },
     "the canvas's own verbs, in spec order")
 end

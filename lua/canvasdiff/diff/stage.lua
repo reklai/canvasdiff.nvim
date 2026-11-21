@@ -114,4 +114,193 @@ function S.splice_many(a_text, b_text, hunks)
   return text
 end
 
+--- Reconstruct final-newline shape from `reference_text`: if `out` is non-empty
+--- and `reference_text` was empty or ended in `\n`, keep a trailing `\n`.
+local function join_preserving_eol(out, reference_text)
+  local text = table.concat(out, "\n")
+  if #out > 0 and (reference_text == "" or reference_text:sub(-1) == "\n") then
+    return text .. "\n"
+  end
+  return text
+end
+
+--- Apply ONLY the selected changes from `b_text` onto `a_text` (line-level
+--- staging). `selection` carries sets in b-side coordinates (plus optional
+--- `a_lines` for wholly-deleted files where deletions render as real rows):
+---   * `b_lines`: `{ [b_lnum] = true }` selected new-side lines
+---   * `seams`:   `{ [b_seam] = true }` selected ghost-deletion seams
+---   * `a_lines`: `{ [a_lnum] = true }` selected old-side lines (deleted files)
+---
+--- Pure line arithmetic, never a patch: preserves CRLF and `a_text`'s final
+--- newline. Returns `new_a_text, changed`.
+function S.splice_lines(a_text, b_text, selection)
+  selection = selection or {}
+  local b_lines = selection.b_lines or {}
+  local seams = selection.seams or {}
+  local a_lines = selection.a_lines or {}
+
+  local hunks = S.pair_hunks(a_text, b_text)
+  if #hunks == 0 then
+    return a_text, false
+  end
+
+  local a, b = lines_of(a_text), lines_of(b_text)
+  local out = {}
+  local pos_a = 1
+  local changed = false
+
+  for _, h in ipairs(hunks) do
+    local start_a, count_a, start_b, count_b = h[1], h[2], h[3], h[4]
+    local upto = count_a > 0 and (start_a - 1) or start_a
+    for i = pos_a, upto do
+      out[#out + 1] = a[i]
+    end
+
+    if count_a == 0 and count_b > 0 then
+      -- Pure addition: include only selected b lines.
+      for lnum = start_b, start_b + count_b - 1 do
+        if b_lines[lnum] then
+          out[#out + 1] = b[lnum]
+          changed = true
+        end
+      end
+    elseif count_a > 0 and count_b == 0 then
+      -- Pure deletion: drop selected a lines (wholly-deleted file) or drop the
+      -- whole block when its ghost seam is selected.
+      if next(a_lines) ~= nil then
+        for lnum = start_a, start_a + count_a - 1 do
+          if a_lines[lnum] then
+            changed = true
+          else
+            out[#out + 1] = a[lnum]
+          end
+        end
+      elseif seams[start_b] then
+        changed = true
+      else
+        for lnum = start_a, start_a + count_a - 1 do
+          out[#out + 1] = a[lnum]
+        end
+      end
+    else
+      -- Replacement (`count_a > 0, count_b > 0`): ghosts hang on `start_b`
+      -- (seam `start_b - 1`). Drop old lines when that seam is selected, and
+      -- emit every selected new line.
+      local drop_a = seams[start_b - 1] == true
+      if drop_a then
+        changed = true
+      else
+        for lnum = start_a, start_a + count_a - 1 do
+          out[#out + 1] = a[lnum]
+        end
+      end
+      for lnum = start_b, start_b + count_b - 1 do
+        if b_lines[lnum] then
+          out[#out + 1] = b[lnum]
+          changed = true
+        end
+      end
+    end
+
+    pos_a = upto + count_a + 1
+  end
+
+  for i = pos_a, #a do
+    out[#out + 1] = a[i]
+  end
+  if not changed then
+    return a_text, false
+  end
+  local result = join_preserving_eol(out, a_text)
+  return result, result ~= a_text
+end
+
+--- Revert ONLY the selected changes in `b_text` back toward `a_text`
+--- (line-level unstaging `HEAD -> index` and line-level discarding
+--- `index -> worktree`). `selection` has the same shape as `splice_lines`.
+---
+--- Returns `new_b_text, removed_lines, changed`, where `removed_lines` lists
+--- the exact b-side lines dropped (with trailing `\r` stripped for the unnamed
+--- register on discard).
+function S.revert_lines(a_text, b_text, selection)
+  selection = selection or {}
+  local b_lines = selection.b_lines or {}
+  local seams = selection.seams or {}
+  local a_lines = selection.a_lines or {}
+
+  local hunks = S.pair_hunks(a_text, b_text)
+  if #hunks == 0 then
+    return b_text, {}, false
+  end
+
+  local a, b = lines_of(a_text), lines_of(b_text)
+  local out = {}
+  local removed = {}
+  local pos_b = 1
+  local changed = false
+
+  for _, h in ipairs(hunks) do
+    local start_a, count_a, start_b, count_b = h[1], h[2], h[3], h[4]
+    local upto_b = count_b > 0 and (start_b - 1) or start_b
+    for i = pos_b, upto_b do
+      out[#out + 1] = b[i]
+    end
+
+    if count_a == 0 and count_b > 0 then
+      -- Pure addition: drop selected b lines, keep unselected ones.
+      for lnum = start_b, start_b + count_b - 1 do
+        if b_lines[lnum] then
+          removed[#removed + 1] = (b[lnum] or ""):gsub("\r$", "")
+          changed = true
+        else
+          out[#out + 1] = b[lnum]
+        end
+      end
+    elseif count_a > 0 and count_b == 0 then
+      -- Pure deletion: restore selected a lines (or all when seam selected).
+      if next(a_lines) ~= nil then
+        for lnum = start_a, start_a + count_a - 1 do
+          if a_lines[lnum] then
+            out[#out + 1] = a[lnum]
+            changed = true
+          end
+        end
+      elseif seams[start_b] then
+        for lnum = start_a, start_a + count_a - 1 do
+          out[#out + 1] = a[lnum]
+        end
+        changed = true
+      end
+    else
+      -- Replacement: restore old lines when the ghost seam `start_b - 1` is
+      -- selected, and drop each selected new line.
+      if seams[start_b - 1] then
+        for lnum = start_a, start_a + count_a - 1 do
+          out[#out + 1] = a[lnum]
+        end
+        changed = true
+      end
+      for lnum = start_b, start_b + count_b - 1 do
+        if b_lines[lnum] then
+          removed[#removed + 1] = (b[lnum] or ""):gsub("\r$", "")
+          changed = true
+        else
+          out[#out + 1] = b[lnum]
+        end
+      end
+    end
+
+    pos_b = upto_b + count_b + 1
+  end
+
+  for i = pos_b, #b do
+    out[#out + 1] = b[i]
+  end
+  if not changed then
+    return b_text, {}, false
+  end
+  local result = join_preserving_eol(out, b_text)
+  return result, removed, result ~= b_text
+end
+
 return S

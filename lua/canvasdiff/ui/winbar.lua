@@ -9,6 +9,7 @@
 local diff = require("canvasdiff.diff")
 local appearance = require("canvasdiff.appearance")
 
+local fold = diff.fold
 local lens = diff.lens
 
 local W = {}
@@ -17,6 +18,31 @@ local W = {}
 --- be escaped before Neovim evaluates it.
 function W.escape(text)
   return tostring(text or ""):gsub("%%", "%%%%")
+end
+
+--- Review progress over the full changeset: total files, cleanly reviewed
+--- files (user-folded and not stale), stale files (edited behind a fold), and
+--- whether the unreviewed-only filter is active. Pure; never errors.
+function W.progress(st)
+  local sections = st and (st.all_sections or st.sections) or {}
+  local l = lens.of(st)
+  local total = #sections
+  local reviewed, stale = 0, 0
+  for _, sec in ipairs(sections) do
+    if fold.user_folded(st, sec.path) then
+      if fold.stale(st, sec.path, diff.fingerprint(sec), l.id) then
+        stale = stale + 1
+      else
+        reviewed = reviewed + 1
+      end
+    end
+  end
+  return {
+    total = total,
+    reviewed = reviewed,
+    stale = stale,
+    filtered = st and st.filter_unreviewed == true or false,
+  }
 end
 
 --- A coloured bar is a mode indicator, like macro-recording: the READ-ONLY
@@ -29,13 +55,27 @@ function W.ensure_hl_groups()
   appearance.ensure()
 end
 
---- The app half of the top band: the comparison label, tinted. No path ever
---- rides here -- the file under the topline is the sticky header row's job
---- (ui/sticky_header.lua), which keeps this text scroll-invariant.
+--- The app half of the top band: the comparison label, plus review progress
+--- once the user starts marking files reviewed (or filtering to unreviewed).
+--- No filename ever rides here -- the file under the topline is the sticky
+--- header row's job (ui/sticky_header.lua), keeping this scroll-invariant.
 function W.text(st)
   local l = lens.of(st)
   local group = lens.is_range(l) and "CanvasDiffWinbarReadOnly" or "CanvasDiffWinbar"
-  return "%#" .. group .. "#" .. W.escape(l.label)
+  local parts = { l.label }
+  local p = W.progress(st)
+  if p.reviewed > 0 or p.stale > 0 or p.filtered then
+    if p.total > 0 then
+      parts[#parts + 1] = ("%d/%d reviewed"):format(p.reviewed, p.total)
+    end
+    if p.stale > 0 then
+      parts[#parts + 1] = ("%d stale"):format(p.stale)
+    end
+    if p.filtered then
+      parts[#parts + 1] = "[unreviewed]"
+    end
+  end
+  return "%#" .. group .. "#" .. W.escape(table.concat(parts, "  ·  "))
 end
 
 --- Cached write. Runs on every WinScrolled, and writing 'winbar' forces a

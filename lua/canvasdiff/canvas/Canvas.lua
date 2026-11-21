@@ -1,8 +1,7 @@
--- One review's rendered-row owner. Canvas projects model sections into an
--- eager scratch buffer or paged store and keeps its anchors, folds, and row
--- lookup coherent. It does not parse repositories or own window controllers;
--- the returned state is the review lifetime, and `show` only adds another view.
-local paged = require("canvasdiff.canvas.paged")
+-- One review's rendered-row owner. Canvas projects model sections into a
+-- scratch buffer and keeps its anchors, folds, and row lookup coherent.
+-- It does not parse repositories or own window controllers; the returned
+-- state is the review lifetime, and `show` only adds another view.
 local render = require("canvasdiff.canvas.format")
 local appearance = require("canvasdiff.appearance")
 local glyphs = require("canvasdiff.config").glyphs
@@ -293,9 +292,6 @@ end
 --- @param state table
 --- @return table logical
 function M.logical(state)
-  if state and state.paged then
-    return paged.logical(state.paged)
-  end
   local function buffer()
     local buf = state and state.buf
     if buf and vim.api.nvim_buf_is_valid(buf) then
@@ -377,41 +373,41 @@ function M.is_canvas_buf(buf)
     and name:sub(#BUFNAME_PREFIX + 1):match("^%d+$") ~= nil
 end
 
+local function path_in_all_sections(state, path)
+  if not (state and state.all_sections and path) then
+    return false
+  end
+  for _, sec in ipairs(state.all_sections) do
+    if sec.path == path then
+      return true
+    end
+  end
+  return false
+end
+
+local function sync_all_section(state, section)
+  if not (state and state.all_sections and section) then
+    return
+  end
+  for idx, sec in ipairs(state.all_sections) do
+    if sec.path == section.path then
+      state.all_sections[idx] = section
+      return
+    end
+  end
+end
+
 --- Clears the buffer and re-renders every section from scratch, placing one
 --- left-gravity anchor per section start plus an EOF sentinel, and applying
 --- line-tier highlights. Populates state.sections/anchor_ids/hl_ids.
---- The visibility predicates the paged renderer needs, expressed against the
---- same state the eager path reads, so both paths fold identically.
-local function paged_opts(state)
-  return {
-    collapsed = function(path) return fold.hidden(state, path) end,
-    stale = function(section)
-      local l = lens.of(state)
-      return fold.stale(state, section.path, model.fingerprint(section),
-        l and l.id or nil)
-    end,
-  }
-end
-
 function M.render_all(state, sections)
-  if state and state.paged then
-    state.sections = sections
-    assert(paged.render_all(state.paged, sections, paged_opts(state)))
-    state.rendered_hidden = {}
-    for _, section in ipairs(sections) do
-      state.rendered_hidden[section.path] = fold.hidden(state, section.path)
-    end
-    return
-  end
-  return M.render_all_eager(state, sections)
-end
-
-function M.render_all_eager(state, sections)
   local buf = state.buf
   -- Before the line build, which reads fold.hidden: a fold key whose directory
   -- no longer has any changes must not fold a file that appears there
   -- later. Covers open, refresh and watch's full-render paths at once.
-  state.folded = fold.prune(sections, state.folded)
+  -- When the unreviewed filter is active, prune against the full changeset so
+  -- directory folds over reviewed files are preserved.
+  state.folded = fold.prune(state.all_sections or sections, state.folded)
   set_modifiable(buf, true)
   vim.api.nvim_buf_clear_namespace(buf, ANCHOR_NS, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, HL_NS, 0, -1)
@@ -471,11 +467,12 @@ function M.open(sections, opts)
   local state = {
     buf = buf,
     win = win,
+    lens = opts.lens,
     sections = {},
     anchor_ids = {},
     hl_ids = {},
-    collapsed = {},
-    folded = {},
+    collapsed = vim.deepcopy(opts.collapsed or {}),
+    folded = vim.deepcopy(opts.folded or {}),
     -- Actual form currently present in the buffer, independent of row count.
     -- Normally span == 1 implied "placeholder"; a pure rename's expanded form
     -- is also one header row, so resplice needs this explicit discriminator.
@@ -483,105 +480,24 @@ function M.open(sections, opts)
     -- `folded_seen[path]` is what a section's content looked like when the user put
     -- it away (diff.fingerprint), or `false` for one that arrived already hidden.
     -- fold.stale compares it against the section's content now.
-    folded_seen = {},
+    folded_seen = vim.deepcopy(opts.folded_seen or {}),
+    -- Paths the user explicitly unfolded out of a `"smart"` auto-collapse, so
+    -- subsequent watch/refresh passes keep them expanded instead of fighting.
+    unfolded_smart = vim.deepcopy(opts.unfolded_smart or {}),
   }
   M.render_all(state, sections)
   return state
 end
 
---- Build a PAGE-BACKED review without showing it anywhere.
+--- Release a canvas's model.
 ---
---- Same state shape as `M.open`, so every reader -- sidebar, status column,
---- scrollbar, motions, session -- keeps working: what changes is that the text
---- lives in a store and the buffer is a blank skeleton with one row per
---- logical row. `anchor_ids` and `hl_ids` stay empty because a paged canvas
---- has nothing to anchor: its starts array is authoritative.
----
---- Split from showing so the expensive part can run in time slices while the
---- user's window keeps its buffer: nothing is visible until `M.show`, and a
---- build that is abandoned instead goes to `M.dispose`. `opts.pace` is the
---- slicing checkpoint, offered while the rows are paged. `state.win` is nil
---- until shown.
----
---- `opts.collapsed` (path -> intent) and `opts.folded` (directory set) seed
---- the fold state the canvas is BUILT in, copied: a section hidden by them
---- is paged as its one placeholder row and its rows never at all. That is
---- how a reopened review applies its saved folds -- building a folded
---- million-row section and then collapsing it cost a full page-in plus a
---- ~130 ms skeleton shrink, for rows nobody was going to see.
-function M.build_paged(sections, opts)
-  opts = opts or {}
-  appearance.ensure()
-
-  local state = {
-    buf = nil,
-    win = nil,
-    sections = {},
-    anchor_ids = {},
-    hl_ids = {},
-    collapsed = vim.deepcopy(opts.collapsed or {}),
-    folded = vim.deepcopy(opts.folded or {}),
-    rendered_hidden = {},
-    folded_seen = {},
-  }
-
-  local render_opts = paged_opts(state)
-  render_opts.pace = opts.pace
-  local built, err = paged.render(sections, render_opts)
-  if not built then
-    return nil, err
-  end
-  state.paged = built
-  state.buf = built.buffer
-  state.sections = sections
-  built.state = state
-  for _, section in ipairs(sections) do
-    state.rendered_hidden[section.path] = fold.hidden(state, section.path)
-  end
-  return state
-end
-
---- Open a PAGE-BACKED review in the current window: `build_paged`, shown.
-function M.open_paged(sections, opts)
-  local state, err = M.build_paged(sections, opts)
-  if not state then
-    return nil, err
-  end
-  M.show(state, vim.api.nvim_get_current_win())
-  return state
-end
-
---- Note activity on a canvas, so a paged one can defer compaction.
----
---- Accepts either kind: an eager canvas has nothing to defer, and an activity
---- hook should not have to know which it is looking at.
-function M.touch(state)
-  if state and state.paged then
-    return paged.touch(state.paged)
-  end
-  return true
-end
-
---- Release a canvas's model, and a paged canvas's store and projection.
----
---- A paged canvas owns a projection and a skeleton buffer, and leaving them
---- behind is a leak of exactly the kind the resume contract forbids. Both kinds
---- own their section list, which is emptied IN PLACE rather than merely
---- dropped: closures that captured the list, or a Surface whose state reaches
---- it, can outlive the review inside a compiled LuaJIT trace, and only an
---- emptied list stops them pinning every entry of a closed review.
----
---- `opts.keep_buffer` leaves a paged canvas's skeleton buffer alive (see
---- Paged.dispose): the owner deletes it once no window shows it.
-function M.dispose(state, opts)
+--- The section list is emptied IN PLACE rather than merely dropped: closures
+--- that captured the list, or a Surface whose state reaches it, can outlive
+--- the review inside a compiled LuaJIT trace, and only an emptied list stops
+--- them pinning every entry of a closed review.
+function M.dispose(state)
   if not state then
     return true
-  end
-  local result = true
-  if state.paged then
-    local built = state.paged
-    state.paged = nil
-    result = paged.dispose(built, opts)
   end
   local sections = state.sections
   state.sections = {}
@@ -590,7 +506,14 @@ function M.dispose(state, opts)
       sections[index] = nil
     end
   end
-  return result
+  local all_sections = state.all_sections
+  state.all_sections = nil
+  if type(all_sections) == "table" then
+    for index = #all_sections, 1, -1 do
+      all_sections[index] = nil
+    end
+  end
+  return true
 end
 
 --- Show an existing canvas state in `win` without rebuilding its model or
@@ -610,9 +533,6 @@ end
 --- 0-based [start_row, end_row_exclusive) for section i, resolved live from
 --- extmarks -- never cached.
 function M.section_rows(state, i)
-  if state and state.paged then
-    return paged.section_rows(state.paged, i)
-  end
   return get_row(state, state.anchor_ids[i]), get_row(state, state.anchor_ids[i + 1])
 end
 
@@ -620,9 +540,6 @@ end
 --- 0-based buffer row `row0`. Returns section index and 1-based offset into
 --- that section's entries, or nil if there are no sections.
 function M.locate(state, row0)
-  if state and state.paged then
-    return paged.locate(state.paged, row0)
-  end
   local n = #state.sections
   if n == 0 then return nil end
 
@@ -667,19 +584,6 @@ end
 --- holds (content changes outside the viewport never move what the user is
 --- reading). `new_section == nil` deletes the section.
 function M.replace_section(state, i, new_section)
-  if state.paged then
-    local ok, err = paged.replace_section(
-      state.paged, i, new_section, paged_opts(state))
-    if ok then
-      state.sections = state.paged.sections
-      if new_section then
-        state.rendered_hidden[new_section.path] =
-          fold.hidden(state, new_section.path)
-      end
-    end
-    return ok, err
-  end
-
   local replaced_path = state.sections[i] and state.sections[i].path
   state.rendered_hidden = state.rendered_hidden or {}
   local was_collapsed = replaced_path ~= nil and state.rendered_hidden[replaced_path]
@@ -752,6 +656,7 @@ function M.replace_section(state, i, new_section)
     state.hl_ids[i] = apply_section_hl(
       state.buf, start_row, new_section, hidden, row_reader(state))
     state.sections[i] = new_section
+    sync_all_section(state, new_section)
     if replaced_path and replaced_path ~= new_section.path then
       state.rendered_hidden[replaced_path] = nil
     end
@@ -761,14 +666,16 @@ function M.replace_section(state, i, new_section)
     table.remove(state.anchor_ids, i)
     table.remove(state.sections, i)
     table.remove(state.hl_ids, i)
-    -- The path is gone from the canvas; drop its collapsed flag and its
-    -- fold fingerprint too, so a different file that later reuses this path
-    -- doesn't inherit either.
-    if replaced_path and state.collapsed then
-      state.collapsed[replaced_path] = nil
-    end
-    if replaced_path and state.folded_seen then
-      state.folded_seen[replaced_path] = nil
+    -- Only forget fold/review state when the path actually left the review.
+    -- When the unreviewed filter removes a reviewed file from `state.sections`,
+    -- it still lives in `state.all_sections` and must keep its fold + seen fp.
+    if replaced_path and not path_in_all_sections(state, replaced_path) then
+      if state.collapsed then
+        state.collapsed[replaced_path] = nil
+      end
+      if state.folded_seen then
+        state.folded_seen[replaced_path] = nil
+      end
     end
     if replaced_path then
       state.rendered_hidden[replaced_path] = nil
@@ -835,16 +742,6 @@ end
 --- niri invariant holds. Precondition: the canvas is non-empty
 --- (#state.sections >= 1) -- the 0 -> N transition goes through render_all.
 function M.insert_section(state, i, section)
-  if state.paged then
-    local ok, err = paged.insert_section(
-      state.paged, i, section, paged_opts(state))
-    if ok then
-      state.sections = state.paged.sections
-      state.rendered_hidden[section.path] = fold.hidden(state, section.path)
-    end
-    return ok, err
-  end
-
   local row = get_row(state, state.anchor_ids[i])
   -- Born under a live fold: the user has never seen this file, so it cannot be
   -- what they reviewed. `false` compares unequal to every real fingerprint, so
@@ -919,18 +816,45 @@ end
 --- No-op when the section is missing, when its anchors don't resolve against
 --- this buffer (same staleness case hl.apply_now guards), or when the buffer
 --- already shows the right form.
-local function resplice(state, i, preferred_win)
+local function resplice(state, i, preferred_win, prev_intent)
   local sec = state.sections[i]
   if not sec then return end
 
   local collapsed = fold.hidden(state, sec.path)
 
-  -- An eager section whose anchors no longer resolve is left entirely alone,
-  -- bookkeeping included; a paged canvas has no anchors to go stale.
-  local start_row, end_row_exclusive
-  if not state.paged then
-    start_row, end_row_exclusive = M.section_rows(state, i)
-    if not (start_row and end_row_exclusive) then return end
+  local start_row, end_row_exclusive = M.section_rows(state, i)
+  if not (start_row and end_row_exclusive) then return end
+
+  -- Materialize a deferred section right before expanding it into real buffer
+  -- rows. Kept behind a state hook so `canvas` never depends on `source`.
+  if not collapsed then
+    if prev_intent == "smart"
+        or sec.defer_reason == "generated"
+        or sec.defer_reason == "large" then
+      state.unfolded_smart = state.unfolded_smart or {}
+      state.unfolded_smart[sec.path] = true
+    end
+    if sec.deferred and state.hooks and state.hooks.on_materialize then
+      local materialized, err = state.hooks.on_materialize(i, sec)
+      if err then
+        -- Restore collapse state on error so the placeholder stays honest.
+        if prev_intent then
+          state.collapsed[sec.path] = prev_intent
+        end
+        return
+      end
+      if materialized == nil then
+        if #state.sections == 1 then
+          M.render_all(state, {})
+        else
+          M.replace_section(state, i, nil)
+        end
+        return
+      end
+      state.sections[i] = materialized
+      sync_all_section(state, materialized)
+      sec = materialized
+    end
   end
 
   -- Remember what this looked like as it went away, so fold.stale can tell later
@@ -949,29 +873,6 @@ local function resplice(state, i, preferred_win)
     end
   else
     state.folded_seen[sec.path] = nil -- back on screen: you have seen it now
-  end
-
-  -- A paged canvas re-renders one section by splicing its store, and needs no
-  -- view correction: rows above the splice keep their numbers, so the viewport
-  -- is already where it was. It shares the bookkeeping above -- returning
-  -- before it meant a folded directory on a large review never recorded what
-  -- you saw, so its files could never show as changed since.
-  --
-  -- And the same no-op rule as the eager form check below: an expanded
-  -- section already in the store is left alone. Re-splicing it re-paged the
-  -- whole section, which made every session.restore -- a resync over every
-  -- section -- re-page the entire review: measured 683 ms of the reopen of a
-  -- million-row review, all of it in the synchronous publish. A collapsed
-  -- one is still re-spliced: one placeholder row, which also refreshes its
-  -- stale mark.
-  if state.paged then
-    if state.paged.collapsed[i] ~= collapsed then
-      paged.set_collapsed(state.paged, i, collapsed, paged_opts(state))
-    elseif collapsed then
-      paged.replace_section(state.paged, i, sec, paged_opts(state))
-    end
-    state.rendered_hidden[sec.path] = collapsed
-    return
   end
 
   -- Already in the desired form -- answered WITHOUT building the lines, because
@@ -1071,18 +972,12 @@ end
 function M.set_collapsed(state, i, collapsed, intent, preferred_win)
   local sec = state.sections[i]
   if not sec then return end
-  if state.paged then
-    -- The paged canvas splices its own store and keeps its own starts, so it
-    -- neither has anchors to repair nor a view to preserve by row arithmetic.
-    state.collapsed[sec.path] = collapsed and (intent or "user") or nil
-    paged.set_collapsed(state.paged, i, collapsed)
-    return
-  end
+  local prev_intent = state.collapsed[sec.path]
   local want = collapsed and (intent or "user") or nil
-  if state.collapsed[sec.path] == want then return end
+  if prev_intent == want then return end
 
   state.collapsed[sec.path] = want
-  resplice(state, i, preferred_win)
+  resplice(state, i, preferred_win, prev_intent)
 end
 
 --- Bring the canvas to `desired` with the fewest possible splices.
@@ -1114,6 +1009,16 @@ local RECONCILE_FIELDS = {
 }
 
 local function same_section(cur, desired)
+  if cur.deferred ~= desired.deferred or cur.defer_reason ~= desired.defer_reason then
+    return false
+  end
+  if cur.deferred and (cur.adds ~= desired.adds or cur.dels ~= desired.dels
+      or cur.binary ~= desired.binary) then
+    return false
+  end
+  if cur.context ~= desired.context then
+    return false
+  end
   for _, field in ipairs(RECONCILE_FIELDS) do
     if cur[field] ~= desired[field] then
       return false
@@ -1122,7 +1027,20 @@ local function same_section(cur, desired)
   return true
 end
 
+local function seed_smart_collapse(state, sec)
+  if sec and sec.deferred
+      and (sec.defer_reason == "generated" or sec.defer_reason == "large")
+      and not (state.collapsed and state.collapsed[sec.path])
+      and not (state.unfolded_smart and state.unfolded_smart[sec.path]) then
+    state.collapsed = state.collapsed or {}
+    state.collapsed[sec.path] = "smart"
+  end
+end
+
 function M.reconcile_sections(state, desired)
+  for _, sec in ipairs(desired) do
+    seed_smart_collapse(state, sec)
+  end
   -- 0 <-> N transitions: the empty canvas holds a placeholder line, not sections,
   -- so there is nothing for a splice to target. Full re-render instead.
   if #state.sections == 0 or #desired == 0 then
@@ -1161,7 +1079,7 @@ function M.reconcile_sections(state, desired)
   -- and inserts in one merge, so dropping "src/" the moment its last OLD section
   -- went would un-fold a sibling inserted a step later. Pruning a key that hides
   -- nothing changes no section's rendered form, so there is nothing to re-splice.
-  state.folded = fold.prune(state.sections, state.folded)
+  state.folded = fold.prune(state.all_sections or state.sections, state.folded)
   return false
 end
 
@@ -1182,14 +1100,28 @@ end
 --- `preferred_win` selects the one Canvas view corrected by every splice and
 --- leaves the historical scalar primary untouched.
 function M.resync_visibility(state, indices, preferred_win)
+  -- Snapshot paths up front: expanding a deferred section whose file became
+  -- clean removes it from `state.sections`, shifting subsequent indices.
+  local paths = {}
   if indices then
     for _, i in ipairs(indices) do
-      resplice(state, i, preferred_win)
+      local sec = state.sections[i]
+      if sec then
+        paths[#paths + 1] = sec.path
+      end
     end
-    return
+  else
+    for _, sec in ipairs(state.sections) do
+      paths[#paths + 1] = sec.path
+    end
   end
-  for i = 1, #state.sections do
-    resplice(state, i, preferred_win)
+  for _, path in ipairs(paths) do
+    for idx, sec in ipairs(state.sections) do
+      if sec.path == path then
+        resplice(state, idx, preferred_win)
+        break
+      end
+    end
   end
 end
 

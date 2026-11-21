@@ -17,6 +17,7 @@ end
 
 local GROUPS = {
   "CanvasDiffAdd", "CanvasDiffDel", "CanvasDiffGhost",
+  "CanvasDiffWordAdd", "CanvasDiffWordDel",
   "CanvasDiffPrefixAdd", "CanvasDiffPrefixDel",
   "CanvasDiffGutterAdd", "CanvasDiffGutterDel", "CanvasDiffFileBar",
   "CanvasDiffFileHeader", "CanvasDiffHunkHeader", "CanvasDiffBinary",

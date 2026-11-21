@@ -1,10 +1,12 @@
 local algorithm = require("canvasdiff.diff.algorithm")
 local anchor = require("canvasdiff.diff.anchor")
+local auto_collapse = require("canvasdiff.diff.auto_collapse")
 local fold = require("canvasdiff.diff.fold")
 local lens = require("canvasdiff.diff.lens")
 local model = require("canvasdiff.diff.model")
 local stage = require("canvasdiff.diff.stage")
 local text = require("canvasdiff.diff.text")
+local word_diff = require("canvasdiff.diff.word_diff")
 
 -- The diff domain is pure over caller-provided text and file metadata.
 -- Consumers outside this directory import only this curated facade.
@@ -21,6 +23,12 @@ return {
     nearest = anchor.nearest,
     resolve = anchor.resolve,
   },
+  -- Pure smart auto-collapse classifier over glob patterns, gitattributes, and
+  -- cheap numstat/size facts. Returns "generated" | "large" | nil.
+  auto_collapse = {
+    classify = auto_collapse.classify,
+    match_glob = auto_collapse.match_glob,
+  },
   -- Path-sorted section list from file records; a file with no reviewable
   -- change contributes nothing.
   build = model.build,
@@ -35,6 +43,11 @@ return {
   -- diffed again. `metadata` must carry old_fingerprint/new_fingerprint (from
   -- `text_fingerprint`); without them, or for a non-table, false. Pure.
   built_from = model.built_from,
+  -- Lightweight deferred placeholder section carrying numstat counts and
+  -- identity without reading or diffing file bytes until unfolded.
+  deferred_section = model.deferred_section,
+  -- Deleted lines attached to an entry (ghosts/del) or its enclosing hunk.
+  deleted_lines_at = model.deleted_lines_at,
   -- The sha256 hex digest every section fingerprint is made of. Persisted in
   -- session files, so it must never change silently. Never errors.
   text_fingerprint = model.text_fingerprint,
@@ -106,10 +119,19 @@ return {
     pair_hunks = stage.pair_hunks,
     pick = stage.pick,
     pick_all = stage.pick_all,
+    revert_lines = stage.revert_lines,
     splice = stage.splice,
+    splice_lines = stage.splice_lines,
     splice_many = stage.splice_many,
   },
   -- True when git's own XY pair says the file was staged and then modified
   -- again -- durable across sessions, independent of our fingerprints.
   staged_then_changed = model.staged_then_changed,
+  -- Pure similarity-gated intra-line word diff and interleaved hunk builder
+  -- for the on-demand hunk peek float.
+  word_diff = {
+    diff_pair = word_diff.diff_pair,
+    hunk_rows = word_diff.hunk_rows,
+    tokenize = word_diff.tokenize,
+  },
 }
